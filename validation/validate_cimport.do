@@ -3007,6 +3007,132 @@ capture erase "temp/empty_test.csv"
 capture erase "temp/error_test.csv"
 
 /*******************************************************************************
+ * Rollback of failed imports
+ *
+ * A failed or interrupted import leaves the data in memory as they were
+ * without a snapshot on disk (Stata 16 or later: an in-memory copy in a
+ * frame); option snapshot preserves the data instead and option fast clears
+ * them first and undoes nothing (see validation/rollback_helpers.do).
+ * The hook $CTOOLS_cimport_fault = load fails the import with r(1), as Break
+ * would, once the imported data are complete. Readers that, like the native
+ * ones, clear the data before parsing leave an empty dataset in every mode.
+ ******************************************************************************/
+print_section "Rollback of Failed Imports"
+capture confirm file "validation/rollback_helpers.do"
+if !_rc do "validation/rollback_helpers.do"
+else do "rollback_helpers.do"
+
+clear
+set obs 60
+gen id = _n
+gen str3 s = "a" + string(_n)
+gen double v = _n / 3
+tempfile rb_file rb_copy rb_out
+export delimited using "`rb_file'.csv", replace
+export excel using "`rb_file'.xlsx", firstrow(variables) replace
+export excel using "`rb_file'.xls", firstrow(variables) replace
+export sasxport8 "`rb_file'.v8xpt", replace
+
+sysuse auto, clear
+label data "cimport rollback master"
+note: dataset note
+note price: note on price
+char _dta[rb_char] dataset characteristic
+char mpg[rb_char] mpg characteristic
+sort foreign make
+save `rb_copy'
+
+_ctools_rb_case, cmd(cimport delimited using "`rb_file'.csv", clear) ///
+    global(CTOOLS_cimport_fault) fault(load) testname("[rollback] delimited")
+_ctools_rb_case, cmd(cimport excel using "`rb_file'.xlsx", firstrow clear) ///
+    global(CTOOLS_cimport_fault) fault(load) testname("[rollback] xlsx")
+_ctools_rb_case, cmd(cimport excel using "`rb_file'.xls", firstrow clear) ///
+    global(CTOOLS_cimport_fault) fault(load) testname("[rollback] xls")
+
+* An empty dataset keeps its value labels and characteristics without clear
+* (it has no variables, so it cannot be saved and compared with cf)
+foreach mode in default snapshot fast {
+    clear
+    label define rb_keep 1 "kept"
+    char _dta[rb_char] kept characteristic
+    _ctools_rb_state
+    local before `"`r(state)'"'
+    global CTOOLS_cimport_fault load
+    capture cimport delimited using "`rb_file'.csv", varnames(1) `=cond("`mode'"=="default","","`mode'")'
+    local rc = _rc
+    global CTOOLS_cimport_fault
+    _ctools_rb_state
+    local after `"`r(state)'"'
+    local same = `"`macval(after)'"' == `"`macval(before)'"'
+    if `rc' == 1 & (`same' == ("`mode'" != "fast")) {
+        test_pass "[rollback] delimited into empty data [`mode']"
+    }
+    else test_fail "[rollback] delimited into empty data [`mode']" "rc=`rc' unchanged=`same'"
+}
+
+* The SAS XPORT reader clears the data before parsing, as import sasxport8
+* does: a failure leaves the cleared dataset (with fast, the loaded data)
+foreach mode in default snapshot fast {
+    use `rb_copy', clear
+    global CTOOLS_cimport_fault load
+    capture cimport sasxport8 "`rb_file'.v8xpt", clear `=cond("`mode'"=="default","","`mode'")'
+    local rc = _rc
+    global CTOOLS_cimport_fault
+    local want = cond("`mode'" == "fast", 60, 0)
+    if `rc' == 1 & _N == `want' test_pass "[rollback] sasxport8 leaves cleared data [`mode']"
+    else test_fail "[rollback] sasxport8 leaves cleared data [`mode']" "rc=`rc' N=`=_N' k=`=c(k)'"
+}
+
+* Imports under the frame prefix replace that frame's data only
+use `rb_copy', clear
+capture frame drop rb_other
+frame create rb_other
+frame rb_other: use `rb_copy', clear
+global CTOOLS_cimport_fault load
+capture frame rb_other: cimport delimited using "`rb_file'.csv", clear
+local rc = _rc
+global CTOOLS_cimport_fault
+frame rb_other: capture cf _all using `rb_copy', all
+local cf_other = _rc
+capture cf _all using `rb_copy', all
+if `rc' == 1 & !`cf_other' & !_rc & c(frame) == "default" {
+    test_pass "[rollback] failed import under frame prefix"
+}
+else test_fail "[rollback] failed import under frame prefix" "rc=`rc' cf other=`cf_other' frame=`c(frame)'"
+frame rb_other: cimport delimited using "`rb_file'.csv", clear
+frame rb_other: local n_other = _N
+capture cf _all using `rb_copy', all
+if `n_other' == 60 & !_rc & c(frame) == "default" test_pass "[rollback] import under frame prefix"
+else test_fail "[rollback] import under frame prefix" "N=`n_other' frame=`c(frame)'"
+frame drop rb_other
+
+* Options snapshot and fast give the default's results; together they are refused
+foreach kind in csv xlsx {
+    local imp = cond("`kind'" == "csv", "delimited", "excel")
+    local opts = cond("`kind'" == "csv", "clear", "firstrow clear")
+    use `rb_copy', clear
+    cimport `imp' using "`rb_file'.`kind'", `opts'
+    local changed = c(changed)
+    save `rb_out', replace
+    foreach mode in snapshot fast {
+        use `rb_copy', clear
+        cimport `imp' using "`rb_file'.`kind'", `opts' `mode'
+        capture cf _all using `rb_out', all
+        if !_rc & c(changed) == `changed' test_pass "[rollback] option `mode' gives the default results (`kind')"
+        else test_fail "[rollback] option `mode' gives the default results (`kind')" "results differ"
+    }
+}
+use `rb_copy', clear
+capture cimport delimited using "`rb_file'.csv", clear snapshot fast
+local rc = _rc
+capture cf _all using `rb_copy', all
+if `rc' == 198 & !_rc test_pass "[rollback] snapshot and fast together refused"
+else test_fail "[rollback] snapshot and fast together refused" "rc=`rc', data changed=`=_rc!=0'"
+foreach ext in csv xlsx xls v8xpt {
+    capture erase "`rb_file'.`ext'"
+}
+
+/*******************************************************************************
  * Cleanup and summary
  ******************************************************************************/
 

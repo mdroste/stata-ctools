@@ -26,7 +26,10 @@ catalogs and explicit encoding. XPORT5 reads `formats.xpf` beside the transport
 file unless `novallabels` is requested. Long delimited/Excel/statistical text and SHP
 binary headers use strL. With `clear`, statistical, dBase and SHP readers clear
 data before parsing, matching native failure behavior. Excel retains existing
-data when its container cannot be opened. Excel `describe` is exclusive of
+data when its container cannot be opened. Other failures or Break restore the
+data in memory from an in-memory copy (a frame, Stata 16 or later), not a
+snapshot on disk; option `snapshot` uses `preserve` instead and option `fast`
+clears the data first and undoes nothing. Excel `describe` is exclusive of
 data-loading options.
 
 ## Delimited text

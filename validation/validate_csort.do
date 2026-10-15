@@ -1468,6 +1468,83 @@ foreach alg in auto lsd msd timsort sample counting merge ips4o {
     restore
 }
 
+/*******************************************************************************
+ * SECTION 26: String keys sorted as 64-bit words (plugin order)
+ * Strings of up to 16 bytes sort as one or two big-endian words, alone and
+ * with numeric keys in either order. nosortedby checks the plugin's own
+ * order; the default path must also leave the sort marker on the key list.
+ * Values cover the empty string, every length up to the width, bytes above
+ * 127, spaces and duplicates. 450,000 rows exceed the parallel thresholds;
+ * there, the empty value of few is a run of more than 200,000 tied rows.
+ ******************************************************************************/
+print_section "String Keys as Words (plugin)"
+
+* Strings of length 0 to width: space, a, b, ~ and bytes 128 and 255
+capture program drop _csort_word_strings
+program define _csort_word_strings
+    syntax newvarname, width(integer) [prefix(string)]
+    tempvar len
+    local free = `width' - strlen(`"`prefix'"')
+    quietly gen int `len' = runiformint(0, `free')
+    quietly gen str`width' `varlist' = `"`prefix'"'
+    forvalues p = 1/`free' {
+        quietly replace `varlist' = `varlist' + char(cond(runiform() < .2, 32, ///
+            cond(runiform() < .4, 97, cond(runiform() < .5, 98, ///
+            cond(runiform() < .4, 126, cond(runiform() < .5, 128, 255)))))) if `len' >= `p'
+    }
+end
+
+capture program drop _csort_plugin_order
+program define _csort_plugin_order
+    syntax varlist, testname(string) algs(string)
+    tempfile orig ref
+    quietly save `orig'
+    sort `varlist', stable
+    quietly save `ref'
+    foreach alg of local algs {
+        quietly use `orig', clear
+        capture csort `varlist', algorithm(`alg') nosortedby
+        local rc = _rc
+        if !`rc' {
+            capture cf _all using `ref'
+            local rc = _rc
+        }
+        quietly use `orig', clear
+        capture csort `varlist', algorithm(`alg')
+        local marked_rc = _rc
+        local marked : sortedby
+        if !`marked_rc' & "`marked'" != "`varlist'" local marked_rc = 9
+        if !`marked_rc' {
+            capture cf _all using `ref'
+            local marked_rc = _rc
+        }
+        if !`rc' & !`marked_rc' test_pass "`testname' [alg=`alg']"
+        else test_fail "`testname' [alg=`alg']" "plugin order rc=`rc', marked rc=`marked_rc'"
+    }
+    quietly use `orig', clear
+end
+
+foreach N in 1000 450000 {
+    local algs = cond(`N' < 10000, "auto lsd msd", "auto lsd")
+    clear
+    set seed `=4021 + `N''
+    quietly set obs `N'
+    gen long id = _n
+    _csort_word_strings s1, width(1)
+    _csort_word_strings s7, width(7)
+    _csort_word_strings s8, width(8)
+    _csort_word_strings s9, width(9)
+    _csort_word_strings s16, width(16)
+    _csort_word_strings p16, width(16) prefix("ABCDEFGH")
+    gen str8 few = cond(mod(id, 3) == 0, "North", cond(mod(id, 7) == 1, "East", ""))
+    gen int n = runiformint(1, 4)
+    gen double d = cond(runiform() < .1, .a, cond(runiform() < .1, ., round(rnormal(), .5)))
+    foreach keys in "s1" "s7" "s8" "s9" "s16" "p16" "few" "s8 n" "n s8" "s16 d" ///
+        "d s16" "few d n" "s1 s9 d" {
+        _csort_plugin_order `keys', testname("word keys N=`N': `keys'") algs(`algs')
+    }
+}
+
 * End of csort validation
 noi print_summary "csort"
 }

@@ -32,6 +32,8 @@ Where `merge_type` is one of:
 | `noreport` | Suppress merge result table |
 | `verbose` | Display timing and progress information |
 | `nolabel` | Do not copy value labels from using data |
+| `snapshot` | Restore the master after a failure from a `preserve` snapshot (written to disk above `c(max_preservemem)`) |
+| `fast` | Keep no copy of the master; a failure or Break can leave the data partly merged |
 
 ## Examples
 
@@ -63,10 +65,10 @@ cmerge m:1 code using lookup.dta, force
 - Loads the using dataset into C memory
 - Uses parallel data loading with 8-way loop unrolling
 
-### Phase 2: Execute Merge
-- Performs high-performance radix sort on key variables (if not pre-sorted)
-- Uses single-pass sorted merge join
-- Parallel output construction
+### Phase 2: Plan and Execute Merge
+- Plans the join before the master is changed: loads the master keys alone, sorts them with a high-performance radix sort (if not pre-sorted), and joins them in a single pass; key, sortedness and uniqueness errors stop here
+- If the result is the master in its existing order, no other master data are read
+- Otherwise stages whole master observations and writes each output observation once, then fills the using variables in parallel
 
 ### Phase 3: Apply Options
 - Applies `keep()` and `assert()` filters
@@ -136,4 +138,11 @@ The `_merge` variable (or variable specified by `generate()`) indicates:
 
 ## Validation and failure behavior
 
-Shared numeric and fixed-string variables are widened before updates or using-only rows are written. A long/float combination uses double to preserve both inputs. Key variables must have matching string/numeric types even with force. For incompatible non-key types, force retains the master type and treats the using-side values as missing. String writes retain the shared plugin limit of str2045; strL output is unsupported. Failed merges restore the master dataset.
+Shared numeric and fixed-string variables are widened before updates or using-only rows are written. A long/float combination uses double to preserve both inputs. Key variables must have matching string/numeric types even with force. For incompatible non-key types, force retains the master type and treats the using-side values as missing. String writes retain the shared plugin limit of str2045; strL output is unsupported. If `assert()` fails, the merged result stays in memory, as with `merge`; any other failed or interrupted merge (including Break) restores the master dataset.
+
+By default `cmerge` keeps that guarantee without writing a snapshot to disk. A `preserve` snapshot of the whole dataset, which Stata writes to disk above `c(max_preservemem)` (1 GB by default), took about a quarter of the merge time at 10 and 25 million observations. Key, sortedness and uniqueness errors are found before the master is changed. Before the plugin overwrites a master observation it keeps a copy of every master observation in memory (the staged rows, or full columns for strings too wide to stage, that the output is written from); a failure, or Break, restores the observations from it, and `cmerge` undoes its own changes: added variables and observations, promoted storage types and formats, value labels, notes and characteristics, the sort marker and `c(changed)`. The copy is released when the merge completes. The few merges that cannot be undone that way keep a snapshot in memory, in a frame dropped when `cmerge` finishes: merges involving strL variables (run by `merge`, which sorts the master before it checks the keys), and empty-data merges whose `keep()` or 1:1 sort would drop or reorder master observations. If that copy does not fit in memory the merge fails before changing anything. Stata 15 and earlier have no frames and use `preserve` for these merges.
+
+Two options change this:
+
+- `snapshot` preserves the whole dataset for every merge, as earlier versions did (written to disk above `c(max_preservemem)`).
+- `fast` keeps no copy at all, like `collapse, fast`. A failure or Break after the merge has started changing the data is reported, but the data are left partly merged. Key errors are still found before any change. It saves memory, and time only where a copy would otherwise be taken (`keep()` or `update` on data already in key order, strL variables, empty data).

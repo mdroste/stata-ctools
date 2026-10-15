@@ -1,0 +1,71 @@
+--- before/src/crangestat/crangestat_impl.c
++++ after/src/crangestat/crangestat_impl.c
+@@ -471,8 +471,14 @@
+     }
+ 
+     size_t avg_group_size = nobs / ngroups;
++    /* Groups below the within-group parallel threshold cannot amortize a
++     * separate team per group. Keep them in one cross-group team. Retain the
++     * existing small-average policy for highly unbalanced groups. The extra
++     * cases fit the cross-group path's 16-source sparse-table buffer. */
+     int use_cross_group_parallel = (ngroups >= CRANGESTAT_PARALLEL_GROUPS_MIN &&
+-                                    avg_group_size < CRANGESTAT_SMALL_GROUP_THRESHOLD);
++                                    (avg_group_size < CRANGESTAT_SMALL_GROUP_THRESHOLD ||
++                                     (max_group_size < CRANGESTAT_PARALLEL_THRESHOLD &&
++                                      nsource <= 16)));
+     int needs_work = 0;
+     for (size_t s = 0; s < nstats; s++)
+         needs_work |= crangestat_stat_needs_work_array(specs[s].type);
+@@ -645,6 +651,15 @@
+ 
+                 /* Missing keys sort to end — stop processing */
+                 if (key_val >= SV_missval) break;
++
++                /* Without excludeself, equal keys have identical windows and
++                 * results, including order statistics and first/last values.
++                 * Reuse only within this group; missing keys stay untouched. */
++                if (!config.exclude_self && i > g_start && key_val == key_data[i - 1]) {
++                    for (size_t s = 0; s < nstats; s++)
++                        result_data[s][i] = result_data[s][i - 1];
++                    continue;
++                }
+ 
+                 /* Compute window bounds */
+                 double low_bound = config.low_is_missing ? -DBL_MAX : key_val + config.interval_low;
+@@ -863,6 +878,14 @@
+                 }
+                 run_starts[num_runs] = g_end;  /* Sentinel */
+ 
++                /* Mostly distinct keys benefit from the linear sliding scan,
++                 * rather than two binary searches and one scheduled task for
++                 * almost every row. No arithmetic or window definition changes. */
++                if (num_runs > g_count / 2) {
++                    free(run_starts);
++                    goto standard_obs_loop;
++                }
++
+                 /* Build O(1) structures for this group (reuse pre-allocated buffers) */
+                 int group_has_o1 = use_o1_queries && (g_count >= CRANGESTAT_PREFIX_SUM_THRESHOLD);
+                 if (group_has_o1) {
+--- before/src/crangestat/crangestat_kernels.c
++++ after/src/crangestat/crangestat_kernels.c
+@@ -1040,7 +1040,9 @@
+ 
+     case STAT_SKEWNESS:
+     {
+-        if (n < 3)
++        /* rangestat uses standardized population moments, which are defined
++         * for two distinct values (no small-sample bias correction). */
++        if (n < 2)
+             return SV_missval;
+         double mean = sum / (double)n;
+         /* Need second pass for higher moments */
+@@ -1067,7 +1069,7 @@
+ 
+     case STAT_KURTOSIS:
+     {
+-        if (n < 4)
++        if (n < 2)
+             return SV_missval;
+         double mean = sum / (double)n;
+         /* Need second pass for higher moments */

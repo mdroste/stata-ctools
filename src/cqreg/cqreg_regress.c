@@ -7,7 +7,6 @@
 
 #include "cqreg_regress.h"
 #include "cqreg_types.h"
-#include "cqreg_ipm.h"
 #include "cqreg_fn.h"
 #include "cqreg_sparsity.h"
 #include "cqreg_vce.h"
@@ -17,6 +16,7 @@
 #include "../ctools_types.h"  /* For ctools_data_load */
 #include "../ctools_spi.h"
 #include "../ctools_ols.h"    /* For detect_collinearity, fast_dot */
+#include "../ctools_hdfe_utils.h"  /* For ctools_dense_cluster_ids */
 
 #include <stdlib.h>
 #include <string.h>
@@ -109,8 +109,9 @@ static void store_scalar(const char *name, ST_double val)
  * - Returns data in stata_data structure
  *
  * After loading:
- * - state->y points to data->vars[0].data.dbl (depvar, view, not copied)
+ * - state->y is an owned copy of the dependent variable
  * - state->X is allocated as contiguous N*K array with X columns + constant
+ * The caller frees the loaded columns once the cluster ids are copied too.
  * ============================================================================ */
 
 /*
@@ -178,14 +179,6 @@ static ST_int load_data_filtered(cqreg_state *state,
     return 0;
 }
 
-/* qsort comparator for ST_int */
-static int cmp_st_int(const void *a, const void *b)
-{
-    ST_int va = *(const ST_int *)a;
-    ST_int vb = *(const ST_int *)b;
-    return (va > vb) - (va < vb);
-}
-
 /* ============================================================================
  * Helper: Load cluster variable from pre-loaded data
  * ============================================================================ */
@@ -207,21 +200,14 @@ static ST_int load_clusters_from_data(cqreg_state *state,
         state->cluster_ids[idx] = (ST_int)cluster_data[idx];
     }
 
-    /* Count unique clusters via sort: O(N log N) instead of O(N * G) */
-    ST_int *sorted = (ST_int *)malloc((size_t)N * sizeof(ST_int));
-    if (sorted == NULL) {
+    /* Count unique clusters (a counting pass for compact codes, a sort otherwise) */
+    ST_int *dense = (ST_int *)malloc((size_t)N * sizeof(ST_int));
+    ST_int num_unique = 0;
+    if (dense == NULL || ctools_dense_cluster_ids(state->cluster_ids, N, dense, &num_unique) != 0) {
+        free(dense);
         return -1;
     }
-    memcpy(sorted, state->cluster_ids, (size_t)N * sizeof(ST_int));
-    qsort(sorted, (size_t)N, sizeof(ST_int), cmp_st_int);
-
-    ST_int num_unique = 1;
-    for (idx = 1; idx < N; idx++) {
-        if (sorted[idx] != sorted[idx - 1]) {
-            num_unique++;
-        }
-    }
-    free(sorted);
+    free(dense);
 
     state->num_clusters = num_unique;
 
@@ -242,6 +228,100 @@ static void cqreg_vce_iterations_error(void)
 {
     ctools_error("cqreg", "VCE computation failed; try increasing the maximum "
                  "number of iterations or try bsqreg");
+}
+
+/*
+ * The two auxiliary quantile fits (at q_lo and q_hi) behind the sparsity and
+ * fitted-density estimates.
+ *
+ * The main solver state is reused for one fit and a lightweight state is
+ * created for the other; both use the looser auxiliary tolerances, and
+ * skip_crossover skips the crossover and residual computation, since only
+ * the coefficients are needed.
+ *
+ * For large N the solver's own loops are parallel. Running the two fits side
+ * by side would then confine each to a single thread (nested regions do not
+ * spawn), so they run one after the other; for small N, or with at most two
+ * threads, they run side by side. The fits are independent, so the results
+ * are the same either way.
+ *
+ * On success the caller owns *beta_lo and *beta_hi (K values each) and the
+ * solver return codes are in *rc_lo and *rc_hi (<= 0: not converged).
+ * Returns 0, or 920 on allocation failure (after reporting it).
+ */
+static ST_retcode cqreg_auxiliary_fits(const ST_double *y, const ST_double *X,
+                                       ST_int N, ST_int K,
+                                       ST_double q_lo, ST_double q_hi,
+                                       cqreg_ipm_state *main_ipm,
+                                       ST_double **beta_lo, ST_double **beta_hi,
+                                       ST_int *rc_lo, ST_int *rc_hi)
+{
+    *beta_lo = (ST_double *)malloc(K * sizeof(ST_double));
+    *beta_hi = (ST_double *)malloc(K * sizeof(ST_double));
+    if (*beta_lo == NULL || *beta_hi == NULL) {
+        free(*beta_lo);
+        free(*beta_hi);
+        *beta_lo = *beta_hi = NULL;
+        ctools_error_alloc("cqreg");
+        return 920;
+    }
+
+    ST_int skip_cross = (N > 1000) ? 1 : 0;
+
+    cqreg_ipm_config aux_config;
+    cqreg_ipm_config_init(&aux_config);
+    aux_config.maxiter = main_ipm->config.maxiter;  /* qreg passes iterate() to the auxiliary fits */
+    /* The duality gap is in units of y. Tighten the 1e-6 gap for small-scale
+     * outcomes so the fits keep the same relative accuracy (y ~ 1e-6 would
+     * otherwise stop at a gap near the objective itself). Never loosened. */
+    ST_double y_scale = 0.0;
+    for (ST_int i = 0; i < N; i++) y_scale += fabs(y[i]);
+    y_scale = (N > 0) ? y_scale / N : 0.0;
+    aux_config.tol_gap = 1e-6 * ((y_scale > 0.0 && y_scale < 1.0) ? y_scale : 1.0);
+    aux_config.verbose = 0;
+    aux_config.skip_crossover = skip_cross;
+
+    cqreg_ipm_state *ipm_hi = cqreg_ipm_create_lite(N, K, &aux_config);
+    if (ipm_hi == NULL) {
+        free(*beta_lo);
+        free(*beta_hi);
+        *beta_lo = *beta_hi = NULL;
+        ctools_error_alloc("cqreg");
+        return 920;
+    }
+
+    /* Temporarily reconfigure the main state for the lo solve */
+    cqreg_ipm_config saved_config = main_ipm->config;
+    main_ipm->config = aux_config;
+
+    ST_int lo = 0, hi = 0;
+    double t_aux_start = ctools_timer_seconds();
+
+#ifdef _OPENMP
+    if (N <= 100000 || ctools_get_max_threads() <= 2) {
+        #pragma omp parallel sections
+        {
+            #pragma omp section
+            { lo = cqreg_fn_solve(main_ipm, y, X, q_lo, *beta_lo); }
+            #pragma omp section
+            { hi = cqreg_fn_solve(ipm_hi, y, X, q_hi, *beta_hi); }
+        }
+    } else
+#endif
+    {
+        lo = cqreg_fn_solve(main_ipm, y, X, q_lo, *beta_lo);
+        hi = cqreg_fn_solve(ipm_hi, y, X, q_hi, *beta_hi);
+    }
+
+    SF_scal_save("_cqreg_time_sparsity_aux", ctools_timer_seconds() - t_aux_start);
+
+    /* Restore original config and free lite state */
+    main_ipm->config = saved_config;
+    cqreg_ipm_free(ipm_hi);
+
+    *rc_lo = lo;
+    *rc_hi = hi;
+    return 0;
 }
 
 /*
@@ -279,70 +359,12 @@ static ST_retcode estimate_siddiqui_sparsity(const ST_double *y,
         return 498;
     }
 
-    /* Allocate temporary arrays for beta coefficients */
-    ST_double *beta_lo = (ST_double *)malloc(K * sizeof(ST_double));
-    ST_double *beta_hi = (ST_double *)malloc(K * sizeof(ST_double));
-
-    if (beta_lo == NULL || beta_hi == NULL) {
-        free(beta_lo);
-        free(beta_hi);
-        ctools_error_alloc("cqreg");
-        return 920;
-    }
-
-    /*
-     * OPTIMIZATION: Run both auxiliary solves in parallel.
-     * - Reuse the main IPM state for one solve (zero allocation cost).
-     * - Create a lightweight FN state for the other solve, without the
-     *   legacy IPM workspace or N-sized per-thread scratch buffers.
-     * - skip_crossover=1 skips the expensive crossover + residual
-     *   computation since we only need beta for sparsity estimation.
-     */
-    ST_int skip_cross = (N > 1000) ? 1 : 0;
-
-    cqreg_ipm_config aux_config;
-    cqreg_ipm_config_init(&aux_config);
-    aux_config.maxiter = main_ipm->config.maxiter;  /* qreg passes iterate() to the auxiliary fits */
-    aux_config.tol_primal = 1e-6;
-    aux_config.tol_dual = 1e-6;
-    aux_config.tol_gap = 1e-6;
-    aux_config.verbose = 0;
-    aux_config.skip_crossover = skip_cross;
-
-    cqreg_ipm_state *ipm_hi = cqreg_ipm_create_lite(N, K, &aux_config);
-    if (ipm_hi == NULL) {
-        free(beta_lo);
-        free(beta_hi);
-        ctools_error_alloc("cqreg");
-        return 920;
-    }
-
-    /* Temporarily reconfigure the main state for the lo solve */
-    cqreg_ipm_config saved_config = main_ipm->config;
-    main_ipm->config = aux_config;
-
+    /* Auxiliary fits at tau -/+ h */
+    ST_double *beta_lo = NULL, *beta_hi = NULL;
     ST_int rc_lo = 0, rc_hi = 0;
-    double t_aux_start = ctools_timer_seconds();
-
-#ifdef _OPENMP
-    #pragma omp parallel sections
-    {
-        #pragma omp section
-        { rc_lo = cqreg_fn_solve(main_ipm, y, X, q_lo, beta_lo); }
-        #pragma omp section
-        { rc_hi = cqreg_fn_solve(ipm_hi, y, X, q_hi, beta_hi); }
-    }
-#else
-    rc_lo = cqreg_fn_solve(main_ipm, y, X, q_lo, beta_lo);
-    rc_hi = cqreg_fn_solve(ipm_hi, y, X, q_hi, beta_hi);
-#endif
-
-    double t_aux_elapsed = ctools_timer_seconds() - t_aux_start;
-    SF_scal_save("_cqreg_time_sparsity_aux", t_aux_elapsed);
-
-    /* Restore original config and free lite state */
-    main_ipm->config = saved_config;
-    cqreg_ipm_free(ipm_hi);
+    ST_retcode aux_rc = cqreg_auxiliary_fits(y, X, N, K, q_lo, q_hi, main_ipm,
+                                             &beta_lo, &beta_hi, &rc_lo, &rc_hi);
+    if (aux_rc) return aux_rc;
 
     main_debug_log("Siddiqui: q_lo=%.4f, q_hi=%.4f, rc_lo=%d, rc_hi=%d\n",
                    q_lo, q_hi, rc_lo, rc_hi);
@@ -470,64 +492,12 @@ static ST_retcode estimate_fitted_per_obs_density(ST_double *obs_density,
         return 498;
     }
 
-    /* Allocate temporary arrays for beta coefficients */
-    ST_double *beta_lo = (ST_double *)malloc(K * sizeof(ST_double));
-    ST_double *beta_hi = (ST_double *)malloc(K * sizeof(ST_double));
-
-    if (beta_lo == NULL || beta_hi == NULL) {
-        free(beta_lo);
-        free(beta_hi);
-        ctools_error_alloc("cqreg");
-        return 920;
-    }
-
-    /*
-     * OPTIMIZATION: Parallel auxiliary solves — same approach as
-     * estimate_siddiqui_sparsity. Reuse main IPM state for one solve,
-     * lightweight state for the other.
-     */
-    ST_int skip_cross = (N > 1000) ? 1 : 0;
-
-    cqreg_ipm_config aux_config;
-    cqreg_ipm_config_init(&aux_config);
-    aux_config.maxiter = main_ipm->config.maxiter;  /* qreg passes iterate() to the auxiliary fits */
-    aux_config.tol_primal = 1e-6;
-    aux_config.tol_dual = 1e-6;
-    aux_config.tol_gap = 1e-6;
-    aux_config.verbose = 0;
-    aux_config.skip_crossover = skip_cross;
-
-    cqreg_ipm_state *ipm_hi = cqreg_ipm_create_lite(N, K, &aux_config);
-    if (ipm_hi == NULL) {
-        free(beta_lo);
-        free(beta_hi);
-        ctools_error_alloc("cqreg");
-        return 920;
-    }
-
-    cqreg_ipm_config saved_config = main_ipm->config;
-    main_ipm->config = aux_config;
-
+    /* Auxiliary fits at tau -/+ h */
+    ST_double *beta_lo = NULL, *beta_hi = NULL;
     ST_int rc_lo = 0, rc_hi = 0;
-    double t_aux_start2 = ctools_timer_seconds();
-
-#ifdef _OPENMP
-    #pragma omp parallel sections
-    {
-        #pragma omp section
-        { rc_lo = cqreg_fn_solve(main_ipm, y, X, q_lo, beta_lo); }
-        #pragma omp section
-        { rc_hi = cqreg_fn_solve(ipm_hi, y, X, q_hi, beta_hi); }
-    }
-#else
-    rc_lo = cqreg_fn_solve(main_ipm, y, X, q_lo, beta_lo);
-    rc_hi = cqreg_fn_solve(ipm_hi, y, X, q_hi, beta_hi);
-#endif
-
-    SF_scal_save("_cqreg_time_sparsity_aux", ctools_timer_seconds() - t_aux_start2);
-
-    main_ipm->config = saved_config;
-    cqreg_ipm_free(ipm_hi);
+    ST_retcode aux_rc = cqreg_auxiliary_fits(y, X, N, K, q_lo, q_hi, main_ipm,
+                                             &beta_lo, &beta_hi, &rc_lo, &rc_hi);
+    if (aux_rc) return aux_rc;
 
     /* Check convergence */
     if (rc_lo <= 0 || rc_hi <= 0) {
@@ -710,7 +680,6 @@ ST_retcode cqreg_full_regression(const char *args)
     ST_int verbose = read_scalar_int("__cqreg_verbose", 0);
     ST_double tolerance = read_scalar("__cqreg_tolerance", 1e-12);
     ST_int maxiter = read_scalar_int("__cqreg_maxiter", 200);
-    ST_int nopreprocess = read_scalar_int("__cqreg_nopreprocess", 0);
     /* Kernel method: kernel and invnormal(q+h) - invnormal(q-h) from Stata */
     ST_int kernel = read_scalar_int("__cqreg_kernel", CQREG_KERNEL_EPANECHNIKOV);
     ST_double kfactor = read_scalar("__cqreg_kfactor", -1.0);
@@ -854,6 +823,13 @@ ST_retcode cqreg_full_regression(const char *args)
 
     /* Compute sample quantile and raw sum of deviations for pseudo R^2 */
     state->q_v = cqreg_compute_quantile(state->y, N, quantile);
+    if (isnan(state->q_v)) {
+        ctools_error_alloc("cqreg");
+        cqreg_state_free(state);
+        ctools_filtered_data_free(&filtered);
+        main_debug_close();
+        return 920;
+    }
     state->sum_rdev = cqreg_sum_raw_deviations(state->y, N, state->q_v, quantile);
     main_debug_log("Computed q_v=%.6f, sum_rdev=%.4f\n", state->q_v, state->sum_rdev);
 
@@ -866,6 +842,10 @@ ST_retcode cqreg_full_regression(const char *args)
             return 198;
         }
     }
+
+    /* y, X and the cluster ids are copied into the state: release the loaded
+     * columns before the solver allocates its N-sized workspace */
+    ctools_filtered_data_free(&filtered);
 
     /* ========================================================================
      * Step 3b: Collinearity detection
@@ -888,22 +868,41 @@ ST_retcode cqreg_full_regression(const char *args)
             return 920;
         }
 
-        for (ST_int i = 0; i < K_x; i++) {
-            const ST_double *Xi = &state->X[(size_t)i * N];
-            for (ST_int j = i; j < K_x; j++) {
+        /* Column means (the same sum for every pair a column appears in),
+         * then the centred cross products, one row of the triangle per thread */
+        ST_double *col_means = (ST_double *)malloc((size_t)(K_x > 0 ? K_x : 1) * sizeof(ST_double));
+        if (!col_means) {
+            free(xtx);
+            free(is_collinear);
+            cqreg_state_free(state);
+            ctools_filtered_data_free(&filtered);
+            ctools_error("cqreg", "Memory allocation failed for collinearity check");
+            main_debug_close();
+            return 920;
+        }
+        ST_int ci;
+        #pragma omp parallel for schedule(static) if(K_x > 1 && (size_t)N * (size_t)K_x > 200000)
+        for (ci = 0; ci < K_x; ci++) {
+            const ST_double *Xi = &state->X[(size_t)ci * N];
+            ST_double mean_i = 0.0;
+            for (ST_int row = 0; row < N; row++) mean_i += Xi[row] / N;
+            col_means[ci] = mean_i;
+        }
+        #pragma omp parallel for schedule(dynamic) if(K_x > 1 && (size_t)N * (size_t)K_x > 200000)
+        for (ci = 0; ci < K_x; ci++) {
+            const ST_double *Xi = &state->X[(size_t)ci * N];
+            const ST_double mean_i = col_means[ci];
+            for (ST_int j = ci; j < K_x; j++) {
                 const ST_double *Xj = &state->X[(size_t)j * N];
-                ST_double mean_i = 0.0, mean_j = 0.0;
-                for (ST_int row = 0; row < N; row++) {
-                    mean_i += Xi[row] / N;
-                    mean_j += Xj[row] / N;
-                }
+                const ST_double mean_j = col_means[j];
                 ST_double val = 0.0;
                 for (ST_int row = 0; row < N; row++)
                     val += (Xi[row] - mean_i) * (Xj[row] - mean_j);
-                xtx[i * K_x + j] = val;
-                xtx[j * K_x + i] = val;
+                xtx[ci * K_x + j] = val;
+                xtx[j * K_x + ci] = val;
             }
         }
+        free(col_means);
 
         /* Detect numerical collinearity via Cholesky */
         ST_int num_collinear = detect_collinearity(xtx, K_x, is_collinear, verbose);
@@ -988,47 +987,27 @@ ST_retcode cqreg_full_regression(const char *args)
 
     double ipm_start = ctools_timer_seconds();
 
-    /* Configure IPM */
+    /* Configure the solver */
     cqreg_ipm_config_init(&ipm_config);
     ipm_config.maxiter = maxiter;
-    ipm_config.tol_primal = tolerance;
-    ipm_config.tol_dual = tolerance;
     ipm_config.tol_gap = tolerance;
     ipm_config.verbose = verbose;
-    ipm_config.use_mehrotra = 1;
 
 
     main_debug_log("Step 4: Creating IPM state...\n");
 
-    /* The direct FN solver does not use the legacy IPM directions or its
-     * N-sized per-thread buffers. Keep those only for experimental preprocessing. */
-    ST_int use_preprocess = (nopreprocess == -1);
-    state->ipm = use_preprocess ? cqreg_ipm_create(N, K, &ipm_config)
-                                : cqreg_ipm_create_lite(N, K, &ipm_config);
+    state->ipm = cqreg_ipm_create_lite(N, K, &ipm_config);
     if (state->ipm == NULL) {
-        main_debug_log("ERROR: cqreg_ipm_create failed\n");
+        main_debug_log("ERROR: cqreg_ipm_create_lite failed\n");
         ctools_error("cqreg", "Failed to create IPM solver");
         rc = 920;
         goto cleanup;
     }
 
-    main_debug_log("IPM state created. Choosing solver...\n");
+    main_debug_log("IPM state created. Solving...\n");
 
-    /* Solve quantile regression.
-     * The preprocessing algorithm (Chernozhukov et al. 2020) is available but
-     * currently DISABLED by default due to performance issues with the current
-     * implementation. The direct Frisch-Newton solver is fast enough for most
-     * use cases. To enable preprocessing (experimental), set nopreprocess=-1.
-     */
-    ST_int ipm_result;
-
-    if (use_preprocess) {
-        main_debug_log("Using preprocessing solver (N=%d > 5000)\n", N);
-        ipm_result = cqreg_preprocess_solve(state->ipm, state->y, state->X, quantile, state->beta);
-    } else {
-        main_debug_log("Using direct Frisch-Newton solver\n");
-        ipm_result = cqreg_fn_solve(state->ipm, state->y, state->X, quantile, state->beta);
-    }
+    /* Solve quantile regression with the Frisch-Newton interior point method */
+    ST_int ipm_result = cqreg_fn_solve(state->ipm, state->y, state->X, quantile, state->beta);
 
     main_debug_log("Solver returned %d\n", ipm_result);
 
@@ -1180,10 +1159,17 @@ ST_retcode cqreg_full_regression(const char *args)
     main_debug_log("Computing VCE...\n");
     double vce_matrix_start = ctools_timer_seconds();
     /* Compute VCE */
-    if (cqreg_compute_vce(state, state->X) != 0) {
+    ST_int vce_rc = cqreg_compute_vce(state, state->X);
+    if (vce_rc != 0) {
         main_debug_log("ERROR: VCE computation failed\n");
-        ctools_error("cqreg", "VCE computation failed");
-        rc = 498;
+        if (vce_rc == 920) {
+            /* the sandwich temporary could not be allocated */
+            ctools_error_alloc("cqreg");
+            rc = 920;
+        } else {
+            ctools_error("cqreg", "VCE computation failed");
+            rc = 498;
+        }
         goto cleanup;
     }
     main_debug_log("VCE computed\n");

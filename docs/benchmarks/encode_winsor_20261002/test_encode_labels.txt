@@ -1,0 +1,101 @@
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+      name:  <unnamed>
+       log:  /Users/Mike/Documents/GitHub/stata-ctools/temp/encode_performance_20261002/test_encode_labels.log
+  log type:  text
+ opened on:   2 Oct 2026, 11:45:58
+
+. cd "/Users/Mike/Documents/GitHub/stata-ctools/temp/encode_performance_20261002/tests"
+/Users/Mike/Documents/GitHub/stata-ctools/temp/encode_performance_20261002/tests
+
+. capture noisily do validation/validate_encode_labels.do
+
+. * Exact code and byte comparisons for the cencode label data handoff.
+. capture do "validation/validate_setup.do"
+
+. if _rc do "validate_setup.do"
+
+. 
+. capture program drop check_label_parity
+
+. program define check_label_parity
+  1.     syntax [, SUBSET(string) THREADS(integer 8)]
+  2.     capture drop got expected decoded_got decoded_expected
+  3.     capture label drop got expected
+  4.     cencode x `subset', gen(got) threads(`threads')
+  5.     encode x `subset', gen(expected)
+  6.     assert got == expected
+  7.     decode got, gen(decoded_got)
+  8.     decode expected, gen(decoded_expected)
+  9.     assert decoded_got == decoded_expected
+ 10.     mata: st_vlload("got", gc=., gt=""); st_vlload("expected", ec=., et=""); assert(gc==ec); assert(gt==et)
+ 11.     test_pass "exact codes, complete label maps and decoded bytes"
+ 12. end
+
+. 
+. mata:
+------------------------------------------------- mata (type end to exit) -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+: void encode_bad_fixture(string scalar path, real scalar kind)
+> {
+>     real scalar fh
+>     string scalar data, nl
+>     nl = char(10)
+>     data = "CTOOLS_LABELS_1" + nl + "1 3" + nl + "one"
+>     if (kind == 1) data = "bad magic" + nl
+>     if (kind == 2) data = data + "2 4" + nl + "two"
+>     if (kind == 3) data = data + "2 -1" + nl
+>     if (kind == 4) data = data + "2 2046" + nl
+>     if (kind == 5) data = data + "2 1.5" + nl
+>     if (kind == 6) data = data + "2" + nl
+>     if (kind == 7) data = data + "x 3" + nl + "two"
+>     if (kind == 8) data = data + "2 3" + nl + "two" + "extra"
+>     if (kind == 9) data = data + "2147483648 3" + nl + "two"
+>     fh = fopen(path, "w")
+>     fwrite(fh, data)
+>     fclose(fh)
+> }
+
+: end
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+. 
+. 
+. quietly {
+
+. print_summary "encode_labels"
+
+---------------------------------------------
+  encode_labels validation results
+---------------------------------------------
+  Passed: 25
+  Failed: 0
+  Skipped: 0
+  Total:  25
+---------------------------------------------
+  ALL TESTS PASSED
+---------------------------------------------
+
+
+. if $TESTS_FAILED exit 9
+
+. di "ENCODE_LABELS_COMPLETE"
+ENCODE_LABELS_COMPLETE
+
+. 
+end of do-file
+
+. local rc=_rc
+
+. if $TESTS_FAILED > 0 local rc=9
+
+. di "TEST_RC=`rc'"
+TEST_RC=0
+
+. di "CTOOLS_LAUNCH=d1c2c6b8e1e64f4eb35cf13597bce27f RC=`rc'"
+CTOOLS_LAUNCH=d1c2c6b8e1e64f4eb35cf13597bce27f RC=0
+
+. log close
+      name:  <unnamed>
+       log:  /Users/Mike/Documents/GitHub/stata-ctools/temp/encode_performance_20261002/test_encode_labels.log
+  log type:  text
+ closed on:   2 Oct 2026, 11:46:08
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------

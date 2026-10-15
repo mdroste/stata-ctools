@@ -61,7 +61,7 @@ forvalues seed = 1/40 {
             ppml_default_check y x z `wt', absorb(`fes') offset(off) ///
                 vce(`vc') name("seed `seed' `w' `vc'")
             benchmark_ppmlhdfe y x z `wt', absorb(`fes') offset(off) ///
-                vce(`vc') tolerance(1e-14) minsf(6) ///
+                vce(`vc') tolerance(1e-14) ///
                 referenceopts("use_exact_partial(1) use_exact_solver(1) min_ok(2)") ///
                 testname("precision seed `seed' `w' `vc'")
         }
@@ -88,13 +88,19 @@ forvalues seed = 1/10 {
     replace c = . in 351/360
     gen str8 sh = string(h)
     gen str8 sg = string(g)
+    * Multiway covariances combine cluster meats with opposite signs, so a
+    * small entry inherits the absolute error of the fixed-effect solve. The
+    * reference's conjugate-gradient partial stops at its 1e-12 inner floor
+    * with ~1e-11 FE error (seen at the 6th digit of V[x,z] for seed 6 pw
+    * "cluster c sh"); its unaccelerated projections converge to the same
+    * point as the native solve to ~12 digits, so use them for the oracle.
     foreach w in none fw pw {
         local wt
         if "`w'"!="none" local wt [`w'=`w']
         foreach vc in "cluster g h" "cluster c sh" "cluster g h t" {
             benchmark_ppmlhdfe y x z `wt', absorb(sg t) offset(off) ///
-                vce(`vc') tolerance(1e-14) minsf(6) ///
-                referenceopts("use_exact_partial(1) use_exact_solver(1) min_ok(2)") ///
+                vce(`vc') tolerance(1e-14) ///
+                referenceopts("use_exact_partial(1) use_exact_solver(1) min_ok(2) accel(none)") ///
                 testname("multiway seed `seed' `w' `vc'")
         }
     }

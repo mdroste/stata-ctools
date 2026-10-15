@@ -32,18 +32,85 @@ void ctools_matmul_atb(const ST_double * restrict A, const ST_double * restrict 
 {
     ST_int j;
 
-    memset(C, 0, K1 * K2 * sizeof(ST_double));
+    memset(C, 0, (size_t)K1 * K2 * sizeof(ST_double));
 
     /* Parallelize over output columns - i must be private to avoid race condition */
-    #pragma omp parallel for schedule(static) if(K1 * K2 > 4)
+    #pragma omp parallel for schedule(static) if((size_t)K1 * K2 > 4)
     for (j = 0; j < K2; j++) {
         ST_int i;  /* Declare inside parallel region to make it private */
         const ST_double *b_col = B + (size_t)j * N;
         for (i = 0; i < K1; i++) {
             const ST_double *a_col = A + (size_t)i * N;
-            C[j * K1 + i] = ctools_dot_unrolled(a_col, b_col, N);
+            C[(size_t)j * K1 + i] = ctools_dot_unrolled(a_col, b_col, N);
         }
     }
+}
+
+/*
+ * Gram matrix C = A' * A (upper triangle computed, then mirrored)
+ */
+void ctools_matmul_ata(const ST_double *A, ST_int N, ST_int K, ST_double *C)
+{
+    ST_int j;
+
+    #pragma omp parallel for schedule(dynamic) if(K > 2)
+    for (j = 0; j < K; j++) {
+        ST_int i;
+        const ST_double *a_j = A + (size_t)j * N;
+        for (i = 0; i <= j; i++) {
+            C[(size_t)j * K + i] = ctools_dot_unrolled(A + (size_t)i * N, a_j, N);
+        }
+    }
+    for (j = 0; j < K; j++) {
+        for (ST_int i = 0; i < j; i++) {
+            C[(size_t)i * K + j] = C[(size_t)j * K + i];
+        }
+    }
+}
+
+/* Rows per block of the row-blocked kernels: a block of a few columns
+ * stays in the L2 cache while the K passes over it run */
+#define CTOOLS_ROW_BLOCK 2048
+
+/*
+ * C = X * B (and y += X * b): row blocks in parallel, columns in order
+ */
+static void matmul_xb_blocks(const ST_double *X, ST_int N, ST_int K, const ST_double *B, ST_int M,
+                             ST_double *C, int zero_first)
+{
+    /* N + CTOOLS_ROW_BLOCK - 1 would overflow int for N within a block of
+     * INT_MAX, leaving every row uncomputed */
+    const ST_int num_blocks = N / CTOOLS_ROW_BLOCK + (N % CTOOLS_ROW_BLOCK != 0);
+    ST_int blk;
+
+    #pragma omp parallel for schedule(static) if((size_t)N * (size_t)K * (size_t)M > 400000)
+    for (blk = 0; blk < num_blocks; blk++) {
+        const ST_int i0 = blk * CTOOLS_ROW_BLOCK;
+        const ST_int i1 = (N - i0 < CTOOLS_ROW_BLOCK) ? N : i0 + CTOOLS_ROW_BLOCK;
+        for (ST_int m = 0; m < M; m++) {
+            ST_double *c = C + (size_t)m * N;
+            const ST_double *b = B + (size_t)m * K;
+            if (zero_first) {
+                for (ST_int i = i0; i < i1; i++) c[i] = 0.0;
+            }
+            for (ST_int k = 0; k < K; k++) {
+                const ST_double *x = X + (size_t)k * N;
+                const ST_double bk = b[k];
+                for (ST_int i = i0; i < i1; i++) c[i] += x[i] * bk;
+            }
+        }
+    }
+}
+
+void ctools_matvec_add(const ST_double *X, ST_int N, ST_int K, const ST_double *b, ST_double *y)
+{
+    matmul_xb_blocks(X, N, K, b, 1, y, 0);
+}
+
+void ctools_matmul_xb(const ST_double *X, ST_int N, ST_int K, const ST_double *B, ST_int M,
+                      ST_double *C)
+{
+    matmul_xb_blocks(X, N, K, B, M, C, 1);
 }
 
 /*
@@ -58,7 +125,7 @@ void ctools_matmul_ab(const ST_double * restrict A, const ST_double * restrict B
 {
     ST_int j;
 
-    memset(C, 0, K1 * K3 * sizeof(ST_double));
+    memset(C, 0, (size_t)K1 * K3 * sizeof(ST_double));
 
     /* C[i,j] = sum_k A[i,k] * B[k,j] */
     /* A is K1 x K2, stored column-major: A[i,k] = A[k*K1 + i] */
@@ -67,14 +134,14 @@ void ctools_matmul_ab(const ST_double * restrict A, const ST_double * restrict B
 
     /* Reorder loops for better cache locality: k-j-i instead of j-i-k */
     /* This allows sequential access to A columns and B columns */
-    #pragma omp parallel for schedule(static) if(K1 * K3 > 16)
+    #pragma omp parallel for schedule(static) if((size_t)K1 * K3 > 16)
     for (j = 0; j < K3; j++) {
         ST_int i, k;  /* Private to each thread */
-        const ST_double *b_col = B + j * K2;
-        ST_double *c_col = C + j * K1;
+        const ST_double *b_col = B + (size_t)j * K2;
+        ST_double *c_col = C + (size_t)j * K1;
         for (k = 0; k < K2; k++) {
             ST_double b_kj = b_col[k];
-            const ST_double *a_col = A + k * K1;
+            const ST_double *a_col = A + (size_t)k * K1;
             #pragma omp simd
             for (i = 0; i < K1; i++) {
                 c_col[i] += a_col[i] * b_kj;
@@ -95,28 +162,28 @@ void ctools_matmul_atdb(const ST_double * restrict A, const ST_double * restrict
 {
     ST_int j;
 
-    memset(C, 0, K1 * K2 * sizeof(ST_double));
+    memset(C, 0, (size_t)K1 * K2 * sizeof(ST_double));
 
     if (w) {
         /* Weighted case: use SIMD-accelerated weighted dot product */
-        #pragma omp parallel for schedule(static) if(K1 * K2 > 4)
+        #pragma omp parallel for schedule(static) if((size_t)K1 * K2 > 4)
         for (j = 0; j < K2; j++) {
             ST_int i;  /* Private to each thread */
             const ST_double *b_col = B + (size_t)j * N;
             for (i = 0; i < K1; i++) {
                 const ST_double *a_col = A + (size_t)i * N;
-                C[j * K1 + i] = ctools_simd_dot_weighted(w, a_col, b_col, (size_t)N);
+                C[(size_t)j * K1 + i] = ctools_simd_dot_weighted(w, a_col, b_col, (size_t)N);
             }
         }
     } else {
         /* Unweighted case: use SIMD-accelerated dot product */
-        #pragma omp parallel for schedule(static) if(K1 * K2 > 4)
+        #pragma omp parallel for schedule(static) if((size_t)K1 * K2 > 4)
         for (j = 0; j < K2; j++) {
             ST_int i;  /* Private to each thread */
             const ST_double *b_col = B + (size_t)j * N;
             for (i = 0; i < K1; i++) {
                 const ST_double *a_col = A + (size_t)i * N;
-                C[j * K1 + i] = ctools_simd_dot(a_col, b_col, (size_t)N);
+                C[(size_t)j * K1 + i] = ctools_simd_dot(a_col, b_col, (size_t)N);
             }
         }
     }
@@ -196,8 +263,8 @@ ST_retcode ctools_vce_robust(const ctools_vce_data *d, ST_double dof_adj, ST_dou
     }
 
     /* Allocate high-precision meat and temp matrices */
-    long double *meat = (long double *)calloc(K * K, sizeof(long double));
-    long double *temp = (long double *)malloc(K * K * sizeof(long double));
+    long double *meat = (long double *)calloc((size_t)K * K, sizeof(long double));
+    long double *temp = (long double *)malloc((size_t)K * K * sizeof(long double));
 
     if (!meat || !temp) {
         if (meat) free(meat);
@@ -213,6 +280,12 @@ ST_retcode ctools_vce_robust(const ctools_vce_data *d, ST_double dof_adj, ST_dou
      * - aw/pw normalized: w_i = (e_i * w_norm_i)^2
      * - aw/pw raw (IV):   w_i = (w_i * e_i)^2    [but actually w_i * e_i^2]
      * Symmetric: accumulate upper triangle, then mirror. */
+    ST_double *obs_w = (ST_double *)malloc((size_t)N * sizeof(ST_double));
+    if (!obs_w) {
+        free(meat); free(temp);
+        if (w_norm) free(w_norm);
+        return 920;
+    }
     for (idx = 0; idx < N; idx++) {
         ST_double w_i;
         ST_double e = d->resid[idx];
@@ -228,20 +301,47 @@ ST_retcode ctools_vce_robust(const ctools_vce_data *d, ST_double dof_adj, ST_dou
             /* Raw weights (IV path): w * e^2 */
             w_i = d->weights[idx] * e * e;
         }
+        obs_w[idx] = w_i;
+    }
 
-        for (j = 0; j < K; j++) {
-            long double xj = (long double)d->X_eff[(size_t)j * N + idx];
-            long double wxj = (long double)w_i * xj;
-            meat[j * K + j] += wxj * xj;
-            for (k = j + 1; k < K; k++) {
-                meat[j * K + k] += wxj * (long double)d->X_eff[(size_t)k * N + idx];
+    /* meat[j,k] = sum_i (w_i * x_ij) * x_ik, each element accumulated over
+     * the observations in order. Column pairs are independent, so the rows
+     * of the upper triangle run in parallel, a few columns k per pass. */
+    #pragma omp parallel for schedule(dynamic) if(K > 1 && (size_t)N * (size_t)K > 100000)
+    for (j = 0; j < K; j++) {
+        const ST_double *xj = d->X_eff + (size_t)j * N;
+        ST_int kk = j;
+        for (; kk + 3 < K; kk += 4) {
+            const ST_double *x0 = d->X_eff + (size_t)kk * N;
+            const ST_double *x1 = x0 + N, *x2 = x1 + N, *x3 = x2 + N;
+            long double a0 = 0.0L, a1 = 0.0L, a2 = 0.0L, a3 = 0.0L;
+            for (ST_int ii = 0; ii < N; ii++) {
+                long double wxj = (long double)obs_w[ii] * (long double)xj[ii];
+                a0 += wxj * (long double)x0[ii];
+                a1 += wxj * (long double)x1[ii];
+                a2 += wxj * (long double)x2[ii];
+                a3 += wxj * (long double)x3[ii];
             }
+            meat[(size_t)j * K + kk] = a0;
+            meat[(size_t)j * K + kk + 1] = a1;
+            meat[(size_t)j * K + kk + 2] = a2;
+            meat[(size_t)j * K + kk + 3] = a3;
+        }
+        for (; kk < K; kk++) {
+            const ST_double *xk = d->X_eff + (size_t)kk * N;
+            long double acc = 0.0L;
+            for (ST_int ii = 0; ii < N; ii++) {
+                long double wxj = (long double)obs_w[ii] * (long double)xj[ii];
+                acc += wxj * (long double)xk[ii];
+            }
+            meat[(size_t)j * K + kk] = acc;
         }
     }
+    free(obs_w);
     /* Mirror upper triangle to lower */
     for (j = 0; j < K; j++) {
         for (k = j + 1; k < K; k++) {
-            meat[k * K + j] = meat[j * K + k];
+            meat[(size_t)k * K + j] = meat[(size_t)j * K + k];
         }
     }
 
@@ -252,20 +352,20 @@ ST_retcode ctools_vce_robust(const ctools_vce_data *d, ST_double dof_adj, ST_dou
         for (i = 0; i < K; i++) {
             long double acc = 0.0L;
             for (k = 0; k < K; k++) {
-                acc += (long double)d->D[k * K + i] * meat[j * K + k];
+                acc += (long double)d->D[(size_t)k * K + i] * meat[(size_t)j * K + k];
             }
-            temp[j * K + i] = acc;
+            temp[(size_t)j * K + i] = acc;
         }
     }
     for (j = 0; j < K; j++) {
         for (i = 0; i < K; i++) {
             long double acc = 0.0L;
             for (k = 0; k < K; k++) {
-                acc += temp[k * K + i] * (long double)d->D[j * K + k];
+                acc += temp[(size_t)k * K + i] * (long double)d->D[(size_t)j * K + k];
             }
             ST_double value = (ST_double)(acc * (long double)dof_adj);
             if (!isfinite(value)) { free(meat); free(temp); return 498; }
-            meat[j * K + i] = value;
+            meat[(size_t)j * K + i] = value;
         }
     }
 
@@ -307,11 +407,11 @@ ST_retcode ctools_vce_cluster(const ctools_vce_data *d,
     }
 
     /* Allocate high-precision buffers */
-    long double *meat = (long double *)calloc(K * K, sizeof(long double));
-    long double *temp = (long double *)malloc(K * K * sizeof(long double));
+    long double *meat = (long double *)calloc((size_t)K * K, sizeof(long double));
+    long double *temp = (long double *)malloc((size_t)K * K * sizeof(long double));
     long double *ecX = (long double *)malloc(K * sizeof(long double));
     ST_int *sort_perm = (ST_int *)malloc(N * sizeof(ST_int));
-    ST_int *boundaries = (ST_int *)malloc((num_clusters + 1) * sizeof(ST_int));
+    ST_int *boundaries = (ST_int *)malloc(((size_t)num_clusters + 1) * sizeof(ST_int));
 
     if (!meat || !temp || !ecX || !sort_perm || !boundaries) {
         if (meat) free(meat);
@@ -331,45 +431,67 @@ ST_retcode ctools_vce_cluster(const ctools_vce_data *d,
         return 920;
     }
 
-    /* Stream through clusters, accumulating ecX then outer product into meat */
-    for (ST_int c = 0; c < num_clusters; c++) {
-        ST_int start = boundaries[c];
-        ST_int end = boundaries[c + 1];
-
-        /* Reset ecX buffer */
-        for (k = 0; k < K; k++) {
-            ecX[k] = 0.0;
+    /* Weighted residual of every observation */
+    ST_double *e_w = (ST_double *)malloc((size_t)N * sizeof(ST_double));
+    /* Clusters are processed in blocks: the e'X sums of a block are formed
+     * one regressor per thread (each sum over its cluster's observations in
+     * sorted order), then the outer products are added in cluster order. */
+    ST_int block_clusters = 65536 / (K > 0 ? K : 1);
+    if (block_clusters < 1) block_clusters = 1;
+    if (block_clusters > num_clusters) block_clusters = num_clusters;
+    long double *block_sums = (long double *)malloc((size_t)block_clusters * (size_t)K * sizeof(long double));
+    if (!e_w || !block_sums) {
+        free(e_w); free(block_sums);
+        free(meat); free(temp); free(ecX);
+        free(sort_perm); free(boundaries);
+        if (w_norm) free(w_norm);
+        return 920;
+    }
+    for (idx = 0; idx < N; idx++) {
+        if (d->weights == NULL) {
+            e_w[idx] = d->resid[idx];
+        } else if (d->weight_type == 2) {
+            e_w[idx] = d->resid[idx] * d->weights[idx];
+        } else if (w_norm) {
+            e_w[idx] = d->resid[idx] * w_norm[idx];
+        } else {
+            e_w[idx] = d->resid[idx] * d->weights[idx];
         }
+    }
 
-        /* Accumulate e'X for this cluster */
-        for (ST_int pos = start; pos < end; pos++) {
-            idx = sort_perm[pos];
-            ST_double e_w;
+    /* c0 advances to c1, which never passes num_clusters (c0 += block_clusters
+     * could overflow int on the last block) */
+    for (ST_int c0 = 0, c1; c0 < num_clusters; c0 = c1) {
+        c1 = (num_clusters - c0 < block_clusters) ? num_clusters : c0 + block_clusters;
+        const size_t block_obs = (size_t)(boundaries[c1] - boundaries[c0]);
 
-            if (d->weights == NULL) {
-                e_w = d->resid[idx];
-            } else if (d->weight_type == 2) {
-                e_w = d->resid[idx] * d->weights[idx];
-            } else if (w_norm) {
-                e_w = d->resid[idx] * w_norm[idx];
-            } else {
-                e_w = d->resid[idx] * d->weights[idx];
-            }
-
-            for (k = 0; k < K; k++) {
-                ecX[k] += (long double)e_w * (long double)d->X_eff[(size_t)k * N + idx];
+        #pragma omp parallel for schedule(static) if(K > 1 && block_obs * (size_t)K > 100000)
+        for (k = 0; k < K; k++) {
+            const ST_double *xk = d->X_eff + (size_t)k * N;
+            for (ST_int c = c0; c < c1; c++) {
+                long double acc = 0.0L;
+                for (ST_int pos = boundaries[c]; pos < boundaries[c + 1]; pos++) {
+                    ST_int obs = sort_perm[pos];
+                    acc += (long double)e_w[obs] * (long double)xk[obs];
+                }
+                block_sums[(size_t)(c - c0) * K + k] = acc;
             }
         }
 
         /* Accumulate outer product ecX * ecX' into meat (upper triangle) */
-        for (ST_int jj = 0; jj < K; jj++) {
-            long double ecXj = ecX[jj];
-            meat[jj * K + jj] += ecXj * ecXj;
-            for (ST_int kk = jj + 1; kk < K; kk++) {
-                meat[jj * K + kk] += ecXj * ecX[kk];
+        for (ST_int c = c0; c < c1; c++) {
+            const long double *sums = block_sums + (size_t)(c - c0) * K;
+            for (ST_int jj = 0; jj < K; jj++) {
+                long double ecXj = sums[jj];
+                meat[(size_t)jj * K + jj] += ecXj * ecXj;
+                for (ST_int kk = jj + 1; kk < K; kk++) {
+                    meat[(size_t)jj * K + kk] += ecXj * sums[kk];
+                }
             }
         }
     }
+    free(e_w);
+    free(block_sums);
 
     free(ecX);
     free(sort_perm);
@@ -379,7 +501,7 @@ ST_retcode ctools_vce_cluster(const ctools_vce_data *d,
     /* Mirror upper triangle to lower */
     for (ST_int jj = 0; jj < K; jj++) {
         for (ST_int kk = jj + 1; kk < K; kk++) {
-            meat[kk * K + jj] = meat[jj * K + kk];
+            meat[(size_t)kk * K + jj] = meat[(size_t)jj * K + kk];
         }
     }
 
@@ -388,20 +510,20 @@ ST_retcode ctools_vce_cluster(const ctools_vce_data *d,
         for (ST_int ii = 0; ii < K; ii++) {
             long double acc = 0.0L;
             for (ST_int kk = 0; kk < K; kk++) {
-                acc += (long double)d->D[kk * K + ii] * meat[jj * K + kk];
+                acc += (long double)d->D[(size_t)kk * K + ii] * meat[(size_t)jj * K + kk];
             }
-            temp[jj * K + ii] = acc;
+            temp[(size_t)jj * K + ii] = acc;
         }
     }
     for (ST_int jj = 0; jj < K; jj++) {
         for (ST_int ii = 0; ii < K; ii++) {
             long double acc = 0.0L;
             for (ST_int kk = 0; kk < K; kk++) {
-                acc += temp[kk * K + ii] * (long double)d->D[jj * K + kk];
+                acc += temp[(size_t)kk * K + ii] * (long double)d->D[(size_t)jj * K + kk];
             }
             ST_double value = (ST_double)(acc * (long double)dof_adj);
             if (!isfinite(value)) { free(meat); free(temp); return 498; }
-            meat[jj * K + ii] = value;
+            meat[(size_t)jj * K + ii] = value;
         }
     }
 

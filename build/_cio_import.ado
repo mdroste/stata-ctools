@@ -2,7 +2,7 @@
 program define _cio_import, rclass
     version 14.1
     gettoken kind 0 : 0, parse(" ,")
-    local options CLEAR
+    local options CLEAR SNAPshot FAST
     if inlist("`kind'","sas","spss","sasxport8","dbase","xls","xlsx") local options "`options' CASE(string)"
     if "`kind'"=="sas" local options "`options' ENCoding(string) BCAT(string)"
     if "`kind'"=="sasxport8" local options "`options' VLABFile(string)"
@@ -12,6 +12,10 @@ program define _cio_import, rclass
     * Parse selectors as text: their variables belong to the incoming dataset.
     syntax [anything(everything equalok)] [, `options']
     if "`kind'"=="sasxport5" & "`describe'"!="" & ("`clear'"!="" | "`novallabels'"!="") exit 198
+    if "`snapshot'" != "" & "`fast'" != "" {
+        di as error "options snapshot and fast may not be combined"
+        exit 198
+    }
     local rest `"`anything'"'
     local prefix ""
     local found 0
@@ -176,22 +180,27 @@ program define _cio_import, rclass
         local members = strlower("$CTOOLS_CIO_members")
         local descriptions "`member'"
         if "`kind'"=="sasxport5" & "`member'"=="" local descriptions "`members'"
-        foreach item of local descriptions {
-            if "`kind'"=="sasxport5" {
-                local __cio_member "`item'"
-                plugin call ctools_plugin, "cio scan `kind'"
-                local nobs $CTOOLS_CIO_nobs
-                local nvar $CTOOLS_CIO_nvar
-                local size $CTOOLS_CIO_size
-            }
-            di "`item': `nvar' variables, `nobs' observations"
-            forvalues j=1/`nvar' {
-                plugin call ctools_plugin, "cio column `j'"
-                di "${CTOOLS_CIO_name}  ${CTOOLS_CIO_type}  ${CTOOLS_CIO_label}"
+        * An error or Break in the listing still releases the scanned file
+        capture noisily {
+            foreach item of local descriptions {
+                if "`kind'"=="sasxport5" {
+                    local __cio_member "`item'"
+                    plugin call ctools_plugin, "cio scan `kind'"
+                    local nobs $CTOOLS_CIO_nobs
+                    local nvar $CTOOLS_CIO_nvar
+                    local size $CTOOLS_CIO_size
+                }
+                di "`item': `nvar' variables, `nobs' observations"
+                forvalues j=1/`nvar' {
+                    plugin call ctools_plugin, "cio column `j'"
+                    di "${CTOOLS_CIO_name}  ${CTOOLS_CIO_type}  ${CTOOLS_CIO_label}"
+                }
             }
         }
-        plugin call ctools_plugin, "cio clear"
+        local rc = _rc
+        capture plugin call ctools_plugin, "cio clear"
         macro drop CTOOLS_CIO_*
+        if `rc' exit `rc'
         return scalar N = `nobs'
         return scalar k = `nvar'
         if "`kind'"=="sasxport5" {
@@ -203,26 +212,64 @@ program define _cio_import, rclass
         }
         exit
     }
-    * Preserve also protects data from allocation or SPI failures after scan.
-    preserve
+    * A failure after the scan (allocation, SPI, Break) leaves the data in
+    * memory as they were. Only an Excel workbook reaches this point with data
+    * in memory (the other readers cleared them above, as native ones do);
+    * from Stata 16 they are copied into a frame of this program's own, in
+    * memory (the copy fails before anything changes if memory is short), and
+    * restored from it with frame copy (see cimport.ado for why the load is
+    * not built in a frame that is then renamed). Option snapshot preserves
+    * the data instead (on disk above c(max_preservemem)), as do loads before
+    * Stata 16 and loads into an empty dataset. Option fast keeps no copy and
+    * undoes nothing. preserve and the frame belong to this program, so these
+    * steps are inline.
+    local snapframe ""
+    local snap 0
+    if "`fast'" == "" {
+        if "`snapshot'" == "" & c(stata_version) >= 16 & (_N > 0 | c(k) > 0) {
+            tempname snapframe
+            capture noisily frame copy `c(frame)' `snapframe'
+        }
+        else {
+            capture noisily preserve
+            local snap 1
+        }
+        * A failed copy still releases the scanned file
+        if _rc {
+            local rc = _rc
+            capture plugin call ctools_plugin, "cio clear"
+            macro drop CTOOLS_CIO_*
+            exit `rc'
+        }
+    }
     local loadcase "`case'"
     if inlist("`kind'","sas","spss") | (inlist("`kind'","xls","xlsx") & "`firstrow'"=="") local loadcase preserve
     capture noisily _cio_import_load `kind' `nobs' `nvar' `nlabels', case(`loadcase') wanted(`"`wanted'"') allstringfmt(`"`allstringfmt'"') `novallabels' `allstring'
     local rc = _rc
     capture plugin call ctools_plugin, "cio clear"
+    macro drop CTOOLS_CIO_*
+    if !`rc' {
+        capture noisily {
+            if `"`selectors'"' != "" quietly keep `selectors'
+            if `"`wanted'"' != "" & !inlist("`kind'","xls","xlsx") keep `wanted'
+            if inlist("`kind'","sas","spss") {
+                if "`case'" != "preserve" rename _all, `case'
+                quietly compress
+            }
+            * Validation hook: fail as Break would once the data are loaded
+            if "$CTOOLS_cimport_fault" == "load" error 1
+        }
+        local rc = _rc
+    }
     if `rc' {
-        macro drop CTOOLS_CIO_*
-        restore
+        nobreak {
+            if "`snapframe'" != "" frame copy `snapframe' `c(frame)', replace
+            else if `snap' restore
+        }
         exit `rc'
     }
-    macro drop CTOOLS_CIO_*
-    if `"`selectors'"' != "" quietly keep `selectors'
-    if `"`wanted'"' != "" & !inlist("`kind'","xls","xlsx") keep `wanted'
-    if inlist("`kind'","sas","spss") {
-        if "`case'" != "preserve" rename _all, `case'
-        quietly compress
-    }
-    restore, not
+    if "`snapframe'" != "" frame drop `snapframe'
+    else if `snap' restore, not
     return scalar N = _N
     return scalar k = c(k)
     return scalar width = c(width)

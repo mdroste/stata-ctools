@@ -137,6 +137,18 @@ cio_import_test using "temp/io_allformats/native/fixture.dbf", kind(dbase) name(
 use "temp/io_allformats/source.dta", clear
 drop stamp
 cio_export_test, kind(dbase) ext(dbf) name("dBase writer raw precision and dates")
+foreach year in 1987 2000 2025 {
+    // DBF metadata stores years since 1900, as native import dbase does.
+    char _dta[dbf_year] `=`year'-1900'
+    char _dta[dbf_month] 2
+    char _dta[dbf_day] 17
+    cio_export_test, kind(dbase) ext(dbf) name("dBase original header date `year'") opts(origdbfdate)
+    mata: fh=fopen("temp/io_allformats/native/output.dbf","r"); ref_header=fread(fh,4); fclose(fh)
+    mata: fh=fopen("temp/io_allformats/result/output.dbf","r"); got_header=fread(fh,4); fclose(fh)
+    mata: st_local("header_same",strofreal(ref_header==got_header))
+    cio_record "dBase original date bytes `year'" `=cond(`header_same',0,9)'
+}
+
 foreach fmt in %10.2f %10.2e %10.0g {
     format precise `fmt'
     cio_export_test, kind(dbase) ext(dbf) name("dBase datafmt `fmt'") opts(datafmt)
@@ -185,7 +197,12 @@ foreach shape in shape0 shape1 shape3 shape5 shape8 shape11 shape13 shape15 shap
         local rc=_rc
         cio_record "SHP `shape' native unsupported measure export" `=cond(`rc'==`native_rc',0,9)'
     }
-    else cio_export_test, kind(shp) ext(shp) name("SHP `shape' writer") opts(shx)
+    else {
+        cio_export_test, kind(shp) ext(shp) name("SHP `shape' writer") opts(shx)
+        clonevar custom_id=_ID
+        replace custom_id=custom_id+100 if !missing(custom_id)
+        cio_export_test, kind(shp) ext(shp) name("SHP `shape' explicit identifier") opts(shx id(custom_id))
+    }
 }
 
 /* Compare failure state with native: Excel retains data; other readers clear. */

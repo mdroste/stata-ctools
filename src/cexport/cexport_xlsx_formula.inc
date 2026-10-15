@@ -78,18 +78,56 @@ static char *xedit_translate_formula(const char *formula, int dc, int dr) {
   }
   return out.data;
 }
-static int xedit_shared_id(const xedit_node *f, const char *id) {
-  const char *a, *b, *v;
-  size_t length;
-  return xedit_attr_span(f, "si", &a, &b, &v, &length) &&
-         strlen(id) == length && !memcmp(id, v, length);
+/* The first qualifying old anchor of each si, and what the merged sheet holds
+ * for that si: a surviving anchor, or the first dependent with a cell ref. */
+typedef struct {
+  xedit_node anchor, first; /* anchor in oldxml; dependent in merged */
+  char *id;                 /* decoded si */
+  int col, row, nc, nr, survives;
+} xedit_shared_group;
+typedef struct {
+  const char *start, *end;
+  char *text;
+} xedit_shared_edit;
+static int xedit_shared_cmp(const void *x, const void *y) {
+  const xedit_shared_group *a = x, *b = y;
+  int c = strcmp(a->id, b->id);
+  return c ? c : (a->anchor.start > b->anchor.start) -
+                     (a->anchor.start < b->anchor.start);
 }
+static int xedit_shared_edit_cmp(const void *x, const void *y) {
+  const xedit_shared_edit *a = x, *b = y;
+  return (a->start > b->start) - (a->start < b->start);
+}
+/* Merged cells match a decoded id by their raw si bytes. */
+static xedit_shared_group *xedit_shared_lookup(xedit_shared_group *groups,
+                                               size_t count, const char *v,
+                                               size_t length) {
+  size_t lo = 0, hi = count;
+  while (lo < hi) {
+    size_t mid = lo + (hi - lo) / 2, n = strlen(groups[mid].id);
+    int c = memcmp(groups[mid].id, v, n < length ? n : length);
+    if (!c)
+      c = (n > length) - (n < length);
+    if (!c)
+      return &groups[mid];
+    if (c < 0)
+      lo = mid + 1;
+    else
+      hi = mid;
+  }
+  return NULL;
+}
+/* One pass over each sheet, then one rebuild: a relocation makes its si's
+ * anchor survive, so only the first old anchor of an si can move. */
 static char *xedit_shared_anchors(const char *oldxml, const char *merged) {
-  char *result = strdup(merged);
-  if (!result)
-    return NULL;
+  const char *mend = merged + strlen(merged);
+  xedit_shared_group *groups = NULL;
+  xedit_shared_edit *edits = NULL;
+  size_t ngroups = 0, nedits = 0, cap = 0, ecap = 0, extra = 0;
+  char *result = NULL;
   const char *p = oldxml, *end = p + strlen(p);
-  xedit_node cell, anchor;
+  xedit_node cell, anchor, f;
   while (xedit_find(p, end, "c", &cell)) {
     p = cell.end;
     if (!xedit_find(cell.open_end, cell.close, "f", &anchor) || anchor.empty ||
@@ -98,78 +136,127 @@ static char *xedit_shared_anchors(const char *oldxml, const char *merged) {
     char *type = xedit_attr(&anchor, "t"), *id = xedit_attr(&anchor, "si");
     int shared = type && !strcmp(type, "shared") && id;
     free(type);
-    if (!shared) {
-      free(id);
-      continue;
-    }
     int col, row;
-    if (!xedit_cell(&cell, &col, &row)) {
+    if (!shared || !xedit_cell(&cell, &col, &row)) {
       free(id);
       continue;
     }
-    const char *q = result, *limit = q + strlen(q);
-    xedit_node next, f, first = {0};
-    int nc = 0, nr = 0, surviving_anchor = 0;
-    while (xedit_find(q, limit, "c", &next)) {
-      q = next.end;
-      if (!xedit_find(next.open_end, next.close, "f", &f) ||
-          !xedit_shared_id(&f, id))
-        continue;
-      if (!f.empty && f.close > f.open_end) {
-        surviving_anchor = 1;
-        break;
+    if (ngroups == cap) {
+      size_t grown = cap ? cap * 2 : 16;
+      xedit_shared_group *g = realloc(groups, grown * sizeof(*groups));
+      if (!g) {
+        free(id);
+        goto done;
       }
-      if (!first.start && xedit_cell(&next, &nc, &nr))
-        first = f;
+      groups = g;
+      cap = grown;
     }
-    free(id);
-    if (surviving_anchor || !first.start)
+    groups[ngroups++] =
+        (xedit_shared_group){anchor, {0}, id, col, row, 0, 0, 0};
+  }
+  if (ngroups)
+    qsort(groups, ngroups, sizeof(*groups), xedit_shared_cmp);
+  size_t kept = 0;
+  for (size_t g = 0; g < ngroups; g++) {
+    if (kept && !strcmp(groups[kept - 1].id, groups[g].id))
+      free(groups[g].id);
+    else
+      groups[kept++] = groups[g];
+  }
+  ngroups = kept;
+  const char *q = ngroups ? merged : mend;
+  while (xedit_find(q, mend, "c", &cell)) {
+    q = cell.end;
+    const char *a, *b, *v;
+    size_t length;
+    if (!xedit_find(cell.open_end, cell.close, "f", &f) ||
+        !xedit_attr_span(&f, "si", &a, &b, &v, &length))
       continue;
-    size_t length = (size_t)(anchor.close - anchor.open_end);
+    xedit_shared_group *g = xedit_shared_lookup(groups, ngroups, v, length);
+    if (!g || g->survives)
+      continue;
+    if (!f.empty && f.close > f.open_end)
+      g->survives = 1;
+    else if (!g->first.start && xedit_cell(&cell, &g->nc, &g->nr))
+      g->first = f;
+  }
+  for (size_t g = 0; g < ngroups; g++) {
+    const xedit_shared_group *s = &groups[g];
+    if (s->survives || !s->first.start)
+      continue;
+    size_t length = (size_t)(s->anchor.close - s->anchor.open_end);
     char *formula = malloc(length + 1);
     if (!formula)
-      goto failed;
-    memcpy(formula, anchor.open_end, length);
+      goto done;
+    memcpy(formula, s->anchor.open_end, length);
     formula[length] = 0;
     length = xlsx_xml_decode_entities(formula, length);
     formula[length] = 0;
-    char *translated = xedit_translate_formula(formula, nc - col, nr - row);
+    char *translated =
+        xedit_translate_formula(formula, s->nc - s->col, s->nr - s->row);
     free(formula);
     if (!translated)
-      goto failed;
+      goto done;
     length = strlen(translated);
     if (length > (SIZE_MAX - 1) / 6) {
       free(translated);
-      goto failed;
+      goto done;
     }
     char *escaped = malloc(length * 6 + 1);
     if (!escaped) {
       free(translated);
-      goto failed;
+      goto done;
     }
     xlsx_escape_xml(translated, escaped, length * 6 + 1);
     free(translated);
     StringBuffer node;
     if (!strbuf_init(&node, length * 6 + 256)) {
       free(escaped);
-      goto failed;
+      goto done;
     }
-    strbuf_append_n(&node, anchor.start,
-                    (size_t)(anchor.open_end - anchor.start));
+    strbuf_append_n(&node, s->anchor.start,
+                    (size_t)(s->anchor.open_end - s->anchor.start));
     strbuf_append(&node, escaped);
     free(escaped);
-    strbuf_append_n(&node, anchor.close, (size_t)(anchor.end - anchor.close));
-    char *updated = node.data ? xedit_replace(result, &first, node.data) : NULL;
-    free(node.data);
-    if (!updated)
-      goto failed;
-    free(result);
-    result = updated;
+    strbuf_append_n(&node, s->anchor.close,
+                    (size_t)(s->anchor.end - s->anchor.close));
+    if (!node.data)
+      goto done;
+    if (nedits == ecap) {
+      size_t grown = ecap ? ecap * 2 : 16;
+      xedit_shared_edit *e = realloc(edits, grown * sizeof(*edits));
+      if (!e) {
+        free(node.data);
+        goto done;
+      }
+      edits = e;
+      ecap = grown;
+    }
+    edits[nedits++] =
+        (xedit_shared_edit){s->first.start, s->first.end, node.data};
+    extra += node.len;
   }
+  if (nedits)
+    qsort(edits, nedits, sizeof(*edits), xedit_shared_edit_cmp);
+  StringBuffer out;
+  if (!strbuf_init(&out, (size_t)(mend - merged) + extra + 64))
+    goto done;
+  const char *keep = merged;
+  for (size_t e = 0; e < nedits; e++) {
+    strbuf_append_n(&out, keep, (size_t)(edits[e].start - keep));
+    strbuf_append(&out, edits[e].text);
+    keep = edits[e].end;
+  }
+  strbuf_append(&out, keep);
+  result = out.data; /* NULL after a failed grow */
+done:
+  for (size_t g = 0; g < ngroups; g++)
+    free(groups[g].id);
+  free(groups);
+  for (size_t e = 0; e < nedits; e++)
+    free(edits[e].text);
+  free(edits);
   return result;
-failed:
-  free(result);
-  return NULL;
 }
 /* Remove calculation-chain declarations, returning the related ZIP part. */
 static char *xedit_remove_chain(const char *xml, const char *element,

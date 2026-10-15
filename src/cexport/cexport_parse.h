@@ -13,18 +13,10 @@
 
 #include "cexport_context.h"
 
-typedef struct {
-    char *destination;
-    char *temporary;
-    bool replace;
-    bool owns_temporary;
-} cexport_output;
+#include "formats/ctools_output.h"
 
 ST_retcode cexport_read_local(const char *field, char **value);
 ST_retcode cexport_column_metadata(size_t column, char **name, int *type, int *date);
-ST_retcode cexport_output_prepare(cexport_output *out, const char *filename, bool replace);
-ST_retcode cexport_output_commit(cexport_output *out);
-void cexport_output_cleanup(cexport_output *out);
 
 /* ========================================================================
    Context Management

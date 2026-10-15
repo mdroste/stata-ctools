@@ -34,7 +34,7 @@ cqreg depvar indepvars [if] [in] [, options]
 |--------|-------------|
 | `tolerance(#)` | Convergence tolerance (default: 1e-12) |
 | `maxiter(#)` | Maximum IPM iterations (default: 200) |
-| `nopreprocess(#)` | Preprocessing control: 0 = disabled (default), -1 = enabled (experimental) |
+| `nopreprocess(#)` | Accepted for backward compatibility; has no effect (`nopreprocess(-1)` returns error 198) |
 
 Exhausting the iteration limit, numerical breakdown, or nonfinite results returns error 430 without posting new estimates.
 
@@ -180,12 +180,8 @@ Cluster-robust standard errors clustered on the specified variable.
 `absorb()` returns an error because least-squares partialling does not preserve
 quantile loss. Use explicit indicators when the number of groups permits it.
 
-### Preprocessing (Experimental)
-The `nopreprocess(-1)` option enables an experimental preprocessing algorithm based on Chernozhukov, Fernández-Val, and Melly (2020). This attempts to speed up estimation by:
-1. Solving on a subsample first
-2. Exploiting that most residual signs are predictable
-
-**Note**: The preprocessing implementation is under development and disabled by default. The direct Frisch-Newton solver is recommended.
+### Solver
+`cqreg` always uses the direct Frisch-Newton interior point solver. The experimental preprocessing solver that `nopreprocess(-1)` used to select has been removed; the option is still parsed so existing do-files with `nopreprocess(0)` or `nopreprocess(1)` keep running.
 
 ## Comparison with qreg
 

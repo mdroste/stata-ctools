@@ -48,6 +48,10 @@
 {syntab:Advanced}
 {synopt:{opt quad}}use quad-precision accumulation in CG solver{p_end}
 
+{syntab:Failure handling}
+{synopt:{opt snap:shot}}{help preserve} the whole dataset, as earlier versions did; written to disk above {cmd:c(max_preservemem)}{p_end}
+{synopt:{opt fast}}undo nothing; a failure or Break can leave the new variables behind{p_end}
+
 {syntab:Reporting}
 {synopt:{opt verbose}}display progress information and timing{p_end}
 {synopt:{opt time:it}}display timing breakdown{p_end}
@@ -84,11 +88,16 @@ the estimated fixed effect for each observation. {bf:Note:} Variable value stora
 is currently a known limitation; the variables are created but may not contain values.
 
 {phang}
-{opt dofadjustments(doftype)} controls how degrees of freedom are calculated.
-{it:doftype} may be {opt all} (default), {opt none}, {opt firstpair}, or
-{opt pairwise}. With {opt none}, no adjustment for connected groups is made.
-With {opt firstpair}, only the first two FE variables are checked for
-connectivity. With {opt pairwise} or {opt all}, all FE pairs are checked.
+{opt dofadjustments(list)} selects how redundant fixed-effect coefficients are
+counted, as in {cmd:reghdfe}. {it:list} may be {opt all} (default), {opt none},
+or any of {opt first:pair} or {opt pair:wise}, {opt cl:usters} and
+{opt cont:inuous}. {opt pairwise} counts each effect's redundant coefficients
+from the mobility groups it forms with every earlier effect; {opt firstpair}
+examines the first two effects only. {opt clusters} treats effects nested
+within the cluster variable as costing no degrees of freedom and sets them
+aside before mobility groups are counted. {opt all} is {opt pairwise clusters}
+{opt continuous}. {opt continuous} concerns slope coefficients, which
+{cmd:creghdfe} does not absorb, and has no effect.
 
 {phang}
 {opt groupvar(newvar)} creates a new variable containing the mobility group
@@ -142,6 +151,29 @@ with ill-conditioned problems.
 {phang}
 {opt residuals(newvar)} is an alias for {opt resid2(newvar)}, provided for
 compatibility with {help reghdfe:reghdfe}.
+
+{dlgtab:Failure handling}
+
+{pstd}
+By default a failed or interrupted {cmd:creghdfe} leaves the data as they were
+without writing a snapshot of the dataset: it only adds variables (the
+residuals, {opt groupvar()} and the {opt savefe} variables, which the plugin
+fills), so after a failure or Break it drops them again and resets
+{cmd:c(changed)}. Results in {cmd:e()} are cleared.
+
+{phang}
+{opt snapshot} restores the data after a failed or interrupted regression from a
+{help preserve} snapshot of the whole dataset instead, as earlier versions of
+{cmd:creghdfe} did. Stata keeps the snapshot in memory up to
+{cmd:c(max_preservemem)} (1 GB by default) and writes it to disk above that, so
+large datasets take longer and write the whole dataset once.
+{p_end}
+
+{phang}
+{opt fast} undoes nothing: if the regression fails after creating its output
+variables, or Break is pressed, the error is reported but the new variables
+stay in the data. {opt fast} may not be combined with {opt snapshot}.
+{p_end}
 
 {dlgtab:Reporting}
 

@@ -54,7 +54,7 @@ if `binscatter_installed' {
         * Run binscatter and extract bin data from CSV
         preserve
         quietly `bs_cmd'
-        import delimited _bs_test.csv, clear
+        import delimited _bs_test.csv, clear asdouble
         rename `xvar' bs_x
         rename `yvar' bs_y
         sort bs_x
@@ -223,16 +223,31 @@ if `binscatter_installed' {
         nbins(10) yvar(price) xvar(mpg) testname("nquantiles(10)")
 
     * nquantiles(50) on larger dataset (auto has only 21 unique mpg values)
-    * Lower tolerance: bin near zero inflates relative error in sigfigs metric
     clear
     set seed 12345
     set obs 2000
     gen x = rnormal()
     gen y = 2*x + rnormal()
-    compare_binscatter_bins, ///
-        bs_cmd(binscatter y x, nquantiles(50) savedata(_bs_test) replace) ///
-        cb_cmd(cbinscatter y x, nquantiles(50) nograph) ///
-        nbins(50) yvar(y) xvar(x) testname("nquantiles(50)") minsf(5)
+    * CSV serialization in binscatter uses a limited-width numeric format.
+    * Near-zero means lose significant digits there. Use its actual bin IDs
+    * and double-precision Stata means to test the numerical result instead.
+    tempvar reference_bin xtile_bin
+    tempname reference_x reference_y candidate_x candidate_y
+    binscatter y x, nquantiles(50) genxq(`reference_bin')
+    xtile `xtile_bin' = x, nq(50)
+    assert `reference_bin' == `xtile_bin'
+    test_pass "binscatter nquantiles(50): assignments match xtile"
+    preserve
+    recast double x y
+    collapse (mean) x y, by(`reference_bin')
+    mkmat x, matrix(`reference_x')
+    mkmat y, matrix(`reference_y')
+    restore
+    cbinscatter y x, nquantiles(50) nograph
+    matrix `candidate_x' = e(bindata)[1...,3]
+    matrix `candidate_y' = e(bindata)[1...,4]
+    assert_matrix_equal `reference_x' `candidate_x' $DEFAULT_SIGFIGS "binscatter X: nquantiles(50)"
+    assert_matrix_equal `reference_y' `candidate_y' $DEFAULT_SIGFIGS "binscatter Y: nquantiles(50)"
 }
 
 * Test invalid nquantiles (should error)
@@ -457,11 +472,10 @@ else {
  * Compares actual bin X and Y coordinates between cbinscatter method(binsreg)
  * and binsreg.ado. Uses price as X (continuous, 73 unique values in auto).
  *
- * TOLERANCE NOTE: binsreg.ado loses precision when storing quantile cutpoints
- * in Stata local macros (double->string->double via binsreg_irecode). This
- * causes ~1% of observations to be assigned to different bins vs xtile. Our
- * cutpoint algorithm matches xtile exactly, so bin X/Y means differ slightly.
- * We use a lower tolerance (0.5 sigfigs) to accommodate this known limitation.
+ * Compare at the standard significant-figure threshold on identical bins.
+ * The reference adapter below uses explicit knots between xtile groups to
+ * avoid binsreg's cutpoint-to-macro rounding, double storage for saved dots,
+ * and keepsingletons to match cbinscatter's estimation and centering sample.
  ******************************************************************************/
 print_section "method(binsreg) Option"
 
@@ -470,6 +484,57 @@ capture which binsreg
 local binsreg_installed = (_rc == 0)
 
 if `binsreg_installed' {
+
+    * Compare the same partition at full precision using binsreg's public options.
+    * Its default helper rounds cutpoints through local macros; mid-gap knots
+    * preserve xtile's partition. Assert that equality before fitting anything.
+    * For degree-zero dots, moving knots inside empty gaps also preserves the
+    * fitted model. This adapter is deliberately restricted to dots(0 0).
+    * cbinscatter keeps FE singletons and centers over the full eligible sample;
+    * reghdfe's default drops them and can shift every adjusted bin vertically.
+    capture program drop ctools_binsreg_reference
+    program define ctools_binsreg_reference
+        syntax varlist(min=2 numeric) [if] [in] [aw fw pw], ///
+            NBINS(integer) DOTS(numlist integer min=2 max=2) [ABSorb(varlist) *]
+        assert "`dots'" == "0 0"
+        marksample touse
+        if "`absorb'" != "" markout `touse' `absorb'
+        local x : word 2 of `varlist'
+        local wt ""
+        if "`weight'" != "" local wt "[`weight'`exp']"
+        tempvar q refq
+        tempname bounds knots
+        quietly xtile `q' = `x' if `touse' `wt', nq(`nbins')
+        preserve
+        quietly keep if `touse'
+        quietly collapse (min) lo=`x' (max) hi=`x', by(`q')
+        assert _N == `nbins'
+        mkmat lo hi, matrix(`bounds')
+        restore
+        matrix `knots' = J(`nbins'+1, 1, .)
+        matrix `knots'[1,1] = `bounds'[1,1]
+        matrix `knots'[`nbins'+1,1] = `bounds'[`nbins',2]
+        local positions ""
+        forvalues b = 2/`nbins' {
+            matrix `knots'[`b',1] = `bounds'[`b'-1,2]/2 + `bounds'[`b',1]/2
+            local cut : display %24.17g `knots'[`b',1]
+            local positions "`positions' `cut'"
+        }
+        quietly gen long `refq' = .
+        quietly binsreg_irecode `x' if `touse', knotmat(`knots') binid(`refq')
+        assert `refq' == `q' if `touse'
+        local absopt ""
+        if "`absorb'" != "" local absopt "absorb(`absorb') reghdfeopt(keepsingletons tolerance(1e-12))"
+        * binsreg creates its saved dot variables using Stata's default type.
+        * Restore the caller's setting even when the reference command fails.
+        local oldtype "`c(type)'"
+        set type double
+        capture noisily binsreg `varlist' if `touse' `wt', ///
+            dots(`dots') binspos(`positions') `absopt' `options'
+        local rc = _rc
+        set type `oldtype'
+        exit `rc'
+    end
 
     * -------------------------------------------------------------------------
     * Helper: compare_binsreg_bins
@@ -482,13 +547,16 @@ if `binsreg_installed' {
     * -------------------------------------------------------------------------
     capture program drop compare_binsreg_bins
     program define compare_binsreg_bins
-        syntax, binsreg_cmd(string asis) cbins_cmd(string asis) nbins(integer) testname(string) [minsf(real 0.5)]
+        syntax, binsreg_cmd(string asis) cbins_cmd(string asis) nbins(integer) testname(string) [minsf(real $DEFAULT_SIGFIGS)]
 
         local min_sigfigs = `minsf'
 
         * Run binsreg and extract bin coordinates
         preserve
-        quietly `binsreg_cmd'
+        gettoken refcommand refargs : binsreg_cmd
+        assert "`refcommand'" == "binsreg"
+        capture erase _binsreg_test.dta
+        quietly ctools_binsreg_reference `refargs'
         use _binsreg_test, clear
         mkmat dots_fit, mat(_br_y)
         mkmat dots_x, mat(_br_x)
@@ -689,11 +757,10 @@ else {
  * (e.g. mpg with 21 unique values) creates one bin per unique value regardless
  * of nbins(), making comparison impossible. Use price, weight, ln_wage, etc.
  *
- * TOLERANCE NOTE: binsreg.ado loses precision when storing quantile cutpoints
- * in Stata local macros (double->string->double via binsreg_irecode). This
- * causes ~1% of observations to be assigned to different bins vs xtile. Our
- * cutpoint algorithm matches xtile exactly, so bin X/Y means differ slightly.
- * We use a lower tolerance (0.5 sigfigs) to accommodate this known limitation.
+ * Compare at the standard significant-figure threshold on identical bins.
+ * The reference adapter below uses explicit knots between xtile groups to
+ * avoid binsreg's cutpoint-to-macro rounding, double storage for saved dots,
+ * and keepsingletons to match cbinscatter's estimation and centering sample.
  ******************************************************************************/
 print_section "method(binsreg) vs binsreg.ado"
 
@@ -1813,7 +1880,84 @@ else {
     }
 }
 
+* An already-residualized outcome must not stop demeaning the bin indicators.
+* Check bin contrasts against an independent regression on explicit FE dummies.
+foreach weighted in 0 1 {
+    clear
+    set obs 48
+    gen int obsid = _n - 1
+    gen int fe1 = 1 + floor(obsid / 16)
+    gen int fe2 = 1 + floor(obsid / 12)
+    gen byte x = 1 + mod(mod(obsid, 7), 3)
+    gen double raw_y = sin(.7 * obsid) + .05 * obsid
+    gen double w = 1 + mod(obsid, 5)
+    local wt ""
+    if `weighted' local wt "[aw=w]"
+    regress raw_y i.fe1 i.fe2 `wt'
+    predict double y, residuals
+    regress y i.x i.fe1 i.fe2 `wt'
+    scalar expected2 = _b[2.x]
+    scalar expected3 = _b[3.x]
+    cbinscatter y x `wt', discrete absorb(fe1 fe2) method(binsreg) nograph
+    matrix batch_bins = e(bindata)
+    if abs(batch_bins[2,4] - batch_bins[1,4] - expected2) < 1e-9 & ///
+       abs(batch_bins[3,4] - batch_bins[1,4] - expected3) < 1e-9 {
+        test_pass "batch FE convergence with residualized y (weighted=`weighted')"
+    }
+    else {
+        test_fail "batch FE convergence with residualized y (weighted=`weighted')" "bin contrasts differ from dummy OLS"
+    }
+
+}
+
+/*******************************************************************************
+ * savedata() leaves the data in memory alone
+ *
+ * The bins are built and saved in a frame of their own (Stata 16 or later):
+ * the data are neither copied nor cleared, and a failed save changes nothing.
+ ******************************************************************************/
+print_section "savedata() and the Data in Memory"
+capture confirm file "validation/rollback_helpers.do"
+if !_rc do "validation/rollback_helpers.do"
+else do "rollback_helpers.do"
+
+sysuse auto, clear
+label data "cbinscatter savedata data"
+note: dataset note
+char _dta[rb_char] dataset characteristic
+sort foreign make
+tempfile rb_copy rb_bins
+save `rb_copy'
+_ctools_rb_state
+local before `"`r(state)'"'
+local frames ""
+if c(stata_version) >= 16 {
+    quietly frames dir
+    local frames `"`r(frames)'"'
+}
+foreach target in "`rb_bins'" "`c(tmpdir)'/rb_no_such_dir/bins.dta" {
+    capture cbinscatter price mpg, nquantiles(5) nograph savedata("`target'")
+    local rc = _rc
+    _ctools_rb_state
+    local after `"`r(state)'"'
+    local frames_now ""
+    if c(stata_version) >= 16 {
+        quietly frames dir
+        local frames_now `"`r(frames)'"'
+    }
+    local name = cond("`target'" == "`rb_bins'", "[savedata] data unchanged", "[savedata] failed save changes nothing")
+    local ok = cond("`target'" == "`rb_bins'", `rc' == 0, `rc' != 0)
+    if `ok' & `"`macval(after)'"' == `"`macval(before)'"' & `"`frames_now'"' == `"`frames'"' {
+        test_pass "`name'"
+    }
+    else test_fail "`name'" "rc=`rc', state or frames changed"
+}
+use `rb_bins', clear
+if _N > 0 & c(k) == 5 test_pass "[savedata] bins saved"
+else test_fail "[savedata] bins saved" "N=`=_N' k=`=c(k)'"
+
 * Clean up helpers
+capture program drop ctools_binsreg_reference
 capture program drop compare_binscatter_bins
 capture program drop compare_binsreg_bins
 

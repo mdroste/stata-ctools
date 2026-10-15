@@ -83,7 +83,8 @@ static int xe_globals(FILE *f, const unsigned char *old, size_t oldlen,
                       long **bounds, unsigned *nbounds, unsigned *strings,
                       unsigned *styles, size_t *newsheet) {
   size_t p = 0, np = 0;
-  xe_record r, nr, sst = {0}, bound = {0};
+  /* Zeroed: an unreadable first record must fail the r.id check below. */
+  xe_record r = {0}, nr = {0}, sst = {0}, bound = {0};
   *strings = 0;
   *styles = 0;
   *nbounds = 0;
@@ -174,7 +175,7 @@ static int xe_sheet(FILE *f, const unsigned char *old, size_t oldlen,
                     int action, int keep, int r0, int c0, size_t n, int k,
                     xlsWorkSheet *ws) {
   size_t p = start;
-  xe_record r;
+  xe_record r = {0}; /* an unreadable first record fails the r.id check */
   int rc, skip_string = 0;
   while (xe_next(old, oldlen, &p, &r)) {
     if (r.id == 0x0a)
@@ -386,8 +387,11 @@ static int xe_edit(const char *path, const char *sheet, int action, int keep,
   if (!wb)
     return 610;
   *book = wb;
+  /* libxls leaves a name it cannot decode NULL; it matches no sheet(). */
   for (unsigned i = 0; i < wb->sheets.count; i++)
-    if (!*sheet ? i == 0 : !strcasecmp(sheet, wb->sheets.sheet[i].name))
+    if (!*sheet ? i == 0
+                : wb->sheets.sheet[i].name &&
+                      !strcasecmp(sheet, wb->sheets.sheet[i].name))
       which = (int)i;
   if (which >= 0 && !action)
     return 602;

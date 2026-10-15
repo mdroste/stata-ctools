@@ -110,6 +110,7 @@ typedef struct {
     size_t bytes_written;    /* Actual bytes written to buffer */
     int success;             /* 1 on success, 0 on failure */
     int read_error;          /* Stata data could not be read */
+    int row_too_long;        /* A row exceeded the formatters' INT_MAX limit */
 } format_chunk_args_t;
 
 /*

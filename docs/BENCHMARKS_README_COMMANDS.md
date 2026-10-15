@@ -1,8 +1,9 @@
 # Interpolation, interval joins, and string splitting: native/SSC comparisons
 
 These measurements compare `cipolate` with native `ipolate`, `csplit` with native
-`split`, and `crangejoin` with SSC `rangejoin`. They support the approximate
-speedups in the [README](../README.md). The separate
+`split`, and `crangejoin` with SSC `rangejoin`. They supplied the earlier
+three-command speedups in the [README](../README.md). The current table uses
+the [20-variable one-shot profiler](README_BENCHMARK.md). The separate
 [optimization report](PERFORMANCE_NEWCOMMANDS.md) compares earlier and later C
 implementations and is not the baseline for these speedups.
 

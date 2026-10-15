@@ -20,8 +20,10 @@ program define cpplmhdfe, eclass
 
     * Start wall clock timer
     local __do_timing = 0
-    timer clear 98
-    timer on 98
+    quietly _ctools_clock __ct_lap98
+
+    * Drop whatever an interrupted run left behind
+    _ctools_cleanup cpplmhdfe
 
     syntax varlist(min=1 fv ts) [aw fw pw] [if] [in] [, Absorb(string) VCE(string) Verbose(integer 0) ///
         TOLerance(real 1e-8) ITERATE(integer 10000) THReads(integer 0) ///
@@ -32,7 +34,7 @@ program define cpplmhdfe, eclass
         CLuster(string) MAXITerations(integer 10000) ITOLerance(real -1) ///
         SEParation(string) EForm IRr noLog TIMEit ///
         GUESS(string) Standardize_data(integer 1) Min_ok(integer 1) ///
-        Use_exact_solver(integer 0) Use_exact_partial(integer 1) Use_heuristic_tol(integer 1) ///
+        Use_exact_solver(integer 0) Use_exact_partial(integer -1) Use_heuristic_tol(integer 1) ///
         Start_inner_tol(real 1e-4) Remove_collinear_variables(integer 1) ///
         Use_step_halving(integer 0) Step_halving_memory(real .9) Max_step_halving(integer 2) ///
         Mu_tol(real 1e-6) Relu_tol(real 1e-4) Relu_zero_tol(real 1e-8) ///
@@ -54,7 +56,10 @@ program define cpplmhdfe, eclass
         di as error "unsupported option(s): `options'"
         exit 198
     }
-    if "`irr'" != "" local eform eform
+    * Exponentiated coefficients: ereturn display takes the column title
+    local eform_opt
+    if "`irr'" != "" local eform_opt eform(IRR)
+    else if "`eform'" != "" local eform_opt eform(exp(b))
     if "`cluster'" != "" {
         if "`vce'" != "" error 198
         local vce cluster `cluster'
@@ -83,6 +88,11 @@ program define cpplmhdfe, eclass
         local do_relu=1
     }
 
+    * Exact partialling is the native default, but the reference defaults to
+    * inexact partialling and its stopping schedule depends on that choice.
+    * Record whether exact partialling was explicitly requested.
+    local ref_exact_partial = (`use_exact_partial' == 1)
+    if `use_exact_partial' == -1 local use_exact_partial 1
     foreach option in standardize_data use_exact_solver use_exact_partial use_heuristic_tol remove_collinear_variables use_step_halving relu_strict relu_accelerate {
         if !inlist(``option'',0,1) error 198
     }
@@ -99,9 +109,7 @@ program define cpplmhdfe, eclass
     local guess_code = cond("`guess_method'"=="simple",0,cond("`guess_method'"=="ols",1,2))
     if `guess_code'==2 confirm numeric variable `guess_var'
     else if "`guess_var'"!="" error 198
-    foreach name in `tagsep' `zvarname' {
-        confirm new variable `name'
-    }
+    if "`tagsep'`zvarname'" != "" _ctools_newvars `tagsep' `zvarname'
 
     if "`acceleration'"=="" local acceleration cg
     local accel_code = .
@@ -146,7 +154,7 @@ program define cpplmhdfe, eclass
         local d _ppmlhdfe_d
         capture drop `d'
     }
-    if "`d'" != "" confirm new variable `d'
+    if "`d'" != "" _ctools_newvars `d'
 
     * Parse independent absorbed-DF adjustments, matching reference semantics.
     local dofmethods = lower(trim("`dofadjustments'"))
@@ -254,7 +262,7 @@ program define cpplmhdfe, eclass
         if "`categories'" == "" error 198
         markout `touse' `categories' `continuous', strok
         tempvar fe_id
-        quietly egen long `fe_id' = group(`categories') if `touse'
+        quietly _ctools_group `categories' if `touse', generate(`fe_id')
         local ncontinuous : word count `continuous'
         if `ncontinuous' > 1 {
             di as error "multiple continuous factors in an absorb interaction"
@@ -300,25 +308,11 @@ program define cpplmhdfe, eclass
     local weight_var ""
     local weight_type = 0
     if "`weight'" != "" {
+        * Evaluate the weight expression; marks out and validates the weights
         tempvar evaluated_weight
-        quietly generate double `evaluated_weight' `exp' if `touse'
+        _ctools_weight, generate(`evaluated_weight') touse(`touse') type(`weight') expression(`"`exp'"')
         local weight_var "`evaluated_weight'"
-
-        if "`weight'" == "aweight" {
-            local weight_type = 1
-        }
-        else if "`weight'" == "fweight" {
-            local weight_type = 2
-        }
-        else if "`weight'" == "pweight" {
-            local weight_type = 3
-        }
-        markout `touse' `weight_var'
-        qui count if `weight_var' <= 0 & `touse'
-        if r(N) > 0 {
-            di as error "cpplmhdfe: weights must be positive"
-            exit 198
-        }
+        local weight_type = cond("`weight'" == "aweight", 1, cond("`weight'" == "fweight", 2, 3))
     }
 
     if "`exposure'" != "" & "`offset'" != "" {
@@ -370,27 +364,11 @@ program define cpplmhdfe, eclass
         fvexpand `indepvars' if `touse'
         local coef_names_all "`r(varlist)'"
 
-        * Filter base/omitted levels
-        local __vars_nobase ""
-        local __names_nobase ""
-        local __n_all : word count `coef_names_all'
-        forval __k = 1/`__n_all' {
-            local __vname : word `__k' of `coef_names_all'
-            local __keep = 1
-            local __parts : subinstr local __vname "#" " ", all
-            foreach __p of local __parts {
-                if regexm("`__p'", "b\.") | regexm("`__p'", "o\.") {
-                    local __keep = 0
-                }
-            }
-            if `__keep' {
-                local __vars_nobase `__vars_nobase' `: word `__k' of `__indepvars_all''
-                local __names_nobase `__names_nobase' `__vname'
-            }
-        }
-
-        local indepvars_expanded "`__vars_nobase'"
-        local coef_names "`__names_nobase'"
+        * Base/omitted placeholders are not sent to the plugin
+        _ctools_fvsplit, names(`coef_names_all') vars(`__indepvars_all')
+        local indepvars_expanded "`r(vars)'"
+        local coef_names "`r(names)'"
+        local coef_is_base "`r(base)'"
         local varlist_expanded "`depvar' `indepvars_expanded'"
     }
     else {
@@ -399,6 +377,8 @@ program define cpplmhdfe, eclass
         local indepvars_expanded `no_regressors'
         local varlist_expanded "`depvar' `no_regressors'"
         local coef_names `no_regressors'
+        local coef_names_all `no_regressors'
+        local coef_is_base 0
     }
 
     local nvars : word count `varlist_expanded'
@@ -413,11 +393,9 @@ program define cpplmhdfe, eclass
     local num_cluster_terms = 0
 
     if `"`vce'"' != "" {
-        local vce_lower = lower(trim(`"`vce'"'))
-        if substr("`vce_lower'", 1, 2) == "cl" {
+        _ctools_vce vce_kind clustervar : `vce'
+        if "`vce_kind'" == "cluster" {
             local vcetype = 2
-            gettoken vce_type clustervar : vce
-            local clustervar = trim("`clustervar'")
             if "`clustervar'" == "" {
                 di as error "cpplmhdfe: cluster variable required with vce(cluster)"
                 exit 198
@@ -433,13 +411,25 @@ program define cpplmhdfe, eclass
                 local parts : subinstr local cl "#" " ", all
                 local parts : subinstr local parts "i." "", all
                 markout `touse' `parts', strok
-                tempvar cl_id
-                quietly egen long `cl_id' = group(`parts') if `touse'
+                * A single numeric variable is passed as it is: the plugin
+                * numbers its values in ascending order, the partition and
+                * order egen group() gives. Strings and interactions are
+                * numbered the same way by _ctools_group.
+                local cl_id
+                if `: word count `parts'' == 1 {
+                    capture confirm numeric variable `parts'
+                    if !_rc local cl_id `parts'
+                }
+                if "`cl_id'" == "" {
+                    tempvar cl_id
+                    quietly _ctools_group `parts' if `touse', generate(`cl_id')
+                }
                 local cluster_numeric `cluster_numeric' `cl_id'
             }
             local clustervar `cluster_numeric'
             * Each nonempty subset contributes an inclusion-exclusion term.
-            * egen preserves numeric and string cluster partitions exactly.
+            * _ctools_group preserves numeric and string cluster partitions exactly;
+            * a subset of one dimension is that dimension's variable.
             local num_cluster_terms = 2^`num_cluster_vars' - 1
             forvalues subset = 1/`num_cluster_terms' {
                 local members
@@ -448,12 +438,17 @@ program define cpplmhdfe, eclass
                         local members `members' `: word `dim' of `clustervar''
                     }
                 }
-                tempvar cluster_id
-                quietly egen long `cluster_id' = group(`members') if `touse'
+                if `: word count `members'' == 1 {
+                    local cluster_id `members'
+                }
+                else {
+                    tempvar cluster_id
+                    quietly _ctools_group `members' if `touse', generate(`cluster_id')
+                }
                 local cluster_terms `cluster_terms' `cluster_id'
             }
         }
-        else if inlist("`vce_lower'", "robust", "r", "unadjusted") {
+        else if inlist("`vce_kind'", "robust", "unadjusted") {
             local vcetype = 1
         }
         else {
@@ -483,6 +478,7 @@ program define cpplmhdfe, eclass
         local key = cond("`option'"=="remove_collinear_variables","remove_collinear","`option'")
         scalar __cpplmhdfe_`key' = ``option''
     }
+    scalar __cpplmhdfe_ref_exact_partial = `ref_exact_partial'
     scalar __cpplmhdfe_acceleration = `accel_code'
     scalar __cpplmhdfe_transform = `transform_code'
     scalar __cpplmhdfe_pool = `poolsize'
@@ -522,11 +518,7 @@ program define cpplmhdfe, eclass
     }
 
     * Record setup time
-    timer off 98
-    quietly timer list 98
-    local __time_setup = r(t98)
-    timer clear 98
-    timer on 98
+    _ctools_lap __time_setup __ct_lap98 `__ct_lap98'
 
     * Build varlist for plugin: depvar indepvars fe_vars [cluster_var] [weight_var] [offset_var]
     local plugin_varlist `varlist_expanded' `absorb'
@@ -620,7 +612,7 @@ program define cpplmhdfe, eclass
                 quietly generate double `zvarname' = `separation_certificate'
                 label variable `zvarname' "[cpplmhdfe: ReLU] Certificate of separation"
             }
-            _cpplmhdfe_cleanup
+            _ctools_cleanup cpplmhdfe
             exit
         }
         local total_singletons = `total_singletons' + __cpplmhdfe_num_singletons
@@ -643,17 +635,13 @@ program define cpplmhdfe, eclass
         local reg_rc = 601
     }
     if `reg_rc' {
-        _cpplmhdfe_cleanup
+        _ctools_cleanup cpplmhdfe
         di as error "Error in PPML regression (rc=`reg_rc')"
         exit `reg_rc'
     }
 
     * Record plugin call time
-    timer off 98
-    quietly timer list 98
-    local __time_plugin_call = r(t98)
-    timer clear 98
-    timer on 98
+    _ctools_lap __time_plugin_call __ct_lap98 `__ct_lap98'
 
     * Match the reference's PSD correction on the full standardized covariance
     * (including its implicit constant), before extracting and rescaling slopes.
@@ -714,179 +702,32 @@ program define cpplmhdfe, eclass
     * Pseudo R-squared (McFadden)
     local r2_p = 1 - `ll' / `ll_0'
 
-    * Build coefficient vector and names
-    tempname b V
-
-    local K_full = `K_x'
-    matrix `b' = J(1, `K_full', 0)
-    matrix `V' = J(`K_full', `K_full', 0)
-
-    * Fill in coefficients and VCE for non-collinear variables
-    if `K_keep' > 0 {
-        local kept_idx = 1
-        forval k = 1/`K_x' {
-            local is_collin = __cpplmhdfe_collinear_`k'
-            if `is_collin' == 0 {
-                matrix `b'[1, `k'] = __cpplmhdfe_beta_`kept_idx'
-                local kept_idx2 = 1
-                forval j = 1/`K_x' {
-                    local is_collin_j = __cpplmhdfe_collinear_`j'
-                    if `is_collin_j' == 0 {
-                        matrix `V'[`k', `j'] = __cpplmhdfe_V[`kept_idx', `kept_idx2']
-                        local ++kept_idx2
-                    }
-                }
-                local ++kept_idx
-            }
-        }
-    }
-
-    * Build column names
-    local colnames ""
-    forval k = 1/`K_x' {
-        local vname : word `k' of `coef_names'
-        if `K_keep' == 0 {
-            local colnames `colnames' o.`vname'
-        }
-        else {
-            local is_collin = __cpplmhdfe_collinear_`k'
-            if `is_collin' == 1 {
-                local colnames `colnames' o.`vname'
-            }
-            else {
-                local colnames `colnames' `vname'
-            }
-        }
-    }
-
-    matrix colnames `b' = `colnames'
-    matrix rownames `V' = `colnames'
-    matrix colnames `V' = `colnames'
+    * e(b) and e(V): every term in order, with zeros for omitted regressors
+    * (o. prefix) and factor-variable base levels, then the constant. The
+    * covariance comes from the PSD-corrected matrix with its implicit constant.
+    tempname b V b_kept
+    _ctools_ebv `b' `V', names(`coef_names_all') base(`coef_is_base') ///
+        stub(__cpplmhdfe) kkeep(`K_keep') vmatrix(__cpplmhdfe_V_full) cons(__cpplmhdfe_cons) kept(`b_kept')
 
     * Wald statistic on the retained slope coefficients
     local F = .
     if `K_keep' > 0 {
-        tempname b_test V_test Vinv Wald
-        matrix `b_test' = J(1, `K_keep', 0)
-        matrix `V_test' = J(`K_keep', `K_keep', 0)
-        local row = 0
-        forvalues i=1/`K_x' {
-            if __cpplmhdfe_collinear_`i' == 0 {
-                local ++row
-                matrix `b_test'[1, `row'] = `b'[1, `i']
-                local col = 0
-                forvalues j=1/`K_x' {
-                    if __cpplmhdfe_collinear_`j' == 0 {
-                        local ++col
-                        matrix `V_test'[`row', `col'] = `V'[`i', `j']
-                    }
-                }
-            }
-        }
+        tempname V_test Vinv Wald
+        matrix `V_test' = __cpplmhdfe_V_full[1..`K_keep', 1..`K_keep']
         matrix `Vinv' = syminv(`V_test')
-        matrix `Wald' = `b_test' * `Vinv' * `b_test''
+        matrix `Wald' = `b_kept' * `Vinv' * `b_kept''
         if diag0cnt(`Vinv') == 0 local F = `Wald'[1,1] / `df_m'
     }
 
-    local K_all = `K_x'
-    * Expand b and V to include base levels for factor variables
-    if "`coef_names_all'" != "" {
-        local K_all : word count `coef_names_all'
-        if `K_all' > `K_x' {
-            local K_full_new = `K_all'
-            tempname b_exp V_exp
-            matrix `b_exp' = J(1, `K_full_new', 0)
-            matrix `V_exp' = J(`K_full_new', `K_full_new', 0)
-
-            local __aidx = 1
-            forvalues __j = 1/`K_all' {
-                local __vn_all : word `__j' of `coef_names_all'
-                local __vn_act : word `__aidx' of `coef_names'
-                if "`__vn_all'" == "`__vn_act'" {
-                    local __bmap_`__j' = `__aidx'
-                    local __aidx = `__aidx' + 1
-                }
-                else {
-                    local __bmap_`__j' = 0
-                }
-            }
-
-            forvalues __j = 1/`K_all' {
-                if `__bmap_`__j'' > 0 {
-                    local __aj = `__bmap_`__j''
-                    matrix `b_exp'[1, `__j'] = `b'[1, `__aj']
-                    forvalues __jj = 1/`K_all' {
-                        if `__bmap_`__jj'' > 0 {
-                            local __ajj = `__bmap_`__jj''
-                            matrix `V_exp'[`__j', `__jj'] = `V'[`__aj', `__ajj']
-                        }
-                    }
-                }
-            }
-
-            matrix `b' = `b_exp'
-            matrix `V' = `V_exp'
-            local K_full = `K_full_new'
-
-            local colnames ""
-            forvalues __j = 1/`K_all' {
-                local __vn : word `__j' of `coef_names_all'
-                if `__bmap_`__j'' == 0 {
-                    local colnames `colnames' `__vn'
-                }
-                else {
-                    local __aj = `__bmap_`__j''
-                    if `K_keep' == 0 {
-                        local colnames `colnames' o.`__vn'
-                    }
-                    else {
-                        local is_collin = __cpplmhdfe_collinear_`__aj'
-                        if `is_collin' == 1 {
-                            local colnames `colnames' o.`__vn'
-                        }
-                        else {
-                            local colnames `colnames' `__vn'
-                        }
-                    }
-                }
-            }
-
-            matrix colnames `b' = `colnames'
-            matrix rownames `V' = `colnames'
-            matrix colnames `V' = `colnames'
-        }
-    }
-
-    * Append the constant after restoring the factor-variable base columns.
-    tempname b_with_cons V_with_cons
-    local bcols = colsof(`b')
-    matrix `b_with_cons' = `b', __cpplmhdfe_cons
-    matrix `V_with_cons' = J(`bcols'+1, `bcols'+1, 0)
-    matrix `V_with_cons'[1,1] = `V'
-    matrix `V_with_cons'[`bcols'+1,`bcols'+1] = __cpplmhdfe_V_full[`K_keep'+1,`K_keep'+1]
-    local jkeep = 0
-    forvalues j=1/`bcols' {
-        local active = `j'
-        if "`coef_names_all'" != "" & `K_all' > `K_x' local active = `__bmap_`j''
-        if `active' > 0 {
-            if __cpplmhdfe_collinear_`active' == 0 {
-                local ++jkeep
-                matrix `V_with_cons'[`j',`bcols'+1] = __cpplmhdfe_V_full[`jkeep',`K_keep'+1]
-                matrix `V_with_cons'[`bcols'+1,`j'] = __cpplmhdfe_V_full[`K_keep'+1,`jkeep']
-            }
-        }
-    }
-    local colnames `colnames' _cons
+    * Without regressors only the constant is posted
     if "`indepvars'" == "" {
-        matrix `b_with_cons' = `b_with_cons'[1,`bcols'+1]
-        matrix `V_with_cons' = `V_with_cons'[`bcols'+1,`bcols'+1]
-        local colnames _cons
+        local bcols = colsof(`b')
+        matrix `b' = `b'[1, `bcols']
+        matrix `V' = `V'[`bcols', `bcols']
+        matrix colnames `b' = _cons
+        matrix colnames `V' = _cons
+        matrix rownames `V' = _cons
     }
-    matrix `b' = `b_with_cons'
-    matrix `V' = `V_with_cons'
-    matrix colnames `b' = `colnames'
-    matrix colnames `V' = `colnames'
-    matrix rownames `V' = `colnames'
     if "`d'" != "" {
         quietly generate double `d' = `saved_d'
         label variable `d' "Sum of fixed effects"
@@ -903,11 +744,7 @@ program define cpplmhdfe, eclass
     if "`zvarname'"!="" quietly generate double `zvarname' = `separation_certificate'
 
     * Record results building time
-    timer off 98
-    quietly timer list 98
-    local __time_build = r(t98)
-    timer clear 98
-    timer on 98
+    _ctools_lap __time_build __ct_lap98 `__ct_lap98'
 
     * Post results
     ereturn post `b' `V', esample(`final_sample') depname(`depvar_orig') obs(`N_final')
@@ -969,11 +806,7 @@ program define cpplmhdfe, eclass
     ereturn local cmdline "cpplmhdfe `0'"
 
     * Record ereturn posting time
-    timer off 98
-    quietly timer list 98
-    local __time_ereturn = r(t98)
-    timer clear 98
-    timer on 98
+    _ctools_lap __time_ereturn __ct_lap98 `__ct_lap98'
 
     * Display
     if `num_singletons' > 0 {
@@ -997,18 +830,16 @@ program define cpplmhdfe, eclass
     di as text _col(49) "Log pseudolikelihood" _col(67) "= " as result %10.4f `ll'
 
     di as text ""
-    ereturn display, `eform' `diopts'
+    ereturn display, `eform_opt' `diopts'
 
     di as text ""
     di as text "Absorbed degrees of freedom:"
     matrix list e(dof_table), noheader format(%9.0g)
 
-    _cpplmhdfe_cleanup
+    _ctools_cleanup cpplmhdfe
 
     * Display timing if verbose
-    timer off 98
-    quietly timer list 98
-    local __time_display = r(t98)
+    _ctools_lap __time_display __ct_lap98 `__ct_lap98'
     local __time_total = `__time_setup' + `__time_plugin_call' + `__time_build' + `__time_ereturn' + `__time_display'
 
     if `__do_timing' {
@@ -1026,47 +857,7 @@ program define cpplmhdfe, eclass
         di as text "{hline 55}"
     }
 
-    timer clear 98
-
 end
-
-
-capture program drop _cpplmhdfe_abs_options
-program define _cpplmhdfe_abs_options
-    syntax [, SAVEfe GENerate KEEPSINgletons TOLerance(string) ITERate(string) DOFadjustments(string) ACCELeration(string) TRANSform(string) POOLsize(string)]
-    if "`acceleration'"!="" c_local acceleration `acceleration'
-    if "`transform'"!="" c_local transform `transform'
-    if "`poolsize'"!="" {
-        confirm integer number `poolsize'
-        if `poolsize'<0 | missing(`poolsize') error 198
-        c_local poolsize `poolsize'
-    }
-    c_local save_all_fe = ("`savefe'`generate'"!="")
-    if "`keepsingletons'"!="" c_local keepsingletons keepsingletons
-    if "`tolerance'"!="" {
-        confirm number `tolerance'
-        if `tolerance'<=0 | missing(`tolerance') error 198
-        c_local itolerance `tolerance'
-    }
-    if "`iterate'"!="" {
-        confirm integer number `iterate'
-        if `iterate'<1 | missing(`iterate') error 198
-        c_local iterate `iterate'
-    }
-    if "`dofadjustments'"!="" c_local dofadjustments `dofadjustments'
-end
-
-capture program drop _cpplmhdfe_cleanup
-program define _cpplmhdfe_cleanup
-    local scalars : all scalars
-    foreach name of local scalars {
-        if substr("`name'",1,12)=="__cpplmhdfe_" | substr("`name'",1,11)=="_cpplmhdfe_" {
-            capture scalar drop `name'
-        }
-    }
-    capture matrix drop __cpplmhdfe_V __cpplmhdfe_V_full __cpplmhdfe_scales __cpplmhdfe_input_scales
-end
-
 
 capture mata: mata drop _cpplmhdfe_fix_psd()
 mata:

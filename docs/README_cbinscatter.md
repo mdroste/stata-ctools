@@ -6,6 +6,15 @@ High-performance C-accelerated binned scatter plots.
 
 `cbinscatter` is a high-performance replacement for `binscatter` that uses a C plugin for all data computations. It creates binned scatter plots by dividing the x variable into equal-sized quantile bins and plotting the mean of y within each bin. All heavy computation (data loading, residualization, bin computation, and line fitting) is performed in optimized C code with OpenMP parallelization.
 
+With `method(binsreg)`, observations in singleton fixed-effect groups remain in
+the bins and in the sample used to center adjusted means. Comparisons with
+`binsreg` should use `reghdfeopt(keepsingletons)` and the same bin partition;
+dropping singletons can shift the adjusted means even when bin contrasts agree.
+The validation suite supplies explicit knots between `xtile` groups and saves
+reference dots in double precision, avoiding the rounding of cutpoints and saved
+coordinates in the reference package. It retains the standard seven-significant-figure
+comparison threshold.
+
 ## Syntax
 
 ```stata
@@ -179,7 +188,7 @@ With `verbose`, you'll see time spent in:
 
 - Missing values in x, y, controls, or absorb variables drop observations
 - `absorb()` values only label groups: negative, fractional, large (e.g. 11-digit) and string codes are allowed
-- With `by()`, each group gets independent bins and fit lines
+- With `by()`, groups share the pooled-sample quantile bins (as `binscatter` does; `method(binsreg)` bins each group separately) and get their own fit lines
 - The `discrete` option creates one bin per unique x value; with `method(binsreg)` those means are adjusted for controls/absorb like quantile bins
 - `method(classic)` with controls/absorb fits the line to the residualized data with the sample means added back (binscatter's convention), so `e(coefs)` matches binscatter's `e(y1_coefs)` (which lists `_cons` last)
 - `method(binsreg)` fits the polynomial jointly with the controls and absorbed effects and evaluates it at the controls' means (binsreg's `polyreg()` convention)

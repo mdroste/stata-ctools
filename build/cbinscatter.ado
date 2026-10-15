@@ -31,7 +31,7 @@ program define cbinscatter, eclass sortpreserve
         [LEGEND(string asis)] ///
         [COLors(string)] ///
         [MSYMbols(string)] ///
-        [MLAbels(string)] ///
+        [MLAbels(string asis)] ///
         [*]
 
     * =========================================================================
@@ -187,7 +187,7 @@ program define cbinscatter, eclass sortpreserve
     if "`by'" != "" {
         local by_orig "`by'"
         tempvar by_numeric
-        quietly egen long `by_numeric' = group(`by') if `touse', label
+        quietly _ctools_group `by' if `touse', generate(`by_numeric') label
         local by "`by_numeric'"
         quietly summarize `by' if `touse', meanonly
         local num_by_groups = r(max)
@@ -276,8 +276,7 @@ program define cbinscatter, eclass sortpreserve
     }
 
     * Record start time
-    timer clear 99
-    timer on 99
+    quietly _ctools_clock __ct_lap99
 
     * Call the C plugin
     capture noisily plugin call ctools_plugin `plugin_varlist' if `touse', ///
@@ -285,25 +284,12 @@ program define cbinscatter, eclass sortpreserve
 
     local plugin_rc = _rc
     if `plugin_rc' {
-        * Clean up scalars on error
-        capture scalar drop __cbinscatter_nquantiles __cbinscatter_linetype
-        capture scalar drop __cbinscatter_compute_se __cbinscatter_discrete
-        capture scalar drop __cbinscatter_has_controls __cbinscatter_num_controls
-        capture scalar drop __cbinscatter_has_absorb __cbinscatter_num_absorb
-        capture scalar drop __cbinscatter_has_by __cbinscatter_has_weights
-        capture scalar drop __cbinscatter_weight_type __cbinscatter_verbose
-        capture scalar drop __cbinscatter_reportreg __cbinscatter_method
-        capture scalar drop __cbinscatter_maxiter __cbinscatter_tolerance
-        capture matrix drop __cbinscatter_bins
-        capture matrix drop __cbinscatter_coefs
-        capture matrix drop __cbinscatter_fit_stats
+        _ctools_cleanup cbinscatter
         di as error "cbinscatter: plugin error (rc=`plugin_rc')"
         exit `plugin_rc'
     }
 
-    timer off 99
-    quietly timer list 99
-    local elapsed = r(t99)
+    _ctools_lap elapsed __ct_lap99 `__ct_lap99'
 
     * Retrieve results from scalars
     local N_used = __cbinscatter_N
@@ -312,7 +298,7 @@ program define cbinscatter, eclass sortpreserve
 
     * Display timing if requested
     if "`verbose'" != "" {
-        local plugin_overhead = r(t99) - __cbinscatter_time_total
+        local plugin_overhead = `elapsed' - __cbinscatter_time_total
         if `plugin_overhead' < 0 local plugin_overhead = 0
         di as text ""
         di as text "{hline 55}"
@@ -328,7 +314,7 @@ program define cbinscatter, eclass sortpreserve
         di as text "  {hline 53}"
         di as text "  Plugin call overhead:     " as result %8.4f `plugin_overhead' " sec"
         di as text "{hline 55}"
-        di as text "    Wall clock total:       " as result %8.4f r(t99) " sec"
+        di as text "    Wall clock total:       " as result %8.4f `elapsed' " sec"
         di as text "{hline 55}"
 
         * Display thread diagnostics
@@ -349,23 +335,23 @@ program define cbinscatter, eclass sortpreserve
         di as text "(dropped " as result `N_dropped' as text " observations due to missing values)"
     }
 
-    * Save bin data if requested
+    * Save bin data if requested. The bins are built in a frame of their own
+    * (Stata 16 or later), so the data in memory are neither copied nor
+    * cleared; before Stata 16 they are preserved (on disk above
+    * c(max_preservemem)) and restored.
     if "`savedata'" != "" {
-        preserve
-        quietly {
-            clear
-            svmat __cbinscatter_bins, names(col)
-            rename c1 by_group
-            rename c2 bin_id
-            rename c3 x_mean
-            rename c4 y_mean
-            rename c5 n_obs
-            * Drop empty rows
-            drop if missing(bin_id)
-            save "`savedata'", replace
+        if c(stata_version) >= 16 {
+            tempname binframe
+            frame create `binframe'
+            frame `binframe': _cbinscatter_savebins `"`savedata'"'
+            frame drop `binframe'
+        }
+        else {
+            preserve
+            _cbinscatter_savebins `"`savedata'"'
+            restore
         }
         di as text "(bin data saved to " as result "`savedata'" as text ")"
-        restore
     }
 
     * Generate bin assignment variable if requested
@@ -420,20 +406,29 @@ program define cbinscatter, eclass sortpreserve
         if `actual_num_groups' == 1 {
             * Single group - build scatteri coordinate list
             local coords ""
+            * scatteri labels each point with text that follows its coordinates
+            local marker_label ""
+            if `"`mlabels'"' != "" {
+                gettoken marker_label : mlabels
+                local marker_label `""`marker_label'""'
+            }
             forval r = 1/`nrows' {
                 local yval = `binmat'[`r', 4]
                 local xval = `binmat'[`r', 3]
                 if `yval' != . & `xval' != . {
-                    local coords "`coords' `yval' `xval'"
+                    local coords `"`coords' `yval' `xval' `marker_label'"'
                 }
             }
 
             * Get marker and line colors (binscatter uses different colors for single series)
             local thismcolor : word 1 of `mcolors'
             local thislcolor : word 1 of `lcolors'
+            local thissymbol ""
+            local symbol : word 1 of `msymbols'
+            if "`symbol'" != "" local thissymbol "msymbol(`symbol')"
 
             * Build scatter with mcolor and lcolor (lcolor for connect mode)
-            local scatters "(scatteri `coords', mcolor(`thismcolor') lcolor(`thislcolor'))"
+            local scatters `"(scatteri `coords', mcolor(`thismcolor') lcolor(`thislcolor') `thissymbol')"'
 
             * Add fit line if requested
             if `linetype_num' > 0 {
@@ -468,6 +463,11 @@ program define cbinscatter, eclass sortpreserve
                 local coords ""
                 local grp_x_min = .
                 local grp_x_max = .
+                local marker_label ""
+                if `"`mlabels'"' != "" {
+                    local marker_label : word `g' of `mlabels'
+                    if `"`marker_label'"' != "" local marker_label `""`marker_label'""'
+                }
 
                 forval r = 1/`nrows' {
                     local grpval = `binmat'[`r', 1]
@@ -475,7 +475,7 @@ program define cbinscatter, eclass sortpreserve
                         local yval = `binmat'[`r', 4]
                         local xval = `binmat'[`r', 3]
                         if `yval' != . & `xval' != . {
-                            local coords "`coords' `yval' `xval'"
+                            local coords `"`coords' `yval' `xval' `marker_label'"'
                             if `grp_x_min' == . | `xval' < `grp_x_min' {
                                 local grp_x_min = `xval'
                             }
@@ -496,14 +496,18 @@ program define cbinscatter, eclass sortpreserve
                     local thislcolor "navy"
                 }
 
-                local scatters "`scatters' (scatteri `coords', mcolor(`thismcolor') lcolor(`thislcolor'))"
+                local thissymbol ""
+                local symbol : word `g' of `msymbols'
+                if "`symbol'" != "" local thissymbol "msymbol(`symbol')"
+
+                local scatters `"`scatters' (scatteri `coords', mcolor(`thismcolor') lcolor(`thislcolor') `thissymbol')"'
                 local group_label : label (`by') `g'
                 local legend_labels `"`legend_labels' label(`legend_idx' "`by_orig'==`group_label'")"'
                 local legend_order "`legend_order' `legend_idx'"
                 local legend_idx = `legend_idx' + 1
 
                 * Add fit line for this group if requested
-                if `linetype_num' > 0 & "`coords'" != "" {
+                if `linetype_num' > 0 & `"`coords'"' != "" {
                     local coef_const = __cbinscatter_coefs[`g', 1]
                     local coef_linear = __cbinscatter_coefs[`g', 2]
 
@@ -631,18 +635,24 @@ program define cbinscatter, eclass sortpreserve
     ereturn local cmd "cbinscatter"
     ereturn local cmdline "cbinscatter `0'"
 
-    * Clean up scalars
-    capture scalar drop __cbinscatter_nquantiles __cbinscatter_linetype
-    capture scalar drop __cbinscatter_compute_se __cbinscatter_discrete
-    capture scalar drop __cbinscatter_has_controls __cbinscatter_num_controls
-    capture scalar drop __cbinscatter_has_absorb __cbinscatter_num_absorb
-    capture scalar drop __cbinscatter_has_by __cbinscatter_has_weights
-    capture scalar drop __cbinscatter_weight_type __cbinscatter_verbose
-    capture scalar drop __cbinscatter_reportreg __cbinscatter_method
-    capture scalar drop __cbinscatter_maxiter __cbinscatter_tolerance
-    capture scalar drop __cbinscatter_N __cbinscatter_N_dropped __cbinscatter_num_groups
-    capture scalar drop __cbinscatter_time_load __cbinscatter_time_resid
-    capture scalar drop __cbinscatter_time_bins __cbinscatter_time_fit __cbinscatter_time_total
+    _ctools_cleanup cbinscatter
+end
 
-    timer clear 99
+* Replace the current dataset with the bins in matrix __cbinscatter_bins and
+* save them.
+program define _cbinscatter_savebins
+    version 14.1
+    args savedata
+    quietly {
+        clear
+        svmat __cbinscatter_bins, names(col)
+        rename c1 by_group
+        rename c2 bin_id
+        rename c3 x_mean
+        rename c4 y_mean
+        rename c5 n_obs
+        * Drop empty rows
+        drop if missing(bin_id)
+        save `"`savedata'"', replace
+    }
 end

@@ -25,7 +25,7 @@ This guide documents the internal C infrastructure for developers contributing t
 
 ### Plugin Lifecycle
 
-Most commands follow this pattern. `cdecode` delegates literal value-label decoding to Stata and commits staged outputs only after every variable succeeds.
+Most commands follow this pattern. `cdecode` reads label text through Mata, lets the plugin map values to text, falls back to Stata's `decode` for results the plugin does not produce (strL, multibyte `maxlength()` cuts), and commits staged outputs only after every variable succeeds.
 
 ```
 Stata -> C Plugin -> Stata
@@ -34,11 +34,18 @@ Stata -> C Plugin -> Stata
   3. Store results back to Stata
 ```
 
-On each invocation the dispatcher in `ctools_plugin.c`:
-1. Parses the command name and optional `threads()` setting
-2. Calls `ctools_cleanup_stale_state()` to free leftover state from previously interrupted commands (while preserving state for multi-phase operations like cmerge)
-3. Dispatches to the appropriate `*_main()` function
-4. Destroys the global thread pool on exit
+On each command invocation the dispatcher in `ctools_plugin.c`:
+
+1. Resolves a descriptor from `ctools_commands.def` and parses `threads()`.
+2. Calls `ctools_command_begin()` to validate the phase and clean any previous owner.
+3. Runs the handler and calls `ctools_command_finish(rc)`; an error or final phase cleans its owner.
+4. Destroys the worker pool after the call. Only a valid multi-phase command retains its cache.
+
+Identity and monotonic-clock queries bypass command transitions and do not disturb
+an active import/merge session. Cleanup hooks are idempotent. `cio` owns a dataset
+cache at the dispatch boundary; its readers receive an explicit dataset pointer.
+Regression modules own separate HDFE states; the shared solver takes a state
+argument and owns no estimator-global state.
 
 ### Memory Model
 
@@ -52,7 +59,15 @@ On each invocation the dispatcher in `ctools_plugin.c`:
 | File | Purpose |
 |------|---------|
 | `src/ctools_plugin.c` | Main dispatcher - routes commands to implementations |
-| `src/ctools_types.h/c` | Core data structures, data I/O, sorting declarations |
+| `src/ctools_types.h` | Compatibility umbrella for focused data, transport, sort and conversion headers |
+| `src/ctools_data.h`, `ctools_data_io.h`, `ctools_sort.h`, `ctools_convert.h` | Data ownership, SPI transport, ordering and conversions |
+| `src/ctools_alloc.h`, `ctools_platform.h/c` | Allocation and one-time cache/prefetch discovery |
+| `src/ctools_data_plan.c`, `ctools_data_io.c`, `ctools_data_store.c`, `ctools_transport.c` | Selection/planning, load kernels, store kernels and shared transport checks |
+| `src/ctools_rowstage.h/c` | Row-major staging for commands that move whole observations (`csort`, `cmerge`) |
+| `src/hdfe/` | Estimator-independent projection, remapping and estimation-sample factors |
+| `src/formats/` | ZIP/XML, bounded Excel addresses and atomic output publication |
+| `src/ctools_text.h/c` | Length-aware CSV/Excel text transport with explicit format limits |
+| `src/ctools_rng.h`, `ctools_group.h/c`, `sort/sort_block.h` | Sampling streams, group runs and stable block radix support |
 | `src/ctools_config.h` | Aligned alloc, prefetch, thread management, constants |
 | `src/ctools_runtime.h/c` | Error reporting, timing, lifecycle cleanup |
 | `src/ctools_parse.h/c` | Argument parsing utilities |
@@ -73,31 +88,11 @@ On each invocation the dispatcher in `ctools_plugin.c`:
 
 ### Dispatched Commands
 
-The following commands are registered in `ctools_plugin.c`:
-
-| Dispatch name | Handler | Source directory |
-|---------------|---------|------------------|
-| `csort` | `csort_main` | `src/csort/` |
-| `cipolate` | `cipolate_main` | `src/cipolate/` |
-| `csplit` | `csplit_main` | `src/csplit/` |
-| `crangejoin` | `crangejoin_main` | `src/crangejoin/` |
-| `creghdfe` | `creghdfe_main` | `src/creghdfe/` |
-| `cimport` | `cimport_main` | `src/cimport/` |
-| `cexport` | `cexport_main` | `src/cexport/` |
-| `cexport_xlsx` | `cexport_xlsx_main` | `src/cexport/` |
-| `cmerge` | `cmerge_main` | `src/cmerge/` |
-| `cqreg` | `cqreg_main` | `src/cqreg/` |
-| `cbinscatter` | `cbinscatter_main` | `src/cbinscatter/` |
-| `civreghdfe` | `civreghdfe_main` | `src/civreghdfe/` |
-| `cencode` | `cencode_main` | `src/cencode/` |
-| `cwinsor` | `cwinsor_main` | `src/cwinsor/` |
-| `cdestring` | `cdestring_main` | `src/cdestring/` |
-| `cdecode`, `cdecode_scan` | Retired entry points; request matching ado update | `src/cdecode/` |
-| `csample` | `csample_main` | `src/csample/` |
-| `cbsample` | `cbsample_main` | `src/cbsample/` |
-| `crangestat` | `crangestat_main` | `src/crangestat/` |
-| `cpsmatch` | `cpsmatch_main` | `src/cpsmatch/` |
-| `cpplmhdfe` | `cpplmhdfe_main` | `src/cpplmhdfe/` |
+The dispatch inventory, state owners and cleanup hooks come from
+[`src/ctools_commands.def`](src/ctools_commands.def). Run
+`python3 scripts/sync_architecture.py --check` to verify the generated inventory
+in [docs/COMMAND_INVENTORY.md](docs/COMMAND_INVENTORY.md). Wire aliases and internal
+handlers are included explicitly; they are not additional public ado commands.
 
 ---
 
@@ -258,6 +253,93 @@ rc = ctools_store_filtered(values, N, var_idx, fd.obs_map);
 rc = ctools_stream_var_permuted(var_idx, source_rows, output_nobs, obs1);
 ```
 
+### Moving Whole Observations
+
+Include: `#include "ctools_rowstage.h"`
+
+Stata keeps one record per observation, so a per-variable transfer walks the
+whole dataset once per variable, and a reordered store gathers every cell from
+a different place in its C column. Commands that reorder or replicate complete
+observations (`csort`, `cmerge`) stage rows instead: each Stata record is read
+once and written once, in tiles small enough to stay cache-resident, and a
+reordered store fetches one staged row per output row.
+
+```c
+ctools_rowstage staged;                      // zero-based staged rows
+if (ctools_rowstage_supported(vars, nvars, widths, nobs)) {
+    rc = ctools_rowstage_load(&staged, vars, nvars, widths, obs1, nobs);
+    rc = ctools_rowstage_column(&staged, col, &key);        // dense copy of one column
+    rc = ctools_rowstage_store(&staged, source, n_out, obs1); // obs1+d <- staged row source[d]
+    ctools_rowstage_free(&staged);
+}
+```
+
+`vars` holds one-based plugin variable indices and `widths` follows the
+`ctools_data_load_ex()` convention (`NULL` reads the caller's `_ctools_strw`
+metadata). Numeric variables and fixed-width strings with a width hint below
+2045 can be staged; strL, unhinted strings, and string columns whose
+declared-width slots would exceed 2 GiB cannot, and callers then use the
+column transport. `source[]` may repeat rows or be `CTOOLS_ROW_NONE` (missing
+numerics, empty strings), so it also expresses join outputs. Loads fail before
+anything is written, stores validate ranges and row indices before the first
+write, and numeric writes use the checked SPI callback. Staging needs
+`nobs * stride` bytes, where the stride is 8 bytes per numeric variable plus
+`width + 1` per string. An in-order store (`source == NULL`) writes straight
+from the staged rows and allocates nothing.
+
+`cmerge` uses its staged master as the undo copy that replaces a `preserve`
+snapshot (full loaded columns when the strings are too wide to stage). Its
+plugin phases are `load_using`, `plan` (master keys only, before the ado
+changes the master, so join errors need no rollback), `execute` (copies the
+master before the first overwrite, restores it itself if a write fails, and
+keeps the copy), then `rollback` (rewrites the master after a Break or a later
+ado failure) or `commit`. The ado records its own schema changes first
+(`_cmerge_record`) and undoes them under `nobreak` (`_cmerge_rollback`); paths
+it cannot undo that way (strL, some empty-data merges) keep a snapshot frame in
+memory. Options `snapshot` (whole-dataset `preserve`) and `fast` (no copy, plan
+argument `nocopy`) replace this. The validation hook `$CTOOLS_cmerge_fault`
+fails a merge at each stage.
+
+The other wrappers that used to take a whole-dataset `preserve` follow the same
+rule: no snapshot on disk by default, `snapshot` (the old `preserve`) and `fast`
+(no copy, no undo) as opt-in options, parsed by `_ctools_mode` (it reads the
+options after the first comma outside parentheses and quotes, so `if
+inlist(g,1,2)` is skipped; `snapshot fast` is r(198)). `_ctools_undo record`
+saves `_N`, `c(k)`, the sort marker, `c(changed)`, the value-label names and the
+`_dta` characteristics (notes included) in globals `CTOOLS_u_<command>_*`
+before the first change; `rollback` (under `nobreak`, after the plugin has
+restored any values it overwrote) drops the observations and variables added at
+the end and the added value labels, puts back the characteristics, recorded
+variable labels, the sort marker (a stable sort of data already in order) and
+`c(changed)`. Each wrapper runs `nobreak { capture noisily break <impl> }`.
+
+- `creghdfe`, `crangestat`, `cwinsor` with `suffix()`/`prefix()`: only add
+  variables, so the record alone undoes them.
+- `cwinsor` in place: the main call takes option `undo`, copies the loaded
+  target values and their observation numbers before changing anything, restores
+  them itself if its store fails, and keeps them (runtime phase 1) until
+  `cwinsor commit` or `cwinsor rollback`.
+- `crangejoin`: from Stata 16 the using data are read in a tempname frame (before
+  16 they can only replace the master, so a `preserve` stays). `write` keeps the
+  master copy `prepare` loaded (phase 3), restores the master rows itself if it
+  fails part way (unless `norestore`), and `crangejoin rollback` rewrites them
+  after a later failure; `crangejoin clear` frees the copy.
+- `cimport` and `_cio_import` replace the whole dataset, so they copy the data in
+  memory first (`frame copy` into a tempname frame, restored with `frame copy
+  ..., replace`; `preserve` before Stata 16 or for an empty dataset). The import
+  is not built in a new frame that then takes the current frame's name: when a
+  frame whose data came from native `import excel` is renamed or dropped and
+  another frame takes its name, a later native `import spss` returns a wrong
+  string for a user-missing value (StataNow 19.5, reproduced with native
+  commands only).
+- `cbinscatter` changes nothing; `savedata()` builds the bins in a tempname frame.
+
+Validation hooks `$CTOOLS_<command>_fault` (`creghdfe`: `outputs`, `post`;
+`crangestat`: `outputs`, `post`; `cwinsor`: `outputs`, `store`, `post`;
+`crangejoin`: `schema`, `store`, `post`; `cimport`: `load`) fail a call after
+its first change; `validation/rollback_helpers.do` runs each case in all three
+modes.
+
 ### Cleanup
 
 The filtered result owns its column buffers, string arenas/fallback strings,
@@ -283,6 +365,7 @@ and OpenMP variants:
 - `validation/test_transport_scheduling.py`: variable/row scheduling, permutations, destination maps, and SPI failures.
 - `validation/test_transport_adaptive_native.py`: wide numeric gate boundaries, allocation retries, packed-string ownership, optional sort order, and reordered fixed-string/strL/numeric loads with errors.
 - `validation/test_transport_store_native.py`: duplicate and invalid destination maps, sparse/OOM fallbacks, checked writes and cancellation, and the sorted-gather size boundary.
+- `validation/test_rowstage_native.py`: row staging eligibility, staged values and extracted columns, reordered/repeated/absent sources, rejection before any write, SPI failures, cancellation, stale width hints and allocation failure.
 
 Run a suite directly with Python, or run the complete native inventory with
 `python3 validation/suite_registry.py --native`. `CTOOLS_TEST_SOURCE` selects an
@@ -738,7 +821,7 @@ Fallback modes:
 
 Include: `#include "ctools_hash.h"`
 
-An open-addressing string -> integer hash table with linear probing and automatic resizing at 75% load factor, used by cencode. The public `cdecode` command uses native Stata decoding.
+An open-addressing string -> integer hash table with linear probing and automatic resizing at 75% load factor, used by cencode. `cdecode` needs no hash table: its ado passes the value-label mapping, and the plugin looks values up in a direct table or by binary search.
 
 ### String -> Integer (for cencode)
 
@@ -801,6 +884,21 @@ void compute_xtx_xty_weighted(const ST_double *data, const ST_double *weights,
 // Collinearity detection via modified Cholesky
 ST_int detect_collinearity(const ST_double *xx, ST_int K,
                            ST_int *is_collinear, ST_int verbose);
+
+// The same screen on an equilibrated copy: variables flagged on entry are
+// excluded (zero rows/columns) and stay flagged
+ST_int detect_collinearity_scaled(ST_double *xx, ST_int K, ST_int *is_collinear, ST_int verbose);
+
+// (K+1)x(K+1) inverse of [X, 1]'W[X, 1] from that of the mean-centred X
+void ctools_inverse_add_constant(const ST_double *inv, ST_int K, const ST_double *means,
+                                 ST_double sum_w, ST_double *out);
+
+// Double-double sum((w[i] * x[i]) * y[i]); w == NULL means unit weights
+dd_real dd_dot_weighted(const ST_double *x, const ST_double *y, const ST_double *w, ST_int N);
+
+// The same sums for n right-hand vectors, four interleaved per pass
+void dd_dot_weighted_multi(const ST_double *x, const ST_double *const *ys, ST_int n,
+                           const ST_double *w, ST_int N, dd_real *out);
 ```
 
 ### Matrix Operations (`ctools_matrix.h`)
@@ -813,6 +911,17 @@ void ctools_matmul_atb(const ST_double *A, const ST_double *B,
 // C = A * B  (A: K1 x K2, B: K2 x K3, C: K1 x K3)
 void ctools_matmul_ab(const ST_double *A, const ST_double *B,
                       ST_int K1, ST_int K2, ST_int K3, ST_double *C);
+
+// C = A' * A  (upper triangle computed in parallel, then mirrored; identical
+// to ctools_matmul_atb(A, A, ...))
+void ctools_matmul_ata(const ST_double *A, ST_int N, ST_int K, ST_double *C);
+
+// y += X * b and C = X * B for a tall N x K column-major X: every output
+// element accumulates over the K columns in order (plain double arithmetic),
+// as a per-row loop would; rows run in cache-sized blocks, in parallel
+void ctools_matvec_add(const ST_double *X, ST_int N, ST_int K, const ST_double *b, ST_double *y);
+void ctools_matmul_xb(const ST_double *X, ST_int N, ST_int K, const ST_double *B, ST_int M,
+                      ST_double *C);
 
 // C = A' * diag(w) * B  (weighted)
 void ctools_matmul_atdb(const ST_double *A, const ST_double *B, const ST_double *w,
@@ -841,7 +950,7 @@ void ctools_vce_cluster(const ctools_vce_data *d, const ST_int *cluster_ids,
 ### HDFE Utilities (`ctools_hdfe_utils.h`)
 
 ```c
-// FE factor and global HDFE state
+// FE factor and caller-owned HDFE state
 typedef struct { ST_int num_levels, max_level; ST_int *levels; ... } FE_Factor;
 typedef struct { ST_int G, N, K; FE_Factor *factors; ... } HDFE_State;
 
@@ -853,6 +962,19 @@ ST_int ctools_remove_singletons(ST_int **fe_levels, ST_int G, ST_int N,
 // Cluster/FE remapping to contiguous indices
 ST_int ctools_remap_cluster_ids(ST_int *cluster_ids, ST_int N, ST_int *num_clusters);
 
+// Dense 0-based ids in order of first appearance (a table over the code range
+// when it is narrow, a sort otherwise; O(N) memory): of integer codes, and of
+// the pairs (a[i], b[i]) for multiway clustering
+ST_int ctools_dense_cluster_ids(const ST_int *codes, ST_int N, ST_int *ids, ST_int *num_groups);
+// ... and numbered in ascending code order (egen group() minus one)
+ST_int ctools_dense_cluster_ids_sorted(const ST_int *codes, ST_int N, ST_int *ids,
+                                       ST_int *num_groups);
+ST_int ctools_intersect_cluster_ids(const ST_int *a, const ST_int *b, ST_int N,
+                                    ST_int *ids, ST_int *num_groups);
+// ... and numbered in ascending (a, b) order
+ST_int ctools_intersect_cluster_ids_sorted(const ST_int *a, const ST_int *b, ST_int N,
+                                           ST_int *ids, ST_int *num_groups);
+
 // Connected components (for mobility groups / DOF)
 ST_int ctools_count_connected_components(const ST_int *fe1_levels, const ST_int *fe2_levels,
                                           ST_int N, ST_int num_levels1, ST_int num_levels2);
@@ -861,15 +983,68 @@ ST_int ctools_count_connected_components(const ST_int *fe1_levels, const ST_int 
 ST_int ctools_fe_nested_in_cluster(const ST_int *fe_levels, ST_int num_fe_levels,
                                     const ST_int *cluster_ids, ST_int N);
 
-// DOF calculation
+// DOF calculation from the first pair of effects
+// (dof_adjust_type: 0=all, 1=none, 2=firstpair, 3=pairwise)
 ST_int ctools_compute_hdfe_dof(const FE_Factor *factors, ST_int G, ST_int N,
-                                ST_int *df_a, ST_int *mobility_groups);
+                                ST_int dof_adjust_type, ST_int *df_a, ST_int *mobility_groups);
+
+// Redundant intercept coefficients per effect, as reghdfe counts them
+ST_int ctools_hdfe_redundant_intercepts(const FE_Factor *factors, ST_int G, ST_int N,
+                                         const ST_int *nested, ST_int flags, ST_int *redundant);
 
 // Allocate CG solver buffers
 ST_int ctools_hdfe_alloc_buffers(HDFE_State *state, ST_int alloc_proj, ST_int max_columns);
 
 // Cleanup
 void ctools_hdfe_state_cleanup(HDFE_State *state);
+```
+
+### Parallel loops and reproducibility
+
+The regression kernels are parallelized only where each output element is an
+independent sum whose terms are added in a fixed order: across columns or
+column pairs (cross products, the sandwich meat, double-double normal
+equations, PPML's reference projection), or across blocks of rows for
+element-wise updates. Results therefore do not depend on the thread count or
+on scheduling. A loop that would have to split one sum across threads (the
+per-level scatter of the FE projection, a deviance or RSS total) stays serial.
+New parallel code in these paths should keep that property and be checked
+with a bit-level before/after comparison of `e()`.
+
+Declare every index and accumulator of a parallel loop inside the loop. A
+variable declared at function scope is shared by all threads: an inner
+`for (k = ...)` over such a `k` races, and once the body calls a function the
+index is reloaded from memory and can run past the end of an array. (This was
+the heap overflow in cqreg's removed `nopreprocess(-1)` solver.)
+
+`cbinscatter` and `cqreg` follow the same rule: `cbinscatter` demeans one
+variable per thread and builds its normal equations with
+`cbinscatter_normal_equations()` (`cbinscatter_resid.h`); `cqreg`'s `X'DX`
+kernels keep the lane structure of their sequential form and run one row of
+the triangle per thread. `cqreg` solves its two auxiliary quantiles side by
+side only for small samples, because a `parallel sections` region turns the
+loops inside each solve serial.
+
+### HDFE Estimation Sample (`hdfe/hdfe_sample.h`)
+
+`creghdfe`, `civreghdfe` and `cpplmhdfe` build their `HDFE_State` factors
+through the same two functions; row selection (singletons, PPML separation)
+stays with each estimator.
+
+```c
+// Raw FE columns -> 1-based levels with counts, one factor per thread
+ST_retcode hdfe_load_factors(HDFE_LoadedFactor *factors, ST_int G,
+                             const ST_double *const *values, ST_int N);
+
+// S->factors on the kept rows: surviving levels renumbered 1..num_levels in
+// order of first appearance, counts, and weighted counts in row order
+ST_retcode hdfe_build_factors(HDFE_State *S, ST_int G, ST_int *const *levels,
+                              const ST_int *level_max, ST_int N_in, const ST_int *keep,
+                              ST_int N, const ST_double *weights, ST_int weighted);
+
+// Copy the kept rows of K columns (column-major, row order preserved)
+void hdfe_compact_columns(const ST_double *src, ST_int N_in, ST_int K, const ST_int *keep,
+                          ST_double *dst, ST_int N);
 ```
 
 ---
@@ -944,41 +1119,36 @@ ST_retcode newcmd_main(const char *args)
 }
 ```
 
-### 3. Add Dispatch Case
+### 3. Register dispatch and state ownership
 
-In `src/ctools_plugin.c`:
+Include the implementation header in `src/ctools_plugin.c`, add a unique owner
+value in `ctools_runtime.h` if needed, and add one `CTOOLS_COMMAND` entry to
+`src/ctools_commands.def`. Supply an idempotent cleanup hook for persistent
+state. Define allowed phases in `ctools_command_begin()` for multi-call
+operations, and test invalid continuations and owner switches.
 
-```c
-#include "newcmd/newcmd_impl.h"
+### 4. Source discovery and incremental builds
 
-// In stata_call():
-else if (strcmp(cmd_name, "newcmd") == 0) {
-    rc = newcmd_main(cmd_args);
-}
-```
+The Makefile discovers first-party C files recursively. The shared compiler
+pipeline writes per-platform, per-compiler/flags objects with compiler-generated
+header and `.inc` dependencies under `build/obj`. A change to the source inventory
+forces relinking, including deletions. A no-op invocation verifies the existing
+plugin hash. Failed compiles or links preserve the published plugin. Vendor-only
+flags and compatibility include paths are scoped in `scripts/build_plugin.py`.
+See [the platform contracts](docs/PLATFORMS.md) before changing target flags.
 
-Also add a `CTOOLS_CMD_NEWCMD` entry to the `ctools_command_t` enum in `ctools_runtime.h` and handle it in `get_command_type()`.
+### 5. Create Stata files and register validation
 
-### 4. Source discovery
+Edit `package/ado/newcmd.ado` and `package/help/newcmd.sthlp`; list every ado,
+prediction helper and help file in `package/metadata/ctools.pkg`. `build/` is the
+published install tree, generated by `scripts/sync_package.py`. Release identity
+comes from `release.json` through `scripts/sync_release.py`.
 
-The Makefile discovers every C/header file recursively under `src/`, tracks
-headers as dependencies, and adds source directories to the include path.
-Do not add per-command `*_SRCS`/`*_HEADERS` lists. Third-party libdeflate sources
-are compiled separately with their own warning flags.
-
-### 5. Create Stata Files
-
-```
-build/newcmd.ado    - Stata wrapper
-build/newcmd.sthlp  - Help file
-```
-
-Add both files and every prediction/helper ado to `build/ctools.pkg`. Register
-the command in the help and compatibility inventories, add its component to
-`validation/validate_all.do` and `validation/run_stata_audit.py`, and put the
-completion marker at the actual end of the component. Define cleanup for every
-owned allocation and any persistent state. `validation/test_release_gate.py`
-checks agreement between the public help, source, package, and test inventories.
+Register validation in `validation/suites.json`, then run
+`python3 validation/suite_registry.py --write-master`. Emit the completion marker
+at the actual end of each component. The registry, package contract and release
+tests reject missing files, unregistered suites and incomplete executions.
+Update the command inventory with `python3 scripts/sync_architecture.py`.
 
 ---
 
@@ -1102,9 +1272,14 @@ ST_retcode mycmd_main(const char *args)
 Use `scripts/fetch_validation_data.py` once to cache the checksum-pinned official
 Stata fixtures, then `validation/run_stata_audit.py` for the complete offline
 suite. The driver uses the machine's `stata` shell alias and exits cleanly.
-Every component must reach its completion marker. Missing references, unexpected
-skips, and failed assertions block publication. ATT-SE comparisons with psmatch2
-are separately counted as documented method differences, never as passes.
+Every component must reach its completion marker. Missing references, any skipped checks, and failed assertions block publication.
+Method-specific inference is checked against the relevant independent formula;
+comparisons must not count a skipped inference test as a pass.
+
+`validation/run_hdfe_datasets.py` is an opt-in comparison of `creghdfe` with
+`reghdfe` on the HDFE benchmark collection, outside the gate. It needs
+`scripts/fetch_validation_data.py --collection hdfe` (about 227 MB) and is
+described in `docs/HDFE_BENCHMARK_DATASETS.md`.
 
 Numeric variable indices are positions in the plugin varlist. Use shared checked
 I/O or `SD_SAFEMODE` for direct SPI calls; raw `SD_FASTMODE` stores can use a
@@ -1124,6 +1299,21 @@ validates complete output-name lists before allocation, and `_ctools_weight.ado`
 stages expression weights while leaving command-specific sample rules in callers.
 `cqreg` uses native `qreg_p`; the unused custom prediction ado is no longer shipped.
 
+The estimation wrappers (`creghdfe`, `civreghdfe`, `cpplmhdfe`, `cqreg`,
+`cbinscatter`) share these private helpers:
+
+| Helper | Purpose |
+|--------|---------|
+| `_ctools_fvsplit` | Splits an `fvexpand` list into the terms sent to the plugin and the base/omitted placeholders. A term is a placeholder only when every `#`-component carries a `b.` or `o.` marker (`1b.a#2.b` and `0b.foreign#c.weight` are estimated). |
+| `_ctools_ebv` | Builds `e(b)` and `e(V)` in Mata from the plugin's compact results: zeros for placeholders and dropped columns, `o.` names for dropped columns, optional `_cons`. The constant is read from its scalar, never through a local. |
+| `_ctools_cleanup` | Drops every scalar and matrix named `__<command>_*` or `_<command>_*`. Each wrapper calls it on entry, after a plugin error and on exit. |
+| `_ctools_lap` | One lap of a caller-local wall clock started with `_ctools_clock`. |
+| `_ctools_vce` | Classifies a `vce()` string (cluster, robust, unadjusted, ols, iid, bootstrap); which kinds a command accepts stays with the command. |
+| `_ctools_group` | Group identifiers in place of `egen group()`: the `group` plugin command numbers a varlist's distinct values in sort order (missing keys stay missing), and `label` rebuilds `egen group(, label)`'s value label in Mata from one observation per group. `count` only counts groups. Do not call `egen` from ctools ado files. |
+
+A wrapper that keeps a statistic between plugin calls holds it in a `tempname`
+scalar, not a global name.
+
 `partial_out_columns()` returns status, convergence, and iteration count.
 Callers must propagate a failed projection and must not post successful estimates.
 The shared robust/cluster covariance APIs also return status: allocation or
@@ -1136,16 +1326,16 @@ partitions use work-sharing loops so reduced runtime teams still cover every row
 Without OpenMP, sorting uses one usable OpenMP worker. Arena reset retains and
 reuses its block chain; aligned and ordinary allocation reject size overflow.
 
-Platform builds compile dependency sources in a fresh private directory, stop
-on the first compiler error, link only that directory's explicit object list,
-and publish the plugin only after a successful link. Failed builds preserve the
-previous plugin and remove temporary objects.
+Platform builds reuse only objects matching the compiler, flags and dependency
+timestamps, stop on the first compiler error, and link the explicit current
+source inventory. Publication uses an atomic rename after a successful link;
+failed builds preserve the previous plugin and remove temporary outputs.
 
 The September 24 regressions are `validation/validate_sep24.do` and
 `validation/test_sep24_native.py`. The native runner accepts
 `CTOOLS_TEST_OPENMP_PREFIX` for constrained-team tests and
 `CTOOLS_SANITIZERS=address,undefined` for ASan plus UBSan. The Stata cases are part
-of the full offline release gate. See `SEP24_ASTRA_FIXES.md` for repair evidence.
+of the full offline release gate.
 
 ## Interpolation, splitting, and interval joins
 
@@ -1179,3 +1369,32 @@ For repeated timing and phase profiles, use
 processes for frozen baseline and candidate plugins and a monotonic timer.
 See [the measurement report](docs/PERFORMANCE_NEWCOMMANDS.md) for workload
 shapes, raw observations, build identities, results, and reproduction commands.
+
+## Module boundaries and maintenance
+
+Estimator `*_input` readers isolate the existing ado scalar protocol in typed
+configuration structs. `*_result` writers borrow completed matrices and metadata
+for posting; they do not own or recompute estimates. PPML numerical modules take
+immutable options explicitly. Keep arithmetic order, thresholds, precision and
+method-specific covariance semantics unchanged when moving numerical code.
+The OLS and quantile-regression headers specify matrix layout and mutation;
+only identical triangular substitutions share `ctools_linalg.h`.
+
+`_ctools_clock` returns a monotonic timestamp in a caller local and preserves
+`r()`. Wrapper timings use local accumulators, leaving Stata's numbered timers
+available to callers. Use this helper for new ado timing. `_ctools_load`,
+`_ctools_newvars` and `_ctools_weight` retain their existing scope and sample
+contracts; private helpers live in matching ado filenames.
+
+C columns, group-run positions and permutations are zero based. SPI variable
+indices and observation maps are one based. `ctools_group_ranges` uses exact
+numeric equality, distinguishes extended missing values, and equates a NULL
+string with an empty string. `ctools_rng` preserves seeded stream and draw order.
+
+Read [validation/native/README.md](validation/native/README.md) for reusable
+harness support and the deliberate whitebox allocation-interposition exception.
+Read [tools/generation/README.md](tools/generation/README.md) for offline generated
+tables and pinned inputs. Vendored codecs live only under `src/vendor`;
+`stplugin.c/h` remain unmodified SDK files. [docs/STYLE.md](docs/STYLE.md) describes
+formatting scope. Historical audits live in `docs/audits`, retained standalone
+probes in `validation/probes`, and disposable outputs in ignored `temp/`.

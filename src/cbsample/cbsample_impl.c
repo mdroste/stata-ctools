@@ -36,172 +36,8 @@
 
 #define CBSAMPLE_MODULE "cbsample"
 
-/* ===========================================================================
-   High-quality PRNG: xoshiro256** (Blackman & Vigna)
-   =========================================================================== */
-
-typedef struct {
-    uint64_t s[4];
-} xoshiro256_state;
-
-static inline uint64_t rotl64(const uint64_t x, int k) {
-    return (x << k) | (x >> (64 - k));
-}
-
-static uint64_t xoshiro256_next(xoshiro256_state *state) {
-    const uint64_t result = rotl64(state->s[1] * 5, 7) * 9;
-    const uint64_t t = state->s[1] << 17;
-
-    state->s[2] ^= state->s[0];
-    state->s[3] ^= state->s[1];
-    state->s[1] ^= state->s[2];
-    state->s[0] ^= state->s[3];
-
-    state->s[2] ^= t;
-    state->s[3] = rotl64(state->s[3], 45);
-
-    return result;
-}
-
-static uint64_t splitmix64(uint64_t *state) {
-    uint64_t z = (*state += 0x9e3779b97f4a7c15ULL);
-    z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
-    z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
-    return z ^ (z >> 31);
-}
-
-static void xoshiro256_seed(xoshiro256_state *state, uint64_t seed) {
-    uint64_t sm_state = seed;
-    state->s[0] = splitmix64(&sm_state);
-    state->s[1] = splitmix64(&sm_state);
-    state->s[2] = splitmix64(&sm_state);
-    state->s[3] = splitmix64(&sm_state);
-}
-
-static inline size_t xoshiro256_uniform(xoshiro256_state *state, size_t n) {
-    if (n == 0) return 0;
-    uint64_t threshold = (UINT64_MAX - n + 1) % n;
-    uint64_t r;
-    do {
-        r = xoshiro256_next(state);
-    } while (r < threshold);
-    return (size_t)(r % n);
-}
-
-/* ===========================================================================
-   Group Detection
-   =========================================================================== */
-
-typedef struct {
-    size_t start;
-    size_t count;
-} group_info;
-
-/* Check if two adjacent observations are in the same group */
-static inline int same_group_check(stata_data *data, size_t nvars, size_t i, double miss) {
-    (void)miss;
-    for (size_t b = 0; b < nvars; b++) {
-        const stata_variable *var = &data->vars[b];
-        if (var->type == STATA_TYPE_STRING) {
-            const char *prev = var->data.str[i - 1];
-            const char *curr = var->data.str[i];
-            if (strcmp(prev ? prev : "", curr ? curr : "") != 0) return 0;
-        } else if (var->data.dbl[i - 1] != var->data.dbl[i]) {
-            return 0;
-        }
-    }
-    return 1;
-}
-
-/* Detect groups from sorted stata_data (data must already be sorted/permuted)
-   Parallelized for large datasets using boundary detection */
-static void detect_groups_from_data(stata_data *data, size_t nvars,
-                                     group_info *groups, size_t *ngroups) {
-    size_t nobs = data->nobs;
-    if (nobs == 0) {
-        *ngroups = 0;
-        return;
-    }
-
-    const double miss = SV_missval;
-
-    #ifdef _OPENMP
-    int num_threads = ctools_get_max_threads();
-
-    /* For small datasets or few threads, use sequential version */
-    if (nobs < 10000 || num_threads <= 1) {
-    #endif
-        /* Sequential version */
-        size_t g = 0;
-        groups[0].start = 0;
-        groups[0].count = 1;
-
-        for (size_t i = 1; i < nobs; i++) {
-            if (same_group_check(data, nvars, i, miss)) {
-                groups[g].count++;
-            } else {
-                g++;
-                groups[g].start = i;
-                groups[g].count = 1;
-            }
-        }
-        *ngroups = g + 1;
-        return;
-    #ifdef _OPENMP
-    }
-
-    /* Parallel version: first find all group boundaries */
-    /* Use a bitmap to mark boundaries (where new group starts) */
-    uint8_t *boundaries = (uint8_t *)calloc(nobs, sizeof(uint8_t));
-    if (!boundaries) {
-        /* Fallback to sequential */
-        size_t g = 0;
-        groups[0].start = 0;
-        groups[0].count = 1;
-        for (size_t i = 1; i < nobs; i++) {
-            if (same_group_check(data, nvars, i, miss)) {
-                groups[g].count++;
-            } else {
-                g++;
-                groups[g].start = i;
-                groups[g].count = 1;
-            }
-        }
-        *ngroups = g + 1;
-        return;
-    }
-
-    boundaries[0] = 1;  /* First obs is always a boundary */
-
-    /* Phase 1: Parallel boundary detection */
-    #pragma omp parallel for schedule(static)
-    for (size_t i = 1; i < nobs; i++) {
-        if (!same_group_check(data, nvars, i, miss)) {
-            boundaries[i] = 1;
-        }
-    }
-
-    /* Phase 2: Sequential group construction (must be sequential for ordering) */
-    size_t g = 0;
-    for (size_t i = 0; i < nobs; i++) {
-        if (boundaries[i]) {
-            if (g > 0) {
-                /* Finalize previous group's count */
-                groups[g - 1].count = i - groups[g - 1].start;
-            }
-            groups[g].start = i;
-            g++;
-        }
-    }
-    /* Finalize last group */
-    if (g > 0) {
-        groups[g - 1].count = nobs - groups[g - 1].start;
-    }
-
-    free(boundaries);
-    *ngroups = g;
-    #endif
-}
+#include "ctools_rng.h"
+#include "ctools_group.h"
 
 /* ===========================================================================
    Argument Parsing
@@ -238,15 +74,15 @@ ST_retcode cbsample_main(const char *args) {
     int *combined_indices = NULL;
     int *sort_vars = NULL;
     double *freq_weights = NULL;
-    group_info *clusters = NULL;
-    group_info *strata = NULL;
+    ctools_group_range *clusters = NULL;
+    ctools_group_range *strata = NULL;
     perm_idx_t *sort_perm = NULL;  /* Saved permutation for mapping back */
     ctools_filtered_data by_filtered;
     perm_idx_t *obs_map = NULL;
     ST_int obs_start = 0;  /* For null obs_map: first observation number */
     stata_retcode rc = STATA_OK;
     int num_threads = 1;
-    xoshiro256_state *thread_rngs = NULL;
+    ctools_rng *thread_rngs = NULL;
 
     ctools_filtered_data_init(&by_filtered);
     t_start = ctools_timer_seconds();
@@ -442,8 +278,8 @@ ST_retcode cbsample_main(const char *args) {
     double sort_start = ctools_timer_seconds();
 
     /* Allocate groups */
-    clusters = (group_info *)malloc((nobs + 1) * sizeof(group_info));
-    strata = (group_info *)malloc((nobs + 1) * sizeof(group_info));
+    clusters = (ctools_group_range *)malloc((nobs + 1) * sizeof(ctools_group_range));
+    strata = (ctools_group_range *)malloc((nobs + 1) * sizeof(ctools_group_range));
     if (!clusters || !strata) {
         if (clusters) free(clusters);
         if (strata) free(strata);
@@ -537,7 +373,7 @@ ST_retcode cbsample_main(const char *args) {
         strata_view.nvars = nstrata;
         strata_view.vars = by_filtered.data.vars;  /* First nstrata vars are strata */
         strata_view.sort_order = NULL;
-        detect_groups_from_data(&strata_view, nstrata, strata, &nstrata_groups);
+        ctools_group_ranges(&strata_view, NULL, NULL, nstrata, strata, &nstrata_groups);
     } else {
         strata[0].start = 0;
         strata[0].count = nobs;
@@ -552,7 +388,7 @@ ST_retcode cbsample_main(const char *args) {
         cluster_view.nvars = total_by;
         cluster_view.vars = by_filtered.data.vars;  /* Include stratum boundaries. */
         cluster_view.sort_order = NULL;
-        detect_groups_from_data(&cluster_view, total_by, clusters, &nclusters);
+        ctools_group_ranges(&cluster_view, NULL, NULL, total_by, clusters, &nclusters);
     } else {
         /* No clustering: each observation is its own "cluster" */
         for (size_t i = 0; i < nobs; i++) {
@@ -570,7 +406,7 @@ ST_retcode cbsample_main(const char *args) {
     /* Allocate thread-local RNGs */
     /* Strata are processed serially for reproducible draws. */
     num_threads = 1;
-    thread_rngs = (xoshiro256_state *)malloc(sizeof(xoshiro256_state));
+    thread_rngs = (ctools_rng *)malloc(sizeof(ctools_rng));
     if (!thread_rngs) {
         if (sort_perm) free(sort_perm);
         free(clusters);
@@ -593,30 +429,20 @@ ST_retcode cbsample_main(const char *args) {
         /* Cluster bootstrap: resample clusters with replacement within each stratum */
         /* For each stratum, identify which clusters are in it and sample from those */
 
+        /* Strata and clusters are runs of the rows sorted by (strata,
+         * cluster), both in row order, and cluster runs also break at every
+         * stratum boundary, so each stratum owns a contiguous run of
+         * clusters: one cursor walks them once across all strata. */
+        size_t cl_cursor = 0;
         for (size_t st = 0; st < nstrata_groups; st++) {
             size_t st_start = strata[st].start;
-            size_t st_count = strata[st].count;
+            size_t st_end = st_start + strata[st].count;
 
             /* Find clusters within this stratum */
-            /* Clusters are sorted by (strata, cluster), so find range */
-            size_t first_cluster = 0;
-            size_t last_cluster = nclusters;
-
-            /* Binary search for first cluster in stratum */
-            for (size_t cl = 0; cl < nclusters; cl++) {
-                if (clusters[cl].start >= st_start &&
-                    clusters[cl].start < st_start + st_count) {
-                    first_cluster = cl;
-                    break;
-                }
-            }
-            /* Find last cluster in stratum */
-            for (size_t cl = first_cluster; cl < nclusters; cl++) {
-                if (clusters[cl].start >= st_start + st_count) {
-                    last_cluster = cl;
-                    break;
-                }
-            }
+            while (cl_cursor < nclusters && clusters[cl_cursor].start < st_start) cl_cursor++;
+            size_t first_cluster = cl_cursor;
+            while (cl_cursor < nclusters && clusters[cl_cursor].start < st_end) cl_cursor++;
+            size_t last_cluster = cl_cursor;
 
             size_t n_clusters_in_stratum = last_cluster - first_cluster;
             if (n_clusters_in_stratum == 0) continue;
@@ -625,12 +451,12 @@ ST_retcode cbsample_main(const char *args) {
             if (target_n > n_clusters_in_stratum) { rc = 498; goto cleanup; }
 
             /* Seed RNG based on stratum index for reproducibility */
-            xoshiro256_seed(&thread_rngs[0], config.seed + (uint64_t)st * 0x9e3779b97f4a7c15ULL);
-            xoshiro256_state *rng = &thread_rngs[0];
+            ctools_rng_seed(&thread_rngs[0], config.seed + (uint64_t)st * 0x9e3779b97f4a7c15ULL);
+            ctools_rng *rng = &thread_rngs[0];
 
             /* Explicit n counts clusters within each stratum. */
             for (size_t draw = 0; draw < target_n; draw++) {
-                size_t cluster_idx = first_cluster + xoshiro256_uniform(rng, n_clusters_in_stratum);
+                size_t cluster_idx = first_cluster + ctools_rng_uniform(rng, n_clusters_in_stratum);
                 size_t cl_start = clusters[cluster_idx].start;
                 size_t cl_count = clusters[cluster_idx].count;
 
@@ -652,11 +478,11 @@ ST_retcode cbsample_main(const char *args) {
             if (target_n > st_count) { rc = 498; goto cleanup; }
 
             /* Seed RNG based on stratum index for reproducibility */
-            xoshiro256_seed(&thread_rngs[0], config.seed + (uint64_t)st * 0x9e3779b97f4a7c15ULL);
-            xoshiro256_state *rng = &thread_rngs[0];
+            ctools_rng_seed(&thread_rngs[0], config.seed + (uint64_t)st * 0x9e3779b97f4a7c15ULL);
+            ctools_rng *rng = &thread_rngs[0];
 
             for (size_t draw = 0; draw < target_n; draw++) {
-                size_t local_idx = xoshiro256_uniform(rng, st_count);
+                size_t local_idx = ctools_rng_uniform(rng, st_count);
                 size_t obs_idx = sort_perm ? sort_perm[st_start + local_idx] : (st_start + local_idx);
                 freq_weights[obs_idx] += 1.0;
             }

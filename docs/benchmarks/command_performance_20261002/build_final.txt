@@ -1,0 +1,11 @@
+Release metadata synchronized
+Package sources staged
+Dependency contract checked: /Users/Mike/Documents/GitHub/stata-ctools/temp/io_performance/libomp/lib/libomp.a
+
+ Building MacOS plugin (arm64)
+    Compiler:  clang -arch arm64
+    OpenMP:    Enabled (static)
+Compile src/crangestat/crangestat_kernels.c
+Link temp/command_performance_20261002/final/ctools_mac_arm.plugin
+    Output:    temp/command_performance_20261002/final/ctools_mac_arm.plugin
+    Size:      1.4M

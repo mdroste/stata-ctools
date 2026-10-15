@@ -120,13 +120,16 @@ stata_retcode csort_stream_sort(
 /*
     Apply permutation to non-key variables using variable-at-a-time approach.
 
-    For each non-key variable (parallelized with OpenMP):
-      1. Allocate O(nobs) buffer
-      2. Read all values in permuted order: buffer[i] = Stata[perm[i]]
-      3. Write all values back: Stata[i] = buffer[i]
-      4. Free buffer, move to next variable
+    Every buffer is allocated before the first write to Stata (a pool of
+    O(nobs) buffers, one per variable in a numeric batch or per string
+    worker, reused across variables), so STATA_ERR_MEMORY leaves the
+    variables untouched. Then for each non-key variable (parallelized with
+    OpenMP):
+      1. Read all values in permuted order: buffer[i] = Stata[perm[i]]
+      2. Write all values back: Stata[i] = buffer[i]
 
     This avoids the read-after-write hazard of block-based streaming.
+    csort_stream_sort performs the same allocation before it writes the keys.
 
     @param perm              [in] Permutation array (sorted_idx -> original_idx)
     @param nobs              [in] Number of observations

@@ -758,7 +758,7 @@ gen mu = exp(-2 + 0.3 * x)
 gen y = rpoisson(mu)
 
 benchmark_ppmlhdfe y x, ///
-    absorb(fe1) vce(robust) minsf(6) testname("zero-inflated Y")
+    absorb(fe1) vce(robust) testname("zero-inflated Y")
 
 * Mixed covariate scales
 clear
@@ -771,7 +771,7 @@ gen mu = exp(1e6 * x_tiny + 1e-6 * x_huge)
 gen y = rpoisson(mu)
 
 benchmark_ppmlhdfe y x_tiny x_huge, ///
-    absorb(fe1) vce(robust) minsf(6) testname("mixed scale covariates")
+    absorb(fe1) vce(robust) testname("mixed scale covariates")
 
 * Constant Y (all same positive value)
 clear

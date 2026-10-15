@@ -34,7 +34,7 @@ ST_double civreghdfe_kernel_weight(ST_int kernel_type, ST_int j, ST_int bw);
     If eigenvalues is provided, stores all K eigenvalues in it (sorted ascending).
 
     A is stored in column-major order and is NOT modified.
-    Returns the minimum eigenvalue.
+    Returns the minimum eigenvalue, or NaN when memory runs out.
 */
 ST_double civreghdfe_jacobi_eigenvalues(const ST_double *A, ST_int K, ST_double *eigenvalues);
 
@@ -45,7 +45,8 @@ ST_double civreghdfe_jacobi_eigenvalues(const ST_double *A, ST_int K, ST_double 
 
     M is K x K (column-major), not modified.
     Result is stored in Minv_sqrt (K x K, column-major)
-    Returns 0 on success, -1 if M is not positive definite.
+    Returns 0 on success, -1 if M is not positive definite, -2 when memory
+    runs out.
 */
 ST_int civreghdfe_matpowersym_neg_half(const ST_double *M, ST_int K, ST_double *Minv_sqrt);
 
@@ -61,7 +62,9 @@ ST_int civreghdfe_matpowersym_neg_half(const ST_double *M, ST_int K, ST_double *
     QWW1 = Y'(I - X_exog(X_exog'X_exog)^-1 X_exog')Y = Y'M_{X_exog} Y
     lambda = min eigenvalue of QWW^(-1/2) * QWW1 * QWW^(-1/2)
 
-    Returns lambda (1.0 on error, equivalent to 2SLS).
+    Returns lambda; NaN when memory runs out (the caller reports r(920),
+    never 2SLS under the LIML label); 1.0 when a matrix is not positive
+    definite (equivalent to 2SLS).
 */
 ST_double civreghdfe_compute_liml_lambda(
     const ST_double *y,

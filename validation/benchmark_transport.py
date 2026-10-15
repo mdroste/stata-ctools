@@ -51,6 +51,9 @@ def main():
                str(ROOT/'validation/benchmark_transport.c'),
                *[str(source/f) for f in ['stplugin.c', 'ctools_data_io.c',
                                          'ctools_types.c', 'ctools_threads.c', 'ctools_arena.c']],
+               *[str(source/f) for f in ['ctools_transport.c', 'ctools_data_plan.c',
+                                         'ctools_data_store.c', 'ctools_platform.c']
+                 if (source/f).exists()],
                str(prefix/'lib/libomp.a'), '-o', str(binary)]
         if not args.prepare_only:
             subprocess.run(cmd, check=True)

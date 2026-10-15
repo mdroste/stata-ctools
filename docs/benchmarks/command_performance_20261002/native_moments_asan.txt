@@ -1,0 +1,2 @@
+PASS: /usr/bin/clang -std=c11 -O1 -g -fsanitize=address,undefined -Isrc -DSYSTEM=APPLEMAC -D_DARWIN_C_SOURCE -Wl,-dead_strip -Wl,-undefined,dynamic_lookup validation/native/harnesses/group_moments.c src/crangestat/crangestat_kernels.c
+Executed with ASAN_OPTIONS=detect_leaks=0; exit status 0.

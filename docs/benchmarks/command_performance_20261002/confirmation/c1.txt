@@ -1,0 +1,310 @@
+-------------------------------------------------------------------------------
+      name:  <unnamed>
+       log:  /Users/Mike/Documents/GitHub/stata-ctools/temp/command_performance
+> _20261002/confirmation/c1.log
+  log type:  text
+ opened on:   2 Oct 2026, 10:46:23
+
+. capture noisily do "/Users/Mike/Documents/GitHub/stata-ctools/temp/command_pe
+> rformance_20261002/confirmation/benchmark.do" "/Users/Mike/Documents/GitHub/s
+> tata-ctools/temp/command_performance_20261002/final" c1 "/Users/Mike/Document
+> s/GitHub/stata-ctools/temp/command_performance_20261002/confirmation" "rs200 
+> rs1000 rs5000 rs_single rs_median w_single" 8 "8" 1000000 "1"
+
+. * One frozen plugin per process. Timers include the entire public command.
+. args buildpath label outdir cases reps threadlist rows refreps
+
+. clear all
+
+. set more off
+
+. set linesize 255
+
+. set seed 928143
+
+. adopath ++ "`buildpath'"
+  [1]              "/Users/Mike/Documents/GitHub/stata-ctools/temp/command_performance_20261002/final"
+  [2]  (BASE)      "/Applications/StataNow/ado/base/"
+  [3]  (SITE)      "/Applications/StataNow/ado/site/"
+  [4]              "."
+  [5]  (PERSONAL)  "/Users/Mike/Documents/Stata/ado/personal/"
+  [6]  (PLUS)      "/Users/Mike/Library/Application Support/Stata/ado/plus/"
+  [7]  (OLDPLACE)  "~/ado/"
+
+. ctools, version
+ctools ado 1.0.2; plugin 1.0.2 (local)
+
+. about
+
+StataNow/MP 19.5 for Unix (Apple Silicon)
+Revision 12 Aug 2026
+Copyright 1985-2025 StataCorp LLC
+
+Total usable memory: 48.01 GB
+
+Stata license: Single-user 4-core , expiring  5 Oct 2027
+Serial number: [omitted]
+  Licensed to: [omitted]
+               
+
+. which rangestat
+/Users/Mike/Library/Application Support/Stata/ado/plus/r/rangestat.ado
+*! 1.1.1                        09may2017
+*! 1.1.0                        16apr2017
+*! 1.0.0            29mar2016 
+*! Robert Picard    picard@netbox.com
+*! Nicholas J. Cox  n.j.cox@durham.ac.uk 
+*! Roberto Ferrer   refp16@gmail.com
+
+. which gstats
+/Users/Mike/Library/Application Support/Stata/ado/plus/g/gstats.ado
+*! version 0.5.0 11Jun2019 Mauricio Caceres Bravo, mauricio.caceres.bravo@gmail.com
+*! Implementation of several statistical functions and transformations
+
+. program perf_clock, plugin using("`outdir'/clock.plugin")
+
+. if "`reps'" == "" local reps 3
+
+. if "`refreps'" == "" local refreps `reps'
+
+. if "`threadlist'" == "" local threadlist 1 8
+
+. if "`rows'" == "" local rows 1000000
+
+. if "`cases'" == "" local cases rs20 rs200 rs1000 rs5000 rs_single rs_ties rs_median rs_skew w20 w200 w1000 w_single w_wide
+
+. foreach case of local cases {
+  2.     clear
+  3.     set seed 928143
+  4.     quietly set obs `rows'
+  5.     local size 200
+  6.     if inlist("`case'", "rs20", "w20") local size 20
+  7.     if inlist("`case'", "rs1000", "w1000") local size 1000
+  8.     if "`case'" == "rs5000" local size 5000
+  9.     if inlist("`case'", "rs_single", "w_single") local size `rows'
+ 10.     quietly gen long id = _n
+ 11.     quietly gen long g = floor((_n-1)/`size')
+ 12.     quietly gen double key = mod(_n-1,`size')
+ 13.     if "`case'" == "rs_ties" quietly replace key = floor(key/20)
+ 14.     if "`case'" == "rs_median" quietly replace key = floor(key/10)
+ 15.     if "`case'" == "rs_skew" quietly replace g = 0 if _n <= .9*`rows'
+ 16.     quietly gen double x = 100 + 5*rnormal()
+ 17.     quietly replace x = . if mod(id,37)==0
+ 18.     quietly replace x = .a if mod(id,107)==0
+ 19.     local vars x
+ 20.     if "`case'" == "w_wide" {
+ 21.         forvalues k=2/8 {
+ 22.             quietly gen double x`k' = 100 + 5*rnormal()
+ 23.             local vars `vars' x`k'
+ 24.         }
+ 25.     }
+ 26.     * Randomize row order to include sorting and restoration costs.
+.     quietly gen double shuffle = runiform()
+ 27.     sort shuffle
+ 28.     drop shuffle
+ 29.     local stat mean
+ 30.     if "`case'" == "rs_median" local stat median
+ 31.     local isrange = (substr("`case'",1,2)=="rs")
+ 32.     if `isrange' {
+ 33.         local command crangestat (`stat') result=x, interval(key -5 5) by(g)
+ 34.         local reference rangestat (`stat') result=x, interval(key -5 5) by(g)
+ 35.         local results result
+ 36.     }
+ 37.     else {
+ 38.         local command cwinsor `vars', by(g) suffix(_w) cuts(1 99)
+ 39.         local reference gstats winsor `vars', by(g) suffix(_w) cuts(1 99)
+ 40.         local results
+ 41.         foreach v of local vars {
+ 42.             local results `results' `v'_w
+ 43.         }
+ 44.     }
+ 45.     tempfile base expected
+ 46.     quietly save `base'
+ 47.     foreach threads of local threadlist {
+ 48.         forvalues rep=0/`reps' {
+ 49.             quietly use `base', clear
+ 50.             plugin call perf_clock, "start"
+ 51.             quietly `command' threads(`threads')
+ 52.             plugin call perf_clock, "stop"
+ 53.             di "PERF,`label',`case',ctools,`rows',`threads',`rep'," %12.7f scalar(__ctools_perf_seconds)
+ 54.             if `isrange' {
+ 55.                 di "PHASE,`label',`case',`threads',`rep'," %12.7f scalar(_crangestat_time_load) "," %12.7f scalar(_crangestat_time_sort) "," %12.7f scalar(_crangestat_time_compute) "," %12.7f scalar(_crangestat_time_store)
+ 56.             }
+ 57.             else {
+ 58.                 di "PHASE,`label',`case',`threads',`rep'," %12.7f scalar(_cwinsor_time_load) "," %12.7f scalar(_cwinsor_time_sort) "," %12.7f scalar(_cwinsor_time_winsor) "," %12.7f scalar(_cwinsor_time_store)
+ 59.             }
+ 60.             if `rep' == 0 {
+ 61.                 if "`label'" == "b1" quietly save "`outdir'/expected_`case'_`threads'.dta", replace
+ 62.                 else cf _all using "`outdir'/expected_`case'_`threads'.dta"
+ 63.                 quietly keep id `results'
+ 64.                 quietly save `expected', replace
+ 65.                 quietly use `base', clear
+ 66.                 quietly `reference'
+ 67.                 foreach v of local results {
+ 68.                     rename `v' ref_`v'
+ 69.                 }
+ 70.                 quietly merge 1:1 id using `expected', assert(match) nogenerate
+ 71.                 foreach v of local results {
+ 72.                     assert missing(`v') == missing(ref_`v')
+ 73.                     assert `v' == ref_`v' | abs(`v'-ref_`v')/max(abs(`v'),abs(ref_`v')) < 1e-7 if !missing(`v')
+ 74.                 }
+ 75.                 di "CORRECT,`label',`case',`threads',all_rows"
+ 76.             }
+ 77.         }
+ 78.     }
+ 79.     * Reference timings use the same saved input, outside comparison/merge work.
+.     forvalues rep=0/`refreps' {
+ 80.         quietly use `base', clear
+ 81.         plugin call perf_clock, "start"
+ 82.         quietly `reference'
+ 83.         plugin call perf_clock, "stop"
+ 84.         di "PERF,`label',`case',reference,`rows',0,`rep'," %12.7f scalar(__ctools_perf_seconds)
+ 85.     }
+ 86. }
+PERF,c1,rs200,ctools,1000000,8,0,   0.0315050
+PHASE,c1,rs200,8,0,   0.0034228,   0.0059665,   0.0009207,   0.0117385
+CORRECT,c1,rs200,8,all_rows
+PERF,c1,rs200,ctools,1000000,8,1,   0.0290200
+PHASE,c1,rs200,8,1,   0.0027342,   0.0060747,   0.0008681,   0.0128376
+PERF,c1,rs200,ctools,1000000,8,2,   0.0273130
+PHASE,c1,rs200,8,2,   0.0027997,   0.0044992,   0.0008284,   0.0128385
+PERF,c1,rs200,ctools,1000000,8,3,   0.0287190
+PHASE,c1,rs200,8,3,   0.0035580,   0.0050396,   0.0009058,   0.0128859
+PERF,c1,rs200,ctools,1000000,8,4,   0.0289860
+PHASE,c1,rs200,8,4,   0.0032951,   0.0052347,   0.0008664,   0.0128328
+PERF,c1,rs200,ctools,1000000,8,5,   0.0283540
+PHASE,c1,rs200,8,5,   0.0028910,   0.0054357,   0.0009248,   0.0128063
+PERF,c1,rs200,ctools,1000000,8,6,   0.0277340
+PHASE,c1,rs200,8,6,   0.0029097,   0.0044572,   0.0009281,   0.0127428
+PERF,c1,rs200,ctools,1000000,8,7,   0.0281010
+PHASE,c1,rs200,8,7,   0.0025153,   0.0054164,   0.0009205,   0.0127818
+PERF,c1,rs200,ctools,1000000,8,8,   0.0288440
+PHASE,c1,rs200,8,8,   0.0031530,   0.0052258,   0.0008502,   0.0129065
+PERF,c1,rs200,reference,1000000,0,0,   2.0493070
+PERF,c1,rs200,reference,1000000,0,1,   2.0638290
+PERF,c1,rs1000,ctools,1000000,8,0,   0.0287190
+PHASE,c1,rs1000,8,0,   0.0034474,   0.0051270,   0.0008632,   0.0129878
+CORRECT,c1,rs1000,8,all_rows
+PERF,c1,rs1000,ctools,1000000,8,1,   0.0298240
+PHASE,c1,rs1000,8,1,   0.0025417,   0.0050142,   0.0007713,   0.0151305
+PERF,c1,rs1000,ctools,1000000,8,2,   0.0288700
+PHASE,c1,rs1000,8,2,   0.0035451,   0.0048460,   0.0008350,   0.0133370
+PERF,c1,rs1000,ctools,1000000,8,3,   0.0276750
+PHASE,c1,rs1000,8,3,   0.0030031,   0.0045355,   0.0007577,   0.0128328
+PERF,c1,rs1000,ctools,1000000,8,4,   0.0322020
+PHASE,c1,rs1000,8,4,   0.0035490,   0.0050082,   0.0007514,   0.0165853
+PERF,c1,rs1000,ctools,1000000,8,5,   0.0281600
+PHASE,c1,rs1000,8,5,   0.0030731,   0.0051765,   0.0007464,   0.0128402
+PERF,c1,rs1000,ctools,1000000,8,6,   0.0283360
+PHASE,c1,rs1000,8,6,   0.0031240,   0.0047475,   0.0007553,   0.0134344
+PERF,c1,rs1000,ctools,1000000,8,7,   0.0342400
+PHASE,c1,rs1000,8,7,   0.0085690,   0.0052065,   0.0008200,   0.0128972
+PERF,c1,rs1000,ctools,1000000,8,8,   0.0340470
+PHASE,c1,rs1000,8,8,   0.0086918,   0.0046016,   0.0008407,   0.0128485
+PERF,c1,rs1000,reference,1000000,0,0,   2.0972530
+PERF,c1,rs1000,reference,1000000,0,1,   2.1010230
+PERF,c1,rs5000,ctools,1000000,8,0,   0.0288930
+PHASE,c1,rs5000,8,0,   0.0031184,   0.0054397,   0.0008081,   0.0128838
+CORRECT,c1,rs5000,8,all_rows
+PERF,c1,rs5000,ctools,1000000,8,1,   0.0283880
+PHASE,c1,rs5000,8,1,   0.0026406,   0.0052097,   0.0007798,   0.0134101
+PERF,c1,rs5000,ctools,1000000,8,2,   0.0287130
+PHASE,c1,rs5000,8,2,   0.0030820,   0.0054297,   0.0007417,   0.0132532
+PERF,c1,rs5000,ctools,1000000,8,3,   0.0278610
+PHASE,c1,rs5000,8,3,   0.0031060,   0.0047297,   0.0007675,   0.0128971
+PERF,c1,rs5000,ctools,1000000,8,4,   0.0273190
+PHASE,c1,rs5000,8,4,   0.0025451,   0.0046577,   0.0007440,   0.0129237
+PERF,c1,rs5000,ctools,1000000,8,5,   0.0283280
+PHASE,c1,rs5000,8,5,   0.0033495,   0.0049820,   0.0008095,   0.0128770
+PERF,c1,rs5000,ctools,1000000,8,6,   0.0280780
+PHASE,c1,rs5000,8,6,   0.0031634,   0.0049250,   0.0008288,   0.0128186
+PERF,c1,rs5000,ctools,1000000,8,7,   0.0278250
+PHASE,c1,rs5000,8,7,   0.0024878,   0.0050358,   0.0008214,   0.0128574
+PERF,c1,rs5000,ctools,1000000,8,8,   0.0277430
+PHASE,c1,rs5000,8,8,   0.0028139,   0.0048239,   0.0008279,   0.0128998
+PERF,c1,rs5000,reference,1000000,0,0,   2.1820780
+PERF,c1,rs5000,reference,1000000,0,1,   2.1654410
+PERF,c1,rs_single,ctools,1000000,8,0,   0.0529900
+PHASE,c1,rs_single,8,0,   0.0030878,   0.0242825,   0.0053096,   0.0128242
+CORRECT,c1,rs_single,8,all_rows
+PERF,c1,rs_single,ctools,1000000,8,1,   0.0463410
+PHASE,c1,rs_single,8,1,   0.0029915,   0.0189797,   0.0048907,   0.0130768
+PERF,c1,rs_single,ctools,1000000,8,2,   0.0484270
+PHASE,c1,rs_single,8,2,   0.0033356,   0.0189960,   0.0052860,   0.0145885
+PERF,c1,rs_single,ctools,1000000,8,3,   0.0484920
+PHASE,c1,rs_single,8,3,   0.0030191,   0.0207487,   0.0053066,   0.0132013
+PERF,c1,rs_single,ctools,1000000,8,4,   0.0457050
+PHASE,c1,rs_single,8,4,   0.0031164,   0.0186080,   0.0049638,   0.0126990
+PERF,c1,rs_single,ctools,1000000,8,5,   0.0469800
+PHASE,c1,rs_single,8,5,   0.0028555,   0.0192292,   0.0054995,   0.0129408
+PERF,c1,rs_single,ctools,1000000,8,6,   0.0457220
+PHASE,c1,rs_single,8,6,   0.0031760,   0.0177897,   0.0049718,   0.0131221
+PERF,c1,rs_single,ctools,1000000,8,7,   0.0474220
+PHASE,c1,rs_single,8,7,   0.0036252,   0.0200898,   0.0045925,   0.0127533
+PERF,c1,rs_single,ctools,1000000,8,8,   0.0456570
+PHASE,c1,rs_single,8,8,   0.0028459,   0.0188847,   0.0047899,   0.0127065
+PERF,c1,rs_single,reference,1000000,0,0,   2.5216010
+PERF,c1,rs_single,reference,1000000,0,1,   2.4722610
+PERF,c1,rs_median,ctools,1000000,8,0,   0.0382030
+PHASE,c1,rs_median,8,0,   0.0035314,   0.0053865,   0.0102028,   0.0127448
+CORRECT,c1,rs_median,8,all_rows
+PERF,c1,rs_median,ctools,1000000,8,1,   0.0379830
+PHASE,c1,rs_median,8,1,   0.0030430,   0.0049373,   0.0098955,   0.0136045
+PERF,c1,rs_median,ctools,1000000,8,2,   0.0380520
+PHASE,c1,rs_median,8,2,   0.0035233,   0.0053314,   0.0099680,   0.0128112
+PERF,c1,rs_median,ctools,1000000,8,3,   0.0369250
+PHASE,c1,rs_median,8,3,   0.0030859,   0.0047212,   0.0097612,   0.0126017
+PERF,c1,rs_median,ctools,1000000,8,4,   0.0371230
+PHASE,c1,rs_median,8,4,   0.0035007,   0.0044906,   0.0100425,   0.0127537
+PERF,c1,rs_median,ctools,1000000,8,5,   0.0363260
+PHASE,c1,rs_median,8,5,   0.0029057,   0.0043947,   0.0100568,   0.0126497
+PERF,c1,rs_median,ctools,1000000,8,6,   0.0385420
+PHASE,c1,rs_median,8,6,   0.0030439,   0.0050947,   0.0098865,   0.0142280
+PERF,c1,rs_median,ctools,1000000,8,7,   0.0406620
+PHASE,c1,rs_median,8,7,   0.0030060,   0.0050653,   0.0097503,   0.0165502
+PERF,c1,rs_median,ctools,1000000,8,8,   0.0407740
+PHASE,c1,rs_median,8,8,   0.0034495,   0.0048301,   0.0097778,   0.0164646
+PERF,c1,rs_median,reference,1000000,0,0,   1.8661140
+PERF,c1,rs_median,reference,1000000,0,1,   1.8711350
+PERF,c1,w_single,ctools,1000000,8,0,   0.0508330
+PHASE,c1,w_single,8,0,   0.0226470,   0.0011230,   0.0100374,   0.0010953
+CORRECT,c1,w_single,8,all_rows
+PERF,c1,w_single,ctools,1000000,8,1,   0.0508440
+PHASE,c1,w_single,8,1,   0.0226857,   0.0013344,   0.0101192,   0.0010985
+PERF,c1,w_single,ctools,1000000,8,2,   0.0500270
+PHASE,c1,w_single,8,2,   0.0223541,   0.0011349,   0.0100430,   0.0009613
+PERF,c1,w_single,ctools,1000000,8,3,   0.0505900
+PHASE,c1,w_single,8,3,   0.0223619,   0.0014277,   0.0100543,   0.0011392
+PERF,c1,w_single,ctools,1000000,8,4,   0.0502280
+PHASE,c1,w_single,8,4,   0.0221955,   0.0013122,   0.0100545,   0.0011197
+PERF,c1,w_single,ctools,1000000,8,5,   0.0498260
+PHASE,c1,w_single,8,5,   0.0217214,   0.0013958,   0.0099855,   0.0011291
+PERF,c1,w_single,ctools,1000000,8,6,   0.0502870
+PHASE,c1,w_single,8,6,   0.0223287,   0.0014967,   0.0100155,   0.0009638
+PERF,c1,w_single,ctools,1000000,8,7,   0.0498900
+PHASE,c1,w_single,8,7,   0.0222137,   0.0013064,   0.0099496,   0.0011069
+PERF,c1,w_single,ctools,1000000,8,8,   0.0506760
+PHASE,c1,w_single,8,8,   0.0229641,   0.0013379,   0.0100678,   0.0009623
+PERF,c1,w_single,reference,1000000,0,0,   0.0327360
+PERF,c1,w_single,reference,1000000,0,1,   0.0325040
+
+. di "GROUP_BENCHMARK_COMPLETE"
+GROUP_BENCHMARK_COMPLETE
+
+. 
+end of do-file
+
+. local rc=_rc
+
+. di "GROUP_BENCHMARK_RC=`rc'"
+GROUP_BENCHMARK_RC=0
+
+. di "CTOOLS_LAUNCH=4c7523ea3a7848d9a688400a900fe655 RC=`rc'"
+CTOOLS_LAUNCH=4c7523ea3a7848d9a688400a900fe655 RC=0
+
+. log close
+      name:  <unnamed>
+       log:  /Users/Mike/Documents/GitHub/stata-ctools/temp/command_performance_20261002/confirmation/c1.log
+  log type:  text
+ closed on:   2 Oct 2026, 10:47:00
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------

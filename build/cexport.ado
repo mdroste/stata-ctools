@@ -117,6 +117,8 @@ program define cexport, rclass
     local export_varlist ""
     local decoded_vars ""
     local original_names ""
+    * Preformatted string columns, which the writer never quotes
+    local formatted_vars ""
     if "`nolabel'" == "" {
         * Default: export value labels
         foreach var of local varlist {
@@ -129,6 +131,15 @@ program define cexport, rclass
                 qui recast str2045 `decoded_`var''
                 local labfmt : format `var'
                 if !(substr("`labfmt'",1,2) == "%t" | substr("`labfmt'",1,3) == "%-t") local labfmt "%18.0g"
+                * Under quote, native export quotes only the label text; a value
+                * without a label is still written as an unquoted number (and
+                * system missing as an empty unquoted field). Quote the label
+                * cells here and mark the column preformatted so the writer
+                * leaves the numeric fallbacks bare.
+                if "`quote'" != "" {
+                    qui replace `decoded_`var'' = char(34) + subinstr(`decoded_`var'', char(34), char(34)+char(34), .) + char(34) if `decoded_`var''!=""
+                    local formatted_vars `formatted_vars' `decoded_`var''
+                }
                 qui replace `decoded_`var'' = strtrim(string(`var',"`labfmt'")) if `decoded_`var''=="" & `var' != .
                 local export_varlist `export_varlist' `decoded_`var''
                 local decoded_vars `decoded_vars' `decoded_`var''
@@ -147,7 +158,6 @@ program define cexport, rclass
     * Prepare display-format fields; the C writer still owns CSV encoding and I/O.
     * Native export writes date/time variables (%t and %-t) with their display
     * format by default; datafmt extends that to every numeric variable.
-    local formatted_vars ""
     local new_export_varlist ""
     local export_idx = 0
     foreach var of local export_varlist {
@@ -258,8 +268,9 @@ program define cexport, rclass
     local opt_replace = cond("`replace'" != "", "replace", "")
 
     * Record start time
-    timer clear 99
-    timer on 99
+    local __ct_elapsed99 = 0
+    if "`__ct_elapsed99'" == "" local __ct_elapsed99 = 0
+    quietly _ctools_clock __ct_start99
 
     * Set string width metadata for flat buffer optimization
     _ctools_strw `export_varlist'
@@ -279,9 +290,11 @@ program define cexport, rclass
         exit `export_rc'
     }
 
-    timer off 99
-    quietly timer list 99
-    local elapsed = r(t99)
+    quietly _ctools_clock __ct_now
+
+    local __ct_elapsed99 = `__ct_elapsed99' + (`__ct_now' - `__ct_start99')
+    * Elapsed seconds are held in caller-local timing state.
+    local elapsed = `__ct_elapsed99'
 
     * Display summary
     di as text ""
@@ -348,7 +361,7 @@ program define cexport, rclass
     return scalar time = `elapsed'
     return local filename `"`using'"'
 
-    timer clear 99
+    local __ct_elapsed99 = 0
 end
 
 /*******************************************************************************
@@ -485,7 +498,10 @@ program define cexport_excel, rclass
                 tempvar decoded_`var'
                 qui decode `var', gen(`decoded_`var'')
                 qui recast str2045 `decoded_`var''
-                qui replace `decoded_`var'' = string(`var',"%18.0g") if `decoded_`var''=="" & !missing(`var')
+                * Unlabeled values, extended missing values included (.b), are
+                * written as numbers as native export excel does; only system
+                * missing is left empty
+                qui replace `decoded_`var'' = string(`var',"%18.0g") if `decoded_`var''=="" & `var' != .
                 local export_varlist `export_varlist' `decoded_`var''
                 local decoded_vars `decoded_vars' `decoded_`var''
             }
@@ -699,8 +715,9 @@ program define cexport_excel, rclass
     local opt_replace = cond("`replace'" != "", "replace", "")
 
     * Record start time
-    timer clear 99
-    timer on 99
+    local __ct_elapsed99 = 0
+    if "`__ct_elapsed99'" == "" local __ct_elapsed99 = 0
+    quietly _ctools_clock __ct_start99
 
     * Set string width metadata for flat buffer optimization
     _ctools_strw `export_varlist'
@@ -721,9 +738,11 @@ program define cexport_excel, rclass
         exit `export_rc'
     }
 
-    timer off 99
-    quietly timer list 99
-    local elapsed = r(t99)
+    quietly _ctools_clock __ct_now
+
+    local __ct_elapsed99 = `__ct_elapsed99' + (`__ct_now' - `__ct_start99')
+    * Elapsed seconds are held in caller-local timing state.
+    local elapsed = `__ct_elapsed99'
 
     * Display summary
     di as text ""
@@ -741,7 +760,7 @@ program define cexport_excel, rclass
     return scalar time = `elapsed'
     return local filename `"`using'"'
 
-    timer clear 99
+    local __ct_elapsed99 = 0
 end
 
 * Parse the nested native sheet(name, modify|replace) syntax independently.

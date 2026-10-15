@@ -24,7 +24,8 @@
  *   X     - Design matrix (N x K, column-major)
  *
  * Returns:
- *   0 on success, error code otherwise
+ *   0 on success, 920 when a sandwich temporary cannot be allocated,
+ *   another nonzero code otherwise
  */
 ST_int cqreg_compute_vce(cqreg_state *state, const ST_double *X);
 

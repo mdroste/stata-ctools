@@ -11,8 +11,7 @@ program define civreghdfe, eclass
     }
 
     * Start wall clock timer immediately
-    timer clear 97
-    timer on 97
+    quietly _ctools_clock __ct_lap97
 
     * Parse syntax
     * Basic syntax: civreghdfe depvar (endogvars = instruments) [exogvars], absorb() [options]
@@ -62,8 +61,8 @@ program define civreghdfe, eclass
         NOPARTIALsmall ///
         EForm(string) ///
         PLUS ///
-        NOOMIT:ted ///
-        OMIT:ted ///
+        NOOMITted ///
+        OMITted ///
         VSQuish ///
         NOEMPtycells ///
         BASElevels ///
@@ -75,28 +74,14 @@ program define civreghdfe, eclass
         THReads(integer 0) ///
         NORETURN]
 
-    * Clean up any leftover scalars from previous runs to prevent state contamination
-    capture scalar drop __civreghdfe_n_orthog
-    capture scalar drop __civreghdfe_n_endogtest
-    capture scalar drop __civreghdfe_n_redundant
-    capture scalar drop __civreghdfe_n_partial
-    capture scalar drop __civreghdfe_dofminus
-    capture scalar drop __civreghdfe_sdofminus
-    capture scalar drop __civreghdfe_nopartialsmall
-    capture scalar drop __civreghdfe_center
-    capture scalar drop __civreghdfe_ts_mode
-    capture scalar drop __civreghdfe_tdelta
-    capture scalar drop __civreghdfe_tspan
-    capture scalar drop __civreghdfe_dropped_opt
-    capture scalar drop __civreghdfe_dropped_col
-    foreach __m in orthog endogtest redundant partial {
-        capture matrix drop __civreghdfe_`__m'_flags
-    }
-    capture scalar drop __civreghdfe_num_collinear
-    capture scalar drop __civreghdfe_K_keep
-    forval i = 1/20 {
-        capture scalar drop __civreghdfe_collinear_`i'
-    }
+    * Drop whatever an earlier run left behind, so no stale state is read
+    _ctools_cleanup civreghdfe
+
+    * Plugin statistics are copied into temporary scalars before they are read
+    tempname temp_F temp_r2 temp_underid temp_underid_df temp_cd_f temp_kp_f temp_kp_f2
+    tempname temp_sargan temp_sargan_df temp_endog_chi2 temp_endog_f temp_endog_df
+    tempname temp_cstat temp_cstat_df temp_endogtest_stat temp_endogtest_df
+    tempname temp_redund_stat temp_redund_df
 
     * Handle standalone robust/cluster as aliases for vce()
     if "`robust'" != "" & `"`vce'"' == "" {
@@ -137,7 +122,7 @@ program define civreghdfe, eclass
         local residuals "_civreghdfe_resid"
     }
 
-    if "`residuals'" != "" & "`residuals2'" == "" confirm new variable `residuals'
+    if "`residuals'" != "" & "`residuals2'" == "" _ctools_newvars `residuals'
 
     * Parse the varlist with parentheses for endogenous vars and instruments
     * Format: depvar [exog_before] (endog1 endog2 = inst1 inst2 inst3) [exog_after]
@@ -261,75 +246,19 @@ program define civreghdfe, eclass
         fvrevar `__all_fv' if `touse'
         local __all_exp "`r(varlist)'"
 
-        * Helper: pre-filter base/omitted levels, then _rmcoll per group
-        * Keep term if ANY #-separated component is non-base/non-omitted
-        local __pos = 1
-
-        * --- Endogenous variables ---
-        local __vars_nobase ""
-        local __names_nobase ""
-        forval __i = 1/`__n_endog_total' {
-            local __vname : word `__i' of `endogvars_names_all'
-            local __keep = 0
-            local __parts : subinstr local __vname "#" " ", all
-            foreach __p of local __parts {
-                if !regexm("`__p'", "b\.") & !regexm("`__p'", "o\.") {
-                    local __keep = 1
-                }
+        * Base/omitted placeholders are not sent to the plugin, which also
+        * detects collinearity. The fvrevar variables follow the three name
+        * lists in order.
+        foreach __grp in endogvars exogvars instruments {
+            local __grp_vars ""
+            forvalues __i = 1/`: word count ``__grp'_names_all'' {
+                gettoken __v __all_exp : __all_exp
+                local __grp_vars `__grp_vars' `__v'
             }
-            if `__keep' {
-                local __vars_nobase `__vars_nobase' `: word `__pos' of `__all_exp''
-                local __names_nobase `__names_nobase' `__vname'
-            }
-            local __pos = `__pos' + 1
+            _ctools_fvsplit, names(``__grp'_names_all') vars(`__grp_vars')
+            local `__grp'_expanded "`r(vars)'"
+            local `__grp'_coef "`r(names)'"
         }
-        * Collinearity detection handled by C plugin
-        local endogvars_expanded "`__vars_nobase'"
-        local endogvars_coef "`__names_nobase'"
-
-        * --- Exogenous variables ---
-        local __vars_nobase ""
-        local __names_nobase ""
-        forval __i = 1/`__n_exog_total' {
-            local __vname : word `__i' of `exogvars_names_all'
-            local __keep = 0
-            local __parts : subinstr local __vname "#" " ", all
-            foreach __p of local __parts {
-                if !regexm("`__p'", "b\.") & !regexm("`__p'", "o\.") {
-                    local __keep = 1
-                }
-            }
-            if `__keep' {
-                local __vars_nobase `__vars_nobase' `: word `__pos' of `__all_exp''
-                local __names_nobase `__names_nobase' `__vname'
-            }
-            local __pos = `__pos' + 1
-        }
-        * Collinearity detection handled by C plugin
-        local exogvars_expanded "`__vars_nobase'"
-        local exogvars_coef "`__names_nobase'"
-
-        * --- Instruments ---
-        local __vars_nobase ""
-        local __names_nobase ""
-        forval __i = 1/`__n_inst_total' {
-            local __vname : word `__i' of `instruments_names_all'
-            local __keep = 0
-            local __parts : subinstr local __vname "#" " ", all
-            foreach __p of local __parts {
-                if !regexm("`__p'", "b\.") & !regexm("`__p'", "o\.") {
-                    local __keep = 1
-                }
-            }
-            if `__keep' {
-                local __vars_nobase `__vars_nobase' `: word `__pos' of `__all_exp''
-                local __names_nobase `__names_nobase' `__vname'
-            }
-            local __pos = `__pos' + 1
-        }
-        * Collinearity detection handled by C plugin
-        local instruments_expanded "`__vars_nobase'"
-        local instruments_coef "`__names_nobase'"
     }
 
     * Check that no endogenous variable is also an excluded instrument
@@ -387,11 +316,11 @@ program define civreghdfe, eclass
     local cluster_var ""
     local cluster_var2 ""
     if `"`vce'"' != "" {
-        local vce_lower = lower(`"`vce'"')
-        if `"`vce_lower'"' == "robust" | `"`vce_lower'"' == "r" {
+        _ctools_vce vce_kind vce_rest : `vce'
+        if "`vce_kind'" == "robust" {
             local vce_type = 1
         }
-        else if substr(`"`vce_lower'"', 1, 2) == "cl" {
+        else if "`vce_kind'" == "cluster" {
             * Extract cluster variable(s)
             local cluster_spec `"`vce'"'
             gettoken vce_cmd cluster_vars : cluster_spec, parse(" (")
@@ -419,7 +348,7 @@ program define civreghdfe, eclass
                 exit 198
             }
         }
-        else if `"`vce_lower'"' == "unadjusted" | `"`vce_lower'"' == "ols" {
+        else if inlist("`vce_kind'", "unadjusted", "ols") {
             local vce_type = 0
         }
         else {
@@ -441,10 +370,11 @@ program define civreghdfe, eclass
             di as error "Weight type `weight' not supported"
             exit 198
         }
+        * Evaluate the weight expression; marks out and validates the weights
         tempvar evaluated_weight
         local weight_expr = trim(`"`exp'"')
         if substr(`"`weight_expr'"', 1, 1) == "=" local weight_expr = substr(`"`weight_expr'"', 2, .)
-        quietly generate double `evaluated_weight' = `weight_expr' if `touse'
+        _ctools_weight, generate(`evaluated_weight') touse(`touse') type(`weight') expression(`"= `weight_expr'"')
         local weight_var "`evaluated_weight'"
     }
 
@@ -609,10 +539,6 @@ program define civreghdfe, eclass
             quietly replace `touse' = 0 if `cluster_var2' == "" & `touse' == 1
         }
     }
-    if `has_weights' {
-        markout `touse' `weight_var'
-    }
-
     * Count observations
     qui count if `touse'
     local N = r(N)
@@ -878,10 +804,12 @@ program define civreghdfe, eclass
     matrix __civreghdfe_V = `V_temp'
 
     * Build variable list for plugin
-    * Order: depvar, endogvars, exogvars, all_instruments, absorb, [cluster], [cluster2], [weight],
-    *        [tsset panel], [tsset time], residual
+    * Order: depvar, endogvars, exogvars, excluded instruments, absorb, [cluster], [cluster2],
+    *        [weight], [tsset panel], [tsset time], residual
+    * The exogenous regressors are also instruments (K_iv counts them) but are
+    * sent once; the plugin copies them into the instrument matrix.
     * Use expanded variables (factor variables converted to temp numeric vars)
-    local plugin_vars `depvar' `endogvars_expanded' `exogvars_expanded' `all_instruments' `absorb'
+    local plugin_vars `depvar' `endogvars_expanded' `exogvars_expanded' `instruments_expanded' `absorb'
     if `vce_type' == 2 | `vce_type' == 3 | `vce_type' == 4 {
         local plugin_vars `plugin_vars' `cluster_var'
     }
@@ -911,13 +839,10 @@ program define civreghdfe, eclass
     }
 
     * Record Stata pre-processing time
-    timer off 97
-    qui timer list 97
-    local t_stata_pre = r(t97)
+    _ctools_lap t_stata_pre __ct_lap97 `__ct_lap97'
 
     * Call the C plugin
-    timer clear 99
-    timer on 99
+    quietly _ctools_clock __ct_lap99
     capture noisily plugin call ctools_plugin `plugin_vars' if `touse', "civreghdfe `threads_code' iv_regression"
     if _rc {
         local __rc = _rc
@@ -929,12 +854,8 @@ program define civreghdfe, eclass
             local __lst : word `__o' of instruments_coef endogvars_coef instruments_coef
             local __v : word `=scalar(__civreghdfe_dropped_col)' of ``__lst''
             di as error "`__opt'(): `__v' was dropped (collinear, or absorbed by the fixed effects) and cannot be tested"
-            capture scalar drop __civreghdfe_dropped_opt
-            capture scalar drop __civreghdfe_dropped_col
         }
-        foreach __m in orthog endogtest redundant partial {
-            capture matrix drop __civreghdfe_`__m'_flags
-        }
+        _ctools_cleanup civreghdfe
         exit `__rc'
     }
     * partial() variables the plugin dropped as collinear or absorbed by the FEs
@@ -952,15 +873,11 @@ program define civreghdfe, eclass
         if "`residuals2'" != "" capture drop `residuals'
         rename `stored_resid' `residuals'
     }
-    timer off 99
-    qui timer list 99
-    local t_plugin = r(t99)
-    timer clear 98
-    timer on 98
+    _ctools_lap t_plugin __ct_lap99 `__ct_lap99'
+    quietly _ctools_clock __ct_lap98
 
     * If noreturn specified, skip all result retrieval and e() posting
     if "`noreturn'" != "" {
-        timer off 98
         di as text "(noreturn specified - skipping result storage)"
         exit 0
     }
@@ -1059,21 +976,11 @@ program define civreghdfe, eclass
     matrix `V_sym' = (`V_temp' + `V_temp'') / 2
     matrix `V_temp' = `V_sym'
 
-    * Insert base/omitted factor variable levels (coefficient=0, variance=0)
-    * to match ivreghdfe's e(b) format. A term was sent to the plugin unless
-    * every #-component carries a base (b.) or omitted (o.) marker (the rule
-    * used to build the plugin varlist above): 0b.foreign#c.weight is an
-    * estimable slope, 1b.a#0b.b is a placeholder. Classify with that same rule
-    * so the plugin's columns map onto the right names.
-    local base_flags ""
-    foreach vname of local varnames_full {
-        local __base = 1
-        local __parts : subinstr local vname "#" " ", all
-        foreach __p of local __parts {
-            if !regexm("`__p'", "b\.") & !regexm("`__p'", "o\.") local __base = 0
-        }
-        local base_flags `base_flags' `__base'
-    }
+    * e(b) and e(V) in ivreghdfe's layout: zeros for the base/omitted
+    * factor-variable levels, which were not sent to the plugin, and the o.
+    * prefix for the columns it found collinear.
+    _ctools_fvsplit, names(`varnames_full')
+    local base_flags `r(base)'
     local K_active : word count `varnames'
     local K_full : word count `varnames_full'
     if `K_full' > `K_active' {
@@ -1085,86 +992,30 @@ program define civreghdfe, eclass
             di as error "civreghdfe: cannot map the estimated coefficients onto the factor-variable terms"
             exit 498
         }
-
-        * Build expanded b and V with zeros for base/omitted levels
-        tempname b_full V_full
-        matrix `b_full' = J(1, `K_full', 0)
-        matrix `V_full' = J(`K_full', `K_full', 0)
-
-        local active_idx = 1
-        forvalues j = 1/`K_full' {
-            if !`: word `j' of `base_flags'' {
-                * Copy coefficient from active vector
-                matrix `b_full'[1, `j'] = `b_temp'[1, `active_idx']
-                * Copy row and column of V
-                local active_idx2 = 1
-                forvalues jj = 1/`K_full' {
-                    if !`: word `jj' of `base_flags'' {
-                        matrix `V_full'[`j', `jj'] = `V_temp'[`active_idx', `active_idx2']
-                        local active_idx2 = `active_idx2' + 1
-                    }
-                }
-                local active_idx = `active_idx' + 1
-            }
-        }
-        matrix `b_temp' = `b_full'
-        matrix `V_temp' = `V_full'
-        local varnames `varnames_full'
-    }
-    else {
-        * Every term was estimated
-        local base_flags ""
-        foreach v of local varnames {
-            local base_flags `base_flags' 0
-        }
     }
 
-    * Apply o. prefix for collinear variables detected by C plugin
-    * Collinearity flags are in [exog, endog] order (matching C internal order)
-    * varnames is in [endog, exog] order (matching ivreghdfe convention)
+    * Collinearity flags are in the plugin's [exog, endog] order; the columns
+    * are in [endog, exog] order (ivreghdfe's convention)
     capture confirm scalar __civreghdfe_num_collinear
-    if _rc == 0 & __civreghdfe_num_collinear > 0 {
-        local varnames_new ""
-        * Walk through varnames: first K_endog entries are endog, then K_exog are exog
-        * Map back to C's [exog, endog] flag order
-        local active_k = 1
-        local __j = 0
-        foreach v of local varnames {
-            * Skip base/omitted placeholders (not estimated by the plugin)
-            local __j = `__j' + 1
-            local is_base : word `__j' of `base_flags'
-            if `is_base' {
-                local varnames_new `varnames_new' `v'
-            }
-            else {
-                * Map active_k to C's [exog, endog] order flag index
-                * active_k 1..K_endog -> C flag K_exog + k (endog)
-                * active_k K_endog+1..K_total -> C flag k - K_endog (exog)
-                if `active_k' <= `K_endog' {
-                    local c_flag_idx = `K_exog' + `active_k'
-                }
-                else {
-                    local c_flag_idx = `active_k' - `K_endog'
-                }
-                capture local is_collin = __civreghdfe_collinear_`c_flag_idx'
-                if _rc != 0 local is_collin = 0
-                if `is_collin' == 1 {
-                    local varnames_new `varnames_new' o.`v'
-                }
-                else {
-                    local varnames_new `varnames_new' `v'
-                }
-                local active_k = `active_k' + 1
-            }
+    local __any_collinear = (_rc == 0)
+    if `__any_collinear' local __any_collinear = (__civreghdfe_num_collinear > 0)
+    local collinear_flags ""
+    forvalues __k = 1/`K_active' {
+        local __is_collin = 0
+        if `__any_collinear' {
+            local __c = cond(`__k' <= `K_endog', `K_exog' + `__k', `__k' - `K_endog')
+            capture local __is_collin = (__civreghdfe_collinear_`__c' == 1)
+            if _rc != 0 local __is_collin = 0
         }
-        local varnames `varnames_new'
+        local collinear_flags `collinear_flags' `__is_collin'
     }
 
-    * Add column/row names to matrices
-    matrix colnames `b_temp' = `varnames'
+    tempname b_full V_full
+    _ctools_ebv `b_full' `V_full', names(`varnames_full') base(`base_flags') ///
+        bmatrix(`b_temp') vmatrix(`V_temp') collinear(`collinear_flags') colnames(varnames)
+    matrix `b_temp' = `b_full'
+    matrix `V_temp' = `V_full'
     matrix rownames `b_temp' = `depvar'
-    matrix colnames `V_temp' = `varnames'
-    matrix rownames `V_temp' = `varnames'
 
     * Compute Wald F-statistic BEFORE posting (b' * V^{-1} * b / K)
     tempname Vinv b_col wald_temp wald_stat
@@ -1210,9 +1061,9 @@ program define civreghdfe, eclass
 
     * Store first-stage F statistics
     forvalues e = 1/`K_endog' {
-        capture scalar temp_F = __civreghdfe_F1_`e'
+        capture scalar `temp_F' = __civreghdfe_F1_`e'
         if _rc == 0 {
-            ereturn scalar F_first`e' = temp_F
+            ereturn scalar F_first`e' = `temp_F'
         }
     }
 
@@ -1311,8 +1162,10 @@ program define civreghdfe, eclass
     *   - ivreghdfe line 670: if HDFE.df_a=0 (nested), force absorb_ct to 1
     * Without absorb: constant is already in K_total, so sdofminus = 0
     * Formula: r2_a = 1 - (1 - r2) * N / (N - K - sdofminus)  (ivreghdfe line 1304)
+    *   - absorb also implies partialsmall: sdofminus() and the partial()
+    *     regressors add to sdofminus, and dofminus() is subtracted too
     if `G' > 0 {
-        local sdofminus = max(1, `df_a_for_vce')
+        local sdofminus = max(1, `df_a_for_vce') + `sdofminus' + `n_partial' + `dofminus'
     }
     else {
         local sdofminus = 0
@@ -1328,6 +1181,82 @@ program define civreghdfe, eclass
         local r2_a = .
     }
     ereturn scalar r2_a = `r2_a'
+
+    * Auxiliary regressions (first stage, reduced form) run by creghdfe over
+    * the IV estimation sample, with the same weights and VCE, while the IV
+    * results are held so they are restored afterwards.
+    tempvar aux_sample
+    if "`first'`rf'" != "" quietly gen byte `aux_sample' = e(sample)
+    local aux_wt ""
+    if "`weight'" != "" local aux_wt "[`weight'=`weight_var']"
+    local aux_vce = cond(`"`vce'"' == "", "unadjusted", `"`vce'"')
+    local aux_absorb ""
+    if "`absorb'" != "" local aux_absorb "absorb(`absorb')"
+
+    * first: as in ivreg2, display each first-stage regression ahead of the
+    * main results, and the first-stage summary statistics (ffirst)
+    if "`first'" != "" local ffirst "ffirst"
+    if "`first'" != "" & "`output'" == "" & `K_endog' > 0 {
+        di as text ""
+        di as text "First-stage regressions"
+        di as text "{hline 23}"
+        tempname first_hold
+        _estimates hold `first_hold', restore
+        foreach fs_dep of local endogvars_coef {
+            quietly fvrevar `fs_dep'
+            local fs_y `r(varlist)'
+            capture quietly creghdfe `fs_y' `instruments' `exogvars' `aux_wt' ///
+                if `aux_sample', `aux_absorb' vce(`aux_vce')
+            local fs_rc = _rc
+            di as text ""
+            di as text "First-stage regression of `fs_dep':"
+            if `fs_rc' {
+                di as error "  first-stage regression failed (rc=`fs_rc')"
+                continue
+            }
+            di as text ""
+            if "`e(clustvar)'" != "" {
+                di as text "Statistics robust to heteroskedasticity and clustering on `e(clustvar)'"
+            }
+            else if "`e(vcetype)'" != "" {
+                di as text "Statistics robust to heteroskedasticity"
+            }
+            else {
+                di as text "Statistics consistent for homoskedasticity only"
+            }
+            di as text "Number of obs = " as result %22.0f e(N)
+            capture quietly testparm `instruments'
+            local fs_test = !_rc
+            if `fs_test' {
+                local fs_F = r(F)
+                local fs_df1 = r(df)
+                local fs_df2 = r(df_r)
+                local fs_p = r(p)
+            }
+            * The constant is partialled out with the fixed effects, so it is
+            * not reported (creghdfe stores it as the last coefficient)
+            tempname fs_b fs_V
+            matrix `fs_b' = e(b)
+            matrix `fs_V' = e(V)
+            local fs_k = colsof(`fs_b')
+            if `fs_k' > 1 & colnumb(`fs_b', "_cons") == `fs_k' {
+                matrix `fs_b' = `fs_b'[1, 1..`fs_k'-1]
+                matrix `fs_V' = `fs_V'[1..`fs_k'-1, 1..`fs_k'-1]
+            }
+            local fs_N = e(N)
+            local fs_dof = e(df_r)
+            local fs_vcetype `e(vcetype)'
+            ereturn post `fs_b' `fs_V', depname(`fs_dep') obs(`fs_N') dof(`fs_dof')
+            if "`fs_vcetype'" != "" ereturn local vcetype "`fs_vcetype'"
+            ereturn display, level(`level')
+            if `fs_test' {
+                di as text "F test of excluded instruments:"
+                di as text "  F(" %3.0f `fs_df1' "," %6.0f `fs_df2' ") = " as result %8.2f `fs_F'
+                di as text "  Prob > F      = " as result %8.4f `fs_p'
+            }
+        }
+        _estimates unhold `first_hold'
+    }
 
     * Display results in ivreghdfe format (if header not suppressed)
     if "`header'" == "" {
@@ -1389,28 +1318,29 @@ program define civreghdfe, eclass
             di as text _col(55) "Number of obs =" as result %9.0fc `N_used'
         }
 
-        * F statistic (Wald test)
+        * F statistic (Wald test). Its numerator df is K, the regressors left
+        * after collinearity removal, which is also the divisor of F_wald.
         * For two-way clustering, use min(N_clust1, N_clust2) - 1 for degrees of freedom
-        local prob_F = Ftail(`K_total', `df_r', `F_wald')
+        local prob_F = Ftail(`K', `df_r', `F_wald')
         if `vce_type' == 2 {
-            di as text _col(55) "F(" %3.0f `K_total' "," %6.0f (`N_clust' - 1) ") =" as result %9.2f `F_wald'
+            di as text _col(55) "F(" %3.0f `K' "," %6.0f (`N_clust' - 1) ") =" as result %9.2f `F_wald'
         }
         else if `vce_type' == 3 {
             local min_clust = min(`N_clust', `N_clust2')
-            di as text _col(55) "F(" %3.0f `K_total' "," %6.0f (`min_clust' - 1) ") =" as result %9.2f `F_wald'
+            di as text _col(55) "F(" %3.0f `K' "," %6.0f (`min_clust' - 1) ") =" as result %9.2f `F_wald'
         }
         else {
-            di as text _col(55) "F(" %3.0f `K_total' "," %6.0f `df_r' ") =" as result %9.2f `F_wald'
+            di as text _col(55) "F(" %3.0f `K' "," %6.0f `df_r' ") =" as result %9.2f `F_wald'
         }
         di as text _col(55) "Prob > F      =" as result %9.4f `prob_F'
 
-        * R-squared and RSS (match ivreghdfe format: 2 spaces then number)
-        di as text "Total (centered) SS     =  " as result %-14.1f `tss' ///
+        * R-squared, sums of squares and root MSE in ivreg2's formats
+        di as text "Total (centered) SS     = " as result %12.0g `tss' ///
             as text _col(55) "Centered R2   =" as result %9.4f `r2'
-        di as text "Total (uncentered) SS   =  " as result %-14.1f `tss' ///
+        di as text "Total (uncentered) SS   = " as result %12.0g `tss' ///
             as text _col(55) "Uncentered R2 =" as result %9.4f `r2'
-        di as text "Residual SS             =  " as result %-14.1f `rss' ///
-            as text _col(55) "Root MSE      =" as result %9.0f round(`rmse')
+        di as text "Residual SS             = " as result %12.0g `rss' ///
+            as text _col(55) "Root MSE      =" as result %9.4g `rmse'
         di as text ""
     }
 
@@ -1427,7 +1357,11 @@ program define civreghdfe, eclass
         if "`plus'" != "" local dispopt "`dispopt' plus"
         if "`eform'" != "" local dispopt "`dispopt' eform(`eform')"
 
+        * ivreg2 and ivreghdfe label the table with the dependent variable
+        * itself, whatever depname() says; e(depvar) keeps the depname().
+        ereturn local depvar "`depvar'"
         ereturn display, level(`level') `dispopt'
+        ereturn local depvar "`depname_use'"
     }
 
     * Display full first-stage results (if ffirst specified)
@@ -1441,11 +1375,11 @@ program define civreghdfe, eclass
 
         forvalues e = 1/`K_endog' {
             local endogvar : word `e' of `endogvars'
-            capture scalar temp_F = __civreghdfe_F1_`e'
-            capture scalar temp_r2 = __civreghdfe_partial_r2_`e'
+            capture scalar `temp_F' = __civreghdfe_F1_`e'
+            capture scalar `temp_r2' = __civreghdfe_partial_r2_`e'
             if _rc == 0 {
-                local F_val = temp_F
-                local r2_val = temp_r2
+                local F_val = `temp_F'
+                local r2_val = `temp_r2'
                 local p_val = Ftail(`K_inst_excl', `df_r', `F_val')
                 di as text abbrev("`endogvar'", 15) _col(20) as result %8.4f `r2_val' ///
                     _col(32) as result %12.2f `F_val' _col(52) as result %10.4f `p_val'
@@ -1462,11 +1396,11 @@ program define civreghdfe, eclass
     if "`footer'" == "" {
 
     * Retrieve underidentification test
-    capture scalar temp_underid = __civreghdfe_underid
-    capture scalar temp_underid_df = __civreghdfe_underid_df
+    capture scalar `temp_underid' = __civreghdfe_underid
+    capture scalar `temp_underid_df' = __civreghdfe_underid_df
     if _rc == 0 {
-        local underid_stat = temp_underid
-        local underid_df = temp_underid_df
+        local underid_stat = `temp_underid'
+        local underid_df = `temp_underid_df'
         ereturn scalar idstat = `underid_stat'
         ereturn scalar iddf = `underid_df'
         ereturn scalar idp = chi2tail(`underid_df', `underid_stat')
@@ -1489,10 +1423,10 @@ program define civreghdfe, eclass
     }
 
     * Weak identification test
-    capture scalar temp_cd_f = __civreghdfe_cd_f
-    capture scalar temp_kp_f = __civreghdfe_kp_f
-    local cd_f_val = temp_cd_f
-    local kp_f_val = temp_kp_f
+    capture scalar `temp_cd_f' = __civreghdfe_cd_f
+    capture scalar `temp_kp_f' = __civreghdfe_kp_f
+    local cd_f_val = `temp_cd_f'
+    local kp_f_val = `temp_kp_f'
 
     * Always display Cragg-Donald F
     di as text "Weak identification test (Cragg-Donald Wald F statistic):" ///
@@ -1584,10 +1518,10 @@ program define civreghdfe, eclass
 
         * Run reduced form regression using creghdfe
         * Reduced form: y = [exogenous + excluded instruments] + error
-        local rf_vce = "`vce'"
-        if "`rf_vce'" == "" local rf_vce = "unadjusted"
-        qui creghdfe `depvar' `exogvars' `instruments' `if' `in' ///
-            [`weight'`exp'], absorb(`absorb') vce(`rf_vce')
+        tempname rf_hold
+        _estimates hold `rf_hold', restore
+        qui creghdfe `depvar' `exogvars' `instruments' `aux_wt' ///
+            if `aux_sample', `aux_absorb' vce(`aux_vce')
 
         * Display coefficient table
         tempname rf_b rf_V
@@ -1625,27 +1559,25 @@ program define civreghdfe, eclass
         }
         di as text "{hline 78}"
 
-        * Restore IV results
-        * We need to re-post to restore the original e() results
-        * But since ereturn post clears everything, we'll just leave a note
-        * The key IV results are already stored in the output above
+        * Restore the IV results
+        _estimates unhold `rf_hold'
     }
 
     * Store and display diagnostic statistics
-    capture scalar temp_sargan = __civreghdfe_sargan
-    capture scalar temp_sargan_df = __civreghdfe_sargan_df
-    capture scalar temp_cd_f = __civreghdfe_cd_f
-    capture scalar temp_endog_chi2 = __civreghdfe_endog_chi2
-    capture scalar temp_endog_f = __civreghdfe_endog_f
-    capture scalar temp_endog_df = __civreghdfe_endog_df
+    capture scalar `temp_sargan' = __civreghdfe_sargan
+    capture scalar `temp_sargan_df' = __civreghdfe_sargan_df
+    capture scalar `temp_cd_f' = __civreghdfe_cd_f
+    capture scalar `temp_endog_chi2' = __civreghdfe_endog_chi2
+    capture scalar `temp_endog_f' = __civreghdfe_endog_f
+    capture scalar `temp_endog_df' = __civreghdfe_endog_df
 
     if _rc == 0 {
-        local sargan_val = temp_sargan
-        local sargan_df = temp_sargan_df
-        local cd_f_val = temp_cd_f
-        local endog_chi2 = temp_endog_chi2
-        local endog_f = temp_endog_f
-        local endog_df = temp_endog_df
+        local sargan_val = `temp_sargan'
+        local sargan_df = `temp_sargan_df'
+        local cd_f_val = `temp_cd_f'
+        local endog_chi2 = `temp_endog_chi2'
+        local endog_f = `temp_endog_f'
+        local endog_df = `temp_endog_df'
 
         * Store in e()
         ereturn scalar sargan = `sargan_val'
@@ -1658,9 +1590,9 @@ program define civreghdfe, eclass
         ereturn scalar cd_f = `cd_f_val'
 
         * Store weak ID statistics (widstat = Kleibergen-Paap F if robust, else Cragg-Donald F)
-        capture scalar temp_kp_f2 = __civreghdfe_kp_f
+        capture scalar `temp_kp_f2' = __civreghdfe_kp_f
         if _rc == 0 & (`vce_type' != 0 | `kernel_type' > 0) {
-            local kp_f_val2 = temp_kp_f2
+            local kp_f_val2 = `temp_kp_f2'
             if `kp_f_val2' > 0 {
                 ereturn scalar widstat = `kp_f_val2'
                 ereturn scalar kp_f = `kp_f_val2'
@@ -1672,7 +1604,6 @@ program define civreghdfe, eclass
         else {
             ereturn scalar widstat = `cd_f_val'
         }
-        capture scalar drop temp_kp_f2
 
         * Store endogeneity test
         ereturn scalar endog_chi2 = `endog_chi2'
@@ -1713,11 +1644,11 @@ program define civreghdfe, eclass
 
     * Display orthog test (C-statistic) if requested
     if `n_orthog' > 0 {
-        capture scalar temp_cstat = __civreghdfe_cstat
-        capture scalar temp_cstat_df = __civreghdfe_cstat_df
+        capture scalar `temp_cstat' = __civreghdfe_cstat
+        capture scalar `temp_cstat_df' = __civreghdfe_cstat_df
         if _rc == 0 {
-            local cstat_val = temp_cstat
-            local cstat_df = temp_cstat_df
+            local cstat_val = `temp_cstat'
+            local cstat_df = `temp_cstat_df'
             local cstat_p = chi2tail(`cstat_df', `cstat_val')
 
             ereturn scalar cstat = `cstat_val'
@@ -1730,17 +1661,15 @@ program define civreghdfe, eclass
                 as result %10.4f `cstat_p'
             di as text "{hline 78}"
         }
-        capture scalar drop temp_cstat
-        capture scalar drop temp_cstat_df
     }
 
     * Display endogtest result if specified
     if `n_endogtest' > 0 {
-        capture scalar temp_endogtest_stat = __civreghdfe_endogtest_stat
-        capture scalar temp_endogtest_df = __civreghdfe_endogtest_df
+        capture scalar `temp_endogtest_stat' = __civreghdfe_endogtest_stat
+        capture scalar `temp_endogtest_df' = __civreghdfe_endogtest_df
         if _rc == 0 {
-            local endogtest_val = temp_endogtest_stat
-            local endogtest_df_val = temp_endogtest_df
+            local endogtest_val = `temp_endogtest_stat'
+            local endogtest_df_val = `temp_endogtest_df'
             local endogtest_p = chi2tail(`endogtest_df_val', `endogtest_val')
 
             ereturn scalar endogtest = `endogtest_val'
@@ -1753,17 +1682,15 @@ program define civreghdfe, eclass
                 as result %10.4f `endogtest_p'
             di as text "{hline 78}"
         }
-        capture scalar drop temp_endogtest_stat
-        capture scalar drop temp_endogtest_df
     }
 
     * Display redundant test result if specified
     if `n_redundant' > 0 {
-        capture scalar temp_redund_stat = __civreghdfe_redund_stat
-        capture scalar temp_redund_df = __civreghdfe_redund_df
+        capture scalar `temp_redund_stat' = __civreghdfe_redund_stat
+        capture scalar `temp_redund_df' = __civreghdfe_redund_df
         if _rc == 0 {
-            local redund_val = temp_redund_stat
-            local redund_df_val = temp_redund_df
+            local redund_val = `temp_redund_stat'
+            local redund_df_val = `temp_redund_df'
             local redund_p = chi2tail(`redund_df_val', `redund_val')
 
             ereturn scalar redund = `redund_val'
@@ -1776,8 +1703,6 @@ program define civreghdfe, eclass
                 as result %10.4f `redund_p'
             di as text "{hline 78}"
         }
-        capture scalar drop temp_redund_stat
-        capture scalar drop temp_redund_df
     }
 
     * Display instruments footer
@@ -1850,6 +1775,68 @@ program define civreghdfe, eclass
 
     } /* End of if "`footer'" == "" */
 
+    * savefirst/saverf: as ivreg2, store each first-stage regression as
+    * <savefprefix><endogenous variable> and the reduced form as
+    * <saverfprefix><depvar>: creghdfe over the IV estimation sample with the
+    * same weights and VCE, the constant partialled out with the effects.
+    * The IV results are held and restored afterwards.
+    local save_eqs ""
+    if "`savefirst'" != "" {
+        local save_prefix = cond("`savefprefix'" != "", "`savefprefix'", "_civreghdfe_")
+        foreach save_dep of local endogvars_coef {
+            local save_eqs `save_eqs' first `save_dep'
+        }
+    }
+    if "`saverf'" != "" {
+        local save_rfprefix = cond("`saverfprefix'" != "", "`saverfprefix'", "_civreghdfe_rf_")
+        local save_eqs `save_eqs' rf `depvar'
+    }
+    if "`save_eqs'" != "" {
+        tempvar save_sample
+        quietly gen byte `save_sample' = e(sample)
+        tempname save_hold save_b save_V
+        _estimates hold `save_hold', restore
+        while "`save_eqs'" != "" {
+            gettoken save_stage save_eqs : save_eqs
+            gettoken save_dep save_eqs : save_eqs
+            quietly fvrevar `save_dep'
+            local save_y `r(varlist)'
+            capture quietly creghdfe `save_y' `instruments' `exogvars' `aux_wt' ///
+                if `save_sample', `aux_absorb' vce(`aux_vce')
+            if _rc {
+                di as error "`save_stage' regression of `save_dep' failed (rc=`=_rc'); not stored"
+                continue
+            }
+            matrix `save_b' = e(b)
+            matrix `save_V' = e(V)
+            local save_k = colsof(`save_b')
+            if `save_k' > 1 & colnumb(`save_b', "_cons") == `save_k' {
+                matrix `save_b' = `save_b'[1, 1..`save_k'-1]
+                matrix `save_V' = `save_V'[1..`save_k'-1, 1..`save_k'-1]
+            }
+            local save_N = e(N)
+            local save_dof = e(df_r)
+            local save_rmse = e(rmse)
+            * no e(sample), as in ivreg2's stored first-stage/reduced-form results
+            ereturn post `save_b' `save_V', depname(`save_dep') obs(`save_N') dof(`save_dof')
+            ereturn scalar rmse = `save_rmse'
+            ereturn scalar df_m = colsof(e(b))
+            ereturn local model "`save_stage'"
+            ereturn local predict "civreghdfe_p"
+            ereturn local cmd "civreghdfe"
+            if "`save_stage'" == "first" {
+                ereturn local estimates_title "First-stage regression: `save_dep'"
+                local save_name = strtoname("`save_prefix'`save_dep'")
+            }
+            else {
+                ereturn local estimates_title "Reduced-form regression: `save_dep'"
+                local save_name = strtoname("`save_rfprefix'`save_dep'")
+            }
+            estimates store `save_name', title(`e(estimates_title)')
+        }
+        _estimates unhold `save_hold'
+    }
+
     * Save first-stage estimation results (if savefirst specified)
     if "`savefirst'" != "" {
         local prefix = cond("`savefprefix'" != "", "`savefprefix'", "_civreghdfe_")
@@ -1870,9 +1857,7 @@ program define civreghdfe, eclass
     }
 
     * Capture post-processing time (before cleanup)
-    timer off 98
-    qui timer list 98
-    local t_stata_post = r(t98)
+    _ctools_lap t_stata_post __ct_lap98 `__ct_lap98'
 
     * Display timing breakdown if verbose specified
     if "`verbose'" != "" {
@@ -1920,119 +1905,7 @@ program define civreghdfe, eclass
         }
     }
 
-    * Clean up temp scalars and matrices
-    capture scalar drop __civreghdfe_K_endog
-    capture scalar drop __civreghdfe_K_exog
-    capture scalar drop __civreghdfe_K_iv
-    capture scalar drop __civreghdfe_G
-    capture scalar drop __civreghdfe_has_cluster
-    capture scalar drop __civreghdfe_has_cluster2
-    capture scalar drop __civreghdfe_has_weights
-    capture scalar drop __civreghdfe_N_clust1
-    capture scalar drop __civreghdfe_N_clust2
-    capture scalar drop __civreghdfe_weight_type
-    capture scalar drop __civreghdfe_vce_type
-    capture scalar drop __civreghdfe_maxiter
-    capture scalar drop __civreghdfe_tolerance
-    capture scalar drop __civreghdfe_verbose
-    capture scalar drop __civreghdfe_N
-    capture scalar drop __civreghdfe_df_r
-    capture scalar drop __civreghdfe_df_a
-    forval g = 1/20 {
-        capture scalar drop __civreghdfe_num_levels_`g'
-    }
-    capture scalar drop __civreghdfe_K
-    capture scalar drop __civreghdfe_rss
-    capture scalar drop __civreghdfe_tss
-    capture scalar drop __civreghdfe_r2
-    capture scalar drop __civreghdfe_rmse
-    capture scalar drop __civreghdfe_N_clust
-    capture scalar drop __civreghdfe_nested_fe_index
-    capture scalar drop __civreghdfe_est_method
-    capture scalar drop __civreghdfe_kclass
-    capture scalar drop __civreghdfe_fuller
-    capture scalar drop __civreghdfe_coviv
-    capture scalar drop __civreghdfe_lambda
-    capture scalar drop __civreghdfe_kernel
-    capture scalar drop __civreghdfe_bw
-    capture scalar drop __civreghdfe_kiefer
-    capture scalar drop __civreghdfe_ts_mode
-    capture scalar drop __civreghdfe_tdelta
-    capture scalar drop __civreghdfe_tspan
-    capture scalar drop __civreghdfe_dofminus
-    capture scalar drop __civreghdfe_sdofminus
-    capture scalar drop __civreghdfe_nopartialsmall
-    capture scalar drop __civreghdfe_center
-    capture scalar drop __civreghdfe_has_b0
-    capture matrix drop __civreghdfe_b0
-    capture scalar drop __civreghdfe_sargan
-    capture scalar drop __civreghdfe_sargan_df
-    capture scalar drop __civreghdfe_cd_f
-    capture scalar drop __civreghdfe_kp_f
-    capture scalar drop __civreghdfe_underid
-    capture scalar drop __civreghdfe_underid_df
-    capture scalar drop temp_underid
-    capture scalar drop temp_underid_df
-    capture scalar drop __civreghdfe_endog_chi2
-    capture scalar drop __civreghdfe_endog_f
-    capture scalar drop __civreghdfe_endog_df
-    capture scalar drop temp_sargan
-    capture scalar drop temp_sargan_df
-    capture scalar drop temp_cd_f
-    capture scalar drop temp_kp_f
-    capture scalar drop temp_endog_chi2
-    capture scalar drop temp_endog_f
-    capture scalar drop temp_endog_df
-    forvalues e = 1/`K_endog' {
-        capture scalar drop __civreghdfe_F1_`e'
-    }
-    capture matrix drop __civreghdfe_b
-    capture matrix drop __civreghdfe_V
-
-    * Clean up diagnostic test and partial() scalars and flag matrices
-    capture scalar drop __civreghdfe_n_orthog
-    capture scalar drop __civreghdfe_cstat
-    capture scalar drop __civreghdfe_cstat_df
-    capture scalar drop __civreghdfe_n_endogtest
-    capture scalar drop __civreghdfe_endogtest_stat
-    capture scalar drop __civreghdfe_endogtest_df
-    capture scalar drop __civreghdfe_n_redundant
-    capture scalar drop __civreghdfe_redund_stat
-    capture scalar drop __civreghdfe_redund_df
-    capture scalar drop __civreghdfe_n_partial
-    foreach __m in orthog endogtest redundant partial {
-        capture matrix drop __civreghdfe_`__m'_flags
-    }
-
-    * Clean up nested FE scalars
-    forval i = 1/20 {
-        capture scalar drop __civreghdfe_fe_nested_`i'
-    }
-
-    capture scalar drop __civreghdfe_resid_idx
-
-    * Clean up collinearity scalars
-    capture scalar drop __civreghdfe_num_collinear
-    capture scalar drop __civreghdfe_K_keep
-    forval i = 1/20 {
-        capture scalar drop __civreghdfe_collinear_`i'
-    }
-
-    * Clean up timing scalars
-    capture scalar drop _civreghdfe_time_load _civreghdfe_time_extract _civreghdfe_time_missing
-    capture scalar drop _civreghdfe_time_singleton
-    capture scalar drop _civreghdfe_time_remap
-    capture scalar drop _civreghdfe_time_fwl
-    capture scalar drop _civreghdfe_time_partial
-    capture scalar drop _civreghdfe_time_dof
-    capture scalar drop _civreghdfe_time_estimate
-    capture scalar drop _civreghdfe_time_stats
-    capture scalar drop _civreghdfe_time_store
-    capture scalar drop _civreghdfe_time_total
-    capture scalar drop _civreghdfe_threads_max
-    capture scalar drop _civreghdfe_openmp_enabled
-    timer clear 97
-
+    _ctools_cleanup civreghdfe
 end
 
 * Flag the plugin columns named by an orthog()/endogtest()/redundant()/
@@ -2043,69 +1916,7 @@ end
 * base levels are skipped and duplicates ignored. Returns r(n) flagged
 * columns, r(flags) (1 x #plugin columns, if r(n) > 0), r(terms) the matched
 * model terms, and r(bad) the first name that matches no term.
-program define _civreghdfe_optflags, rclass
-    args optvars all touse
-    fvexpand `optvars' if `touse'
-    local optnames `r(varlist)'
-
-    local sall ""
-    local plugpos ""
-    local np = 0
-    foreach v of local all {
-        _civreghdfe_fvstrip `"`v'"'
-        local sall `sall' `r(name)'
-        local keep = 0
-        local parts : subinstr local v "#" " ", all
-        foreach p of local parts {
-            if !regexm("`p'", "b\.") & !regexm("`p'", "o\.") local keep = 1
-        }
-        if `keep' {
-            local ++np
-            local plugpos `plugpos' `np'
-        }
-        else local plugpos `plugpos' 0
-    }
-
-    tempname F
-    if `np' > 0 matrix `F' = J(1, `np', 0)
-    local n = 0
-    local terms ""
-    local bad ""
-    foreach v of local optnames {
-        _civreghdfe_fvstrip `"`v'"'
-        local sv `r(name)'
-        local j : list posof "`sv'" in sall
-        if `j' == 0 {
-            local bad `v'
-            continue, break
-        }
-        local terms `terms' `: word `j' of `all''
-        local p : word `j' of `plugpos'
-        if `p' > 0 {
-            if `F'[1, `p'] == 0 local ++n
-            matrix `F'[1, `p'] = 1
-        }
-    }
-    local terms : list uniq terms
-    return local bad `bad'
-    return local terms `terms'
-    return scalar n = `n'
-    if `n' > 0 return matrix flags = `F'
-end
 
 * Term name without base/omitted markers (1b.g -> 1.g, 2bn.g -> 2.g,
 * o.x -> x, co.x -> c.x), so an option list matches the model's terms
 * whatever base each fvexpand call picked
-program define _civreghdfe_fvstrip, rclass
-    args s
-    while regexm(`"`s'"', "([0-9]+)(bn|b|o)\.") {
-        local mk = regexs(0)
-        local lev = regexs(1)
-        local s : subinstr local s "`mk'" "`lev'.", all
-    }
-    local s : subinstr local s "#co." "#c.", all
-    local s : subinstr local s "#o." "#", all
-    if substr(`"`s'"', 1, 3) == "co." local s = "c." + substr(`"`s'"', 4, .)
-    else if substr(`"`s'"', 1, 2) == "o." local s = substr(`"`s'"', 3, .)
-    return local name `"`s'"'
-end

@@ -3,7 +3,9 @@
 This document describes features available **only** in ctools commands—functionality that does not exist in the standard Stata commands or popular user-written alternatives they replace.
 
 Most ctools commands use C implementations with parallel processing. `cdecode`
-uses Stata's native decoding engine to preserve literal and long value labels.
+reads value labels directly from Stata and writes the text in C; results it
+does not produce there (strL, multibyte `maxlength()` cuts) come from Stata's
+own `decode`.
 This document describes added capabilities; see `docs/COMPATIBILITY.md` for the
 supported scope and differences from reference commands.
 

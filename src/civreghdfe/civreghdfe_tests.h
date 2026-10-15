@@ -17,6 +17,12 @@
 #include "civreghdfe_omega.h"
 
 /*
+    Every test returns 0, or 920 when memory runs out. A statistic that
+    cannot be computed is SV_missval, never 0 (which would read as p = 1);
+    a test that does not apply (e.g. an exactly identified model) keeps 0.
+*/
+
+/*
     Compute underidentification test (Anderson LM / Kleibergen-Paap rk LM)
     and weak identification statistics (Cragg-Donald / KP rk Wald F).
 
@@ -37,13 +43,13 @@
     - cd_f: Output - Cragg-Donald F statistic
     - kp_f: Output - Kleibergen-Paap rk Wald F statistic
 */
-void civreghdfe_compute_underid_test(
+ST_retcode civreghdfe_compute_underid_test(
     const ST_double *X_endog,
     const ST_double *Z,
     const ST_double *weights,
     ST_int weight_type,
     ST_int N,
-    ST_int N_eff,
+    ST_double N_eff,
     ST_int K_exog,
     ST_int K_endog,
     ST_int K_iv,
@@ -73,7 +79,7 @@ void civreghdfe_compute_underid_test(
     - J: Output - overidentification test statistic
     - overid_df: Output - degrees of freedom (K_iv - K_total)
 */
-void civreghdfe_compute_hansen_j(
+ST_retcode civreghdfe_compute_hansen_j(
     const ST_double *y,
     const ST_double *X_all,
     ST_int K_total,
@@ -105,7 +111,7 @@ void civreghdfe_compute_hansen_j(
     - endog_f: Output - DWH F statistic
     - endog_df: Output - degrees of freedom
 */
-void civreghdfe_compute_dwh_test(
+ST_retcode civreghdfe_compute_dwh_test(
     const ST_double *y,
     const ST_double *X_exog,
     const ST_double *X_endog,
@@ -139,7 +145,7 @@ void civreghdfe_compute_dwh_test(
     - cstat: Output - C statistic
     - cstat_df: Output - degrees of freedom
 */
-void civreghdfe_compute_cstat(
+ST_retcode civreghdfe_compute_cstat(
     const ST_double *y,
     const ST_double *X_all,
     ST_int K_total,
@@ -176,7 +182,7 @@ void civreghdfe_compute_cstat(
     - endogtest_stat: Output - C statistic (chi-sq)
     - endogtest_df: Output - degrees of freedom
 */
-void civreghdfe_compute_endogtest_subset(
+ST_retcode civreghdfe_compute_endogtest_subset(
     const ST_double *y,
     const ST_double *X_exog,
     const ST_double *X_endog,
@@ -212,7 +218,7 @@ void civreghdfe_compute_endogtest_subset(
     - redund_stat: Output - LM test statistic (chi-sq)
     - redund_df: Output - degrees of freedom (K_endog * n_redund)
 */
-void civreghdfe_compute_redundant(
+ST_retcode civreghdfe_compute_redundant(
     const ST_double *X_endog,
     const ST_double *Z,
     ST_int N,

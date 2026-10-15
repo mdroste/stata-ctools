@@ -1,4 +1,4 @@
-"""Run frozen whole-command comparisons, exclusively through oldstata."""
+"""Run frozen whole-command comparisons, exclusively through stata."""
 from pathlib import Path
 import csv, hashlib, json, shlex, shutil, statistics, subprocess, time
 
@@ -20,7 +20,7 @@ for block in range(2):
         directory.mkdir(exist_ok=True)
         shutil.copy2(OUT / 'clock.plugin', directory / 'clock.plugin')
         arguments = [str(DRIVER), str(variants[variant]), str(directory), label, '7', '8']
-        shell = 'oldstata -q -b do ' + shlex.join(arguments)
+        shell = 'stata -q -b do ' + shlex.join(arguments)
         manifest['runs'].append(dict(block=block, variant=variant, label=label,
                                     directory=str(directory), shell=shell))
 (OUT / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')

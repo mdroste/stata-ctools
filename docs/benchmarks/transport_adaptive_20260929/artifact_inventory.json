@@ -1857,10 +1857,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/tiny_campaign/manifest.json",
     "archived": "tiny_campaign/manifest.json",
     "source_sha256": "a220a1e644be2ffe4642c09d7e91c38a5f7a905a82dd69927402bc8a579052f8",
-    "archived_sha256": "a220a1e644be2ffe4642c09d7e91c38a5f7a905a82dd69927402bc8a579052f8",
+    "archived_sha256": "f473a3f48ec7d8075f6b68987e81c33b217fe24569a01b53abfeb7bc9e5658ef",
     "source_bytes": 93096,
-    "archived_bytes": 93096,
-    "compression": "none"
+    "archived_bytes": 92532,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "a220a1e644be2ffe4642c09d7e91c38a5f7a905a82dd69927402bc8a579052f8",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/tiny_campaign/process.csv",
@@ -1893,10 +1895,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/tiny_campaign/run-plan.tsv",
     "archived": "tiny_campaign/run-plan.tsv",
     "source_sha256": "9b616a91b7ab2b0bc33ed044767bb51ba3d67973f98d1b096cb4f3ce1b49d384",
-    "archived_sha256": "9b616a91b7ab2b0bc33ed044767bb51ba3d67973f98d1b096cb4f3ce1b49d384",
+    "archived_sha256": "e6eced7f8d88e37c9f46fcb8616c5ca8971311e46ea3c69bd4412dcf2c07f82b",
     "source_bytes": 1068,
-    "archived_bytes": 1068,
-    "compression": "none"
+    "archived_bytes": 1056,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "9b616a91b7ab2b0bc33ed044767bb51ba3d67973f98d1b096cb4f3ce1b49d384",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/tiny_campaign/summary.csv",
@@ -4683,10 +4687,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/tiny_weighted_screen/manifest.json",
     "archived": "tiny_weighted_screen/manifest.json",
     "source_sha256": "8ebcbd4922802efdadfc34a654bd5903d12308e811d4f28ad8c38c5b098f1875",
-    "archived_sha256": "8ebcbd4922802efdadfc34a654bd5903d12308e811d4f28ad8c38c5b098f1875",
+    "archived_sha256": "25d6523ad48ea04bdf0292a6e7375b21188abd808abcde43e8f8e0d889f0822b",
     "source_bytes": 132029,
-    "archived_bytes": 132029,
-    "compression": "none"
+    "archived_bytes": 131183,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "8ebcbd4922802efdadfc34a654bd5903d12308e811d4f28ad8c38c5b098f1875",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/tiny_weighted_screen/process.csv",
@@ -4719,10 +4725,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/tiny_weighted_screen/run-plan.tsv",
     "archived": "tiny_weighted_screen/run-plan.tsv",
     "source_sha256": "45ba496b028b6a1ec25fc3dbcf5e5293ebc074fb4289401bb5fd12940f2b9c0f",
-    "archived_sha256": "45ba496b028b6a1ec25fc3dbcf5e5293ebc074fb4289401bb5fd12940f2b9c0f",
+    "archived_sha256": "a2f62b310de5fed4ca1eabb48d14d0f46d4e1b1258bc6a8206cca6cd1ebe5b05",
     "source_bytes": 1716,
-    "archived_bytes": 1716,
-    "compression": "none"
+    "archived_bytes": 1698,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "45ba496b028b6a1ec25fc3dbcf5e5293ebc074fb4289401bb5fd12940f2b9c0f",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/tiny_weighted_screen/summary.csv",
@@ -6159,10 +6167,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/numeric_screen/manifest.json",
     "archived": "numeric_screen/manifest.json",
     "source_sha256": "ce7addd4569c71e612dab2470b5691710493b87ade09f053d077add6763faa91",
-    "archived_sha256": "ce7addd4569c71e612dab2470b5691710493b87ade09f053d077add6763faa91",
+    "archived_sha256": "4c20a686482f024eaf501041c317043f0b6933f4809a747e75fb2d29118c961c",
     "source_bytes": 90638,
-    "archived_bytes": 90638,
-    "compression": "none"
+    "archived_bytes": 90068,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "ce7addd4569c71e612dab2470b5691710493b87ade09f053d077add6763faa91",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/numeric_screen/process.csv",
@@ -6195,10 +6205,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/numeric_screen/run-plan.tsv",
     "archived": "numeric_screen/run-plan.tsv",
     "source_sha256": "d530301548be7ddf988736bf98e101ed7b446014a0bad6322a947b1069ab8b10",
-    "archived_sha256": "d530301548be7ddf988736bf98e101ed7b446014a0bad6322a947b1069ab8b10",
+    "archived_sha256": "8c3a6115efd836ea2908fa253c134c46d22d57421d3a50f3e1be4536c34cc98d",
     "source_bytes": 1632,
-    "archived_bytes": 1632,
-    "compression": "none"
+    "archived_bytes": 1614,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "d530301548be7ddf988736bf98e101ed7b446014a0bad6322a947b1069ab8b10",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/numeric_screen/summary.csv",
@@ -7257,10 +7269,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/str2045_screen/manifest.json",
     "archived": "str2045_screen/manifest.json",
     "source_sha256": "b0b5a90a23d390640d5d19816d53fedc0a51a19dac35eb743c21904bc45b779c",
-    "archived_sha256": "b0b5a90a23d390640d5d19816d53fedc0a51a19dac35eb743c21904bc45b779c",
+    "archived_sha256": "811d27a338cf5df026e8a4e69c079e1633d936c0f292e34daddd19e5cb2ef386",
     "source_bytes": 58900,
-    "archived_bytes": 58900,
-    "compression": "none"
+    "archived_bytes": 58606,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "b0b5a90a23d390640d5d19816d53fedc0a51a19dac35eb743c21904bc45b779c",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/str2045_screen/process.csv",
@@ -7293,10 +7307,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/str2045_screen/run-plan.tsv",
     "archived": "str2045_screen/run-plan.tsv",
     "source_sha256": "1841b1d13fed713e55a6691d42f09179bab793f3ddc144943e3b9ebf231d386e",
-    "archived_sha256": "1841b1d13fed713e55a6691d42f09179bab793f3ddc144943e3b9ebf231d386e",
+    "archived_sha256": "931714761abe380a6e6a2be9684c6c5f73312cb3fc5f9b6fd63534582be3192d",
     "source_bytes": 1608,
-    "archived_bytes": 1608,
-    "compression": "none"
+    "archived_bytes": 1590,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "1841b1d13fed713e55a6691d42f09179bab793f3ddc144943e3b9ebf231d386e",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/str2045_screen/summary.csv",
@@ -8589,10 +8605,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/numeric_tile_sweep_full/manifest.json",
     "archived": "numeric_tile_sweep_full/manifest.json",
     "source_sha256": "10a160298d780169c16dad13176688d669bb7c9f30c163b961ba32a2c1ca8c49",
-    "archived_sha256": "10a160298d780169c16dad13176688d669bb7c9f30c163b961ba32a2c1ca8c49",
+    "archived_sha256": "74df1301991a5e1aa6ae7ea4138697605bd1139fee49725b509539e595603b65",
     "source_bytes": 73470,
-    "archived_bytes": 73470,
-    "compression": "none"
+    "archived_bytes": 73164,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "10a160298d780169c16dad13176688d669bb7c9f30c163b961ba32a2c1ca8c49",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/numeric_tile_sweep_full/process.csv",
@@ -8625,10 +8643,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/numeric_tile_sweep_full/run-plan.tsv",
     "archived": "numeric_tile_sweep_full/run-plan.tsv",
     "source_sha256": "b756ac5bb8e2fad9913e426a283f5bdb44b438c5c29f2e1dbd28d373b8b1b9d4",
-    "archived_sha256": "b756ac5bb8e2fad9913e426a283f5bdb44b438c5c29f2e1dbd28d373b8b1b9d4",
+    "archived_sha256": "a14712184213433d6ab67ba8ac67a9fda8aeeb16469f506e73da95ef403ecf71",
     "source_bytes": 2870,
-    "archived_bytes": 2870,
-    "compression": "none"
+    "archived_bytes": 2840,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "b756ac5bb8e2fad9913e426a283f5bdb44b438c5c29f2e1dbd28d373b8b1b9d4",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/numeric_tile_sweep_full/summary.csv",
@@ -10119,10 +10139,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/store_screen/manifest.json",
     "archived": "store_screen/manifest.json",
     "source_sha256": "3d0ed3170bc76cda19df55a76821fcff7548f05e482748f4ce19fc5795980a65",
-    "archived_sha256": "3d0ed3170bc76cda19df55a76821fcff7548f05e482748f4ce19fc5795980a65",
+    "archived_sha256": "a783f007bde0ce43ea61798989a3ea0459f4f2b2c004ba66f0c23134b9af3399",
     "source_bytes": 121032,
-    "archived_bytes": 121032,
-    "compression": "none"
+    "archived_bytes": 120186,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "3d0ed3170bc76cda19df55a76821fcff7548f05e482748f4ce19fc5795980a65",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/store_screen/process.csv",
@@ -10155,10 +10177,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/store_screen/run-plan.tsv",
     "archived": "store_screen/run-plan.tsv",
     "source_sha256": "9e2da5906c40eebf627416072e0bd864e3deb3dab4b6986f8d707ab5ab22ab2c",
-    "archived_sha256": "9e2da5906c40eebf627416072e0bd864e3deb3dab4b6986f8d707ab5ab22ab2c",
+    "archived_sha256": "8722f0209fb9cdd915ad70b805ab4ed7ec2421d20c2c849fd8de4461344cda09",
     "source_bytes": 1620,
-    "archived_bytes": 1620,
-    "compression": "none"
+    "archived_bytes": 1602,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "9e2da5906c40eebf627416072e0bd864e3deb3dab4b6986f8d707ab5ab22ab2c",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/store_screen/summary.csv",
@@ -10785,10 +10809,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/runtime_focus/manifest.json",
     "archived": "runtime_focus/manifest.json",
     "source_sha256": "435d5e99f451120d41dab62914d4b0d3e3befed982e717c1978c9289b4c0ba08",
-    "archived_sha256": "435d5e99f451120d41dab62914d4b0d3e3befed982e717c1978c9289b4c0ba08",
+    "archived_sha256": "a573a9403a422884ac93e2940faa2bee006088c0636af57d030f3624d6c2a5b2",
     "source_bytes": 54915,
-    "archived_bytes": 54915,
-    "compression": "none"
+    "archived_bytes": 54621,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "435d5e99f451120d41dab62914d4b0d3e3befed982e717c1978c9289b4c0ba08",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/runtime_focus/process.csv",
@@ -10821,10 +10847,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/runtime_focus/run-plan.tsv",
     "archived": "runtime_focus/run-plan.tsv",
     "source_sha256": "8ec97738a95ab0e5bfe1c82aa1047862a8e53133b3442a4308372793e2e0f798",
-    "archived_sha256": "8ec97738a95ab0e5bfe1c82aa1047862a8e53133b3442a4308372793e2e0f798",
+    "archived_sha256": "e61ad112779c3bb006f1cb00323be55daea75a634b65afbde47a2a115ca42e70",
     "source_bytes": 1620,
-    "archived_bytes": 1620,
-    "compression": "none"
+    "archived_bytes": 1602,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "8ec97738a95ab0e5bfe1c82aa1047862a8e53133b3442a4308372793e2e0f798",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/runtime_focus/summary.csv",
@@ -11433,10 +11461,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/no_sort_order_focused/manifest.json",
     "archived": "no_sort_order_focused/manifest.json",
     "source_sha256": "1029599a0a13e7905b21a7c6089b2eab85c9ed4879cf1ea6f0dc242a3abc61a2",
-    "archived_sha256": "1029599a0a13e7905b21a7c6089b2eab85c9ed4879cf1ea6f0dc242a3abc61a2",
+    "archived_sha256": "a10111be3cfe6117ddf6ae724a47df904ba2203a4565c6ac65681405e7659f7b",
     "source_bytes": 77164,
-    "archived_bytes": 77164,
-    "compression": "none"
+    "archived_bytes": 76600,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "1029599a0a13e7905b21a7c6089b2eab85c9ed4879cf1ea6f0dc242a3abc61a2",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/no_sort_order_focused/process.csv",
@@ -11469,10 +11499,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/no_sort_order_focused/run-plan.tsv",
     "archived": "no_sort_order_focused/run-plan.tsv",
     "source_sha256": "fa6636aa15996bc75554069e45600915e31dccfd12c80800e428ccab8c24f7b2",
-    "archived_sha256": "fa6636aa15996bc75554069e45600915e31dccfd12c80800e428ccab8c24f7b2",
+    "archived_sha256": "8820d137074f5afdac8fa932b33c6fcc8941468ebd4bc16d7aaa22ba9544460c",
     "source_bytes": 1150,
-    "archived_bytes": 1150,
-    "compression": "none"
+    "archived_bytes": 1138,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "fa6636aa15996bc75554069e45600915e31dccfd12c80800e428ccab8c24f7b2",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/no_sort_order_focused/summary.csv",
@@ -13881,10 +13913,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/final_comparison/manifest.json",
     "archived": "final_comparison/manifest.json",
     "source_sha256": "e0e33165e9f2513084db402050d2022df955bdce0b75939395fc537e73604094",
-    "archived_sha256": "e0e33165e9f2513084db402050d2022df955bdce0b75939395fc537e73604094",
+    "archived_sha256": "67bf18adb12b07a20d40a79cee75159c0269be324355403a2da9412650558769",
     "source_bytes": 90248,
-    "archived_bytes": 90248,
-    "compression": "none"
+    "archived_bytes": 89672,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "e0e33165e9f2513084db402050d2022df955bdce0b75939395fc537e73604094",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/final_comparison/process.csv",
@@ -13917,10 +13951,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/final_comparison/run-plan.tsv",
     "archived": "final_comparison/run-plan.tsv",
     "source_sha256": "aa73406c246d2d6d706a79814d13e48e5678cccdd3c8a1b4f2f8ea1cff1afbea",
-    "archived_sha256": "aa73406c246d2d6d706a79814d13e48e5678cccdd3c8a1b4f2f8ea1cff1afbea",
+    "archived_sha256": "a5cf05b787b5df90b001a69706e2cc58fa2b1e2a667ac7981dcba5c800933065",
     "source_bytes": 2232,
-    "archived_bytes": 2232,
-    "compression": "none"
+    "archived_bytes": 2208,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "aa73406c246d2d6d706a79814d13e48e5678cccdd3c8a1b4f2f8ea1cff1afbea",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/final_comparison/summary.csv",
@@ -14241,10 +14277,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/final_allocation/manifest.json",
     "archived": "final_allocation/manifest.json",
     "source_sha256": "617f8e4b10db09ea35c19a8ca7be083b6ffd2837037b10215b6ba42e615ff8ed",
-    "archived_sha256": "617f8e4b10db09ea35c19a8ca7be083b6ffd2837037b10215b6ba42e615ff8ed",
+    "archived_sha256": "8de9bd1a6043487a1a9c326b1baac5a177d9e11ce2278a2629280a200981f150",
     "source_bytes": 73580,
-    "archived_bytes": 73580,
-    "compression": "none"
+    "archived_bytes": 73016,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "617f8e4b10db09ea35c19a8ca7be083b6ffd2837037b10215b6ba42e615ff8ed",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/final_allocation/process.csv",
@@ -14277,10 +14315,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/final_allocation/run-plan.tsv",
     "archived": "final_allocation/run-plan.tsv",
     "source_sha256": "79c934855295a1501e2059bbd8722781aeb48c3092c022efcd83e6651d49571e",
-    "archived_sha256": "79c934855295a1501e2059bbd8722781aeb48c3092c022efcd83e6651d49571e",
+    "archived_sha256": "38b431fb607e798159ccdbbe25fcd113d9ddc984521bcdae2a2382c0a5719486",
     "source_bytes": 1122,
-    "archived_bytes": 1122,
-    "compression": "none"
+    "archived_bytes": 1110,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "79c934855295a1501e2059bbd8722781aeb48c3092c022efcd83e6651d49571e",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/final_allocation/summary.csv",
@@ -14529,10 +14569,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/no_order_toggle/manifest.json",
     "archived": "no_order_toggle/manifest.json",
     "source_sha256": "5f1f59ebc92807b8a18ac5f3bf93e615118b875e177dfe73ae51a83c096a7b33",
-    "archived_sha256": "5f1f59ebc92807b8a18ac5f3bf93e615118b875e177dfe73ae51a83c096a7b33",
+    "archived_sha256": "b31454f868322b702146c6e447f324a9db28f05360ce30141297da7dac9e2ff4",
     "source_bytes": 37779,
-    "archived_bytes": 37779,
-    "compression": "none"
+    "archived_bytes": 37497,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "5f1f59ebc92807b8a18ac5f3bf93e615118b875e177dfe73ae51a83c096a7b33",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/no_order_toggle/process.csv",
@@ -14556,10 +14598,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/no_order_toggle/run-plan.tsv",
     "archived": "no_order_toggle/run-plan.tsv",
     "source_sha256": "784890cb3ed7a56618641196b41cc3d3c782fda9c8b8a798c6571446793b7682",
-    "archived_sha256": "784890cb3ed7a56618641196b41cc3d3c782fda9c8b8a798c6571446793b7682",
+    "archived_sha256": "1e7e67d9f9859dc927e0c663d0a3d04766cbe38bec40bf1c4dbf79183e273914",
     "source_bytes": 506,
-    "archived_bytes": 506,
-    "compression": "none"
+    "archived_bytes": 500,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "784890cb3ed7a56618641196b41cc3d3c782fda9c8b8a798c6571446793b7682",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/no_order_toggle/summary.csv",
@@ -14970,10 +15014,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/numeric_scheduler_toggle/manifest.json",
     "archived": "numeric_scheduler_toggle/manifest.json",
     "source_sha256": "74be2acf8e048f2b392b4e4744612cdb6496f8d43d8c4ca1af84d6de18937623",
-    "archived_sha256": "74be2acf8e048f2b392b4e4744612cdb6496f8d43d8c4ca1af84d6de18937623",
+    "archived_sha256": "faf6b3a789e24476fd46a4457aa401fe674fd8ff1b6f368ff0fb351488ddc9e0",
     "source_bytes": 41628,
-    "archived_bytes": 41628,
-    "compression": "none"
+    "archived_bytes": 41346,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "74be2acf8e048f2b392b4e4744612cdb6496f8d43d8c4ca1af84d6de18937623",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/numeric_scheduler_toggle/process.csv",
@@ -14997,10 +15043,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/numeric_scheduler_toggle/run-plan.tsv",
     "archived": "numeric_scheduler_toggle/run-plan.tsv",
     "source_sha256": "3f4f3ad05bf204980e4d871e69628add4996c72095b6a2cbe936427e49a9f595",
-    "archived_sha256": "3f4f3ad05bf204980e4d871e69628add4996c72095b6a2cbe936427e49a9f595",
+    "archived_sha256": "aabdca55879032136600fc751257f477da93b04669f9cc42a2e7347b566907ef",
     "source_bytes": 542,
-    "archived_bytes": 542,
-    "compression": "none"
+    "archived_bytes": 536,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "3f4f3ad05bf204980e4d871e69628add4996c72095b6a2cbe936427e49a9f595",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/numeric_scheduler_toggle/summary.csv",
@@ -15474,10 +15522,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/map_comparison/manifest.json",
     "archived": "map_comparison/manifest.json",
     "source_sha256": "bf6c57b6c0d0deaa1bc16fd02154716685a48eb67731d42813266403729821b8",
-    "archived_sha256": "bf6c57b6c0d0deaa1bc16fd02154716685a48eb67731d42813266403729821b8",
+    "archived_sha256": "47bd44c27e6791fadc8bc6f954a9d6e3e26c6666353e7e8d9cd1483db55eab40",
     "source_bytes": 75118,
-    "archived_bytes": 75118,
-    "compression": "none"
+    "archived_bytes": 74548,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "bf6c57b6c0d0deaa1bc16fd02154716685a48eb67731d42813266403729821b8",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/map_comparison/process.csv",
@@ -15510,10 +15560,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/map_comparison/run-plan.tsv",
     "archived": "map_comparison/run-plan.tsv",
     "source_sha256": "f619366a6efc7cb5cfe449a8282390849b2289d86af933e7dd08e049c0f06c3d",
-    "archived_sha256": "f619366a6efc7cb5cfe449a8282390849b2289d86af933e7dd08e049c0f06c3d",
+    "archived_sha256": "fbdc2f424c441e9091a8f880c1691abafd04cde833d70d65a0d419baf2a22a71",
     "source_bytes": 1608,
-    "archived_bytes": 1608,
-    "compression": "none"
+    "archived_bytes": 1590,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "f619366a6efc7cb5cfe449a8282390849b2289d86af933e7dd08e049c0f06c3d",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/map_comparison/summary.csv",
@@ -15726,10 +15778,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/numeric_small_byte_toggle/manifest.json",
     "archived": "numeric_small_byte_toggle/manifest.json",
     "source_sha256": "2aebb316dfdcdb7506f465e9bb38052ca8c652556e9dcc3b3517fc283a37b76e",
-    "archived_sha256": "2aebb316dfdcdb7506f465e9bb38052ca8c652556e9dcc3b3517fc283a37b76e",
+    "archived_sha256": "6f20f4f0726736ec0c6e527a26bdb5d9beb9b3735dbdf0ba0036527f37f61c91",
     "source_bytes": 37692,
-    "archived_bytes": 37692,
-    "compression": "none"
+    "archived_bytes": 37410,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "2aebb316dfdcdb7506f465e9bb38052ca8c652556e9dcc3b3517fc283a37b76e",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/numeric_small_byte_toggle/process.csv",
@@ -15753,10 +15807,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/numeric_small_byte_toggle/run-plan.tsv",
     "archived": "numeric_small_byte_toggle/run-plan.tsv",
     "source_sha256": "f6f5beee369e35a49b018914745c48a0368d671ac9a319858cea10ebe00321b5",
-    "archived_sha256": "f6f5beee369e35a49b018914745c48a0368d671ac9a319858cea10ebe00321b5",
+    "archived_sha256": "894a77c099a0ca566f5a25d7067380da184fe01f6759b3f2aade760b546fd58e",
     "source_bytes": 546,
-    "archived_bytes": 546,
-    "compression": "none"
+    "archived_bytes": 540,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "f6f5beee369e35a49b018914745c48a0368d671ac9a319858cea10ebe00321b5",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/numeric_small_byte_toggle/summary.csv",
@@ -15915,10 +15971,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/numeric_sixm_toggle/manifest.json",
     "archived": "numeric_sixm_toggle/manifest.json",
     "source_sha256": "13b69f9065e7fa869ae046731874e86024e4b65855676edad36d3a506a8cd115",
-    "archived_sha256": "13b69f9065e7fa869ae046731874e86024e4b65855676edad36d3a506a8cd115",
+    "archived_sha256": "d8b885c77e0bbb26252cf1a193df43a233d30652b6f6616dc3329ca5eabaacdc",
     "source_bytes": 36545,
-    "archived_bytes": 36545,
-    "compression": "none"
+    "archived_bytes": 36263,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "13b69f9065e7fa869ae046731874e86024e4b65855676edad36d3a506a8cd115",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/numeric_sixm_toggle/process.csv",
@@ -15942,10 +16000,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/numeric_sixm_toggle/run-plan.tsv",
     "archived": "numeric_sixm_toggle/run-plan.tsv",
     "source_sha256": "a92e85029da90be95237556905ff8a38484377dd4634c06bbd9a7c0cf87fe9ed",
-    "archived_sha256": "a92e85029da90be95237556905ff8a38484377dd4634c06bbd9a7c0cf87fe9ed",
+    "archived_sha256": "db811ee9c60c3fb89d8272fbbf8cc14204b7089906460991bc046f2fc3d46c95",
     "source_bytes": 522,
-    "archived_bytes": 522,
-    "compression": "none"
+    "archived_bytes": 516,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "a92e85029da90be95237556905ff8a38484377dd4634c06bbd9a7c0cf87fe9ed",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/numeric_sixm_toggle/summary.csv",
@@ -16842,10 +16902,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/final_revision/manifest.json",
     "archived": "final_revision/manifest.json",
     "source_sha256": "f3244ac4d793ddf7bd37c69460a8773c91a5f5f10d481be1cffcd64f19362c5f",
-    "archived_sha256": "f3244ac4d793ddf7bd37c69460a8773c91a5f5f10d481be1cffcd64f19362c5f",
+    "archived_sha256": "d9170bd94b351264f829c94137736ae41c17c6b2e53e7f470514410045e65365",
     "source_bytes": 79167,
-    "archived_bytes": 79167,
-    "compression": "none"
+    "archived_bytes": 78597,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "f3244ac4d793ddf7bd37c69460a8773c91a5f5f10d481be1cffcd64f19362c5f",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/final_revision/process.csv",
@@ -16878,10 +16940,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/final_revision/run-plan.tsv",
     "archived": "final_revision/run-plan.tsv",
     "source_sha256": "f5a2477fc2b2b55f11c12388ecc2f13d41cd95d8a50e70ec3b602f8fec778043",
-    "archived_sha256": "f5a2477fc2b2b55f11c12388ecc2f13d41cd95d8a50e70ec3b602f8fec778043",
+    "archived_sha256": "709ccdd1fb866311b60786bfcc12bd12dac5ba68940297d95d5cb9414f3b6907",
     "source_bytes": 1653,
-    "archived_bytes": 1653,
-    "compression": "none"
+    "archived_bytes": 1635,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "f5a2477fc2b2b55f11c12388ecc2f13d41cd95d8a50e70ec3b602f8fec778043",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/final_revision/summary.csv",
@@ -17490,10 +17554,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/final_confirmed/manifest.json",
     "archived": "final_confirmed/manifest.json",
     "source_sha256": "1cc86cab1158ce01b350d71a5b4113efa4e344bf6360eab02b09e812a11578b6",
-    "archived_sha256": "1cc86cab1158ce01b350d71a5b4113efa4e344bf6360eab02b09e812a11578b6",
+    "archived_sha256": "fa354bc665d724fad3ee76ff8d1cdb1f80e319c9d98bf09093078071ff89a0ac",
     "source_bytes": 76858,
-    "archived_bytes": 76858,
-    "compression": "none"
+    "archived_bytes": 76294,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "1cc86cab1158ce01b350d71a5b4113efa4e344bf6360eab02b09e812a11578b6",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/final_confirmed/process.csv",
@@ -17526,10 +17592,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/final_confirmed/run-plan.tsv",
     "archived": "final_confirmed/run-plan.tsv",
     "source_sha256": "6173ab4d3edf729f28beb339abc228ea12517e587e5aefc5723683c1d521ee65",
-    "archived_sha256": "6173ab4d3edf729f28beb339abc228ea12517e587e5aefc5723683c1d521ee65",
+    "archived_sha256": "226a7ea73219996e850be519d2215baf3aa653222e522930318245e33859dfcf",
     "source_bytes": 1114,
-    "archived_bytes": 1114,
-    "compression": "none"
+    "archived_bytes": 1102,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "6173ab4d3edf729f28beb339abc228ea12517e587e5aefc5723683c1d521ee65",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/final_confirmed/summary.csv",
@@ -17770,19 +17838,23 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/profile_transport.py",
     "archived": "profile_transport.py",
     "source_sha256": "ea6a9a7ea4b3b7ee60be9254dde8e15be2e6021cd3dba79d8bb819799b7fcac8",
-    "archived_sha256": "ea6a9a7ea4b3b7ee60be9254dde8e15be2e6021cd3dba79d8bb819799b7fcac8",
+    "archived_sha256": "d2e06450591cd058f621eae3072b988c501b68dbeab237cde3f8ded4e32ea24c",
     "source_bytes": 1604,
-    "archived_bytes": 1604,
-    "compression": "none"
+    "archived_bytes": 1598,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "ea6a9a7ea4b3b7ee60be9254dde8e15be2e6021cd3dba79d8bb819799b7fcac8",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/prepare_no_order_toggle.py",
     "archived": "prepare_no_order_toggle.py",
     "source_sha256": "3c1fd25572ec4ea114af4705a0c89df065b63af6c68ef61c25a6986e81beedf7",
-    "archived_sha256": "3c1fd25572ec4ea114af4705a0c89df065b63af6c68ef61c25a6986e81beedf7",
+    "archived_sha256": "8d054458edf11b6e8cbb3ba536cce06f49076086e1386a1e802e4db8daf4d4e0",
     "source_bytes": 6867,
-    "archived_bytes": 6867,
-    "compression": "none"
+    "archived_bytes": 6864,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "3c1fd25572ec4ea114af4705a0c89df065b63af6c68ef61c25a6986e81beedf7",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/summarize_no_order_toggle.py",
@@ -17797,10 +17869,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/prepare_numeric_scheduler_toggle.py",
     "archived": "prepare_numeric_scheduler_toggle.py",
     "source_sha256": "1b9087e7f1cd561934735d217987a5cfd91a8590d4b5bc042e2d7ca97a6a358f",
-    "archived_sha256": "1b9087e7f1cd561934735d217987a5cfd91a8590d4b5bc042e2d7ca97a6a358f",
+    "archived_sha256": "af1a7ecdea33ca6a66b66456d0b50b9063939c54c2de4a82479be9aa68536b8d",
     "source_bytes": 7601,
-    "archived_bytes": 7601,
-    "compression": "none"
+    "archived_bytes": 7598,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "1b9087e7f1cd561934735d217987a5cfd91a8590d4b5bc042e2d7ca97a6a358f",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/summarize_numeric_scheduler_toggle.py",
@@ -17815,10 +17889,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/prepare_numeric_small_byte_toggle.py",
     "archived": "prepare_numeric_small_byte_toggle.py",
     "source_sha256": "617b13f0f4e134bdea04a80fbe9d069ea280af7f5208bdd2091c919d08c075f9",
-    "archived_sha256": "617b13f0f4e134bdea04a80fbe9d069ea280af7f5208bdd2091c919d08c075f9",
+    "archived_sha256": "976d7b269524cb0aa61638568232f68c0b73562e6db9118547c4e03318a14340",
     "source_bytes": 4028,
-    "archived_bytes": 4028,
-    "compression": "none"
+    "archived_bytes": 4025,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "617b13f0f4e134bdea04a80fbe9d069ea280af7f5208bdd2091c919d08c075f9",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/summarize_numeric_small_byte_toggle.py",
@@ -17833,10 +17909,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/prepare_numeric_sixm_toggle.py",
     "archived": "prepare_numeric_sixm_toggle.py",
     "source_sha256": "9f43c3304b80f763fc689559e1a352d8c58498913ae1b5db994322f31b9db659",
-    "archived_sha256": "9f43c3304b80f763fc689559e1a352d8c58498913ae1b5db994322f31b9db659",
+    "archived_sha256": "e4109d661b638894a15c159f9c7683bec640fc1f273781674ec3d24df84d9ce2",
     "source_bytes": 3976,
-    "archived_bytes": 3976,
-    "compression": "none"
+    "archived_bytes": 3973,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "9f43c3304b80f763fc689559e1a352d8c58498913ae1b5db994322f31b9db659",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/summarize_numeric_sixm_toggle.py",
@@ -17869,10 +17947,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/run_campaign.py",
     "archived": "run_campaign.py",
     "source_sha256": "baf6b9a2887e00807503375a874ae3d0b8c1da251876024851555112151d31c5",
-    "archived_sha256": "baf6b9a2887e00807503375a874ae3d0b8c1da251876024851555112151d31c5",
+    "archived_sha256": "db033b252061ec60b10b7c02ac9074bc7006934031d8a6adcc5a5f425fc24904",
     "source_bytes": 1529,
-    "archived_bytes": 1529,
-    "compression": "none"
+    "archived_bytes": 1523,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "baf6b9a2887e00807503375a874ae3d0b8c1da251876024851555112151d31c5",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/benchmark_adaptive_commands.do",
@@ -17959,19 +18039,23 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/prepare_dual_impl.py",
     "archived": "prepare_dual_impl.py",
     "source_sha256": "7584b7093c1d517f482b1d4591a6b36233025674d7a711eb44717e4f7668df52",
-    "archived_sha256": "7584b7093c1d517f482b1d4591a6b36233025674d7a711eb44717e4f7668df52",
+    "archived_sha256": "0dd8b85b8bd15b647201adffdfbcfc062fe8ed0f624820ad3305f55e39d88404",
     "source_bytes": 20241,
-    "archived_bytes": 20241,
-    "compression": "none"
+    "archived_bytes": 20235,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "7584b7093c1d517f482b1d4591a6b36233025674d7a711eb44717e4f7668df52",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/run_dual.py",
     "archived": "run_dual.py",
     "source_sha256": "3014f8d2a1d73f3cac3525335dd99bbf985fccfc243850078982016309200691",
-    "archived_sha256": "3014f8d2a1d73f3cac3525335dd99bbf985fccfc243850078982016309200691",
+    "archived_sha256": "672784fa9519842da8e4a90f1aaed5c080cdc926713456da8c327a3d65ec3cc2",
     "source_bytes": 757,
-    "archived_bytes": 757,
-    "compression": "none"
+    "archived_bytes": 754,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "3014f8d2a1d73f3cac3525335dd99bbf985fccfc243850078982016309200691",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/install_final.json",
@@ -17986,19 +18070,23 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/run_commands.py",
     "archived": "run_commands.py",
     "source_sha256": "5d017f978f960278b9f93887b5111a84e920c9b1743577f746db76278dd8be3d",
-    "archived_sha256": "5d017f978f960278b9f93887b5111a84e920c9b1743577f746db76278dd8be3d",
+    "archived_sha256": "bd9972739c76ffe07ceab74a5c89d848c60dc2ead5e92ef86a2197ad343851c0",
     "source_bytes": 5036,
-    "archived_bytes": 5036,
-    "compression": "none"
+    "archived_bytes": 5030,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "5d017f978f960278b9f93887b5111a84e920c9b1743577f746db76278dd8be3d",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/run_commands_final.py",
     "archived": "run_commands_final.py",
     "source_sha256": "8f61db18c2a751f1efbc4d1fd370a14fa06955d4697dd921b4db56bffc96892f",
-    "archived_sha256": "8f61db18c2a751f1efbc4d1fd370a14fa06955d4697dd921b4db56bffc96892f",
+    "archived_sha256": "be145e2fc45d1fed12222d6f7b631528f9e55321e3cfb44c127a0de81d2d211c",
     "source_bytes": 5057,
-    "archived_bytes": 5057,
-    "compression": "none"
+    "archived_bytes": 5051,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "8f61db18c2a751f1efbc4d1fd370a14fa06955d4697dd921b4db56bffc96892f",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/run_final_timings.py",
@@ -18022,10 +18110,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/validation/benchmark_transport_campaign.py",
     "archived": "tools/benchmark_transport_campaign.py",
     "source_sha256": "eafbe22ce09aebba9d331a6e6f3b315027f7aca4ea5aaa85228608f8f8401559",
-    "archived_sha256": "eafbe22ce09aebba9d331a6e6f3b315027f7aca4ea5aaa85228608f8f8401559",
+    "archived_sha256": "c55f72346e8c5b13e8b93d7b8da37b334e02884143ad11da49b5fee41de445b1",
     "source_bytes": 22471,
-    "archived_bytes": 22471,
-    "compression": "none"
+    "archived_bytes": 22459,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "eafbe22ce09aebba9d331a6e6f3b315027f7aca4ea5aaa85228608f8f8401559",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/validation/benchmark_transport.c",
@@ -18508,10 +18598,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/commands/manifest.json",
     "archived": "acceptance/commands/manifest.json",
     "source_sha256": "f62b86ea640ee8eaae0ba10909e95517a9c1bc2b5bfb8b164f3a9aa6534d062b",
-    "archived_sha256": "f62b86ea640ee8eaae0ba10909e95517a9c1bc2b5bfb8b164f3a9aa6534d062b",
+    "archived_sha256": "852868dcf846c0b43bc8efe292e4788d82e1fa80bc3440a1ccdbd9b9e8a95052",
     "source_bytes": 8244,
-    "archived_bytes": 8244,
-    "compression": "none"
+    "archived_bytes": 8232,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "f62b86ea640ee8eaae0ba10909e95517a9c1bc2b5bfb8b164f3a9aa6534d062b",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/commands/process.csv",
@@ -18688,10 +18780,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/commands_final/manifest.json",
     "archived": "acceptance/commands_final/manifest.json",
     "source_sha256": "399d3a9c18c55a17716b80c5d8369d84173db8727866f47d4c6e5bfd1c46d612",
-    "archived_sha256": "399d3a9c18c55a17716b80c5d8369d84173db8727866f47d4c6e5bfd1c46d612",
+    "archived_sha256": "ac8d9f59a042447f8be2f08049a9e2957756ccc5723f9284c579853b00b4a5fb",
     "source_bytes": 8296,
-    "archived_bytes": 8296,
-    "compression": "none"
+    "archived_bytes": 8284,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "399d3a9c18c55a17716b80c5d8369d84173db8727866f47d4c6e5bfd1c46d612",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/commands_final/process.csv",
@@ -18976,10 +19070,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/dual_impl_control/manifest.json",
     "archived": "acceptance/dual_impl_control/manifest.json",
     "source_sha256": "ea92d6dc2f095a064e896d691559206d5a7b8696fc96c6753ce880c48c9e98f5",
-    "archived_sha256": "ea92d6dc2f095a064e896d691559206d5a7b8696fc96c6753ce880c48c9e98f5",
+    "archived_sha256": "df94130c8462fe2e80899221d1ad3513c70d4af608f0ec549539eea4b854378d",
     "source_bytes": 119816,
-    "archived_bytes": 119816,
-    "compression": "none"
+    "archived_bytes": 119810,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "ea92d6dc2f095a064e896d691559206d5a7b8696fc96c6753ce880c48c9e98f5",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/dual_impl_control/raw.csv",
@@ -18994,10 +19090,12 @@
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/dual_impl_control/run-plan.tsv",
     "archived": "acceptance/dual_impl_control/run-plan.tsv",
     "source_sha256": "90344307a4765cca357ff1ea9927a865b2144dc11d6fdeff04a9278c02a2d548",
-    "archived_sha256": "90344307a4765cca357ff1ea9927a865b2144dc11d6fdeff04a9278c02a2d548",
+    "archived_sha256": "f2dc8e0a451b1be820e9f393f76c4a5e8aa0d0df35b873fb6c2fd43fc6b56581",
     "source_bytes": 274,
-    "archived_bytes": 274,
-    "compression": "none"
+    "archived_bytes": 268,
+    "compression": "none",
+    "archived_sha256_before_launcher_update": "90344307a4765cca357ff1ea9927a865b2144dc11d6fdeff04a9278c02a2d548",
+    "transformation": "Stata launch command updated to the stata alias on 2026-10-02; original source hash retained."
   },
   {
     "original": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/dual_impl_control/shared/ctools_arena.c",

@@ -11,12 +11,10 @@
 
 #include "../stplugin.h"
 #include "../ctools_types.h"
-#include "../creghdfe/creghdfe_types.h"
-#include "../creghdfe/creghdfe_hdfe.h"
-#include "../creghdfe/creghdfe_solver.h"
+#include "hdfe/hdfe_types.h"
+#include "hdfe/hdfe_solver.h"
 #include "../ctools_ols.h"
-#include "../creghdfe/creghdfe_vce.h"
-#include "../creghdfe/creghdfe_utils.h"
+#include "hdfe/hdfe_remap.h"
 
 /*
     Main entry point for civreghdfe plugin calls.

@@ -98,7 +98,7 @@
 {syntab:Save Results}
 {synopt:{opt res:iduals(newvar)}}save residuals to new variable{p_end}
 {synopt:{opt res:iduals2}}save residuals to auto-named variable _civreghdfe_resid{p_end}
-{synopt:{opt savef:irst}}store estimation results using {cmd:estimates store}{p_end}
+{synopt:{opt savef:irst}}store the first-stage regressions using {cmd:estimates store}{p_end}
 {synopt:{opt savefp:refix(string)}}prefix for stored results (default: _civreghdfe_){p_end}
 {synopt:{opt saverf}}store reduced-form estimation results{p_end}
 {synopt:{opt saverfp:refix(string)}}prefix for stored RF results (default: _civreghdfe_rf_){p_end}
@@ -319,8 +319,9 @@ performed and results are stored in {cmd:e()}.
 a custom title in the output.
 
 {phang}
-{opt depname(string)} specifies a custom label for the dependent variable
-in the coefficient table output and stored results.
+{opt depname(string)} specifies a custom name for the dependent variable
+stored in {cmd:e(depvar)}. As in {cmd:ivreg2} and {cmd:ivreghdfe}, the
+coefficient table still shows the actual dependent variable.
 
 {phang}
 {opt noid} suppresses the underidentification test display in the footer.
@@ -394,18 +395,22 @@ collinear with earlier ones or absorbed by the fixed effects is dropped with a n
 variable named {it:newvar}.
 
 {phang}
-{opt savefirst} stores the current estimation results using {cmd:estimates store}
-so they can be retrieved later with {cmd:estimates restore}. The results are
-stored with a prefix (default: "_civreghdfe_") followed by "main".
+{opt savefirst} stores each first-stage regression, as {cmd:ivreg2} does, with
+{cmd:estimates store} under the prefix (default: "_civreghdfe_") followed by the
+name of the endogenous regressor, so they can be retrieved later with
+{cmd:estimates restore}. The constant is partialled out with the fixed effects.
+The IV estimation results are also stored, under the prefix followed by "main".
 
 {phang}
 {opt savefprefix(string)} specifies the prefix to use when storing first-stage
 results with {opt savefirst}. The default prefix is "_civreghdfe_".
 
 {phang}
-{opt saverf} stores the current estimation results (as reduced-form estimates)
-using {cmd:estimates store}. The results are stored with a prefix (default:
-"_civreghdfe_rf_") followed by "main".
+{opt saverf} stores the reduced-form regression of the dependent variable on
+the instruments, as {cmd:ivreg2} does, with {cmd:estimates store} under the
+prefix (default: "_civreghdfe_rf_") followed by the name of the dependent
+variable. The IV estimation results are also stored, under the prefix followed
+by "main".
 
 {phang}
 {opt saverfprefix(string)} specifies the prefix to use when storing reduced-form

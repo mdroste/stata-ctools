@@ -35,7 +35,10 @@
 static void civ_zwe(const ST_double *Z, ST_int L, const ST_double *e,
                     const ST_double *w, ST_int N, ST_double *g)
 {
-    for (ST_int l = 0; l < L; l++) {
+    ST_int l;
+    /* one independent sum per column */
+    #pragma omp parallel for schedule(static) if(L > 1 && (size_t)N * (size_t)L > 200000)
+    for (l = 0; l < L; l++) {
         const ST_double *z = Z + (size_t)l * N;
         ST_double s = 0.0;
         if (w) { for (ST_int i = 0; i < N; i++) s += z[i] * w[i] * e[i]; }
@@ -68,13 +71,24 @@ static ST_int civ_partial_cols(const ST_double *A, ST_int ncol, const ST_double 
         rc = civ_sym_solve(XX, P, XA, ncol, XA);
     }
     if (!rc) {
-        for (ST_int c = 0; c < ncol; c++) {
-            ST_double *o = out + (size_t)c * N;
-            const ST_double *b = XA + (size_t)c * P;
-            for (ST_int p = 0; p < P; p++) {
-                const ST_double *x = X + (size_t)p * N;
-                ST_double bp = b[p];
-                if (bp != 0.0) for (ST_int i = 0; i < N; i++) o[i] -= x[i] * bp;
+        /* every element subtracts x[i,p] * b[p] over the regressors in order;
+           rows are independent, so blocks of rows run in parallel */
+        const ST_int block = 2048;
+        /* N + block - 1 would overflow int near INT_MAX rows */
+        const ST_int num_blocks = N / block + (N % block != 0);
+        ST_int blk;
+        #pragma omp parallel for schedule(static) if((size_t)N * (size_t)ncol * (size_t)P > 200000)
+        for (blk = 0; blk < num_blocks; blk++) {
+            const ST_int i0 = blk * block;
+            const ST_int i1 = (N - i0 < block) ? N : i0 + block;
+            for (ST_int c = 0; c < ncol; c++) {
+                ST_double *o = out + (size_t)c * N;
+                const ST_double *b = XA + (size_t)c * P;
+                for (ST_int p = 0; p < P; p++) {
+                    const ST_double *x = X + (size_t)p * N;
+                    ST_double bp = b[p];
+                    if (bp != 0.0) for (ST_int i = i0; i < i1; i++) o[i] -= x[i] * bp;
+                }
             }
         }
     }
@@ -88,7 +102,9 @@ static ST_int civ_partial_cols(const ST_double *A, ST_int ncol, const ST_double 
    (e.g. too few clusters), so it is replicated. */
 static void civ_standardize_cols(ST_double *A, ST_int ncol, ST_int N)
 {
-    for (ST_int c = 0; c < ncol; c++) {
+    ST_int c;
+    #pragma omp parallel for schedule(static) if(ncol > 1 && (size_t)N * (size_t)ncol > 200000)
+    for (c = 0; c < ncol; c++) {
         ST_double *a = A + (size_t)c * N;
         ST_double mean = 0.0, ss = 0.0;
         for (ST_int i = 0; i < N; i++) mean += a[i];
@@ -194,11 +210,12 @@ static ST_int civ_sym_eigen(const ST_double *A, ST_int n, ST_double *ev, ST_doub
 }
 
 /* Solve the general square system A X = B (n x n, nrhs columns) by Gaussian
-   elimination with partial pivoting; B is overwritten with X */
+   elimination with partial pivoting; B is overwritten with X. Returns 0,
+   920 when memory runs out, or -1 when A is singular. */
 static ST_int civ_gauss_solve(const ST_double *A, ST_int n, ST_double *B, ST_int nrhs)
 {
     ST_double *M = (ST_double *)malloc((size_t)n * n * sizeof(ST_double));
-    if (!M) return -1;
+    if (!M) return 920;
     memcpy(M, A, (size_t)n * n * sizeof(ST_double));
     for (ST_int k = 0; k < n; k++) {
         ST_int piv = k;
@@ -350,7 +367,8 @@ static ST_int civ_j_direct(const ST_double *e, const ST_double *Z, ST_int L,
     U2 only enters through the orthogonal complement of the first K-1 left
     singular vectors, and v up to sign, so both come from symmetric
     eigen-decompositions of that*that' and that'*that.
-    Returns 0 with the statistic in *stat, or -1.
+    Returns 0 with the statistic in *stat, 920 when memory runs out, or -1
+    when a factorization fails.
 */
 static ST_int civ_kp_rk(const ST_double *Y, ST_int K, const ST_double *Zx, ST_int L,
                         const ST_double *w, ST_int N, const civ_omega *om,
@@ -387,7 +405,7 @@ static ST_int civ_kp_rk(const ST_double *Y, ST_int K, const ST_double *Zx, ST_in
     ST_double *vhat = wald ? (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)K, sizeof(ST_double)) : NULL;
     if (!Qyy || !Qzz || !Pi || !Ly || !Lz || !Ay || !Az || !that || !S || !B || !T || !Mu ||
         !Uq || !evu || !Mv || !Vq || !evv || !u22 || !uu || !u22h || !aq || !Qm || !vlab ||
-        !lab || (wald && !vhat)) rc = -1;
+        !lab || (wald && !vhat)) rc = 920;
 
     if (!rc) {
         civ_cross(Y, K, Y, K, w, N, Qyy);
@@ -396,7 +414,7 @@ static ST_int civ_kp_rk(const ST_double *Y, ST_int K, const ST_double *Zx, ST_in
         for (ST_int i = 0; i < K * K; i++) Qyy[i] /= NN;
         for (ST_int i = 0; i < L * L; i++) Qzz[i] /= NN;
         for (ST_int i = 0; i < L * K; i++) Pi[i] /= NN;
-        rc = civ_sym_solve(Qzz, L, Pi, K, Pi);
+        rc = civ_sym_solve(Qzz, L, Pi, K, Pi) ? 920 : 0;   /* fails only when memory runs out */
     }
     if (!rc && wald) {
         /* reduced-form residuals */
@@ -409,7 +427,7 @@ static ST_int civ_kp_rk(const ST_double *Y, ST_int K, const ST_double *Zx, ST_in
                 for (ST_int i = 0; i < N; i++) v[i] -= z[i] * p;
             }
     }
-    if (!rc) rc = civ_omega_build(om, wald ? vhat : Y, K, Zx, L, S) ? -1 : 0;
+    if (!rc) rc = civ_omega_build(om, wald ? vhat : Y, K, Zx, L, S);   /* 0 or 920 */
     if (!rc && K == 1) {
         /* One endogenous regressor: the full-rank test is ranktest's test
            of rank 0, N g' shat0^- g with g = Zx'WY/N and shat0 = S/N
@@ -418,8 +436,8 @@ static ST_int civ_kp_rk(const ST_double *Y, ST_int K, const ST_double *Zx, ST_in
         ST_double *g = lab, *sg = lab + m;   /* m = L when K = 1 */
         civ_cross(Zx, L, Y, 1, w, N, g);
         for (ST_int l = 0; l < L; l++) g[l] /= NN;
-        for (ST_int i = 0; i < D * D; i++) S[i] /= NN;
-        rc = civ_sym_solve(S, L, g, 1, sg);
+        for (size_t i = 0; i < (size_t)D * D; i++) S[i] /= NN;
+        rc = civ_sym_solve(S, L, g, 1, sg) ? 920 : 0;
         if (!rc) {
             ST_double q = 0.0;
             for (ST_int l = 0; l < L; l++) q += g[l] * sg[l];
@@ -450,7 +468,7 @@ static ST_int civ_kp_rk(const ST_double *Y, ST_int K, const ST_double *Zx, ST_in
                     for (ST_int l1 = 0; l1 < L; l1++)
                         B[(size_t)(k2 * L + l2) * D + (k1 * L + l1)] =
                             Ay[(size_t)k2 * K + k1] * Az[(size_t)l2 * L + l1];
-        for (ST_int i = 0; i < D * D; i++) S[i] /= NN;
+        for (size_t i = 0; i < (size_t)D * D; i++) S[i] /= NN;
         ctools_matmul_ab(B, S, D, D, D, T);           /* T = B shat0 */
         for (ST_int c = 0; c < D; c++)                 /* S <- T B' */
             for (ST_int r = 0; r < D; r++) {
@@ -473,8 +491,8 @@ static ST_int civ_kp_rk(const ST_double *Y, ST_int K, const ST_double *Zx, ST_in
                 for (ST_int k = 0; k < K; k++) s += that[(size_t)k * L + r] * that[(size_t)k * L + c];
                 Mu[(size_t)c * L + r] = s;
             }
-        rc = civ_sym_eigen(Mv, K, evv, Vq);
-        if (!rc) rc = civ_sym_eigen(Mu, L, evu, Uq);
+        rc = civ_sym_eigen(Mv, K, evv, Vq) ? 920 : 0;   /* memory only */
+        if (!rc) rc = civ_sym_eigen(Mu, L, evu, Uq) ? 920 : 0;
     }
     if (!rc) {
         /* U2 = Uq[:, 0..m-1]; u22 = its rows K-1..L-1 */
@@ -486,7 +504,7 @@ static ST_int civ_kp_rk(const ST_double *Y, ST_int K, const ST_double *Zx, ST_in
                 for (ST_int j = 0; j < m; j++) s += u22[(size_t)j * m + r] * u22[(size_t)j * m + c];
                 uu[(size_t)c * m + r] = s;
             }
-        rc = civ_sym_sqrt(uu, m, u22h);
+        rc = civ_sym_sqrt(uu, m, u22h) ? 920 : 0;   /* memory only */
         /* u22h <- u22^-1 u22h, then aq = U2 u22h */
         if (!rc) rc = civ_gauss_solve(u22, m, u22h, m);
     }
@@ -526,7 +544,7 @@ static ST_int civ_kp_rk(const ST_double *Y, ST_int K, const ST_double *Zx, ST_in
                 for (ST_int j = 0; j < D; j++) s += QS[(size_t)j * m + r] * Qm[(size_t)j * m + c];
                 vlab[(size_t)c * m + r] = s;
             }
-        rc = civ_sym_solve(vlab, m, lab, 1, lab + m);
+        rc = civ_sym_solve(vlab, m, lab, 1, lab + m) ? 920 : 0;
     }
     if (!rc) {
         ST_double q = 0.0;
@@ -545,13 +563,13 @@ kp_done:
     Compute underidentification test (Anderson LM / Kleibergen-Paap rk LM)
     and weak identification statistics (Cragg-Donald F / KP rk Wald F).
 */
-void civreghdfe_compute_underid_test(
+ST_retcode civreghdfe_compute_underid_test(
     const ST_double *X_endog,
     const ST_double *Z,
     const ST_double *weights,
     ST_int weight_type,
     ST_int N,
-    ST_int N_eff,
+    ST_double N_eff,
     ST_int K_exog,
     ST_int K_endog,
     ST_int K_iv,
@@ -574,9 +592,9 @@ void civreghdfe_compute_underid_test(
     *cd_f = 0.0;
     *kp_f = 0.0;
 
-    if (K_endog <= 0 || L < K_endog) return;
+    if (K_endog <= 0 || L < K_endog) return 0;
 
-    ST_int df_resid = N_eff - K_iv - df_a;
+    ST_double df_resid = N_eff - K_iv - df_a;
     if (df_resid <= 0) df_resid = 1;
 
     /* ranktest partials the included exogenous regressors out of the
@@ -586,9 +604,15 @@ void civreghdfe_compute_underid_test(
     if (!Y || !Zx ||
         civ_partial_cols(X_endog, K_endog, Z, K_exog, w, N, Y) != 0 ||
         civ_partial_cols(Z + (size_t)K_exog * N, L, Z, K_exog, w, N, Zx) != 0) {
+        /* civ_partial_cols fails only when memory runs out; the statistics
+           are missing, never 0 (p = 1) */
         free(Y); free(Zx);
-        return;
+        *underid_stat = SV_missval;
+        *cd_f = SV_missval;
+        *kp_f = SV_missval;
+        return 920;
     }
+    ST_retcode trc = 0;
     civ_standardize_cols(Y, K_endog, N);
     civ_standardize_cols(Zx, L, N);
 
@@ -607,12 +631,14 @@ void civreghdfe_compute_underid_test(
         ST_double *M = (ST_double *)calloc((size_t)K_endog * K_endog, sizeof(ST_double));
         ST_double *ev = (ST_double *)calloc((size_t)K_endog, sizeof(ST_double));
         ST_int ok = (Qyy && Qzz && Qzy && P && M && ev);
+        if (!ok) trc = 920;
         if (ok) {
             civ_cross(Y, K_endog, Y, K_endog, w, N, Qyy);
             civ_cross(Zx, L, Zx, L, w, N, Qzz);
             civ_cross(Zx, L, Y, K_endog, w, N, Qzy);
             memcpy(P, Qzy, (size_t)L * K_endog * sizeof(ST_double));
             ok = (civ_sym_solve(Qzz, L, P, K_endog, P) == 0);
+            if (!ok) trc = 920;   /* civ_sym_solve fails only when memory runs out */
         }
         if (ok) {
             /* M = Qzy' Qzz^-1 Qzy; the eigenvalues of Qyy^-1/2 M Qyy^-1/2
@@ -626,6 +652,7 @@ void civreghdfe_compute_underid_test(
             ST_double *Ly = (ST_double *)calloc((size_t)K_endog * K_endog, sizeof(ST_double));
             ST_double *Ay = (ST_double *)calloc((size_t)K_endog * K_endog, sizeof(ST_double));
             ST_double *T = (ST_double *)calloc((size_t)K_endog * K_endog, sizeof(ST_double));
+            if (!Ly || !Ay || !T) trc = 920;
             ok = Ly && Ay && T && civ_chol_lower(Qyy, K_endog, Ly) == 0;
             if (ok) {
                 civ_lower_inverse(Ly, K_endog, Ay);
@@ -638,6 +665,7 @@ void civreghdfe_compute_underid_test(
                         M[(size_t)c * K_endog + r] = s;
                     }
                 ok = (civ_sym_eigen(M, K_endog, ev, NULL) == 0);
+                if (!ok) trc = 920;   /* civ_sym_eigen fails only when memory runs out */
             }
             free(Ly); free(Ay); free(T);
         }
@@ -646,8 +674,17 @@ void civreghdfe_compute_underid_test(
             *underid_stat = (ST_double)N_eff * min_eval;
             if (min_eval > 0.0 && min_eval < 1.0)
                 *cd_f = min_eval / (1.0 - min_eval) * ((ST_double)df_resid / (ST_double)L);
+        } else {
+            /* not computed: missing, never 0 (p = 1) */
+            *underid_stat = SV_missval;
+            *cd_f = SV_missval;
         }
         free(Qyy); free(Qzz); free(Qzy); free(P); free(M); free(ev);
+    }
+    if (trc) {
+        free(Y); free(Zx);
+        *kp_f = SV_missval;
+        return trc;
     }
 
     if (rk_om->kind == CIV_OMEGA_IID && rk_om->kernel <= 0) {
@@ -660,8 +697,13 @@ void civreghdfe_compute_underid_test(
            two-way, HAC/AC/Driscoll-Kraay with the Bartlett kernel): LM for
            idstat, Wald for widstat, converted as ivreghdfe does */
         ST_double lm = 0.0, wald = 0.0;
-        if (civ_kp_rk(Y, K_endog, Zx, L, w, N, rk_om, 0, &lm) == 0) *underid_stat = lm;
-        if (civ_kp_rk(Y, K_endog, Zx, L, w, N, rk_om, 1, &wald) == 0) {
+        ST_int lm_rc = civ_kp_rk(Y, K_endog, Zx, L, w, N, rk_om, 0, &lm);
+        /* never the iid Anderson LM under the Kleibergen-Paap label */
+        *underid_stat = (lm_rc == 0) ? lm : SV_missval;
+        ST_int wald_rc = civ_kp_rk(Y, K_endog, Zx, L, w, N, rk_om, 1, &wald);
+        if (lm_rc == 920 || wald_rc == 920) trc = 920;
+        *kp_f = SV_missval;   /* overwritten on success */
+        if (wald_rc == 0) {
             if (rk_cluster) {
                 ST_double G = (ST_double)rk_nclust;
                 *kp_f = wald / (ST_double)(N_eff - 1) * (ST_double)df_resid *
@@ -672,6 +714,7 @@ void civreghdfe_compute_underid_test(
         }
     }
     free(Y); free(Zx);
+    return trc;
 }
 
 /*
@@ -681,7 +724,7 @@ void civreghdfe_compute_underid_test(
     of efficient GMM for S (resid == NULL: the Hansen J of an inefficient
     2SLS / k-class fit, ivreg2's s_iegmm and s_liml).
 */
-void civreghdfe_compute_hansen_j(
+ST_retcode civreghdfe_compute_hansen_j(
     const ST_double *y,
     const ST_double *X_all,
     ST_int K_total,
@@ -699,17 +742,23 @@ void civreghdfe_compute_hansen_j(
     const ST_double *w = (weights && weight_type != 0) ? weights : NULL;
     *overid_df = K_iv - K_total;
     *J = 0.0;
-    if (*overid_df <= 0) return;
+    if (*overid_df <= 0) return 0;
     ST_double j = 0.0;
     ST_int rc = resid ? civ_j_direct(resid, Z, K_iv, w, N, S, &j)
                       : civ_gmm_eff_j(y, X_all, K_total, Z, K_iv, w, N, S, &j);
-    if (rc == 0) *J = j;
+    /* both fail only when memory runs out: missing, never 0 (p = 1) */
+    if (rc != 0) {
+        *J = SV_missval;
+        return 920;
+    }
+    *J = j;
+    return 0;
 }
 
 /*
     Compute Durbin-Wu-Hausman endogeneity test.
 */
-void civreghdfe_compute_dwh_test(
+ST_retcode civreghdfe_compute_dwh_test(
     const ST_double *y,
     const ST_double *X_exog,
     const ST_double *X_endog,
@@ -732,24 +781,24 @@ void civreghdfe_compute_dwh_test(
     *endog_f = 0.0;
     *endog_df = K_endog;
 
-    if (K_endog <= 0) return;
+    if (K_endog <= 0) return 0;
+
+    /* missing, never 0 (p = 1), unless computed below */
+    *endog_chi2 = SV_missval;
+    *endog_f = SV_missval;
 
     /* Compute first-stage residuals: v = X_endog - Z * pi */
     ST_double *v_resid = (ST_double *)calloc((size_t)N * K_endog, sizeof(ST_double));
-    if (!v_resid) return;
+    if (!v_resid) return 920;
 
     for (ST_int e = 0; e < K_endog; e++) {
         const ST_double *x_endog_col = X_endog + (size_t)e * N;
         ST_double *v_col = v_resid + (size_t)e * N;
         const ST_double *pi_col = temp1 + (K_exog + e) * K_iv;
 
-        for (i = 0; i < N; i++) {
-            ST_double pred = 0.0;
-            for (k = 0; k < K_iv; k++) {
-                pred += Z[(size_t)k * N + i] * pi_col[k];
-            }
-            v_col[i] = x_endog_col[i] - pred;
-        }
+        /* fitted value accumulated over the instruments in order */
+        ctools_matmul_xb(Z, N, K_iv, pi_col, 1, v_col);
+        for (i = 0; i < N; i++) v_col[i] = x_endog_col[i] - v_col[i];
     }
 
     /* Build augmented design matrix: [X_exog, X_endog, v] */
@@ -761,34 +810,19 @@ void civreghdfe_compute_dwh_test(
     if (!X_aug || !XaXa || !Xay) {
         free(v_resid);
         free(X_aug); free(XaXa); free(Xay);
-        return;
+        return 920;
     }
 
     /* Copy X_exog, X_endog, v_resid */
-    if (X_exog) {
-        for (j = 0; j < K_exog; j++) {
-            for (i = 0; i < N; i++) {
-                X_aug[(size_t)j * N + i] = X_exog[(size_t)j * N + i];
-            }
-        }
-    }
-    if (X_endog) {
-        for (j = 0; j < K_endog; j++) {
-            for (i = 0; i < N; i++) {
-                X_aug[(size_t)(K_exog + j) * N + i] = X_endog[(size_t)j * N + i];
-            }
-        }
-    }
-    for (j = 0; j < K_endog; j++) {
-        for (i = 0; i < N; i++) {
-            X_aug[(size_t)(K_total + j) * N + i] = v_resid[(size_t)j * N + i];
-        }
-    }
+    if (X_exog && K_exog > 0) memcpy(X_aug, X_exog, (size_t)N * K_exog * sizeof(ST_double));
+    if (X_endog) memcpy(X_aug + (size_t)K_exog * N, X_endog, (size_t)N * K_endog * sizeof(ST_double));
+    memcpy(X_aug + (size_t)K_total * N, v_resid, (size_t)N * K_endog * sizeof(ST_double));
 
     /* Compute X_aug'X_aug */
-    ctools_matmul_atb(X_aug, X_aug, N, K_aug, K_aug, XaXa);
+    ctools_matmul_ata(X_aug, N, K_aug, XaXa);
 
-    /* Compute X_aug'y */
+    /* Compute X_aug'y (one independent sum per column) */
+    #pragma omp parallel for schedule(static) private(i) if(K_aug > 1 && (size_t)N * (size_t)K_aug > 200000)
     for (j = 0; j < K_aug; j++) {
         ST_double sum = 0.0;
         const ST_double *xa_col = X_aug + (size_t)j * N;
@@ -802,11 +836,12 @@ void civreghdfe_compute_dwh_test(
     ST_double *XaXa_L = (ST_double *)calloc(K_aug * K_aug, sizeof(ST_double));
     ST_double *XaXa_inv = (ST_double *)calloc(K_aug * K_aug, sizeof(ST_double));
     ST_double *beta_aug = (ST_double *)calloc(K_aug, sizeof(ST_double));
+    ST_retcode trc = (XaXa_L && XaXa_inv && beta_aug) ? 0 : 920;
 
     if (XaXa_L && XaXa_inv && beta_aug) {
         memcpy(XaXa_L, XaXa, K_aug * K_aug * sizeof(ST_double));
-        if (ctools_cholesky(XaXa_L, K_aug) == 0) {
-            ctools_invert_from_cholesky(XaXa_L, K_aug, XaXa_inv);
+        if (ctools_cholesky(XaXa_L, K_aug) == 0 &&
+            (trc = ctools_stata_rc(ctools_invert_from_cholesky(XaXa_L, K_aug, XaXa_inv))) == 0) {
 
             /* beta_aug = XaXa_inv * Xay */
             for (i = 0; i < K_aug; i++) {
@@ -818,13 +853,13 @@ void civreghdfe_compute_dwh_test(
             }
 
             /* Compute residuals and sigma^2 */
+            /* v_resid has been copied into X_aug and is reused for the
+               fitted values, accumulated over the columns in order */
             ST_double sse_aug = 0.0;
+            memset(v_resid, 0, (size_t)N * sizeof(ST_double));
+            ctools_matvec_add(X_aug, N, K_aug, beta_aug, v_resid);
             for (i = 0; i < N; i++) {
-                ST_double fitted = 0.0;
-                for (j = 0; j < K_aug; j++) {
-                    fitted += X_aug[(size_t)j * N + i] * beta_aug[j];
-                }
-                ST_double r = y[i] - fitted;
+                ST_double r = y[i] - v_resid[i];
                 sse_aug += r * r;
             }
 
@@ -858,6 +893,8 @@ void civreghdfe_compute_dwh_test(
                 *endog_f = (*endog_chi2) / K_endog;
 
                 free(XaXa_vv);
+            } else {
+                trc = 920;
             }
         }
     }
@@ -869,6 +906,7 @@ void civreghdfe_compute_dwh_test(
     free(XaXa_L);
     free(XaXa_inv);
     free(beta_aug);
+    return trc;
 }
 
 /*
@@ -879,7 +917,7 @@ void civreghdfe_compute_dwh_test(
     With the iid S = sigma^2 Z'WZ this is the difference of Sargan
     statistics that both use the full model's sigma^2.
 */
-void civreghdfe_compute_cstat(
+ST_retcode civreghdfe_compute_cstat(
     const ST_double *y,
     const ST_double *X_all,
     ST_int K_total,
@@ -905,12 +943,16 @@ void civreghdfe_compute_cstat(
 
     /* A restricted model that is not identified has no C statistic (ivreg2
        posts 0, as when its recursive call fails with r(481)) */
-    if (n_orthog <= 0 || K_rest < K_total) return;
+    if (n_orthog <= 0 || K_rest < K_total) return 0;
+
+    /* missing, never 0 (p = 1), unless computed below; no C without J */
+    *cstat = SV_missval;
+    if (!(J_full < SV_missval)) return 0;
 
     /* Keep mask: the tested columns are distinct, in-range excluded
        instruments (mapped in civreghdfe_impl.c); refuse anything else */
     ST_int *keep = (ST_int *)malloc((size_t)K_iv * sizeof(ST_int));
-    if (!keep) return;
+    if (!keep) return 920;
     for (ST_int k = 0; k < K_iv; k++) keep[k] = 1;
     ST_int n_masked = 0;
     for (ST_int i = 0; i < n_orthog; i++) {
@@ -921,9 +963,11 @@ void civreghdfe_compute_cstat(
         }
     }
     ST_double *Zr = NULL, *Srr = NULL;
+    ST_retcode trc = 0;
     if (n_masked == n_orthog) {
         Zr = (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)K_rest, sizeof(ST_double));
         Srr = (ST_double *)calloc((size_t)K_rest * K_rest, sizeof(ST_double));
+        if (!Zr || !Srr) trc = 920;
     }
     if (Zr && Srr) {
         /* Z_r and S_rr: the retained instruments and their block of S */
@@ -943,9 +987,12 @@ void civreghdfe_compute_cstat(
         if (civ_gmm_eff_j(y, X_all, K_total, Zr, K_rest, w, N, Srr, &Jr) == 0) {
             *cstat = J_full - Jr;
             if (*cstat < 0) *cstat = 0;
+        } else {
+            trc = 920;   /* civ_gmm_eff_j fails only when memory runs out */
         }
     }
     free(keep); free(Zr); free(Srr);
+    return trc;
 }
 
 /*
@@ -960,7 +1007,7 @@ void civreghdfe_compute_cstat(
     the exogenous model's S for the original instruments. With the iid S
     both J's use the exogenous model's sigma^2.
 */
-void civreghdfe_compute_endogtest_subset(
+ST_retcode civreghdfe_compute_endogtest_subset(
     const ST_double *y,
     const ST_double *X_exog,
     const ST_double *X_endog,
@@ -987,7 +1034,11 @@ void civreghdfe_compute_endogtest_subset(
     *endogtest_stat = 0.0;
     *endogtest_df = n_endogtest;
 
-    if (n_endogtest <= 0 || n_endogtest > K_endog) return;
+    if (n_endogtest <= 0 || n_endogtest > K_endog) return 0;
+
+    /* missing, never 0 (p = 1), unless computed below */
+    *endogtest_stat = SV_missval;
+    ST_retcode trc = 920;   /* until the work arrays exist */
 
     ST_double *X_all = (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)K_total, sizeof(ST_double));
     ST_double *Z_aug = (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)K_aug, sizeof(ST_double));
@@ -1004,6 +1055,7 @@ void civreghdfe_compute_endogtest_subset(
     ST_double kclass = 1.0, J_aug = 0.0, J_r = 0.0;
     if (!X_all || !Z_aug || !e || !S_aug || !S_r || !ZZ || !ZX || !Zy || !A || !XkX || !b)
         goto endogtest_cleanup;
+    trc = 0;
 
     if (K_exog > 0) memcpy(X_all, X_exog, (size_t)N * K_exog * sizeof(ST_double));
     memcpy(X_all + (size_t)N * K_exog, X_endog, (size_t)N * K_endog * sizeof(ST_double));
@@ -1025,7 +1077,7 @@ void civreghdfe_compute_endogtest_subset(
         ST_int K_en = K_endog - n_endogtest, K_ex = K_exog + n_endogtest;
         X_ex = (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)K_ex, sizeof(ST_double));
         X_en = (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)(K_en > 0 ? K_en : 1), sizeof(ST_double));
-        if (!X_ex || !X_en) goto endogtest_cleanup;
+        if (!X_ex || !X_en) { trc = 920; goto endogtest_cleanup; }
         if (K_exog > 0) memcpy(X_ex, X_exog, (size_t)N * K_exog * sizeof(ST_double));
         memcpy(X_ex + (size_t)N * K_exog, Z_aug + (size_t)N * K_iv, (size_t)N * n_endogtest * sizeof(ST_double));
         ST_int ne = 0;
@@ -1036,11 +1088,15 @@ void civreghdfe_compute_endogtest_subset(
         }
         kclass = civreghdfe_compute_liml_lambda(y, X_en, X_ex, Z_aug, weights, weight_type,
                                                 N, K_ex, K_en, K_aug);
+        if (isnan(kclass)) { trc = 920; goto endogtest_cleanup; }   /* memory */
     }
     civ_cross(Z_aug, K_aug, Z_aug, K_aug, w, N, ZZ);
     civ_cross(Z_aug, K_aug, X_all, K_total, w, N, ZX);
     civ_zwe(Z_aug, K_aug, y, w, N, Zy);
     memcpy(A, ZX, (size_t)K_aug * K_total * sizeof(ST_double));
+    /* civ_sym_solve, civ_omega_build and the J helpers below fail only when
+       memory runs out */
+    trc = 920;
     if (civ_sym_solve(ZZ, K_aug, A, K_total, A) != 0) goto endogtest_cleanup;   /* (Z'Z)^-1 Z'X */
     /* XkX = (1-k) X'WX + k X'Pz X, b = (1-k) X'Wy + k X'Pz y */
     if (kclass != 1.0) {
@@ -1068,9 +1124,14 @@ void civreghdfe_compute_endogtest_subset(
        the efficient GMM J (GMM2S's own J, or the 2SLS/LIML Hansen J) */
     if (civ_omega_build(om, e, 1, Z_aug, K_aug, S_aug) != 0) goto endogtest_cleanup;
     /* ivreg2 reports no C statistic when that S is rank deficient */
-    if (!iid && civ_sym_rank(S_aug, K_aug, 1.0 / om->N_eff) < K_aug) {
-        *endogtest_stat = SV_missval;
-        goto endogtest_cleanup;
+    if (!iid) {
+        ST_int rank_aug = civ_sym_rank(S_aug, K_aug, 1.0 / om->N_eff);
+        if (rank_aug < 0) goto endogtest_cleanup;
+        if (rank_aug < K_aug) {
+            *endogtest_stat = SV_missval;
+            trc = 0;
+            goto endogtest_cleanup;
+        }
     }
     if ((iid ?civ_j_direct(e, Z_aug, K_aug, w, N, S_aug, &J_aug)
              : civ_gmm_eff_j(y, X_all, K_total, Z_aug, K_aug, w, N, S_aug, &J_aug)) != 0)
@@ -1083,10 +1144,12 @@ void civreghdfe_compute_endogtest_subset(
 
     *endogtest_stat = J_aug - J_r;
     if (*endogtest_stat < 0) *endogtest_stat = 0;
+    trc = 0;
 
 endogtest_cleanup:
     free(X_all); free(Z_aug); free(e); free(S_aug); free(S_r); free(ZZ);
     free(ZX); free(Zy); free(A); free(XkX); free(b); free(X_ex); free(X_en);
+    return trc;
 }
 
 /*
@@ -1098,7 +1161,7 @@ endogtest_cleanup:
     With the iid S this is N times the sum of the squared canonical
     correlations.
 */
-void civreghdfe_compute_redundant(
+ST_retcode civreghdfe_compute_redundant(
     const ST_double *X_endog,
     const ST_double *Z,
     ST_int N,
@@ -1121,7 +1184,11 @@ void civreghdfe_compute_redundant(
     *redund_stat = 0.0;
     *redund_df = D;
 
-    if (n_redund <= 0 || K_endog <= 0 || K_rest < K_exog) return;
+    if (n_redund <= 0 || K_endog <= 0 || K_rest < K_exog) return 0;
+
+    /* missing, never 0 (p = 1), unless computed below */
+    *redund_stat = SV_missval;
+    ST_retcode trc = 920;   /* until the work arrays exist */
 
     ST_int *test = (ST_int *)calloc((size_t)K_iv, sizeof(ST_int));
     ST_double *Z_rest = (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)(K_rest > 0 ? K_rest : 1), sizeof(ST_double));
@@ -1130,6 +1197,7 @@ void civreghdfe_compute_redundant(
     ST_double *g = (ST_double *)calloc((size_t)D * 2, sizeof(ST_double));
     ST_double *S = (ST_double *)calloc((size_t)D * D, sizeof(ST_double));
     if (!test || !Z_rest || !Z_test || !Y || !g || !S) goto redund_cleanup;
+    trc = 0;
 
     /* Tested columns: distinct, in-range excluded instruments (mapped in
        civreghdfe_impl.c); refuse anything else */
@@ -1142,6 +1210,9 @@ void civreghdfe_compute_redundant(
         }
     }
     if (n_masked != n_redund) goto redund_cleanup;
+    /* civ_partial_cols, civ_omega_build and civ_sym_solve fail only when
+       memory runs out */
+    trc = 920;
 
     ST_int ir = 0, it = 0;
     for (ST_int k = 0; k < K_iv; k++) {
@@ -1162,7 +1233,9 @@ void civreghdfe_compute_redundant(
     ST_double q = 0.0;
     for (ST_int d = 0; d < D; d++) q += g[d] * g[D + d];
     *redund_stat = q;
+    trc = 0;
 
 redund_cleanup:
     free(test); free(Z_rest); free(Z_test); free(Y); free(g); free(S);
+    return trc;
 }

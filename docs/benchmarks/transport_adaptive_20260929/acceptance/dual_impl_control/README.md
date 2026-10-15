@@ -20,5 +20,5 @@ source change. Existing process-isolated comparisons remain separate evidence.
 Compile only when other timing has stopped:
 `python3 temp/transport_20260929/prepare_dual_impl.py build DIRECTORY`
 
-Run the exact oldstata commands in run-plan.tsv sequentially, then:
+Run the exact stata commands in run-plan.tsv sequentially, then:
 `python3 temp/transport_20260929/prepare_dual_impl.py summarize DIRECTORY`

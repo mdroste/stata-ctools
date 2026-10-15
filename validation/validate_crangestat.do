@@ -1780,10 +1780,10 @@ set obs 50
 gen t = _n
 gen price = _n * 100
 crangestat (mean) price, interval(t -3 3)
-* Convention is stat_varname, so (mean) price → mean_price
-capture confirm variable mean_price
+* Convention is varname_stat, so (mean) price → price_mean
+capture confirm variable price_mean
 if _rc == 0 {
-    sigfigs `=mean_price[25]' 2500
+    sigfigs `=price_mean[25]' 2500
     if r(sigfigs) >= $DEFAULT_SIGFIGS {
         test_pass "auto-name: mean"
     }
@@ -1793,7 +1793,7 @@ if _rc == 0 {
     }
 }
 else {
-    test_fail "auto-name: mean" "variable mean_price not created"
+    test_fail "auto-name: mean" "variable price_mean not created"
 }
 
 * Test 18.2: Default name for count
@@ -1802,17 +1802,17 @@ set obs 50
 gen t = _n
 gen val = 1
 crangestat (count) val, interval(t -2 2)
-capture confirm variable count_val
+capture confirm variable val_count
 if _rc == 0 {
-    if count_val[25] == 5 {
+    if val_count[25] == 5 {
         test_pass "auto-name: count"
     }
     else {
-        test_fail "auto-name: count" "expected 5, got `=count_val[25]'"
+        test_fail "auto-name: count" "expected 5, got `=val_count[25]'"
     }
 }
 else {
-    test_fail "auto-name: count" "variable count_val not created"
+    test_fail "auto-name: count" "variable val_count not created"
 }
 
 * Test 18.3: Default names for multiple stats
@@ -1821,13 +1821,13 @@ set obs 50
 gen t = _n
 gen x = _n
 crangestat (mean) x (sd) x (min) x (max) x, interval(t -2 2)
-capture confirm variable mean_x
+capture confirm variable x_mean
 local rc1 = _rc
-capture confirm variable sd_x
+capture confirm variable x_sd
 local rc2 = _rc
-capture confirm variable min_x
+capture confirm variable x_min
 local rc3 = _rc
-capture confirm variable max_x
+capture confirm variable x_max
 local rc4 = _rc
 if `rc1' == 0 & `rc2' == 0 & `rc3' == 0 & `rc4' == 0 {
     test_pass "auto-name: multiple stats"
@@ -1844,13 +1844,13 @@ gen x = _n
 crangestat (mean) my_mean=x (sd) x, interval(t -2 2)
 capture confirm variable my_mean
 local rc1 = _rc
-capture confirm variable sd_x
+capture confirm variable x_sd
 local rc2 = _rc
 if `rc1' == 0 & `rc2' == 0 {
     test_pass "auto-name: mixed explicit and auto"
 }
 else {
-    test_fail "auto-name: mixed" "my_mean rc=`rc1', sd_x rc=`rc2'"
+    test_fail "auto-name: mixed" "my_mean rc=`rc1', x_sd rc=`rc2'"
 }
 
 /*******************************************************************************
@@ -2055,9 +2055,91 @@ else {
     else test_fail "min/max over a 1.1M-observation window" "`r(N)' mismatches vs egen"
 }
 
+* Endpoint missing codes and excludeself must match the reference exactly.
+quietly do validation/coverage_helpers.do
+clear
+set obs 24
+gen long t=_n
+gen byte g=mod(_n,2)
+gen double x=_n
+replace x=.a if mod(_n,4)==1
+replace x=.z if mod(_n,4)==0
+foreach radius in 1 12 {
+    foreach grouping in "" "by(g)" {
+        foreach exclusion in "" "excludeself" {
+            coverage_data, reference(rangestat (first) x (last) x (firstnm) x (lastnm) x, interval(t -`radius' `radius') `grouping' `exclusion') ///
+                candidate(crangestat (first) x (last) x (firstnm) x (lastnm) x, interval(t -`radius' `radius') `grouping' `exclusion') ///
+                name("endpoint semantics radius `radius' `grouping' `exclusion'")
+        }
+    }
+}
+replace x=.a
+coverage_data, reference(rangestat (first) x (last) x, interval(t 0 0)) ///
+    candidate(crangestat (first) x (last) x, interval(t 0 0)) ///
+    name("all extended-missing endpoints retain codes")
+
 /*******************************************************************************
  * SUMMARY
  ******************************************************************************/
+/*******************************************************************************
+ * Rollback of failed calls
+ *
+ * A failed or interrupted crangestat leaves the data as they were without a
+ * snapshot of the dataset; option snapshot preserves it instead and option
+ * fast undoes nothing (see validation/rollback_helpers.do). The hook
+ * $CTOOLS_crangestat_fault fails the call with r(1), as Break would:
+ *   outputs  after the result variables were created and labeled
+ *   post     after the plugin filled them
+ ******************************************************************************/
+print_section "Rollback of Failed Calls"
+capture confirm file "validation/rollback_helpers.do"
+if !_rc do "validation/rollback_helpers.do"
+else do "rollback_helpers.do"
+
+clear
+set seed 1414
+set obs 2500
+gen long id = _n
+gen int f1 = mod(_n, 31) + 1
+gen int month = mod(_n * 13, 40)
+gen double y = rnormal()
+gen float x1 = rnormal()
+gen byte cat = mod(_n, 3)
+label define rb_cat 0 "zero" 1 "one" 2 "two"
+label values cat rb_cat
+label variable y "outcome"
+label data "crangestat rollback data"
+note: dataset note
+note y: note on y
+char _dta[rb_char] dataset characteristic
+char x1[rb_char] x1 characteristic
+sort f1 month id
+tempfile rb_copy rb_out
+save `rb_copy'
+
+_ctools_rb_case, cmd(crangestat (mean) y (sd) rb_sd=x1 (count) x1, interval(month -3 3) by(f1)) ///
+    global(CTOOLS_crangestat_fault) fault(outputs) testname("[rollback] outputs created")
+_ctools_rb_case, cmd(crangestat (median) y (max) x1, interval(month -3 3) excludeself) ///
+    global(CTOOLS_crangestat_fault) fault(post) testname("[rollback] after plugin")
+
+* Options snapshot and fast give the default's results; together they are refused
+use `rb_copy', clear
+crangestat (mean) y (sd) x1, interval(month -3 3) by(f1)
+save `rb_out', replace
+foreach mode in snapshot fast {
+    use `rb_copy', clear
+    crangestat (mean) y (sd) x1, interval(month -3 3) by(f1) `mode'
+    capture cf _all using `rb_out', all
+    if !_rc test_pass "[rollback] option `mode' gives the default results"
+    else test_fail "[rollback] option `mode' gives the default results" "results differ"
+}
+use `rb_copy', clear
+capture crangestat (mean) y, interval(month -3 3) snapshot fast
+local rc = _rc
+capture cf _all using `rb_copy', all
+if `rc' == 198 & !_rc test_pass "[rollback] snapshot and fast together refused"
+else test_fail "[rollback] snapshot and fast together refused" "rc=`rc', data changed=`=_rc!=0'"
+
 * End of crangestat validation
 noi print_summary "crangestat"
 }

@@ -20,16 +20,12 @@
 
 /* Shared FE_Factor and HDFE_State types */
 #include "../ctools_hdfe_utils.h"
+#include "../hdfe/hdfe_sample.h"
 
 /* ========================================================================
- * Factor data structure for initialization (mirrors creghdfe)
+ * Factor data structure for initialization (shared with creghdfe)
  * ======================================================================== */
 
-typedef struct {
-    ST_int *levels;      /* Level assignment for each obs (1-indexed) */
-    ST_int *counts;      /* Count of obs per level */
-    ST_int num_levels;   /* Number of unique levels */
-    ST_int num_obs;      /* Number of observations */
-} PPMLFactorData;
+typedef HDFE_LoadedFactor PPMLFactorData;
 
 #endif /* CPPLMHDFE_TYPES_H */

@@ -49,6 +49,8 @@
 
 {syntab:Reporting}
 {synopt:{opt v:erbose(#)}}display detailed timing and convergence information{p_end}
+{synopt:{opt ef:orm}}report exponentiated coefficients{p_end}
+{synopt:{opt ir:r}}report incidence-rate ratios; {opt eform} with the column titled IRR{p_end}
 {synoptline}
 {p2colreset}{...}
 

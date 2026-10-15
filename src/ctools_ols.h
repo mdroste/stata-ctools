@@ -26,6 +26,9 @@
 
 /* ========================================================================
  * Cholesky decomposition: A = L * L' (in-place, returns L in lower triangle)
+ * Dense row-major n x n, leading dimension n; upper triangle is zeroed.
+ * Ordinary double accumulation in index order. No scratch allocation.
+ * n==0 is a no-op; on failure A can contain a partial factor.
  * Returns STATA_OK or STATA_ERR_INVALID_INPUT / STATA_ERR_SINGULAR
  * ======================================================================== */
 ST_int ctools_cholesky(ST_double *A, ST_int n);
@@ -34,6 +37,9 @@ ST_int ctools_cholesky(ST_double *A, ST_int n);
  * Matrix inversion via Cholesky (for positive definite matrices)
  * Input: L (lower triangular Cholesky factor)
  * Output: inv (inverse of L*L')
+ * Both row-major n x n; L is read-only and must not alias inv. Allocates n*n
+ * doubles for the inverse factor. Requires a nonsingular factor from a
+ * successful factorization; no new factorization is performed here.
  * Returns STATA_OK or an internal stata_retcode (memory/input/singularity)
  * ======================================================================== */
 ST_int ctools_invert_from_cholesky(const ST_double *L, ST_int n, ST_double *inv);
@@ -41,6 +47,9 @@ ST_int ctools_invert_from_cholesky(const ST_double *L, ST_int n, ST_double *inv)
 /* ========================================================================
  * Solve linear system Ax = b using Cholesky decomposition
  * A must be symmetric positive definite
+ * Row-major n x n; A and b are read-only, x receives n doubles. Allocates a
+ * factor copy and n-vector scratch, then factors the copy (unlike the cqreg
+ * solve API, which consumes an existing lower factor and overwrites b).
  * Returns STATA_OK or an internal stata_retcode; caller converts at the boundary
  * ======================================================================== */
 ST_int ctools_solve_cholesky(const ST_double *A, const ST_double *b, ST_int n, ST_double *x);
@@ -98,6 +107,19 @@ ST_double dd_sum_sq_dev(const ST_double *x, ST_double mean, ST_int N);
 ST_double dd_sum_sq_dev_weighted(const ST_double *x, ST_double mean,
                                   const ST_double *w, ST_int N);
 
+/* Double-double weighted dot product: sum((w[i] * x[i]) * y[i]), with w == NULL
+ * meaning unit weights. The product w[i] * x[i] is rounded to double first;
+ * accumulation is sequential in index order. Returned unnormalized so a
+ * caller can keep accumulating; the value is hi + lo. */
+dd_real dd_dot_weighted(const ST_double *x, const ST_double *y, const ST_double *w, ST_int N);
+
+/* The same sums for n right-hand vectors at once: out[t] is exactly
+ * dd_dot_weighted(x, ys[t], w, N). The accumulations are independent, so up
+ * to four are interleaved per pass over the data, which several times
+ * shortens the wait on each sum's dependency chain. */
+void dd_dot_weighted_multi(const ST_double *x, const ST_double *const *ys, ST_int n,
+                           const ST_double *w, ST_int N, dd_real *out);
+
 /* ========================================================================
  * Dot product variants for numerical precision
  * ======================================================================== */
@@ -144,6 +166,22 @@ void compute_xtx_xty_weighted(
 /* Detect collinear variables using Cholesky decomposition
  * Returns number of collinear variables detected (-1 on error) */
 ST_int detect_collinearity(const ST_double *xx, ST_int K, ST_int *is_collinear, ST_int verbose);
+
+/* Scale-invariant collinearity detection on a symmetric cross-product matrix.
+ * xx (K x K) is modified in place: rows and columns of the variables flagged
+ * in is_collinear on entry are zeroed, the matrix is equilibrated to a unit
+ * diagonal, and detect_collinearity() runs on the result. Variables flagged
+ * on entry stay flagged. Returns what detect_collinearity() returns for the
+ * equilibrated matrix (-1 on allocation failure, is_collinear then unchanged). */
+ST_int detect_collinearity_scaled(ST_double *xx, ST_int K, ST_int *is_collinear, ST_int verbose);
+
+/* Inverse cross-product matrix of [X, 1] from that of mean-centred X.
+ * inv is (X~'W X~)^-1 for the K centred regressors (K x K, symmetric), means
+ * their K (weighted) means and sum_w the total weight 1'W1 (N if unweighted).
+ * out is (K+1) x (K+1) with the constant last, by the block-partition
+ * formula; it must not overlap inv. K == 0 gives the 1 x 1 matrix 1/sum_w. */
+void ctools_inverse_add_constant(const ST_double *inv, ST_int K, const ST_double *means,
+                                 ST_double sum_w, ST_double *out);
 
 /* Sweep-based generalized inverse for symmetric matrices (matches Mata invsym):
  * pivots on the largest remaining diagonal and zeros a column whose remaining

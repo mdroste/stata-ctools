@@ -165,13 +165,16 @@ df_r = N - K - df_absorbed + redundant_FEs
 ```
 where redundant FEs are fixed effects that are collinear with others.
 
+Redundant coefficients are counted as `reghdfe` counts them. Effects nested within the cluster variable cost no degrees of freedom and are set aside. Each remaining effect after the first then loses the largest number of mobility groups it forms with any earlier remaining effect, and at least one coefficient. `dofadjustments()` takes `reghdfe`'s values: `all` (default), `none`, or any of `firstpair` or `pairwise`, `clusters` and `continuous`.
+
 ## See Also
 
 - [ctools Overview](../README.md)
 - [reghdfe](http://scorreia.com/software/reghdfe/) - Original Stata implementation
 - [cqreg](README_cqreg.md) - Quantile regression
 - [civreghdfe](README_civreghdfe.md) - IV regression with HDFE
+- [HDFE benchmark datasets](HDFE_BENCHMARK_DATASETS.md) - `creghdfe` compared with `reghdfe` on 15 benchmark graphs
 
 ## Validation and failure behavior
 
-residuals(), groupvar(), and savefe output names must be distinct new variables. Existing variables, including inputs and fixed-effect identifiers, are never replaced by these options. Failed operations restore the dataset. iterate() and tolerance() must be positive. Exhausting the fixed-effect solver returns error 430 instead of posting estimates.
+residuals(), groupvar(), and savefe output names must be distinct new variables. Existing variables, including inputs and fixed-effect identifiers, are never replaced by these options. Failed or interrupted operations restore the dataset without writing a snapshot to disk (the variables creghdfe added are dropped again); option `snapshot` uses `preserve` instead and option `fast` undoes nothing. iterate() and tolerance() must be positive. Exhausting the fixed-effect solver returns error 430 instead of posting estimates.

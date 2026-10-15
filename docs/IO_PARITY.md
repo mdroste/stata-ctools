@@ -36,7 +36,7 @@ need testing before an all-format parity claim.
 ReadStat 1.1.9 and libxls 1.6.3 are pinned and compiled into the plugin;
 ReadStat's .zsav compression uses the vendored miniz through a zlib-compatible
 shim. Source provenance and local changes are in
-[`src/io/vendor/README.md`](../src/io/vendor/README.md); distribution licenses
+[`src/vendor/README.md`](../src/vendor/README.md); distribution licenses
 are bundled in `ctools-codecs-LICENSE.txt` and `THIRD_PARTY_NOTICES`. Unix uses system iconv; Windows uses
 system code pages through a C adapter, without an iconv DLL.
 

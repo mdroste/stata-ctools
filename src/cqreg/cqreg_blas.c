@@ -103,32 +103,51 @@ void blas_xtdx(ST_double *XDX,
      */
 #ifdef _OPENMP
     if (N > 100000 && K >= 2) {
-        /* Compute each (j,k) element of the upper triangle in parallel */
-        #pragma omp parallel for collapse(2) schedule(dynamic)
-        for (j = 0; j < K; j++) {
-            for (k = 0; k < K; k++) {
-                if (k >= j) {
-                    /* Compute XDX[j,k] = sum_i D[i] * X[i,j] * X[i,k] */
-                    const ST_double *Xj = &X[(size_t)j * N];
-                    const ST_double *Xk = &X[(size_t)k * N];
-                    ST_double sum = 0.0;
+        /* Each element XDX[j,k] = sum_i D[i] * X[i,j] * X[i,k] of the upper
+         * triangle is an independent sum, accumulated four rows at a time
+         * exactly as the sequential version below does. For a fixed j the
+         * columns k are taken XTDX_GROUP at a time, so D * Xj is formed once
+         * per row and the data are read in far fewer passes than one per
+         * element; the (j, group) tasks run in parallel. */
+        enum { XTDX_GROUP = 8 };
+        const ST_int N4 = N - (N % 4);
+        const ST_int groups_per_row = (K + XTDX_GROUP - 1) / XTDX_GROUP;
+        ST_int task;
+        #pragma omp parallel for schedule(dynamic)
+        for (task = 0; task < K * groups_per_row; task++) {
+            const ST_int jj = task / groups_per_row;
+            const ST_int k0 = jj + (task % groups_per_row) * XTDX_GROUP;
+            if (k0 >= K) continue;
+            const ST_int nk = (K - k0 < XTDX_GROUP) ? K - k0 : XTDX_GROUP;
+            const ST_double *Xj = &X[(size_t)jj * N];
+            const ST_double *Xk[XTDX_GROUP];
+            ST_double sum[XTDX_GROUP];
+            for (ST_int q = 0; q < XTDX_GROUP; q++) {
+                /* unused slots repeat the first column */
+                Xk[q] = &X[(size_t)(k0 + (q < nk ? q : 0)) * N];
+                sum[q] = 0.0;
+            }
 
-                    /* 4-way unrolling */
-                    const ST_int N4 = N - (N % 4);
-                    for (ST_int i = 0; i < N4; i += 4) {
-                        sum += D[i]   * Xj[i]   * Xk[i]
-                             + D[i+1] * Xj[i+1] * Xk[i+1]
-                             + D[i+2] * Xj[i+2] * Xk[i+2]
-                             + D[i+3] * Xj[i+3] * Xk[i+3];
-                    }
-                    for (ST_int i = N4; i < N; i++) {
-                        sum += D[i] * Xj[i] * Xk[i];
-                    }
+            for (ST_int i = 0; i < N4; i += 4) {
+                const ST_double dx0 = D[i]   * Xj[i];
+                const ST_double dx1 = D[i+1] * Xj[i+1];
+                const ST_double dx2 = D[i+2] * Xj[i+2];
+                const ST_double dx3 = D[i+3] * Xj[i+3];
+                for (ST_int q = 0; q < XTDX_GROUP; q++) {
+                    const ST_double *xk = Xk[q];
+                    sum[q] += dx0 * xk[i] + dx1 * xk[i+1] + dx2 * xk[i+2] + dx3 * xk[i+3];
+                }
+            }
+            for (ST_int i = N4; i < N; i++) {
+                const ST_double dx = D[i] * Xj[i];
+                for (ST_int q = 0; q < XTDX_GROUP; q++) sum[q] += dx * Xk[q][i];
+            }
 
-                    XDX[j + k * K] = sum;
-                    if (k > j) {
-                        XDX[k + j * K] = sum;  /* Symmetrize */
-                    }
+            for (ST_int q = 0; q < nk; q++) {
+                const ST_int kk = k0 + q;
+                XDX[jj + kk * K] = sum[q];
+                if (kk > jj) {
+                    XDX[kk + jj * K] = sum[q];  /* Symmetrize */
                 }
             }
         }

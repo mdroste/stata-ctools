@@ -6,11 +6,11 @@ High-performance C-accelerated sorting for Stata datasets.
 
 `csort` implements stable ascending sorting through a C plugin. It supports multiple sorting algorithms optimized for different use cases:
 
-- **LSD Radix Sort**: Best for fixed-width keys and general-purpose sorting
-- **MSD Radix Sort**: Best for variable-length strings with common prefixes
+- **LSD Radix Sort**: Best for numeric keys and short strings (up to 16 bytes), alone or combined
+- **MSD Radix Sort**: Best for long variable-length strings with common prefixes
 - **Timsort**: Best for partially sorted data (panel data, time series)
 
-The default `auto` mode chooses an algorithm from the key types and ranges. `sample`, `counting`, `merge`, and `ips4o` are also available. Like native `sort`, `csort` rejects `if` and `in`.
+The default `auto` mode chooses an algorithm from the key types and ranges: counting sort (falling back to LSD) when every key is numeric, LSD when the string keys are at most 16 bytes wide (`str1`-`str16`), and MSD when any string key is wider. `sample`, `counting`, `merge`, and `ips4o` are also available. Like native `sort`, `csort` rejects `if` and `in`.
 
 ## Syntax
 
@@ -41,7 +41,10 @@ csort state year firm_id
 * Sort with timing output
 csort myvar, verbose
 
-* Use MSD radix sort (better for variable-length strings)
+* Short string and numeric keys together (automatic selection uses LSD)
+csort state_code year
+
+* Use MSD radix sort (better for long variable-length strings)
 csort company_name, algorithm(msd)
 
 * Use Timsort (better for partially sorted data)
@@ -55,19 +58,20 @@ csort panelid year, algorithm(timsort) verbose
 
 ### LSD Radix Sort
 **Best for:**
-- Integer or fixed-width numeric keys
-- Data with uniform key distribution
+- Numeric keys
+- String keys of up to 16 bytes (codes, abbreviations, short names), alone or mixed with numeric keys
 - General-purpose sorting when you're unsure
 
 **How it works:**
-- Processes bytes from least significant to most significant
-- 8-bit radix (256 buckets per pass)
-- 8 passes for 64-bit doubles
+- Every key is read as 64-bit words that compare like the key: a number as one word, a string as its bytes eight at a time, big-endian and zero padded (a string of up to 8 bytes is one word, up to 16 bytes two)
+- Rows are sorted by the first word, and then only rows that tie on a word are sorted by the next one, so later keys are never read once ties are broken
+- Within a word, 8-bit radix passes (256 buckets) run from the least significant byte, skipping bytes that are equal in every key; many rows are first split by their most significant differing byte so the remaining passes run in cache
+- Key lists with a string wider than 16 bytes sort one key at a time, last key first, with one pass per character position
 - Stable sort: maintains relative order of equal elements
 
 ### MSD Radix Sort
 **Best for:**
-- Variable-length strings (names, addresses, identifiers)
+- Long variable-length strings (names, addresses, identifiers wider than 16 bytes)
 - Strings with common prefixes (state names, company names)
 - Data where elements can be distinguished by their first few characters
 
@@ -113,8 +117,8 @@ csort date_var, algorithm(timsort)
 The sorting algorithms are optimized for performance:
 
 ### LSD Radix Sort Performance
-- **Complexity**: O(N*k) where k is key width (8 for doubles)
-- **Parallelization**: OpenMP parallel histogram and scatter
+- **Complexity**: O(N*k) where k is the number of differing key bytes, counted only over rows still tied on the earlier words
+- **Parallelization**: OpenMP parallel histogram and scatter for the first word; runs of tied rows are sorted one per thread
 
 ### MSD Radix Sort Performance
 - **Complexity**: O(N*k) where k is average distinguishing prefix length
@@ -128,12 +132,16 @@ The sorting algorithms are optimized for performance:
 ### Speedup Tricks
 
 **LSD Radix Sort:**
-- **8-bit radix (256 buckets)**: Balances the number of passes against bucket overhead; 8 passes for 64-bit doubles
+- **8-bit radix (256 buckets)**: Balances the number of passes against bucket overhead; at most 8 passes for 64-bit doubles
+- **Key/row records**: Each 64-bit key word travels with its row index, so every pass reads and writes memory sequentially
+- **Strings as words**: Strings of up to 16 bytes become one or two big-endian words, so string and numeric keys share one record sort
+- **Tie refinement**: Only rows that tie on a word are sorted by the next word; if the first key has no ties, the remaining keys are never read
+- **Top-byte split**: Large sets of rows are first distributed by their most significant differing byte, so the remaining passes run on cache-sized buckets
 - **Parallel histogram and scatter phases**: OpenMP parallelizes both the counting and the data redistribution passes
 - **Pointer swapping between passes**: Avoids copying the entire array; input/output buffers alternate roles
 - **Early exit for uniform passes**: Skips any radix pass where all values fall into a single bucket
 - **32-bit permutation indices**: Uses 4-byte indices instead of 8-byte pointers, halving auxiliary memory
-- **Pre-cached string lengths**: Avoids repeated `strlen()` calls during multi-key string sorts
+- **Pre-cached string lengths**: Avoids repeated `strlen()` calls when a string key is wider than 16 bytes
 - **Cache-line aligned histograms**: 64-byte alignment prevents false sharing between threads
 
 **MSD Radix Sort:**
@@ -151,7 +159,7 @@ The sorting algorithms are optimized for performance:
 - **16x loop unrolling**: Reduces loop overhead and improves instruction pipelining during data load/store
 - **Software prefetching**: `_mm_prefetch` hints hide memory latency during data transfer
 - **Non-temporal stores**: Bypasses cache for very large writes to avoid cache pollution
-- **Parallel permutation application**: Each variable's data is reordered by a separate thread
+- **Row-major staging**: Whole observations are read from Stata once and written once in sorted order (numeric and fixed-width string variables); datasets that cannot be staged are reordered one variable per thread
 - **Persistent thread pool**: Threads are reused across calls, avoiding creation/destruction overhead
 
 ### Timing Breakdown
@@ -192,7 +200,7 @@ When using the `verbose` option, you'll see:
 | Algorithm | Modified merge sort | LSD radix | MSD radix | Hybrid merge/insert |
 | Complexity | O(N log N) | O(N*k) | O(N*k) | O(N) to O(N log N) |
 | Parallelization | No | Yes (OpenMP) | Yes (OpenMP) | Partial |
-| Best For | General | Fixed-width keys | Variable strings | Partially sorted |
+| Best For | General | Numeric and short string keys | Long variable strings | Partially sorted |
 | Stable Sort | Yes (with `stable`) | Yes | Yes | Yes |
 
 ## See Also

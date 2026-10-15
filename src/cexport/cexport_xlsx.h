@@ -31,6 +31,6 @@
         0 on success, Stata error code on failure
 */
 ST_retcode cexport_xlsx_main(const char *args);
-ST_retcode cexport_load_text_data(ctools_filtered_data *fd, ST_int nvars, bool excel_limit);
+#include "ctools_text.h"
 
 #endif /* CEXPORT_XLSX_H */

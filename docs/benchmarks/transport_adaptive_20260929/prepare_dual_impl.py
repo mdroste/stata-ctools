@@ -191,7 +191,7 @@ def prepare(args):
                   'di "DUAL_TRANSPORT_COMPLETE RC=`rc\'"', 'log close', 'exit, clear']
         driver = directory/'run.do'
         driver.write_text('\n'.join(lines)+'\n')
-        command = shlex.join(['/bin/zsh', '-lic', 'oldstata -q -b do '+shlex.quote(str(driver))])
+        command = shlex.join(['/bin/zsh', '-lic', 'stata -q -b do '+shlex.quote(str(driver))])
         runs.append(dict(block=block, driver=str(driver), log=str(directory/'transport.log'), command=command))
     prefix = Path(os.environ.get('LIBOMP_PREFIX', '/private/tmp/ctools-memory-audit/libomp'))
     cc = os.environ.get('CC', 'clang')
@@ -248,7 +248,7 @@ source change. Existing process-isolated comparisons remain separate evidence.
 Compile only when other timing has stopped:
 `python3 temp/transport_20260929/prepare_dual_impl.py build DIRECTORY`
 
-Run the exact oldstata commands in run-plan.tsv sequentially, then:
+Run the exact stata commands in run-plan.tsv sequentially, then:
 `python3 temp/transport_20260929/prepare_dual_impl.py summarize DIRECTORY`
 ''')
     print(f'Prepared {len(cases)} cases, {args.blocks} blocks, {len(expected)} calls; no compilation or Stata execution.')

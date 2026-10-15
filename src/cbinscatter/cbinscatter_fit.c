@@ -133,14 +133,8 @@ static ST_retcode fit_polynomial_joint(
                                     config->maxiter, config->tolerance, 0, &dropped);
         if (rc != CBINSCATTER_OK) goto cleanup;
 
-        for (i = 0; i < N; i++) {
-            ST_double w = weights ? weights[i] : 1.0;
-            for (j = 0; j < q; j++) {
-                ST_double wv = w * vars[1 + j][i];
-                Xty[j] += wv * vars[0][i];
-                for (k = j; k < q; k++) XtX[(size_t)j * q + k] += wv * vars[1 + k][i];
-            }
-        }
+        cbinscatter_normal_equations((const ST_double *const *)(vars + 1), q, vars[0], weights,
+                                     NULL, 0, N, XtX, Xty);
     } else {
         /* Streamed: [1, d..d^p, W - w̄] on y - ȳ */
         for (i = 0; i < N; i++) {

@@ -115,7 +115,10 @@ large codes are allowed.
 
 {phang}
 {opt by(varname)} creates separate scatter series for each level of the
-specified variable. Each group gets its own bins and optional fit line.
+specified variable. As in {cmd:binscatter}, the bins are the quantiles of x in
+the whole sample, and each group's points are its means within those bins;
+with {cmd:method(binsreg)} each group is binned on its own x, as in
+{cmd:binsreg}. Each group gets its own optional fit line.
 
 {phang}
 {opt method(method)} specifies the residualization method when controls or
@@ -135,6 +138,13 @@ when the conditional expectation function is nonlinear.{p_end}
 {pstd}
 When no controls or absorb variables are specified, both methods produce
 identical results.
+
+{pstd}
+With {opt method(binsreg)}, observations in singleton fixed-effect groups are
+retained in the bins and in the sample used to center adjusted means. To compare
+with {cmd:binsreg}, use the same bin partition and
+{opt reghdfeopt(keepsingletons)} there. Its default singleton removal can shift
+adjusted means even when bin contrasts agree.
 
 {dlgtab:Line Fitting}
 
@@ -189,11 +199,13 @@ graph and axis titles. Defaults for axis titles are the variable names.
 
 {phang}
 {opt msymbols(string)} specifies marker symbols for the scatter series.
-Default is filled circles (O). (Not yet implemented.)
+The {it:i}th symbol applies to the {it:i}th series, as in {cmd:binscatter}.
+Default is filled circles (O).
 
 {phang}
-{opt mlabels(string)} specifies marker labels for the scatter series.
-(Not yet implemented.)
+{opt mlabels(string)} specifies marker labels for the scatter series. The
+{it:i}th word labels every bin marker of the {it:i}th series; use quotes for
+labels containing spaces. {cmd:binscatter} has no equivalent option.
 
 {phang}
 {it:twoway_options} any other options are passed through to the underlying

@@ -1,0 +1,176 @@
+-------------------------------------------------------------------------------
+      name:  <unnamed>
+       log:  /Users/Mike/Documents/GitHub/stata-ctools/temp/encode_performance_
+> 20261002/screen.log
+  log type:  text
+ opened on:   2 Oct 2026, 11:31:53
+
+. adopath ++ "/Users/Mike/Documents/GitHub/stata-ctools/temp/encode_performance
+> _20261002/baseline"
+  [1]              "/Users/Mike/Documents/GitHub/stata-ctools/temp/encode_perfo
+> rmance_20261002/baseline"
+  [2]  (BASE)      "/Applications/StataNow/ado/base/"
+  [3]  (SITE)      "/Applications/StataNow/ado/site/"
+  [4]              "."
+  [5]  (PERSONAL)  "/Users/Mike/Documents/Stata/ado/personal/"
+  [6]  (PLUS)      "/Users/Mike/Library/Application Support/Stata/ado/plus/"
+  [7]  (OLDPLACE)  "~/ado/"
+
+. foreach categories in 10 1000 10000 {
+  2.     clear
+  3.     set obs 200000
+  4.     gen str12 x = "value_" + string(mod(_n-1,`categories'), "%05.0f")
+  5.     cencode x, gen(y) verbose threads(8)
+  6.     encode x, gen(z)
+  7.     assert y==z
+  8.     decode y, gen(ytext)
+  9.     assert ytext==x
+ 10. }
+Number of observations (_N) was 0, now 200,000.
+
+-------------------------------------------------------
+cencode timing breakdown:
+-------------------------------------------------------
+  C plugin internals:
+    Argument parsing:         0.0000 sec
+    Data load:                0.0019 sec
+    Collect unique values:    0.0023 sec
+    Sort:                     0.0000 sec
+    Encode:                   0.0011 sec
+    Apply labels:             0.0003 sec
+  -----------------------------------------------------
+    C plugin total:           0.0056 sec
+
+  Stata overhead:
+    Pre-plugin setup:         0.0084 sec
+    Plugin call overhead:     0.0013 sec
+    Post-plugin cleanup:      0.0007 sec
+  -----------------------------------------------------
+    Stata overhead total:     0.0103 sec
+-------------------------------------------------------
+    Wall clock total:         0.0165 sec
+-------------------------------------------------------
+
+  Variables encoded:        1
+
+  Thread diagnostics:
+    OpenMP enabled:                1
+    Max threads available:         8
+-------------------------------------------------------
+Number of observations (_N) was 0, now 200,000.
+
+-------------------------------------------------------
+cencode timing breakdown:
+-------------------------------------------------------
+  C plugin internals:
+    Argument parsing:         0.0000 sec
+    Data load:                0.0008 sec
+    Collect unique values:    0.0024 sec
+    Sort:                     0.0001 sec
+    Encode:                   0.0003 sec
+    Apply labels:             0.0012 sec
+  -----------------------------------------------------
+    C plugin total:           0.0048 sec
+
+  Stata overhead:
+    Pre-plugin setup:         0.0014 sec
+    Plugin call overhead:     0.0001 sec
+    Post-plugin cleanup:      0.0311 sec
+  -----------------------------------------------------
+    Stata overhead total:     0.0327 sec
+-------------------------------------------------------
+    Wall clock total:         0.0378 sec
+-------------------------------------------------------
+
+  Variables encoded:        1
+
+  Thread diagnostics:
+    OpenMP enabled:                1
+    Max threads available:         8
+-------------------------------------------------------
+Number of observations (_N) was 0, now 200,000.
+
+-------------------------------------------------------
+cencode timing breakdown:
+-------------------------------------------------------
+  C plugin internals:
+    Argument parsing:         0.0000 sec
+    Data load:                0.0008 sec
+    Collect unique values:    0.0027 sec
+    Sort:                     0.0014 sec
+    Encode:                   0.0002 sec
+    Apply labels:             0.0085 sec
+  -----------------------------------------------------
+    C plugin total:           0.0137 sec
+
+  Stata overhead:
+    Pre-plugin setup:         0.0014 sec
+    Plugin call overhead:     0.0002 sec
+    Post-plugin cleanup:      0.3252 sec
+  -----------------------------------------------------
+    Stata overhead total:     0.3268 sec
+-------------------------------------------------------
+    Wall clock total:         0.3408 sec
+-------------------------------------------------------
+
+  Variables encoded:        1
+
+  Thread diagnostics:
+    OpenMP enabled:                1
+    Max threads available:         8
+-------------------------------------------------------
+
+. clear
+
+. set obs 1000000
+Number of observations (_N) was 0, now 1,000,000.
+
+. set seed 81523
+
+. gen double x=rnormal()
+
+. gen long g=mod(_n,5000)
+
+. cwinsor x, by(g) suffix(_w) verbose threads(8)
+
+------------------------------------------------------------
+cwinsor timing breakdown:
+------------------------------------------------------------
+  Stata pre-plugin:
+    Syntax/validation:        0.0153 sec
+    Sort by-variables:        0.0001 sec
+  ----------------------------------------------------------
+    Pre-plugin total:         0.0154 sec
+  ----------------------------------------------------------
+  C plugin phases:
+    Data load:                0.0234 sec
+    Sort by-variables:        0.0044 sec
+    Group detection:          0.0012 sec
+    Winsorization:            0.0014 sec
+    Data store:               0.0020 sec
+  ----------------------------------------------------------
+    C plugin total:           0.0324 sec
+  ----------------------------------------------------------
+  Stata post-plugin:          0.0001 sec
+------------------------------------------------------------
+    Wall clock total:         0.0481 sec
+------------------------------------------------------------
+
+  Dataset: 1000000 obs x 1 vars
+  Groups:      5000
+  Mode:    winsorize at [1, 99] percentiles
+  Threads:        8
+------------------------------------------------------------
+
+. local rc=0
+
+. di "CTOOLS_LAUNCH=c5007717dd844522ad5273b69f05b80f RC=`rc'"
+CTOOLS_LAUNCH=c5007717dd844522ad5273b69f05b80f RC=0
+
+. log close
+      name:  <unnamed>
+       log:  /Users/Mike/Documents/GitHub/stata-ctools/temp/encode_performance_
+> 20261002/screen.log
+  log type:  text
+ closed on:   2 Oct 2026, 11:31:54
+-------------------------------------------------------------------------------

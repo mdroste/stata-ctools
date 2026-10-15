@@ -1,20 +1,15 @@
+#include "ctools_linalg.h"
 /*
  * cqreg_linalg.c
  *
- * Optimized linear algebra operations for quantile regression IPM solver.
+ * Linear algebra operations for the quantile regression solver.
  * Part of the ctools suite.
  */
 
 #include "cqreg_linalg.h"
 #include "../ctools_unroll.h"
-#include "../ctools_simd.h"
 #include <math.h>
 #include <string.h>
-#include <stdio.h>
-
-#ifdef _OPENMP
-#include <omp.h>
-#endif
 
 /* ============================================================================
  * Dot Products
@@ -30,107 +25,6 @@ ST_double cqreg_dot(const ST_double * CQREG_RESTRICT x,
 ST_double cqreg_dot_self(const ST_double * CQREG_RESTRICT x, ST_int N)
 {
     return ctools_dot_self_unrolled(x, N);
-}
-
-/* ============================================================================
- * Vector Operations
- * ============================================================================ */
-
-void cqreg_vcopy(ST_double * CQREG_RESTRICT dst,
-                 const ST_double * CQREG_RESTRICT src,
-                 ST_int N)
-{
-    memcpy(dst, src, N * sizeof(ST_double));
-}
-
-/* ============================================================================
- * Matrix-Vector Operations
- * ============================================================================ */
-
-void cqreg_matvec_col(ST_double * CQREG_RESTRICT y,
-                      const ST_double * CQREG_RESTRICT A,
-                      const ST_double * CQREG_RESTRICT x,
-                      ST_int M, ST_int N)
-{
-    ST_int i, j;
-    ST_int M8 = M - (M & 7);  /* M rounded down to multiple of 8 */
-
-    /* Initialize y to zero */
-    memset(y, 0, M * sizeof(ST_double));
-
-    /* y = sum_j x[j] * A[:,j]
-     * OPTIMIZED: 8x loop unrolling for better vectorization */
-    for (j = 0; j < N; j++) {
-        const ST_double *col = &A[(size_t)j * M];
-        ST_double xj = x[j];
-
-        /* 8x unrolled main loop */
-        for (i = 0; i < M8; i += 8) {
-            y[i]     += xj * col[i];
-            y[i + 1] += xj * col[i + 1];
-            y[i + 2] += xj * col[i + 2];
-            y[i + 3] += xj * col[i + 3];
-            y[i + 4] += xj * col[i + 4];
-            y[i + 5] += xj * col[i + 5];
-            y[i + 6] += xj * col[i + 6];
-            y[i + 7] += xj * col[i + 7];
-        }
-        /* Remainder */
-        for (; i < M; i++) {
-            y[i] += xj * col[i];
-        }
-    }
-}
-
-void cqreg_xtdx(ST_double * CQREG_RESTRICT XDX,
-                const ST_double * CQREG_RESTRICT X,
-                const ST_double * CQREG_RESTRICT D,
-                ST_int N, ST_int K)
-{
-    ST_int j, k;
-
-    /* Initialize to zero */
-    memset(XDX, 0, (size_t)K * K * sizeof(ST_double));
-
-    /* Compute X' * D * X using SIMD-accelerated weighted dot products
-     * XDX[j,k] = sum_i X[i,j] * D[i] * X[i,k]
-     *          = sum_i D[i] * X[j*N + i] * X[k*N + i]
-     * = ctools_simd_dot_weighted(D, Xj, Xk, N)
-     */
-
-    #ifdef _OPENMP
-    #pragma omp parallel for schedule(static) if(K >= 2 && N > 500)
-    #endif
-    for (j = 0; j < K; j++) {
-        const ST_double *Xj = &X[(size_t)j * N];
-
-        /* Diagonal element: XDX[j,j] = X[:,j]' * D * X[:,j] */
-        XDX[j * K + j] = ctools_simd_dot_weighted(D, Xj, Xj, (size_t)N);
-
-        /* Off-diagonal elements (upper triangle) */
-        for (k = j + 1; k < K; k++) {
-            const ST_double *Xk = &X[(size_t)k * N];
-            ST_double total = ctools_simd_dot_weighted(D, Xj, Xk, (size_t)N);
-            XDX[j * K + k] = total;
-            XDX[k * K + j] = total;  /* Symmetric */
-        }
-    }
-}
-
-void cqreg_xtv(ST_double * CQREG_RESTRICT result,
-               const ST_double * CQREG_RESTRICT X,
-               const ST_double * CQREG_RESTRICT v,
-               ST_int N, ST_int K)
-{
-    ST_int j;
-
-    /* result[j] = X[:,j]' * v */
-    #ifdef _OPENMP
-    #pragma omp parallel for schedule(static) if(K >= 2 && N > 500)
-    #endif
-    for (j = 0; j < K; j++) {
-        result[j] = cqreg_dot(&X[(size_t)j * N], v, N);
-    }
 }
 
 /* ============================================================================
@@ -176,32 +70,14 @@ static void cqreg_solve_lower(const ST_double * CQREG_RESTRICT L,
                               ST_double * CQREG_RESTRICT b,
                               ST_int K)
 {
-    ST_int i, j;
-
-    /* Forward substitution: L * x = b */
-    for (i = 0; i < K; i++) {
-        ST_double sum = b[i];
-        for (j = 0; j < i; j++) {
-            sum -= L[i * K + j] * b[j];
-        }
-        b[i] = sum / L[i * K + i];
-    }
+    ctools_solve_lower_factor(L, b, K, b);
 }
 
 static void cqreg_solve_lower_t(const ST_double * CQREG_RESTRICT L,
                                 ST_double * CQREG_RESTRICT b,
                                 ST_int K)
 {
-    ST_int i, j;
-
-    /* Back substitution: L' * x = b */
-    for (i = K - 1; i >= 0; i--) {
-        ST_double sum = b[i];
-        for (j = i + 1; j < K; j++) {
-            sum -= L[j * K + i] * b[j];
-        }
-        b[i] = sum / L[i * K + i];
-    }
+    ctools_solve_lower_transpose(L, b, K, b);
 }
 
 void cqreg_solve_cholesky(const ST_double * CQREG_RESTRICT L,
@@ -308,7 +184,7 @@ ST_double cqreg_compute_quantile(const ST_double *y, ST_int N, ST_double tau)
     /* Select from a copy so the response stays in observation order. */
     ST_double *y_work = (ST_double *)malloc((size_t)N * sizeof(ST_double));
     if (y_work == NULL) {
-        return 0.0;  /* Error: return 0 */
+        return NAN;  /* the caller reports r(920); 0 would pass as a quantile */
     }
 
     memcpy(y_work, y, (size_t)N * sizeof(ST_double));

@@ -3,7 +3,7 @@ import json, subprocess, sys, shlex, time
 root=Path(__file__).resolve().parent/'dual_impl_control'
 for block in range(2):
  d=root/f'b{block}'; start=time.monotonic()
- shell='oldstata -q -b do '+shlex.quote(str(d/'run.do'))
+ shell='stata -q -b do '+shlex.quote(str(d/'run.do'))
  print('DUAL_START',block,flush=True)
  with (d/'resources.txt').open('w') as f:
   r=subprocess.run(['/usr/bin/time','-l','/bin/zsh','-lic',shell],cwd=d,stdout=f,stderr=subprocess.STDOUT)

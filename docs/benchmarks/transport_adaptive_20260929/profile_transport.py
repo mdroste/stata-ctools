@@ -1,11 +1,11 @@
-"""Profile only a newly started benchmark through oldstata; never a user's process."""
+"""Profile only a newly started benchmark through stata; never a user's process."""
 from pathlib import Path
 import subprocess,time,shlex,sys,re,json
 root=Path(sys.argv[1]).resolve();driver=root/'run.do';log=root/'transport.log'
 log.unlink(missing_ok=True)
 start=time.monotonic()
 with (root/'wrapper_resources.txt').open('w') as output:
- process=subprocess.Popen(['/usr/bin/time','-l','/bin/zsh','-lic','oldstata -q -b do '+shlex.quote(str(driver))],cwd=root,stdout=output,stderr=subprocess.STDOUT)
+ process=subprocess.Popen(['/usr/bin/time','-l','/bin/zsh','-lic','stata -q -b do '+shlex.quote(str(driver))],cwd=root,stdout=output,stderr=subprocess.STDOUT)
  pid=None
  while process.poll() is None and time.monotonic()-start<90:
   text=log.read_text() if log.exists() else ''

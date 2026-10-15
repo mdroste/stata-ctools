@@ -197,6 +197,14 @@ static bool cimport_row_is_empty(const char *file_base, const CImportFieldRef *f
 }
 
 /* Display warnings for unmatched quotes (Stata-compatible format) */
+/* emptylines(include): native counts the empty text after a final line
+ * terminator as one more empty line, so the row parsed at that terminator is
+ * kept as an empty observation. Only for the part of the file that ends it. */
+static bool cimport_trailing_empty_line(const CImportContext *ctx, const char *end) {
+    return ctx->emptylines_mode != CIMPORT_EMPTYLINES_SKIP && ctx->file_size > 0 &&
+           end == ctx->file_data + ctx->file_size && (end[-1] == '\n' || end[-1] == '\r');
+}
+
 static void cimport_display_warnings(CImportContext *ctx) {
     if (ctx->num_unmatched_quote_warnings == 0) return;
 
@@ -310,13 +318,18 @@ static int cimport_parse_header_row(const CImportContext *ctx, CImportFieldRef *
 }
 
 static int cimport_parse_header(CImportContext *ctx) {
-    CImportFieldRef fields[CTOOLS_MAX_COLUMNS];
+    /* fields and next_fields (512 KiB each) share one heap block, off the
+     * Stata thread's stack. */
+    CImportFieldRef *fields = ctools_safe_malloc2(2 * (size_t)CTOOLS_MAX_COLUMNS, sizeof(CImportFieldRef));
     const char *end = ctx->file_data + ctx->file_size;
     const char *header_start, *next;
+    if (!fields) return -1;
 
     ctx->num_columns = cimport_parse_header_row(ctx, fields, &header_start, &next);
+    /* Chunked parsing starts at this row, so chunk 0 always holds the header. */
+    ctx->first_row_offset = (size_t)(header_start - ctx->file_data);
     /* Only empty rows: native imports nothing, like an empty file. */
-    if (ctx->num_columns == 0) return 0;
+    if (ctx->num_columns == 0) { free(fields); return 0; }
 
     /* Auto headers are inferred from a text-to-number transition, as native
      * does: some first-row cell is text while its column's data are numbers.
@@ -328,8 +341,9 @@ static int cimport_parse_header(CImportContext *ctx) {
     SF_macro_use("___cimport_autoheader", autoheader, sizeof(autoheader) - 1);
     if (strcmp(autoheader, "1") == 0) {
         ctx->has_header = false;
-        CImportFieldRef next_fields[CTOOLS_MAX_COLUMNS];
-        bool candidates[CTOOLS_MAX_COLUMNS];
+        CImportFieldRef *next_fields = fields + CTOOLS_MAX_COLUMNS;
+        bool *candidates = calloc((size_t)ctx->num_columns, sizeof(bool));
+        if (!candidates) { free(fields); return -1; }
         for (int i = 0; i < ctx->num_columns; i++) {
             int len = CIMPORT_FIELD_LENGTH(fields[i]);
             candidates[i] = len && !cimport_context_numeric(ctx,&fields[i]);
@@ -361,10 +375,11 @@ static int cimport_parse_header(CImportContext *ctx) {
         for (int i = 0; i < ctx->num_columns; i++) {
             if (candidates[i]) { ctx->has_header = true; break; }
         }
+        free(candidates);
     }
 
     ctx->columns = ctools_safe_calloc2(ctx->num_columns, sizeof(CImportColumnInfo));
-    if (!ctx->columns) return -1;
+    if (!ctx->columns) { free(fields); return -1; }
 
     char name_buf[CTOOLS_MAX_STRING_LEN];
     for (int i = 0; i < ctx->num_columns; i++) {
@@ -380,6 +395,7 @@ static int cimport_parse_header(CImportContext *ctx) {
         ctx->columns[i].max_strlen = 0;
     }
 
+    free(fields);
     return 0;
 }
 
@@ -721,11 +737,21 @@ static void *cimport_parse_chunk_parallel(void *arg) {
     }
     cimport_init_col_stats(chunk->col_stats, ctx->num_columns);
 
-    CImportFieldRef field_buf[CTOOLS_MAX_COLUMNS];
+    /* 512 KiB of field refs: on the heap, as a worker stack may be no larger. */
+    CImportFieldRef *field_buf = ctools_safe_malloc2(CTOOLS_MAX_COLUMNS, sizeof(CImportFieldRef));
+    if (!field_buf) {
+        atomic_store(&ctx->error_code, 1);
+        return NULL;
+    }
     const char *ptr = task->start;
     const char *end = task->end;
+    bool trailing_empty = task->chunk_id == ctx->num_chunks - 1 && cimport_trailing_empty_line(ctx, end);
 
-    while (ptr < end && atomic_load(&ctx->error_code) == 0) {
+    while ((ptr < end || trailing_empty) && atomic_load(&ctx->error_code) == 0) {
+        if (ptr >= end) {
+            ptr = end - 1;
+            trailing_empty = false;
+        }
         const char *next_row;
         bool had_unmatched;
         int num_fields = cimport_parse_row_fast(ptr, end, ctx->delimiter, ctx->quote_char,
@@ -793,6 +819,7 @@ static void *cimport_parse_chunk_parallel(void *arg) {
         ptr = next_row;
     }
 
+    free(field_buf);
     return NULL;
 }
 
@@ -953,7 +980,10 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
              !strcmp(source_encoding, "latin1") ? "ISO-8859-1"
                                                 : source_encoding);
     ctx->encoding = cimport_parse_encoding_name(source_encoding);
-    /* ASCII can retain the original mapping after statistical recognition. */
+    /* These stateless encodings preserve every ASCII byte. The detector can
+     * select any of its ISO-8859 models even for entirely numeric ASCII text;
+     * keep that reported charset without needlessly transcoding the file.
+     * Explicit names still go through converter validation. */
     bool ascii_fast_path =
         !explicit_encoding &&
         (ctx->encoding == CIMPORT_ENC_UTF8 ||
@@ -961,7 +991,14 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
          ctx->encoding == CIMPORT_ENC_ISO_8859_1 ||
          ctx->encoding == CIMPORT_ENC_ISO_8859_15 ||
          ctx->encoding == CIMPORT_ENC_WINDOWS_1252 ||
-         ctx->encoding == CIMPORT_ENC_MACROMAN) &&
+         ctx->encoding == CIMPORT_ENC_MACROMAN ||
+         !strcmp(source_encoding, "ISO-8859-2") ||
+         !strcmp(source_encoding, "ISO-8859-5") ||
+         !strcmp(source_encoding, "ISO-8859-6") ||
+         !strcmp(source_encoding, "ISO-8859-7") ||
+         !strcmp(source_encoding, "ISO-8859-8") ||
+         !strcmp(source_encoding, "ISO-8859-9") ||
+         !strcmp(source_encoding, "KOI8-R")) &&
         cimport_is_ascii_simd(ctx->file_data, ctx->file_size);
     if (!ascii_fast_path) {
       char *converted = NULL;
@@ -1107,7 +1144,13 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
         }
         cimport_init_col_stats(chunk->col_stats, ctx->num_columns);
 
-        CImportFieldRef field_buf[CTOOLS_MAX_COLUMNS];
+        /* 512 KiB of field refs: on the heap, off the Stata thread's stack. */
+        CImportFieldRef *field_buf = ctools_safe_malloc2(CTOOLS_MAX_COLUMNS, sizeof(CImportFieldRef));
+        if (!field_buf) {
+            cimport_free_context(ctx);
+            return NULL;
+        }
+        bool failed = false;
         const char *ptr = ctx->file_data;
         const char *end = ctx->file_data + ctx->file_size;
 
@@ -1116,7 +1159,12 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
             ptr = cimport_skip_rows(ptr, end, ctx->skip_rows, ctx->quote_char, ctx->bindquotes);
         }
 
-        while (ptr < end) {
+        bool trailing_empty = cimport_trailing_empty_line(ctx, end);
+        while (ptr < end || trailing_empty) {
+            if (ptr >= end) {
+                ptr = end - 1;
+                trailing_empty = false;
+            }
             const char *next_row;
             bool had_unmatched;
             int num_fields = cimport_parse_row_fast(ptr, end, ctx->delimiter, ctx->quote_char,
@@ -1142,18 +1190,18 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
 
             if (chunk->num_rows >= chunk->capacity) {
                 if (chunk->capacity > SIZE_MAX / 2) {
-                    cimport_free_context(ctx);
-                    return NULL;
+                    failed = true;
+                    break;
                 }
                 size_t new_capacity = chunk->capacity * 2;
                 if (new_capacity > SIZE_MAX / sizeof(CImportParsedRow *)) {
-                    cimport_free_context(ctx);
-                    return NULL;
+                    failed = true;
+                    break;
                 }
                 CImportParsedRow **new_rows = realloc(chunk->rows, sizeof(CImportParsedRow *) * new_capacity);
                 if (!new_rows) {
-                    cimport_free_context(ctx);
-                    return NULL;
+                    failed = true;
+                    break;
                 }
                 chunk->rows = new_rows;
                 chunk->capacity = new_capacity;
@@ -1161,8 +1209,8 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
 
             CImportParsedRow *row = ctools_arena_alloc(&chunk->arena, cimport_row_size(num_fields));
             if (!row || !cimport_fill_row(row, field_buf, num_fields)) {
-                cimport_free_context(ctx);
-                return NULL;
+                failed = true;
+                break;
             }
             uint64_t *values = cimport_row_values(row);
             for (int f = 0; f < num_fields; f++) {
@@ -1178,18 +1226,18 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
 
             ptr = next_row;
         }
-    } else {
-        /* Skip rows if requested (for varnames(N) where N > 1) */
-        const char *data_start = ctx->file_data;
-        size_t data_size = ctx->file_size;
-        if (ctx->skip_rows > 0) {
-            data_start = cimport_skip_rows(ctx->file_data, ctx->file_data + ctx->file_size,
-                                           ctx->skip_rows, ctx->quote_char, ctx->bindquotes);
-            data_size = ctx->file_size - (data_start - ctx->file_data);
+        free(field_buf);
+        if (failed) {
+            cimport_free_context(ctx);
+            return NULL;
         }
-
+    } else {
+        /* Start at the first row read, after the varnames(#) skip and the
+         * empty rows emptylines(skip) drops, so chunk 0 always begins with
+         * the header that every consumer skips as its row 0. */
+        size_t start_offset = ctx->first_row_offset;
+        size_t data_size = ctx->file_size - start_offset;
         size_t chunk_size = data_size / num_chunks;
-        size_t start_offset = data_start - ctx->file_data;
 
         size_t *boundaries = ctools_safe_malloc2((size_t)num_chunks + 1, sizeof(size_t));
         if (!boundaries) {
@@ -1222,9 +1270,12 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
         if (!pool_ok) {
             /* Fallback: raw pthreads */
             pthread_t threads[CIMPORT_MAX_THREADS];
+            pthread_attr_t attr;
+            int have_attr = ctools_worker_attr_init(&attr) == 0;
             int threads_created = 0;
             for (int i = 0; i < num_chunks; i++) {
-                if (pthread_create(&threads[threads_created], NULL, cimport_parse_chunk_parallel, &tasks[i]) == 0) {
+                if (pthread_create(&threads[threads_created], have_attr ? &attr : NULL,
+                                   cimport_parse_chunk_parallel, &tasks[i]) == 0) {
                     threads_created++;
                 } else {
                     cimport_parse_chunk_parallel(&tasks[i]);
@@ -1233,6 +1284,7 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
             for (int i = 0; i < threads_created; i++) {
                 pthread_join(threads[i], NULL);
             }
+            if (have_attr) pthread_attr_destroy(&attr);
         }
 
         free(boundaries);
@@ -1249,6 +1301,12 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
     ctx->total_rows = 0;
     for (int c = 0; c < ctx->num_chunks; c++) {
         ctx->total_rows += ctx->chunks[c].num_rows;
+    }
+    /* Every consumer skips row 0 of chunk 0 as the header, so it must be there. */
+    if (ctx->has_header && ctx->total_rows > 0 && ctx->chunks[0].num_rows == 0) {
+        g_cimport_parse_status = 459;
+        cimport_free_context(ctx);
+        return NULL;
     }
     if (ctx->has_header && ctx->total_rows > 0) {
         ctx->total_rows--;
@@ -1424,6 +1482,8 @@ static void *cimport_build_cache_worker(void *arg) {
                         }
                     }
 
+                    /* string_data holds exactly total_rows entries. */
+                    if (row_idx >= ctx->total_rows) {atomic_store(&ctx->error_code,459);free(field_buf);return (void*)1;}
                     cache->string_data[row_idx++] = str;
                 }
             }
@@ -1530,9 +1590,12 @@ static void cimport_build_column_cache(CImportContext *ctx) {
         if (!pool_ok) {
             /* Fallback: raw pthreads */
             pthread_t threads[CIMPORT_MAX_THREADS];
+            pthread_attr_t attr;
+            int have_attr = ctools_worker_attr_init(&attr) == 0;
             int threads_created = 0;
             for (int t = 0; t < num_threads; t++) {
-                if (pthread_create(&threads[threads_created], NULL, cimport_build_cache_worker, &tasks[t]) == 0) {
+                if (pthread_create(&threads[threads_created], have_attr ? &attr : NULL,
+                                   cimport_build_cache_worker, &tasks[t]) == 0) {
                     threads_created++;
                 } else {
                     cimport_build_cache_worker(&tasks[t]);
@@ -1541,6 +1604,7 @@ static void cimport_build_column_cache(CImportContext *ctx) {
             for (int t = 0; t < threads_created; t++) {
                 pthread_join(threads[t], NULL);
             }
+            if (have_attr) pthread_attr_destroy(&attr);
         }
     }
 
@@ -1555,19 +1619,34 @@ static void cimport_build_column_cache(CImportContext *ctx) {
  * Column List Parsing (for numericcols/stringcols options)
  * ============================================================================ */
 
-/* Parse column list from Stata global macro */
-static int *cimport_parse_col_list(const char *macro_name, int *out_count) {
-    char buf[4096];
+/* Parse a column list from the ado's local <macro_name>. The ado also passes
+ * its byte length in <macro_name>_len, so a list that cannot be read whole
+ * fails with 198 instead of losing columns. *out_cols stays NULL when no list
+ * was given (no or zero length). */
+static ST_retcode cimport_parse_col_list(const char *macro_name, int **out_cols, int *out_count) {
+    char name[64], length_text[32] = "";
+    int length;
+    *out_cols = NULL;
     *out_count = 0;
 
-    if (SF_macro_use((char *)macro_name, buf, sizeof(buf)) != 0 || strlen(buf) == 0) {
-        return NULL;
+    snprintf(name, sizeof(name), "%s_len", macro_name);
+    if (SF_macro_use(name, length_text, sizeof(length_text) - 1) != 0) return 198;
+    if (!length_text[0]) return 0;
+    if (!ctools_safe_atoi(length_text, &length) || length < 0 || length > INT_MAX - 2) return 198;
+    if (length == 0) return 0;
+
+    char *buf = calloc((size_t)length + 2, 1);
+    if (!buf) return 920;
+    if (SF_macro_use((char *)macro_name, buf, length + 1) != 0 || strlen(buf) != (size_t)length) {
+        free(buf);
+        return 198;
     }
 
     if (strcmp(buf, "_all") == 0) {
-        int *all = calloc(1, sizeof(int));
-        if (all) *out_count = 1;
-        return all;
+        free(buf);
+        if (!(*out_cols = calloc(1, sizeof(int)))) return 920;
+        *out_count = 1;
+        return 0;
     }
     /* Count tokens */
     int count = 0;
@@ -1579,10 +1658,10 @@ static int *cimport_parse_col_list(const char *macro_name, int *out_count) {
         while (*p && *p != ' ') p++;
     }
 
-    if (count == 0) return NULL;
+    if (count == 0) { free(buf); return 0; }
 
     int *cols = ctools_safe_malloc2(count, sizeof(int));
-    if (!cols) return NULL;
+    if (!cols) { free(buf); return 920; }
 
     /* Parse tokens - use strtol directly since ctools_safe_atoi expects null-terminated strings */
     p = buf;
@@ -1595,15 +1674,32 @@ static int *cimport_parse_col_list(const char *macro_name, int *out_count) {
         long val = strtol(p, &endptr, 10);
         if (errno == ERANGE || endptr == p || val <= 0 || val > INT_MAX) {
             free(cols);
-            return NULL;  /* Invalid column number */
+            free(buf);
+            return 198;  /* Invalid column number */
         }
         cols[idx] = (int)val;
         idx++;
         p = endptr;  /* Move to character after the parsed number */
     }
 
+    free(buf);
+    *out_cols = cols;
     *out_count = idx;
-    return cols;
+    return 0;
+}
+
+/* Read the numericcols() and stringcols() lists; on failure neither is kept. */
+static ST_retcode cimport_parse_col_lists(int **force_num, int *num_force_num,
+                                          int **force_str, int *num_force_str) {
+    ST_retcode rc = cimport_parse_col_list("___cimport_numcols", force_num, num_force_num);
+    if (!rc) rc = cimport_parse_col_list("___cimport_strcols", force_str, num_force_str);
+    if (rc) {
+        free(*force_num);
+        *force_num = NULL;
+        *num_force_num = 0;
+        cimport_display_error("cimport: cannot read numericcols() or stringcols()\n");
+    }
+    return rc;
 }
 
 /* ============================================================================
@@ -1619,9 +1715,9 @@ static ST_retcode cimport_do_scan(const char *filename, char delimiter, bool has
     cimport_clear_cached_context();
 
     /* Parse column type overrides BEFORE parsing CSV so inference runs once with overrides */
-    int num_force_num = 0, num_force_str = 0;
-    int *force_num = cimport_parse_col_list("CIMPORT_NUMCOLS", &num_force_num);
-    int *force_str = cimport_parse_col_list("CIMPORT_STRCOLS", &num_force_str);
+    int num_force_num = 0, num_force_str = 0, *force_num = NULL, *force_str = NULL;
+    ST_retcode list_rc = cimport_parse_col_lists(&force_num, &num_force_num, &force_str, &num_force_str);
+    if (list_rc) return list_rc;
 
     g_cimport_ctx = cimport_parse_csv(filename, delimiter, has_header, skip_rows, verbose, bindquotes,
                                        numeric_type_mode, decimal_sep, group_sep, emptylines_mode, max_quoted_rows,
@@ -1711,10 +1807,17 @@ static ST_retcode cimport_do_scan(const char *filename, char delimiter, bool has
     }
     *p=0;SF_macro_save("_cimport_longtypes",macro_val);
 
-    /* Transport original headings independently, including quotes and spaces. */
-    CImportFieldRef headings[CTOOLS_MAX_COLUMNS];
+    /* Transport original headings independently, including quotes and spaces.
+     * The 512 KiB of field refs live on the heap, off the Stata thread's stack. */
+    CImportFieldRef *headings = NULL;
     int count = 0;
     if (ctx->has_header) {
+        headings = ctools_safe_malloc2(CTOOLS_MAX_COLUMNS, sizeof(CImportFieldRef));
+        if (!headings) {
+            cimport_free_context(g_cimport_ctx);
+            g_cimport_ctx = NULL;
+            return 920;
+        }
         count = cimport_parse_header_row(ctx, headings, NULL, NULL);
     }
     for (int i = 0; i < ctx->num_columns; i++) {
@@ -1723,6 +1826,7 @@ static ST_retcode cimport_do_scan(const char *filename, char delimiter, bool has
         if (i < count) cimport_extract_field_fast(ctx->file_data, &headings[i], value, sizeof(value), cimport_extract_quote(ctx));
         SF_macro_save(key, value);
     }
+    free(headings);
 
     /* Display warnings for malformed data (like Stata) */
     cimport_display_warnings(ctx);
@@ -1826,9 +1930,9 @@ static ST_retcode cimport_do_load(const char *filename, char delimiter, bool has
         cimport_clear_cached_context();
 
         /* Parse column type overrides BEFORE parsing CSV so inference runs once */
-        int num_force_num = 0, num_force_str = 0;
-        int *force_num = cimport_parse_col_list("CIMPORT_NUMCOLS", &num_force_num);
-        int *force_str = cimport_parse_col_list("CIMPORT_STRCOLS", &num_force_str);
+        int num_force_num = 0, num_force_str = 0, *force_num = NULL, *force_str = NULL;
+        ST_retcode list_rc = cimport_parse_col_lists(&force_num, &num_force_num, &force_str, &num_force_str);
+        if (list_rc) return list_rc;
 
         g_cimport_ctx = cimport_parse_csv(filename, delimiter, has_header, skip_rows, verbose, bindquotes,
                                            numeric_type_mode, decimal_sep, group_sep, emptylines_mode, max_quoted_rows,
@@ -1936,11 +2040,12 @@ static ST_retcode cimport_do_load(const char *filename, char delimiter, bool has
 
     /* Save timing and thread diagnostics to Stata scalars (convert ms to seconds) */
     SF_scal_save("_cimport_time_mmap", ctx->time_mmap / 1000.0);
+    SF_scal_save("_cimport_time_encoding", ctx->time_encoding / 1000.0);
     SF_scal_save("_cimport_time_parse", ctx->time_parse / 1000.0);
     SF_scal_save("_cimport_time_infer", ctx->time_type_infer / 1000.0);
     SF_scal_save("_cimport_time_cache", ctx->time_cache / 1000.0);
     SF_scal_save("_cimport_time_store", time_spi / 1000.0);
-    SF_scal_save("_cimport_time_total", (ctx->time_mmap + ctx->time_parse + ctx->time_type_infer + ctx->time_cache + time_spi) / 1000.0);
+    SF_scal_save("_cimport_time_total", (ctx->time_mmap + ctx->time_encoding + ctx->time_parse + ctx->time_type_infer + ctx->time_cache + time_spi) / 1000.0);
     CTOOLS_SAVE_THREAD_INFO("_cimport");
 
     cimport_clear_cached_context();

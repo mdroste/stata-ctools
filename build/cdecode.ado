@@ -1,19 +1,47 @@
 *! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools
 
-program define cdecode, rclass
-    version 14.1
-    preserve
-    capture noisily _cdecode_impl `0'
-    local rc = _rc
-    if `rc' {
-        restore
-        exit `rc'
+* Hand one value label to the plugin as local __cd_map (format: see
+* src/cdecode/cdecode_impl.c). Sets __cd_ok to 0 when decode itself must do the
+* work: an undefined or empty label, a strL result, or a maxlength() cut inside
+* text with multibyte characters, which decode never splits.
+capture mata: mata drop _cdecode_pack()
+mata:
+void _cdecode_pack(string scalar label, real scalar maxlength)
+{
+    real colvector values, lengths
+    string colvector text, entries
+    string scalar packed
+    real scalar i, width
+
+    st_local("__cd_ok", "0")
+    if (!st_vlexists(label)) return
+    st_vlload(label, values, text)
+    if (rows(values) == 0) return
+    lengths = strlen(text)
+    if (maxlength > 0) {
+        for (i = 1; i <= rows(text); i++) {
+            if (lengths[i] > maxlength) {
+                if (max(ascii(text[i])) > 127) return
+                text[i] = substr(text[i], 1, maxlength)
+            }
+        }
+        lengths = strlen(text)
     }
-    return add
-    restore, not
+    /* Like decode, the new variable is as wide as the longest label text. */
+    width = max((1 \ lengths))
+    if (width > 2045) return
+    entries = strtrim(strofreal(values, "%21.0f")) :+ " " :+ strofreal(lengths) :+ " " :+ text
+    packed = strofreal(rows(values)) + " " + invtokens(entries', " ") + " |"
+    if (strlen(packed) != strlen(strofreal(rows(values))) + sum(strlen(entries)) + rows(values) + 2) return
+    if (strlen(packed) >= c("macrolen")) return
+    st_local("__cd_map", packed)
+    st_local("__cd_len", strofreal(strlen(packed), "%21.0f"))
+    st_local("__cd_width", strofreal(width))
+    st_local("__cd_ok", "1")
+}
 end
 
-program define _cdecode_impl, rclass
+program define cdecode, rclass
     version 14.1
     syntax varlist [if] [in], [Generate(string) replace MAXLength(integer 0) Verbose THReads(integer 0)]
 
@@ -26,6 +54,7 @@ program define _cdecode_impl, rclass
         exit 198
     }
     local nvars : word count `varlist'
+    if "`replace'" != "" unab original_order : _all
     if "`generate'" != "" {
         local nout : word count `generate'
         local unique : list uniq generate
@@ -46,35 +75,86 @@ program define _cdecode_impl, rclass
         }
     }
 
-    * Keep labeled missing values in the sample. Native decode retrieves literal
-    * label text directly, including strL labels, without parsing label-save code.
-    marksample touse, novarlist
+    * Several outputs share one sample: evaluate if/in once.
+    local sample `"`if' `in'"'
+    local ifflag = cond(`"`if'"' != "", "ifcond", "")
+    if `nvars' > 1 & `"`if'`in'"' != "" {
+        marksample touse, novarlist
+        local sample "if `touse'"
+        local ifflag "ifcond"
+    }
+    * Without if/in the plugin writes every observation, so its destination
+    * can be created without first being filled.
+    local fill = cond(`"`if'`in'"' == "", "fillall", "")
     local maxopt ""
     if `maxlength' > 0 local maxopt "maxlength(`maxlength')"
+    local threads_code ""
+    if `threads' > 0 local threads_code "threads(`threads')"
+
+    * The plugin is an accelerator only: without it every variable is decoded
+    * by Stata, as are labels the plugin protocol does not cover.
+    local have_plugin = 0
+    capture _ctools_load
+    if !_rc {
+        capture program ctools_plugin, plugin using("`__ctools_plugin'")
+        if _rc == 0 | _rc == 110 local have_plugin = 1
+    }
+    capture confirm number 0
+
+    * Every output is first built under a temporary name. The inputs are not
+    * touched until all variables have been decoded, so a failure or Break
+    * before then leaves the dataset as it was.
     local staged ""
+    local n_plugin = 0
     foreach v of local varlist {
         tempvar decoded
-        quietly decode `v' if `touse', generate(`decoded') `maxopt'
+        local done = 0
+        local __cd_ok = 0
+        if `have_plugin' & `maxlength' <= 32000 & _N > 0 {
+            mata: _cdecode_pack("`: value label `v''", `maxlength')
+        }
+        if `__cd_ok' {
+            mata: (void) st_addvar("str`__cd_width'", "`decoded'", "`fill'" != "")
+            capture plugin call ctools_plugin `v' `decoded' `sample', ///
+                "cdecode `threads_code' v2 maplen=`__cd_len' width=`__cd_width' `ifflag' `fill'"
+            if _rc == 1 exit 1
+            if _rc {
+                drop `decoded'
+            }
+            else {
+                mata: st_varlabel("`decoded'", st_varlabel("`v'"))
+                local done = 1
+                local ++n_plugin
+            }
+        }
+        local __cd_map ""
+        if !`done' {
+            quietly decode `v' `sample', generate(`decoded') `maxopt'
+        }
         local staged `staged' `decoded'
     }
 
-    local i = 0
-    foreach v of local varlist {
-        local ++i
-        local decoded : word `i' of `staged'
-        if "`replace'" != "" {
-            order `decoded', before(`v')
-            drop `v'
-            rename `decoded' `v'
+    * st_varrename() is built in; rename is an ado file whose first use in a
+    * session costs about 10 ms. One order for all outputs moves the data once.
+    nobreak {
+        local i = 0
+        foreach v of local varlist {
+            local ++i
+            local decoded : word `i' of `staged'
+            if "`replace'" != "" drop `v'
+            else local v : word `i' of `generate'
+            mata: st_varrename("`decoded'", "`v'")
         }
-        else {
-            local target : word `i' of `generate'
-            rename `decoded' `target'
-        }
+        if "`replace'" != "" order `original_order'
     }
     if "`verbose'" != "" {
-        di as text "cdecode: decoded `nvars' variable(s) with Stata's value-label engine"
-        di as text "threads() is retained for syntax compatibility; decoding is managed by Stata"
+        di as text "cdecode: decoded `nvars' variable(s): `n_plugin' in the ctools plugin, " ///
+            "`=`nvars' - `n_plugin'' with Stata's decode"
+        if `n_plugin' > 0 {
+            capture local __threads_max = _cdecode_threads_max
+            if !_rc di as text "  threads available: `__threads_max'"
+        }
     }
     return scalar N_vars = `nvars'
+    return scalar N_plugin = `n_plugin'
 end

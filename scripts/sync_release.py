@@ -21,7 +21,7 @@ def generated():
 #endif
 #endif
 '''
-    for filename in ("README.md", "build/ctools.ado", "build/ctools.sthlp", "build/ctools.pkg"):
+    for filename in ("README.md", "package/ado/ctools.ado", "package/help/ctools.sthlp", "package/metadata/ctools.pkg"):
         text = (ROOT / filename).read_text()
         if filename == "README.md":
             text = re.sub(r"!\[Version\]\([^\n]+\)", f"![Version](https://img.shields.io/badge/version-{v}-blue)", text)

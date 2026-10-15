@@ -19,156 +19,56 @@ void cqreg_ipm_config_init(cqreg_ipm_config *config)
     if (config == NULL) return;
 
     config->maxiter = CQREG_DEFAULT_MAXITER;
-    config->tol_primal = CQREG_DEFAULT_TOL;
-    config->tol_dual = CQREG_DEFAULT_TOL;
     config->tol_gap = CQREG_DEFAULT_TOL;
     config->verbose = 0;
-    config->use_mehrotra = 1;
     config->skip_crossover = 0;
-    config->mu_init = CQREG_DEFAULT_MU_INIT;
-    config->sigma = CQREG_DEFAULT_SIGMA;
 }
 
 /* ============================================================================
  * IPM State Management
  * ============================================================================ */
 
-cqreg_ipm_state *cqreg_ipm_create(ST_int N, ST_int K, const cqreg_ipm_config *config)
+/*
+ * Frisch-Newton workspace of cqreg_fn_solve: 17 N-sized and 2 K-sized arrays.
+ * Returns 0, or -1 on overflow or allocation failure; the caller releases
+ * whatever was allocated with cqreg_ipm_free().
+ */
+static int cqreg_ipm_alloc_fn_workspace(cqreg_ipm_state *ipm)
 {
-    cqreg_ipm_state *ipm = NULL;
-    ST_int t;
+    size_t n_size, k_size;
 
-    if (N <= 0 || K <= 0) return NULL;
-
-    ipm = (cqreg_ipm_state *)calloc(1, sizeof(cqreg_ipm_state));
-    if (ipm == NULL) return NULL;
-
-    ipm->N = N;
-    ipm->K = K;
-
-    /* Copy configuration */
-    if (config != NULL) {
-        memcpy(&ipm->config, config, sizeof(cqreg_ipm_config));
-    } else {
-        cqreg_ipm_config_init(&ipm->config);
+    if (ctools_safe_mul_size((size_t)ipm->N, sizeof(ST_double), &n_size) != 0 ||
+        ctools_safe_mul_size((size_t)ipm->K, sizeof(ST_double), &k_size) != 0) {
+        return -1;
     }
 
-    /* Determine thread count using unified policy */
-    ipm->num_threads = ctools_get_max_threads();
-
-    /* Allocate coefficient vector */
-    ipm->beta = (ST_double *)ctools_cacheline_alloc(K * sizeof(ST_double));
-    if (ipm->beta == NULL) goto cleanup;
-
-    /* Allocate primal variables */
-    ipm->u = (ST_double *)ctools_cacheline_alloc(N * sizeof(ST_double));
-    ipm->v = (ST_double *)ctools_cacheline_alloc(N * sizeof(ST_double));
-    if (ipm->u == NULL || ipm->v == NULL) goto cleanup;
-
-    /* Allocate dual variables */
-    ipm->lambda_u = (ST_double *)ctools_cacheline_alloc(N * sizeof(ST_double));
-    ipm->lambda_v = (ST_double *)ctools_cacheline_alloc(N * sizeof(ST_double));
-    if (ipm->lambda_u == NULL || ipm->lambda_v == NULL) goto cleanup;
-
-    /* Allocate diagonal scaling */
-    ipm->D = (ST_double *)ctools_cacheline_alloc(N * sizeof(ST_double));
-    if (ipm->D == NULL) goto cleanup;
-
-    /* Compute K*K size with overflow check */
-    size_t kk_size;
-    if (ctools_safe_alloc_size((size_t)K, (size_t)K, sizeof(ST_double), &kk_size) != 0) {
-        goto cleanup;  /* Overflow */
-    }
-
-    /* Allocate normal equations storage */
-    ipm->XDX = (ST_double *)ctools_cacheline_alloc(kk_size);
-    ipm->XDXcopy = (ST_double *)ctools_cacheline_alloc(kk_size);
-    ipm->L = (ST_double *)ctools_cacheline_alloc(kk_size);
-    ipm->rhs = (ST_double *)ctools_cacheline_alloc(K * sizeof(ST_double));
-    if (ipm->XDX == NULL || ipm->XDXcopy == NULL || ipm->L == NULL || ipm->rhs == NULL) goto cleanup;
-
-    /* Allocate search directions */
-    ipm->delta_beta = (ST_double *)ctools_cacheline_alloc(K * sizeof(ST_double));
-    ipm->delta_u = (ST_double *)ctools_cacheline_alloc(N * sizeof(ST_double));
-    ipm->delta_v = (ST_double *)ctools_cacheline_alloc(N * sizeof(ST_double));
-    ipm->delta_lambda_u = (ST_double *)ctools_cacheline_alloc(N * sizeof(ST_double));
-    ipm->delta_lambda_v = (ST_double *)ctools_cacheline_alloc(N * sizeof(ST_double));
-    if (ipm->delta_beta == NULL || ipm->delta_u == NULL || ipm->delta_v == NULL ||
-        ipm->delta_lambda_u == NULL || ipm->delta_lambda_v == NULL) goto cleanup;
-
-    /* Allocate Mehrotra affine directions */
-    ipm->delta_u_aff = (ST_double *)ctools_cacheline_alloc(N * sizeof(ST_double));
-    ipm->delta_v_aff = (ST_double *)ctools_cacheline_alloc(N * sizeof(ST_double));
-    ipm->delta_lambda_u_aff = (ST_double *)ctools_cacheline_alloc(N * sizeof(ST_double));
-    ipm->delta_lambda_v_aff = (ST_double *)ctools_cacheline_alloc(N * sizeof(ST_double));
-    if (ipm->delta_u_aff == NULL || ipm->delta_v_aff == NULL ||
-        ipm->delta_lambda_u_aff == NULL || ipm->delta_lambda_v_aff == NULL) goto cleanup;
-
-    /* Allocate residuals */
-    ipm->r_primal = (ST_double *)ctools_cacheline_alloc(N * sizeof(ST_double));
-    ipm->r_dual = (ST_double *)ctools_cacheline_alloc(K * sizeof(ST_double));
-    if (ipm->r_primal == NULL || ipm->r_dual == NULL) goto cleanup;
-
-    /* LP basis found by the crossover */
-    ipm->basis = (ST_int *)ctools_cacheline_alloc(K * sizeof(ST_int));
-    if (ipm->basis == NULL) goto cleanup;
-
-    /* Allocate working arrays */
-    ipm->work_N = (ST_double *)ctools_cacheline_alloc(N * sizeof(ST_double));
-    ipm->work_K = (ST_double *)ctools_cacheline_alloc(K * sizeof(ST_double));
-    if (ipm->work_N == NULL || ipm->work_K == NULL) goto cleanup;
-
-    /* Allocate per-thread buffers */
-    ipm->thread_buf = (ST_double **)calloc(ipm->num_threads, sizeof(ST_double *));
-    if (ipm->thread_buf == NULL) goto cleanup;
-
-    for (t = 0; t < ipm->num_threads; t++) {
-        ipm->thread_buf[t] = (ST_double *)ctools_cacheline_alloc(N * sizeof(ST_double));
-        if (ipm->thread_buf[t] == NULL) goto cleanup;
-    }
-
-    /* FN only stores the weighted RHS here, not a scaled design matrix. */
-    size_t n_size;
-    if (ctools_safe_mul_size((size_t)N, sizeof(ST_double), &n_size) != 0) {
-        goto cleanup;  /* Overflow */
-    }
-
-    /* Allocate Frisch-Newton solver workspace */
-    ipm->fn_xp = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
-    ipm->fn_s = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
-    ipm->fn_yd = (ST_double *)ctools_cacheline_alloc((size_t)K * sizeof(ST_double));
-    ipm->fn_z = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
-    ipm->fn_w = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
-    ipm->fn_dx = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
-    ipm->fn_ds = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
-    ipm->fn_dy = (ST_double *)ctools_cacheline_alloc((size_t)K * sizeof(ST_double));
-    ipm->fn_dz = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
-    ipm->fn_dw = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
-    ipm->fn_fx = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
-    ipm->fn_fs = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
-    ipm->fn_fz = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
-    ipm->fn_fw = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
-    ipm->fn_q = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
-    ipm->fn_r = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
-    ipm->fn_tmp = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
-    ipm->fn_sinv = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
+    ipm->fn_xp = (ST_double *)ctools_cacheline_alloc(n_size);
+    ipm->fn_s = (ST_double *)ctools_cacheline_alloc(n_size);
+    ipm->fn_yd = (ST_double *)ctools_cacheline_alloc(k_size);
+    ipm->fn_z = (ST_double *)ctools_cacheline_alloc(n_size);
+    ipm->fn_w = (ST_double *)ctools_cacheline_alloc(n_size);
+    ipm->fn_dx = (ST_double *)ctools_cacheline_alloc(n_size);
+    ipm->fn_ds = (ST_double *)ctools_cacheline_alloc(n_size);
+    ipm->fn_dy = (ST_double *)ctools_cacheline_alloc(k_size);
+    ipm->fn_dz = (ST_double *)ctools_cacheline_alloc(n_size);
+    ipm->fn_dw = (ST_double *)ctools_cacheline_alloc(n_size);
+    ipm->fn_fx = (ST_double *)ctools_cacheline_alloc(n_size);
+    ipm->fn_fs = (ST_double *)ctools_cacheline_alloc(n_size);
+    ipm->fn_fz = (ST_double *)ctools_cacheline_alloc(n_size);
+    ipm->fn_fw = (ST_double *)ctools_cacheline_alloc(n_size);
+    ipm->fn_q = (ST_double *)ctools_cacheline_alloc(n_size);
+    ipm->fn_r = (ST_double *)ctools_cacheline_alloc(n_size);
+    ipm->fn_tmp = (ST_double *)ctools_cacheline_alloc(n_size);
+    ipm->fn_sinv = (ST_double *)ctools_cacheline_alloc(n_size);
+    /* The weighted right-hand side, not a scaled design matrix */
     ipm->fn_Xq = (ST_double *)ctools_cacheline_alloc(n_size);
+
     if (!ipm->fn_xp || !ipm->fn_s || !ipm->fn_yd || !ipm->fn_z || !ipm->fn_w ||
         !ipm->fn_dx || !ipm->fn_ds || !ipm->fn_dy || !ipm->fn_dz || !ipm->fn_dw ||
         !ipm->fn_fx || !ipm->fn_fs || !ipm->fn_fz || !ipm->fn_fw ||
         !ipm->fn_q || !ipm->fn_r || !ipm->fn_tmp || !ipm->fn_sinv || !ipm->fn_Xq)
-        goto cleanup;
-
-    /* Initialize convergence tracking */
-    ipm->mu = ipm->config.mu_init;
-    ipm->converged = 0;
-    ipm->iterations = 0;
-
-    return ipm;
-
-cleanup:
-    cqreg_ipm_free(ipm);
-    return NULL;
+        return -1;
+    return 0;
 }
 
 cqreg_ipm_state *cqreg_ipm_create_lite(ST_int N, ST_int K, const cqreg_ipm_config *config)
@@ -177,8 +77,8 @@ cqreg_ipm_state *cqreg_ipm_create_lite(ST_int N, ST_int K, const cqreg_ipm_confi
 
     if (N <= 0 || K <= 0) return NULL;
 
-    /* calloc zeros all pointers to NULL, so cqreg_ipm_free works correctly
-     * even though we skip allocating most fields */
+    /* calloc zeros all pointers to NULL, so cqreg_ipm_free works after a
+     * partial allocation and when the crossover arrays are skipped */
     ipm = (cqreg_ipm_state *)calloc(1, sizeof(cqreg_ipm_state));
     if (ipm == NULL) return NULL;
 
@@ -191,19 +91,11 @@ cqreg_ipm_state *cqreg_ipm_create_lite(ST_int N, ST_int K, const cqreg_ipm_confi
         cqreg_ipm_config_init(&ipm->config);
     }
 
-    ipm->num_threads = 0;  /* No thread_buf allocated */
-
     /* Compute sizes with overflow check */
     size_t kk_size;
     if (ctools_safe_alloc_size((size_t)K, (size_t)K, sizeof(ST_double), &kk_size) != 0) {
         goto cleanup;
     }
-    size_t n_size;
-    if (ctools_safe_mul_size((size_t)N, sizeof(ST_double), &n_size) != 0) {
-        goto cleanup;
-    }
-
-    /* Only allocate arrays that cqreg_fn_solve actually uses */
 
     /* beta (K) - stores result */
     ipm->beta = (ST_double *)ctools_cacheline_alloc(K * sizeof(ST_double));
@@ -223,33 +115,8 @@ cqreg_ipm_state *cqreg_ipm_create_lite(ST_int N, ST_int K, const cqreg_ipm_confi
         if (!ipm->r_primal || !ipm->u || !ipm->v || !ipm->basis) goto cleanup;
     }
 
-    /* Frisch-Newton workspace: 17 N-sized and 2 K-sized arrays. */
-    ipm->fn_xp = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
-    ipm->fn_s = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
-    ipm->fn_yd = (ST_double *)ctools_cacheline_alloc((size_t)K * sizeof(ST_double));
-    ipm->fn_z = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
-    ipm->fn_w = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
-    ipm->fn_dx = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
-    ipm->fn_ds = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
-    ipm->fn_dy = (ST_double *)ctools_cacheline_alloc((size_t)K * sizeof(ST_double));
-    ipm->fn_dz = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
-    ipm->fn_dw = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
-    ipm->fn_fx = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
-    ipm->fn_fs = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
-    ipm->fn_fz = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
-    ipm->fn_fw = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
-    ipm->fn_q = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
-    ipm->fn_r = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
-    ipm->fn_tmp = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
-    ipm->fn_sinv = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
-    ipm->fn_Xq = (ST_double *)ctools_cacheline_alloc(n_size);
-    if (!ipm->fn_xp || !ipm->fn_s || !ipm->fn_yd || !ipm->fn_z || !ipm->fn_w ||
-        !ipm->fn_dx || !ipm->fn_ds || !ipm->fn_dy || !ipm->fn_dz || !ipm->fn_dw ||
-        !ipm->fn_fx || !ipm->fn_fs || !ipm->fn_fz || !ipm->fn_fw ||
-        !ipm->fn_q || !ipm->fn_r || !ipm->fn_tmp || !ipm->fn_sinv || !ipm->fn_Xq)
-        goto cleanup;
+    if (cqreg_ipm_alloc_fn_workspace(ipm) != 0) goto cleanup;
 
-    ipm->mu = ipm->config.mu_init;
     ipm->converged = 0;
     ipm->iterations = 0;
 
@@ -262,59 +129,17 @@ cleanup:
 
 void cqreg_ipm_free(cqreg_ipm_state *ipm)
 {
-    ST_int t;
-
     if (ipm == NULL) return;
 
-    /* Free coefficient vector */
     ctools_aligned_free(ipm->beta);
-
-    /* Free primal variables */
-    ctools_aligned_free(ipm->u);
-    ctools_aligned_free(ipm->v);
-
-    /* Free dual variables */
-    ctools_aligned_free(ipm->lambda_u);
-    ctools_aligned_free(ipm->lambda_v);
-
-    /* Free diagonal scaling */
-    ctools_aligned_free(ipm->D);
-
-    /* Free normal equations storage */
     ctools_aligned_free(ipm->XDX);
-    ctools_aligned_free(ipm->XDXcopy);
-    ctools_aligned_free(ipm->L);
     ctools_aligned_free(ipm->rhs);
 
-    /* Free search directions */
-    ctools_aligned_free(ipm->delta_beta);
-    ctools_aligned_free(ipm->delta_u);
-    ctools_aligned_free(ipm->delta_v);
-    ctools_aligned_free(ipm->delta_lambda_u);
-    ctools_aligned_free(ipm->delta_lambda_v);
-
-    /* Free Mehrotra affine directions */
-    ctools_aligned_free(ipm->delta_u_aff);
-    ctools_aligned_free(ipm->delta_v_aff);
-    ctools_aligned_free(ipm->delta_lambda_u_aff);
-    ctools_aligned_free(ipm->delta_lambda_v_aff);
-
-    /* Free residuals and basis */
+    /* Crossover results and basis */
+    ctools_aligned_free(ipm->u);
+    ctools_aligned_free(ipm->v);
     ctools_aligned_free(ipm->r_primal);
-    ctools_aligned_free(ipm->r_dual);
     ctools_aligned_free(ipm->basis);
-
-    /* Free working arrays */
-    ctools_aligned_free(ipm->work_N);
-    ctools_aligned_free(ipm->work_K);
-
-    /* Free per-thread buffers */
-    if (ipm->thread_buf != NULL) {
-        for (t = 0; t < ipm->num_threads; t++) {
-            ctools_aligned_free(ipm->thread_buf[t]);
-        }
-        free(ipm->thread_buf);
-    }
 
     /* Free Frisch-Newton solver workspace */
     ctools_aligned_free(ipm->fn_xp);
@@ -338,6 +163,28 @@ void cqreg_ipm_free(cqreg_ipm_state *ipm)
     ctools_aligned_free(ipm->fn_Xq);
 
     free(ipm);
+}
+
+ST_double cqreg_ipm_get_objective(const cqreg_ipm_state *ipm, ST_double q)
+{
+    ST_int N = ipm->N;
+    ST_double obj = 0.0;
+
+    for (ST_int i = 0; i < N; i++) {
+        obj += q * ipm->u[i] + (1.0 - q) * ipm->v[i];
+    }
+
+    return obj;
+}
+
+void cqreg_ipm_get_residuals(const cqreg_ipm_state *ipm, ST_double *residuals)
+{
+    ST_int N = ipm->N;
+
+    /* Residuals = u - v */
+    for (ST_int i = 0; i < N; i++) {
+        residuals[i] = ipm->u[i] - ipm->v[i];
+    }
 }
 
 /* ============================================================================

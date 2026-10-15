@@ -8,7 +8,7 @@
 {title:Title}
 
 {phang}
-{bf:cdecode} {hline 2} Literal value-label decoding with multiple-variable and replace support
+{bf:cdecode} {hline 2} Fast value-label decoding with multiple-variable and replace support
 
 
 {marker syntax}{...}
@@ -29,8 +29,8 @@
 
 {syntab:Options}
 {synopt:{opth maxl:ength(#)}}maximum string length for new variables{p_end}
-{synopt:{opt thr:eads(#)}}accepted for compatibility; native decoding controls execution{p_end}
-{synopt:{opt v:erbose}}report use of the native decoding engine{p_end}
+{synopt:{opt thr:eads(#)}}maximum number of threads for the ctools plugin{p_end}
+{synopt:{opt v:erbose}}report how each variable was decoded{p_end}
 {synoptline}
 
 
@@ -39,9 +39,18 @@
 
 {pstd}
 {cmd:cdecode} extends Stata's {help decode:decode} command to multiple variables
-and transactional replacement. It uses Stata's native value-label engine to
-preserve literal text, labeled extended missing values, and long strL labels. It converts numeric variables with value labels to string variables
-containing the label text.
+and transactional replacement. It converts numeric variables with value labels
+to string variables containing the label text, and produces the same values and
+storage types as {cmd:decode}, including literal text and labeled extended
+missing values.
+
+{pstd}
+Label text is read directly from Stata and written by the ctools plugin in
+parallel. Results that the plugin does not produce are decoded by {cmd:decode}
+itself: strL results (label text longer than 2,045 bytes), {opt maxlength()}
+cuts within text containing multibyte characters, and any call for which the
+plugin is unavailable. {cmd:r(N_plugin)} reports how many variables the plugin
+decoded.
 
 {pstd}
 The source variables must be numeric and have value labels attached. For each
@@ -86,17 +95,18 @@ You must specify either {opt generate()} or {opt replace}, but not both.
 
 {phang}
 {opth maxlength(#)} specifies the maximum string length for the new variables.
-By default, native {cmd:decode} determines the output type, including strL for
-long labels. {cmd:maxlength()} uses native decode's length and truncation rules. Use this option to truncate
+By default, the output type follows {cmd:decode}, including strL for
+long labels. {cmd:maxlength()} follows {cmd:decode}'s length and truncation rules. Use this option to truncate
 labels to a specific length.
 
 {phang}
-{opt threads(#)} is retained for syntax compatibility and does not control
-Stata's native decoding engine. The legacy C label-save parser is no longer used.
+{opt threads(#)} limits the number of threads the ctools plugin uses. The
+default is all available processors. It has no effect on variables decoded by
+{cmd:decode} itself.
 
 {phang}
-{opt verbose} reports use of the native decoding engine and the number of
-variables decoded.
+{opt verbose} reports the number of variables decoded by the ctools plugin and
+by {cmd:decode}.
 
 
 {marker examples}{...}
@@ -140,6 +150,7 @@ variables decoded.
 {synoptset 24 tabbed}{...}
 {p2col 5 24 28 2: Scalars}{p_end}
 {synopt:{cmd:r(N_vars)}}number of variables decoded{p_end}
+{synopt:{cmd:r(N_plugin)}}number of those decoded by the ctools plugin{p_end}
 
 
 {title:Author}

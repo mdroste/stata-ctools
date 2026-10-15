@@ -1,7 +1,7 @@
 """Prepare and summarize isolated real-Stata transport comparisons.
 
 This program NEVER launches Stata. It writes frozen benchmark plugins, do-files,
-a manifest, and a run-plan.tsv of exact oldstata commands for sequential execution.
+a manifest, and a run-plan.tsv of exact stata commands for sequential execution.
 Each process loads one plugin only. Blocks alternate variant order (AB, BA), and
 summaries first reduce repetitions to process medians to avoid pseudoreplication.
 
@@ -49,9 +49,9 @@ EXAMPLE = [
 ]
 
 
-def oldstata_command(driver):
+def stata_command(driver):
     """Use the user's required machine-wide Stata wrapper, never a direct binary."""
-    return ['/bin/zsh', '-lic', 'oldstata -q -b do '+shlex.quote(str(driver))]
+    return ['/bin/zsh', '-lic', 'stata -q -b do '+shlex.quote(str(driver))]
 
 
 def sha(path):
@@ -151,6 +151,9 @@ def compile_plugin(source, binary, harness, flags):
            *flags, str(harness),
            *[str(source/f) for f in ('stplugin.c', 'ctools_data_io.c', 'ctools_types.c',
                                      'ctools_threads.c', 'ctools_arena.c')],
+           *[str(source/f) for f in ('ctools_transport.c', 'ctools_data_plan.c',
+                                     'ctools_data_store.c', 'ctools_platform.c')
+             if (source/f).exists()],
            str(prefix/'lib/libomp.a'), '-o', str(binary)]
     subprocess.run(cmd, check=True)
     return cmd
@@ -255,7 +258,7 @@ def prepare(args):
                 prefix = ['/usr/bin/time', '-l']
                 if environment:
                     prefix += ['env', *[key+'='+value for key, value in environment.items()]]
-                command = shlex.join([*prefix, *oldstata_command(driver)])+' 2>'+shlex.quote(str(resource))
+                command = shlex.join([*prefix, *stata_command(driver)])+' 2>'+shlex.quote(str(resource))
                 runs.append(dict(name=name, block=block, variant=v['name'], cases=[c['name'] for c in group],
                                  driver=str(driver), log=str(directory/'transport.log'),
                                  resources=str(resource), command=command))

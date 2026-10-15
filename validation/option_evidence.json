@@ -1,0 +1,1082 @@
+{
+  "cbinscatter": {
+    "genxq": {
+      "kind": "unsupported",
+      "reason": "The command explicitly rejects this interface; rejection and unchanged data are asserted.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "genxq(unimplemented)"
+        }
+      ]
+    },
+    "savedata": {
+      "kind": "contract",
+      "reason": "Saved coordinates and bin counts must equal the fully checked bin matrix across three fixtures.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "savedata all bin values and counts"
+        }
+      ]
+    },
+    "method": {
+      "kind": "differential",
+      "reason": "Native binsreg bin coordinates and counts are checked at seven significant digits across controls, weights, absorption, and filters.",
+      "evidence": [
+        {
+          "path": "validation/validate_cbinscatter.do",
+          "anchor": "program define compare_binsreg_bins"
+        }
+      ]
+    },
+    "msymbols": {
+      "kind": "contract",
+      "reason": "Numerical bin comparisons are supplemented by rendered SVG properties and independent regression coefficients.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "Check actual rendered marker shapes/colors/text"
+        }
+      ]
+    },
+    "mlabels": {
+      "kind": "contract",
+      "reason": "Numerical bin comparisons are supplemented by rendered SVG properties and independent regression coefficients.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "Check actual rendered marker shapes/colors/text"
+        }
+      ]
+    },
+    "legend": {
+      "kind": "contract",
+      "reason": "Numerical bin comparisons are supplemented by rendered SVG properties and independent regression coefficients.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "Check actual rendered marker shapes/colors/text"
+        }
+      ]
+    },
+    "title": {
+      "kind": "contract",
+      "reason": "Numerical bin comparisons are supplemented by rendered SVG properties and independent regression coefficients.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "Check actual rendered marker shapes/colors/text"
+        }
+      ]
+    },
+    "xtitle": {
+      "kind": "contract",
+      "reason": "Numerical bin comparisons are supplemented by rendered SVG properties and independent regression coefficients.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "Check actual rendered marker shapes/colors/text"
+        }
+      ]
+    },
+    "ytitle": {
+      "kind": "contract",
+      "reason": "Numerical bin comparisons are supplemented by rendered SVG properties and independent regression coefficients.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "Check actual rendered marker shapes/colors/text"
+        }
+      ]
+    },
+    "colors": {
+      "kind": "contract",
+      "reason": "Numerical bin comparisons are supplemented by rendered SVG properties and independent regression coefficients.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "Check actual rendered marker shapes/colors/text"
+        }
+      ]
+    },
+    "reportreg": {
+      "kind": "contract",
+      "reason": "Numerical bin comparisons are supplemented by rendered SVG properties and independent regression coefficients.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "Check actual rendered marker shapes/colors/text"
+        }
+      ]
+    },
+    "linetype": {
+      "kind": "contract",
+      "reason": "Numerical bin comparisons are supplemented by rendered SVG properties and independent regression coefficients.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "Check actual rendered marker shapes/colors/text"
+        }
+      ]
+    }
+  },
+  "cbsample": {
+    "weight": {
+      "kind": "contract",
+      "reason": "Weights must be nonnegative integer frequencies with native draw totals; repeated-seed tests check the inclusion distribution.",
+      "evidence": [
+        {
+          "path": "validation/coverage_helpers.do",
+          "anchor": "program define coverage_weighted_bootstrap"
+        }
+      ]
+    }
+  },
+  "cexport": {
+    "replace": {
+      "kind": "differential",
+      "reason": "Native read-back comparisons reuse output files with changed contents and verify values and metadata.",
+      "evidence": [
+        {
+          "path": "validation/validate_io_formats.do",
+          "anchor": "cio_export_test"
+        }
+      ]
+    },
+    "keepcellfmt": {
+      "kind": "differential",
+      "reason": "Native workbook mutations compare every affected sheet; Python also verifies styles and formulas.",
+      "evidence": [
+        {
+          "path": "validation/validate_io_excel_options.do",
+          "anchor": "sheet(Original, modify) keepcellfmt"
+        }
+      ]
+    },
+    "sheetmodify": {
+      "kind": "differential",
+      "reason": "Native workbook mutations compare every affected sheet; Python also verifies styles and formulas.",
+      "evidence": [
+        {
+          "path": "validation/validate_io_excel_options.do",
+          "anchor": "sheet(Original, modify) keepcellfmt"
+        }
+      ]
+    },
+    "sheetreplace": {
+      "kind": "differential",
+      "reason": "Native workbook mutations compare every affected sheet; Python also verifies styles and formulas.",
+      "evidence": [
+        {
+          "path": "validation/validate_io_excel_options.do",
+          "anchor": "sheet(Original, modify) keepcellfmt"
+        }
+      ]
+    },
+    "novallabels": {
+      "kind": "differential",
+      "reason": "Native SPSS output is read back and exact values, metadata, and label definitions are compared.",
+      "evidence": [
+        {
+          "path": "validation/validate_io_formats.do",
+          "anchor": "SPSS no value labels"
+        }
+      ]
+    },
+    "rename": {
+      "kind": "differential",
+      "reason": "XPORT name collisions and format-label companion choices are compared to native output.",
+      "evidence": [
+        {
+          "path": "validation/validate_io_formats.do",
+          "anchor": "XPORT5 renamed collisions"
+        }
+      ]
+    },
+    "vallabfile": {
+      "kind": "differential",
+      "reason": "XPORT name collisions and format-label companion choices are compared to native output.",
+      "evidence": [
+        {
+          "path": "validation/validate_io_formats.do",
+          "anchor": "XPORT5 renamed collisions"
+        }
+      ]
+    },
+    "version": {
+      "kind": "differential",
+      "reason": "Native DBF version 3 output is checked; invalid version return codes are also compared.",
+      "evidence": [
+        {
+          "path": "validation/validate_io_excel_options.do",
+          "anchor": "DBF version(3)"
+        }
+      ]
+    },
+    "origdbfdate": {
+      "kind": "differential",
+      "reason": "Three original dates are checked using native read-back and exact header bytes.",
+      "evidence": [
+        {
+          "path": "validation/validate_io_formats.do",
+          "anchor": "dBase original date bytes"
+        }
+      ]
+    },
+    "id": {
+      "kind": "differential",
+      "reason": "Multiple geometry types compare native export with explicit, shifted identifiers while retaining native-required _ID.",
+      "evidence": [
+        {
+          "path": "validation/validate_io_formats.do",
+          "anchor": "explicit identifier"
+        }
+      ]
+    },
+    "shx": {
+      "kind": "differential",
+      "reason": "Multiple geometry types are compared with native export, including renamed identifiers.",
+      "evidence": [
+        {
+          "path": "validation/validate_io_formats.do",
+          "anchor": "explicit identifier"
+        }
+      ]
+    },
+    "quote": {
+      "kind": "differential",
+      "reason": "Byte-level CSV checks supplement native read-back so ignored formatting options fail. CRLF translates native line endings; noquoteif asserts the documented raw-field extension.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "/* Format switches must affect file bytes, not just equivalent read-back. */"
+        }
+      ]
+    },
+    "novarnames": {
+      "kind": "differential",
+      "reason": "Byte-level CSV checks supplement native read-back so ignored formatting options fail. CRLF translates native line endings; noquoteif asserts the documented raw-field extension.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "/* Format switches must affect file bytes, not just equivalent read-back. */"
+        }
+      ]
+    },
+    "nolabel": {
+      "kind": "differential",
+      "reason": "Byte-level CSV checks supplement native read-back so ignored formatting options fail. CRLF translates native line endings; noquoteif asserts the documented raw-field extension.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "/* Format switches must affect file bytes, not just equivalent read-back. */"
+        }
+      ]
+    },
+    "delimiter": {
+      "kind": "differential",
+      "reason": "Byte-level CSV checks supplement native read-back so ignored formatting options fail. CRLF translates native line endings; noquoteif asserts the documented raw-field extension.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "/* Format switches must affect file bytes, not just equivalent read-back. */"
+        }
+      ]
+    },
+    "datafmt": {
+      "kind": "differential",
+      "reason": "Byte-level CSV checks supplement native read-back so ignored formatting options fail. CRLF translates native line endings; noquoteif asserts the documented raw-field extension.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "/* Format switches must affect file bytes, not just equivalent read-back. */"
+        }
+      ]
+    },
+    "crlf": {
+      "kind": "differential",
+      "reason": "Byte-level CSV checks supplement native read-back so ignored formatting options fail. CRLF translates native line endings; noquoteif asserts the documented raw-field extension.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "/* Format switches must affect file bytes, not just equivalent read-back. */"
+        }
+      ]
+    },
+    "noquoteif": {
+      "kind": "contract",
+      "reason": "Byte-level CSV checks supplement native read-back so ignored formatting options fail. CRLF translates native line endings; noquoteif asserts the documented raw-field extension.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "/* Format switches must affect file bytes, not just equivalent read-back. */"
+        }
+      ]
+    }
+  },
+  "cimport": {
+    "allstring": {
+      "kind": "differential",
+      "reason": "Native XLS/XLSX imports compare values and metadata under several numeric/date/string display formats. allstringfmt is the internal adapter spelling.",
+      "evidence": [
+        {
+          "path": "validation/validate_io_excel_options.do",
+          "anchor": "allstring(%21x)"
+        }
+      ]
+    },
+    "allstringfmt": {
+      "kind": "differential",
+      "reason": "Native XLS/XLSX imports compare values and metadata under several numeric/date/string display formats. allstringfmt is the internal adapter spelling.",
+      "evidence": [
+        {
+          "path": "validation/validate_io_excel_options.do",
+          "anchor": "allstring(%21x)"
+        }
+      ]
+    },
+    "sheet": {
+      "kind": "differential",
+      "reason": "Named sheets, explicit ranges, selectors, headers, dates, and Unicode are compared with native imports.",
+      "evidence": [
+        {
+          "path": "validation/validate_io_formats.do",
+          "anchor": "XLSX explicit columns"
+        }
+      ]
+    },
+    "cellrange": {
+      "kind": "differential",
+      "reason": "Named sheets, explicit ranges, selectors, headers, dates, and Unicode are compared with native imports.",
+      "evidence": [
+        {
+          "path": "validation/validate_io_formats.do",
+          "anchor": "XLSX explicit columns"
+        }
+      ]
+    },
+    "firstrow": {
+      "kind": "differential",
+      "reason": "Named sheets, explicit ranges, selectors, headers, dates, and Unicode are compared with native imports.",
+      "evidence": [
+        {
+          "path": "validation/validate_io_formats.do",
+          "anchor": "XLSX explicit columns"
+        }
+      ]
+    },
+    "describe": {
+      "kind": "differential",
+      "reason": "Workbook and XPORT descriptions compare returned dimensions/names and caller state.",
+      "evidence": [
+        {
+          "path": "validation/validate_io_formats.do",
+          "anchor": "XPORT5 describe results"
+        }
+      ]
+    },
+    "locale": {
+      "kind": "differential",
+      "reason": "Native imports compare encoding and regional header handling in XLS and XLSX.",
+      "evidence": [
+        {
+          "path": "validation/validate_io_excel_options.do",
+          "anchor": "locale(tr_TR)"
+        }
+      ]
+    },
+    "detail": {
+      "kind": "rejection",
+      "reason": "The describe/detail incompatibility must return the same error as native Stata.",
+      "evidence": [
+        {
+          "path": "validation/validate_io_excel_options.do",
+          "anchor": "describe rejects"
+        }
+      ]
+    },
+    "bcat": {
+      "kind": "differential",
+      "reason": "Native SAS catalog labels, metadata, and values are compared.",
+      "evidence": [
+        {
+          "path": "validation/validate_io_formats.do",
+          "anchor": "SAS catalogue definitions"
+        }
+      ]
+    },
+    "vlabfile": {
+      "kind": "differential",
+      "reason": "Native companion-file behavior compares return codes, results, and partial dataset state.",
+      "evidence": [
+        {
+          "path": "validation/validate_io_formats.do",
+          "anchor": "cio_companion_state_test"
+        }
+      ]
+    },
+    "zsav": {
+      "kind": "differential",
+      "reason": "Native compressed SPSS input is checked with long strings and metadata.",
+      "evidence": [
+        {
+          "path": "validation/validate_io_formats.do",
+          "anchor": "ZSAV compression and long strings"
+        }
+      ]
+    },
+    "novallabels": {
+      "kind": "differential",
+      "reason": "Native XPORT multi-member input and value-label suppression are compared.",
+      "evidence": [
+        {
+          "path": "validation/validate_io_formats.do",
+          "anchor": "XPORT5 member selection"
+        }
+      ]
+    },
+    "member": {
+      "kind": "differential",
+      "reason": "Native XPORT multi-member input and value-label suppression are compared.",
+      "evidence": [
+        {
+          "path": "validation/validate_io_formats.do",
+          "anchor": "XPORT5 member selection"
+        }
+      ]
+    },
+    "snapshot": {
+      "kind": "contract",
+      "reason": "Failures injected after the first change are undone from a preserve snapshot: data, variable order, labels, notes, characteristics, sort marker and c(changed) equal a copy saved before; successful results equal the default mode.",
+      "evidence": [
+        {
+          "path": "validation/validate_cimport.do",
+          "anchor": "[rollback] delimited"
+        },
+        {
+          "path": "validation/validate_cimport.do",
+          "anchor": "[rollback] option `mode' gives the default results"
+        }
+      ]
+    },
+    "fast": {
+      "kind": "contract",
+      "reason": "Injected failures are reported and, with no undo, leave the data changed; successful results equal the default mode; combining fast with snapshot is refused before any change.",
+      "evidence": [
+        {
+          "path": "validation/validate_cimport.do",
+          "anchor": "[rollback] delimited"
+        },
+        {
+          "path": "validation/validate_cimport.do",
+          "anchor": "[rollback] option `mode' gives the default results"
+        },
+        {
+          "path": "validation/validate_cimport.do",
+          "anchor": "[rollback] snapshot and fast together refused"
+        }
+      ]
+    }
+  },
+  "civreghdfe": {
+    "center": {
+      "kind": "unsupported",
+      "reason": "Explicit rejection with no data mutation is tested.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "civreghdfe y x (endog=z z2), center"
+        }
+      ]
+    },
+    "noreturn": {
+      "kind": "contract",
+      "reason": "The timing extension must preserve the previous estimation results.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "IV noreturn preserves previous results"
+        }
+      ]
+    },
+    "savefirst": {
+      "kind": "differential",
+      "reason": "Restores and compares the requested first-stage/reduced-form estimate after clearing all stored estimates; missing saved output fails.",
+      "evidence": [
+        {
+          "path": "validation/coverage_helpers.do",
+          "anchor": "program define coverage_saved_iv"
+        }
+      ]
+    },
+    "savefprefix": {
+      "kind": "differential",
+      "reason": "Restores and compares the requested first-stage/reduced-form estimate after clearing all stored estimates; missing saved output fails.",
+      "evidence": [
+        {
+          "path": "validation/coverage_helpers.do",
+          "anchor": "program define coverage_saved_iv"
+        }
+      ]
+    },
+    "saverf": {
+      "kind": "differential",
+      "reason": "Restores and compares the requested first-stage/reduced-form estimate after clearing all stored estimates; missing saved output fails.",
+      "evidence": [
+        {
+          "path": "validation/coverage_helpers.do",
+          "anchor": "program define coverage_saved_iv"
+        }
+      ]
+    },
+    "saverfprefix": {
+      "kind": "differential",
+      "reason": "Restores and compares the requested first-stage/reduced-form estimate after clearing all stored estimates; missing saved output fails.",
+      "evidence": [
+        {
+          "path": "validation/coverage_helpers.do",
+          "anchor": "program define coverage_saved_iv"
+        }
+      ]
+    },
+    "first": {
+      "kind": "differential",
+      "reason": "Required diagnostics must exist and agree at seven significant digits; native e(first) rows and differently named scalars are explicitly mapped.",
+      "evidence": [
+        {
+          "path": "validation/option_cases.py",
+          "anchor": "# Diagnostics must exist; two missing scalars are not evidence of equivalence."
+        },
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "IV first-stage display"
+        }
+      ]
+    },
+    "ffirst": {
+      "kind": "differential",
+      "reason": "Required diagnostics must exist and agree at seven significant digits; native e(first) rows and differently named scalars are explicitly mapped.",
+      "evidence": [
+        {
+          "path": "validation/option_cases.py",
+          "anchor": "# Diagnostics must exist; two missing scalars are not evidence of equivalence."
+        }
+      ]
+    },
+    "orthog": {
+      "kind": "differential",
+      "reason": "Required diagnostics must exist and agree at seven significant digits; native e(first) rows and differently named scalars are explicitly mapped.",
+      "evidence": [
+        {
+          "path": "validation/option_cases.py",
+          "anchor": "# Diagnostics must exist; two missing scalars are not evidence of equivalence."
+        }
+      ]
+    },
+    "endogtest": {
+      "kind": "differential",
+      "reason": "Required diagnostics must exist and agree at seven significant digits; native e(first) rows and differently named scalars are explicitly mapped.",
+      "evidence": [
+        {
+          "path": "validation/option_cases.py",
+          "anchor": "# Diagnostics must exist; two missing scalars are not evidence of equivalence."
+        }
+      ]
+    },
+    "redundant": {
+      "kind": "differential",
+      "reason": "Required diagnostics must exist and agree at seven significant digits; native e(first) rows and differently named scalars are explicitly mapped.",
+      "evidence": [
+        {
+          "path": "validation/option_cases.py",
+          "anchor": "# Diagnostics must exist; two missing scalars are not evidence of equivalence."
+        }
+      ]
+    },
+    "level": {
+      "kind": "differential",
+      "reason": "Rendered output is checked against native output, including factor-variable tables with collinearity and empty cells.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "/* Presentation controls must change the actual displayed output. */"
+        }
+      ]
+    },
+    "eform": {
+      "kind": "differential",
+      "reason": "Rendered output is checked against native output, including factor-variable tables with collinearity and empty cells.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "/* Presentation controls must change the actual displayed output. */"
+        }
+      ]
+    },
+    "title": {
+      "kind": "differential",
+      "reason": "Rendered output is checked against native output, including factor-variable tables with collinearity and empty cells.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "/* Presentation controls must change the actual displayed output. */"
+        }
+      ]
+    },
+    "subtitle": {
+      "kind": "differential",
+      "reason": "Rendered output is checked against native output, including factor-variable tables with collinearity and empty cells.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "/* Presentation controls must change the actual displayed output. */"
+        }
+      ]
+    },
+    "depname": {
+      "kind": "differential",
+      "reason": "Rendered output is checked against native output, including factor-variable tables with collinearity and empty cells.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "/* Presentation controls must change the actual displayed output. */"
+        }
+      ]
+    },
+    "noheader": {
+      "kind": "differential",
+      "reason": "Rendered output is checked against native output, including factor-variable tables with collinearity and empty cells.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "/* Presentation controls must change the actual displayed output. */"
+        }
+      ]
+    },
+    "nofooter": {
+      "kind": "differential",
+      "reason": "Rendered output is checked against native output, including factor-variable tables with collinearity and empty cells.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "/* Presentation controls must change the actual displayed output. */"
+        }
+      ]
+    },
+    "nooutput": {
+      "kind": "differential",
+      "reason": "Rendered output is checked against native output, including factor-variable tables with collinearity and empty cells.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "/* Presentation controls must change the actual displayed output. */"
+        }
+      ]
+    },
+    "noid": {
+      "kind": "differential",
+      "reason": "Rendered output is checked against native output, including factor-variable tables with collinearity and empty cells.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "/* Presentation controls must change the actual displayed output. */"
+        }
+      ]
+    },
+    "rf": {
+      "kind": "differential",
+      "reason": "Rendered output is checked against native output, including factor-variable tables with collinearity and empty cells.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "/* Presentation controls must change the actual displayed output. */"
+        }
+      ]
+    },
+    "plus": {
+      "kind": "differential",
+      "reason": "Rendered output is checked against native output, including factor-variable tables with collinearity and empty cells.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "/* Presentation controls must change the actual displayed output. */"
+        }
+      ]
+    },
+    "noomitted": {
+      "kind": "differential",
+      "reason": "Rendered output is checked against native output, including factor-variable tables with collinearity and empty cells.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "/* Presentation controls must change the actual displayed output. */"
+        }
+      ]
+    },
+    "omitted": {
+      "kind": "differential",
+      "reason": "Rendered output is checked against native output, including factor-variable tables with collinearity and empty cells.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "/* Presentation controls must change the actual displayed output. */"
+        }
+      ]
+    },
+    "vsquish": {
+      "kind": "differential",
+      "reason": "Rendered output is checked against native output, including factor-variable tables with collinearity and empty cells.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "/* Presentation controls must change the actual displayed output. */"
+        }
+      ]
+    },
+    "noemptycells": {
+      "kind": "differential",
+      "reason": "Rendered output is checked against native output, including factor-variable tables with collinearity and empty cells.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "/* Presentation controls must change the actual displayed output. */"
+        }
+      ]
+    },
+    "baselevels": {
+      "kind": "differential",
+      "reason": "Rendered output is checked against native output, including factor-variable tables with collinearity and empty cells.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "/* Presentation controls must change the actual displayed output. */"
+        }
+      ]
+    },
+    "allbaselevels": {
+      "kind": "differential",
+      "reason": "Rendered output is checked against native output, including factor-variable tables with collinearity and empty cells.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "/* Presentation controls must change the actual displayed output. */"
+        }
+      ]
+    }
+  },
+  "cpplmhdfe": {
+    "tagsep": {
+      "kind": "differential",
+      "reason": "Separated-row tags and certificate signs/missingness are checked against native PPML and independent separation constraints.",
+      "evidence": [
+        {
+          "path": "validation/cpplmhdfe_advanced_cases.do",
+          "anchor": "assert native_tag==ref_tag"
+        }
+      ]
+    },
+    "zvarname": {
+      "kind": "differential",
+      "reason": "Separated-row tags and certificate signs/missingness are checked against native PPML and independent separation constraints.",
+      "evidence": [
+        {
+          "path": "validation/cpplmhdfe_advanced_cases.do",
+          "anchor": "assert native_tag==ref_tag"
+        }
+      ]
+    }
+  },
+  "cpplmhdfe_p": {
+    "cooksd": {
+      "kind": "unsupported",
+      "reason": "These explicitly unimplemented predictions must fail without creating a destination.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "PPML predict `option' rejects without output"
+        }
+      ]
+    },
+    "hat": {
+      "kind": "unsupported",
+      "reason": "These explicitly unimplemented predictions must fail without creating a destination.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "PPML predict `option' rejects without output"
+        }
+      ]
+    },
+    "likelihood": {
+      "kind": "unsupported",
+      "reason": "These explicitly unimplemented predictions must fail without creating a destination.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "PPML predict `option' rejects without output"
+        }
+      ]
+    }
+  },
+  "cqreg": {
+    "absorb": {
+      "kind": "unsupported",
+      "reason": "Explicit rejection with no data mutation is tested.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "cqreg y x, absorb(g)"
+        }
+      ]
+    }
+  },
+  "ctools": {
+    "version": {
+      "kind": "contract",
+      "reason": "The utility has no replacement command: version/plugin identity and data preservation are asserted.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "ctools version and environment identity"
+        }
+      ]
+    },
+    "environment_check": {
+      "kind": "contract",
+      "reason": "The utility has no replacement command: version/plugin identity and data preservation are asserted.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "ctools version and environment identity"
+        }
+      ]
+    },
+    "verbose": {
+      "kind": "contract",
+      "reason": "The utility has no replacement command: version/plugin identity and data preservation are asserted.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "ctools version and environment identity"
+        }
+      ]
+    },
+    "update": {
+      "kind": "contract",
+      "reason": "A test-only copy replaces only network dispatch; success, up-to-date, and error branches are exercised without installation.",
+      "evidence": [
+        {
+          "path": "validation/validate_option_contracts.do",
+          "anchor": "ctools update dispatch mocked status"
+        }
+      ]
+    }
+  },
+  "cencode": {
+    "noextend": {
+      "kind": "differential",
+      "reason": "Specialized fixtures activate error/type-mismatch behavior as well as ordinary differential cases.",
+      "evidence": [
+        {
+          "path": "validation/validate_cencode.do",
+          "anchor": "noextend rejects unknown strings"
+        }
+      ]
+    }
+  },
+  "cmerge": {
+    "force": {
+      "kind": "differential",
+      "reason": "Specialized fixtures activate error/type-mismatch behavior as well as ordinary differential cases.",
+      "evidence": [
+        {
+          "path": "validation/validate_cmerge.do",
+          "anchor": "benchmark_merge 1:1 id using `using_1', force nogenerate"
+        }
+      ]
+    },
+    "assert": {
+      "kind": "differential",
+      "reason": "Successful assertions compare the full merge; failed assertions compare native return codes.",
+      "evidence": [
+        {
+          "path": "validation/validate_cmerge.do",
+          "anchor": "assert(match) fails correctly"
+        }
+      ]
+    },
+    "snapshot": {
+      "kind": "contract",
+      "reason": "Every injected failure (before any change, after the schema changes, inside the plugin store, after the plugin, after keep()) and every join error is undone from a preserve snapshot: data, variable order, storage types, formats, labels, notes, characteristics, sort marker and c(changed) equal a copy saved before, with no record or frame left; successful merges match the default mode.",
+      "evidence": [
+        {
+          "path": "validation/validate_cmerge.do",
+          "anchor": "foreach mode in default snapshot fast"
+        },
+        {
+          "path": "validation/validate_cmerge.do",
+          "anchor": "rollback m:1 staged: fault at"
+        },
+        {
+          "path": "validation/validate_cmerge.do",
+          "anchor": "successful merge releases its record"
+        }
+      ]
+    },
+    "fast": {
+      "kind": "contract",
+      "reason": "Every injected failure and join error is reported with its return code (no undo is attempted); successful merges match the default mode and leave no record or frame; combining fast with snapshot is refused with r(198).",
+      "evidence": [
+        {
+          "path": "validation/validate_cmerge.do",
+          "anchor": "foreach mode in default snapshot fast"
+        },
+        {
+          "path": "validation/validate_cmerge.do",
+          "anchor": "successful merge releases its record"
+        },
+        {
+          "path": "validation/validate_cmerge.do",
+          "anchor": "snapshot and fast together are rejected"
+        }
+      ]
+    }
+  },
+  "creghdfe": {
+    "snapshot": {
+      "kind": "contract",
+      "reason": "Failures injected after the first change are undone from a preserve snapshot: data, variable order, labels, notes, characteristics, sort marker and c(changed) equal a copy saved before; successful results equal the default mode.",
+      "evidence": [
+        {
+          "path": "validation/validate_creghdfe.do",
+          "anchor": "[rollback] outputs created"
+        },
+        {
+          "path": "validation/validate_creghdfe.do",
+          "anchor": "[rollback] option `mode' gives the default results"
+        }
+      ]
+    },
+    "fast": {
+      "kind": "contract",
+      "reason": "Injected failures are reported and, with no undo, leave the data changed; successful results equal the default mode; combining fast with snapshot is refused before any change.",
+      "evidence": [
+        {
+          "path": "validation/validate_creghdfe.do",
+          "anchor": "[rollback] outputs created"
+        },
+        {
+          "path": "validation/validate_creghdfe.do",
+          "anchor": "[rollback] option `mode' gives the default results"
+        },
+        {
+          "path": "validation/validate_creghdfe.do",
+          "anchor": "[rollback] snapshot and fast together refused"
+        }
+      ]
+    }
+  },
+  "crangestat": {
+    "snapshot": {
+      "kind": "contract",
+      "reason": "Failures injected after the first change are undone from a preserve snapshot: data, variable order, labels, notes, characteristics, sort marker and c(changed) equal a copy saved before; successful results equal the default mode.",
+      "evidence": [
+        {
+          "path": "validation/validate_crangestat.do",
+          "anchor": "[rollback] outputs created"
+        },
+        {
+          "path": "validation/validate_crangestat.do",
+          "anchor": "[rollback] option `mode' gives the default results"
+        }
+      ]
+    },
+    "fast": {
+      "kind": "contract",
+      "reason": "Injected failures are reported and, with no undo, leave the data changed; successful results equal the default mode; combining fast with snapshot is refused before any change.",
+      "evidence": [
+        {
+          "path": "validation/validate_crangestat.do",
+          "anchor": "[rollback] outputs created"
+        },
+        {
+          "path": "validation/validate_crangestat.do",
+          "anchor": "[rollback] option `mode' gives the default results"
+        },
+        {
+          "path": "validation/validate_crangestat.do",
+          "anchor": "[rollback] snapshot and fast together refused"
+        }
+      ]
+    }
+  },
+  "cwinsor": {
+    "snapshot": {
+      "kind": "contract",
+      "reason": "Failures injected after the first change are undone from a preserve snapshot: data, variable order, labels, notes, characteristics, sort marker and c(changed) equal a copy saved before; successful results equal the default mode.",
+      "evidence": [
+        {
+          "path": "validation/validate_cwinsor.do",
+          "anchor": "[rollback] in place after plugin"
+        },
+        {
+          "path": "validation/validate_cwinsor.do",
+          "anchor": "[rollback] option `mode' gives the default results"
+        }
+      ]
+    },
+    "fast": {
+      "kind": "contract",
+      "reason": "Injected failures are reported and, with no undo, leave the data changed; successful results equal the default mode; combining fast with snapshot is refused before any change.",
+      "evidence": [
+        {
+          "path": "validation/validate_cwinsor.do",
+          "anchor": "[rollback] in place after plugin"
+        },
+        {
+          "path": "validation/validate_cwinsor.do",
+          "anchor": "[rollback] option `mode' gives the default results"
+        },
+        {
+          "path": "validation/validate_cwinsor.do",
+          "anchor": "[rollback] snapshot and fast together refused"
+        }
+      ]
+    }
+  },
+  "crangejoin": {
+    "snapshot": {
+      "kind": "contract",
+      "reason": "Failures injected after the first change are undone from a preserve snapshot: data, variable order, labels, notes, characteristics, sort marker and c(changed) equal a copy saved before; successful results equal the default mode.",
+      "evidence": [
+        {
+          "path": "validation/validate_crangejoin.do",
+          "anchor": "[rollback] string by(), all variables"
+        },
+        {
+          "path": "validation/validate_crangejoin.do",
+          "anchor": "[rollback] option `mode' gives the default results"
+        }
+      ]
+    },
+    "fast": {
+      "kind": "contract",
+      "reason": "Injected failures are reported and, with no undo, leave the data changed; successful results equal the default mode; combining fast with snapshot is refused before any change.",
+      "evidence": [
+        {
+          "path": "validation/validate_crangejoin.do",
+          "anchor": "[rollback] string by(), all variables"
+        },
+        {
+          "path": "validation/validate_crangejoin.do",
+          "anchor": "[rollback] option `mode' gives the default results"
+        },
+        {
+          "path": "validation/validate_crangejoin.do",
+          "anchor": "[rollback] snapshot and fast together refused"
+        }
+      ]
+    }
+  }
+}

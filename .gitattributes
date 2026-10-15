@@ -1,0 +1,2 @@
+# Preserve checksum-pinned inputs byte for byte on every checkout platform.
+tools/generation/inputs/** -text

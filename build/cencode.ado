@@ -2,15 +2,26 @@
 
 program define cencode, rclass
     version 14.1
-    preserve
+    * Outputs are built under temporary names and committed only after every
+    * variable is encoded, so a failure leaves the variables untouched. Value
+    * labels are the only other state cencode changes: the labels it may write
+    * are saved exactly (through Mata) and put back if anything fails.
+    syntax varlist [if] [in], [Generate(string) replace Label(name) *]
+    local __labels "`label'"
+    if "`__labels'" == "" {
+        local __labels = cond("`replace'" != "", "`varlist'", "`generate'")
+    }
+    capture mata: _cencode_labels_save(tokens(st_local("__labels")))
+    local __saved = (_rc == 0)
     capture noisily _cencode_impl `0'
     local rc = _rc
     if `rc' {
-        restore
+        if `__saved' capture mata: _cencode_labels_restore()
+        capture mata: mata drop __cencode_vl_saved __cencode_vl_names
         exit `rc'
     }
+    capture mata: mata drop __cencode_vl_saved __cencode_vl_names
     return add
-    restore, not
 end
 
 program define _cencode_impl, rclass
@@ -41,6 +52,7 @@ program define _cencode_impl, rclass
 
     * Count input variables
     local n_vars : word count `varlist'
+    unab original_order : _all
 
     * Handle replace vs generate
     local __do_replace = 0
@@ -67,14 +79,17 @@ program define _cencode_impl, rclass
     }
 
     if _N == 0 {
+        local staged ""
         forvalues i=1/`n_vars' {
-            if `__do_replace' {
-                local target : word `i' of `varlist'
-                drop `target'
-            }
-            else local target : word `i' of `generate'
-            quietly generate long `target' = .
+            local srcvar : word `i' of `varlist'
+            tempvar target
+            local final_name = cond(`__do_replace', "`srcvar'", "`: word `i' of `generate''")
+            local this_label "`label'"
+            if "`this_label'"=="" local this_label "`final_name'"
+            quietly encode `srcvar' `if' `in', generate(`target') label(`this_label') `noextend'
+            local staged `staged' `target'
         }
+        _cencode_commit "`varlist'" "`staged'" "`generate'" `__do_replace' "`original_order'"
         return scalar N_unique = 0
         return scalar N_vars = `n_vars'
         exit
@@ -87,16 +102,15 @@ program define _cencode_impl, rclass
     * Start timing
     local __do_timing = ("`verbose'" != "")
     if `__do_timing' {
-        timer clear 90
-        timer clear 91
-        timer clear 92
-        timer clear 93
-        timer on 90
-        timer on 91
+        local __ct_elapsed90 = 0
+        local __ct_elapsed91 = 0
+        local __ct_elapsed92 = 0
+        local __ct_elapsed93 = 0
+        if "`__ct_elapsed90'" == "" local __ct_elapsed90 = 0
+        quietly _ctools_clock __ct_start90
+        if "`__ct_elapsed91'" == "" local __ct_elapsed91 = 0
+        quietly _ctools_clock __ct_start91
     }
-
-    * Mark sample
-    marksample touse, strok
 
     * Load the platform-appropriate ctools plugin if not already loaded
     _ctools_load
@@ -113,22 +127,28 @@ program define _cencode_impl, rclass
         local threads_code "threads(`threads')"
     }
 
+    * Without if/in the plugin writes every observation, so the destination
+    * can be created without first filling it with missing values.
+    local __fill = cond(`"`if'`in'"' == "", "fillall", "")
+    local __ifflag = cond(`"`if'"' != "", "ifcond", "")
+
     * =========================================================================
     * Process each variable
     * =========================================================================
 
+    local staged ""
     forvalues i = 1/`n_vars' {
         local srcvar : word `i' of `varlist'
 
-        * Determine destination variable name
+        * Every output is built under a temporary name; see _cencode_commit.
+        tempvar __tempgen
+        local destvar "`__tempgen'"
+        local staged `staged' `destvar'
         if `__do_replace' {
-            tempvar __tempgen
-            local destvar "`__tempgen'"
             local __final_name "`srcvar'"
         }
         else {
-            local destvar : word `i' of `generate'
-            local __final_name "`destvar'"
+            local __final_name : word `i' of `generate'
         }
 
         * Set label name for this variable
@@ -139,77 +159,89 @@ program define _cencode_impl, rclass
             local this_label "`__final_name'"
         }
 
+        * An existing label is extended as encode does: the plugin receives
+        * its mappings. Encode itself handles what the plugin hands back
+        * (noextend with new strings, codes past the long range) and labels it
+        * cannot pass (extended missing values, text over 2,045 bytes).
+        local __existing = 0
+        local __native = 0
+        local __labelmap ""
         capture label list `this_label'
         if !_rc {
-            quietly encode `srcvar' `if' `in', generate(`destvar') label(`this_label') `noextend'
-            tempvar label_tag
-            quietly egen byte `label_tag' = tag(`destvar')
-            quietly count if `label_tag'
-            return scalar N_unique = r(N)
-            if `__do_replace' {
-                drop `srcvar'
-                rename `destvar' `srcvar'
-            }
-            * No C phases ran for this variable.
-            foreach phase in parse load collect sort encode labels total {
-                scalar _cencode_time_`phase' = 0
-            }
+            local __existing = 1
+            local __ce_ok = 0
+            mata: _cencode_pack_label(st_local("this_label"))
+            if `__ce_ok' local __labelmap "labelmap=`__ce_len' `noextend'"
+            else local __native = 1
+        }
+        if `__native' {
+            _cencode_native `srcvar' `destvar' `this_label' `"`if' `in'"' `noextend'
+            return scalar N_unique = r(N_unique)
             continue
         }
 
         * Create the destination variable (numeric, long type for sufficient range)
-        quietly generate long `destvar' = .
-
-        * Get variable indices with a single unab + loop
-        * (gen_idx is always the last variable since we just created it)
-        unab allvars : *
-        local var_idx = 0
-        local idx = 1
-        foreach v of local allvars {
-            if ("`v'" == "`srcvar'") {
-                local var_idx = `idx'
-            }
-            local ++idx
+        if "`__fill'" != "" {
+            mata: (void) st_addvar("long", st_local("destvar"), 1)
         }
-        local gen_idx : word count `allvars'
-
-        if `var_idx' == 0 {
-            di as error "cencode: could not find variable `srcvar'"
-            exit 111
+        else {
+            quietly generate long `destvar' = .
         }
 
-        * Build label option
-        local label_code "label=`this_label'"
-
-        * Temp file for C plugin to write label definitions
+        * Temp data file for C plugin to write length-prefixed label bytes
         tempfile __labelfile
-        local labelfile_code "labelfile=`__labelfile'"
+        * The path can contain spaces, so the plugin reads it from local
+        * __ce_labelfile and receives only its length in bytes.
+        local __ce_labelfile `"`__labelfile'"'
+        local __ce_lflen = strlen(`"`__labelfile'"')
+        local labelfile_code "labelfile=`__ce_lflen'"
 
-        * Set string width metadata for flat buffer optimization
-        _ctools_strw `allvars'
-
-        * Call the C plugin with ALL variables
+        * The plugin sees only the source (variable 1) and the destination (2).
         if `__do_timing' {
-            timer off 91
-            timer on 92
+            quietly _ctools_clock __ct_now
+            local __ct_elapsed91 = `__ct_elapsed91' + (`__ct_now' - `__ct_start91')
+            if "`__ct_elapsed92'" == "" local __ct_elapsed92 = 0
+            quietly _ctools_clock __ct_start92
         }
-        plugin call ctools_plugin `allvars' `if' `in', "cencode `threads_code' `var_idx' `gen_idx' `label_code' `labelfile_code'"
+        capture scalar drop _cencode_max_len _cencode_protocol _cencode_fallback _cencode_n_new
+        plugin call ctools_plugin `srcvar' `destvar' `if' `in', "cencode `threads_code' 1 2 `labelfile_code' stream `__fill' `__ifflag' `__labelmap'"
+        local __ce_map ""
+        local __ce_labelfile ""
         if `__do_timing' {
-            timer off 92
-            timer on 93
+            quietly _ctools_clock __ct_now
+            local __ct_elapsed92 = `__ct_elapsed92' + (`__ct_now' - `__ct_start92')
+            if "`__ct_elapsed93'" == "" local __ct_elapsed93 = 0
+            quietly _ctools_clock __ct_start93
         }
 
         * =====================================================================
-        * Create value labels from .do file written by C plugin
+        * Install the label vector without interpreting user text as source
         * =====================================================================
 
         local n_unique = _cencode_n_unique
 
-        if `n_unique' > 0 {
+        if `__existing' {
+            * A plugin that does not report protocol 2 numbered the strings
+            * afresh; encode redoes those, as it does the handed-back cases.
+            capture local __protocol = scalar(_cencode_protocol)
+            if _rc local __protocol = 0
+            capture local __fallback = scalar(_cencode_fallback)
+            if _rc local __fallback = 1
+            if `__protocol' != 2 | `__fallback' != 0 | `n_unique' == 0 {
+                drop `destvar'
+                _cencode_native `srcvar' `destvar' `this_label' `"`if' `in'"' `noextend'
+                return scalar N_unique = r(N_unique)
+                continue
+            }
+            local n_new = _cencode_n_new
+            if `n_new' > 0 {
+                mata: _cencode_apply_labels(st_local("__labelfile"), st_local("this_label"), strtoreal(st_local("n_new")))
+            }
+        }
+        else if `n_unique' > 0 {
             * Drop any pre-existing label with this name for a clean slate
             capture label drop `this_label'
-            * Run the .do file written by C plugin (label define commands)
-            run `__labelfile'
+            mata: _cencode_apply_labels(st_local("__labelfile"), st_local("this_label"), strtoreal(st_local("n_unique")))
         }
 
         * Apply label to variable if it exists
@@ -218,42 +250,61 @@ program define _cencode_impl, rclass
             label values `destvar' `this_label'
         }
 
-        * Handle replace option: drop original var and rename temp var
-        if `__do_replace' {
-            capture drop `srcvar'
-            rename `destvar' `srcvar'
+        * encode sizes the display to the longest encoded value in bytes, with
+        * a minimum of eight; the plugin reports that length. With no
+        * categories it retains long's default format and empty label.
+        if `n_unique' > 0 {
+            capture local __max_len = scalar(_cencode_max_len)
+            if _rc | "`__max_len'" == "" | "`__max_len'" == "." {
+                * A plugin from before that report: measure in Mata.
+                mata: st_local("__max_len",strofreal(max(strlen(select(st_sdata(.,st_local("srcvar")),st_data(.,st_local("destvar")):<.)))))
+            }
+            local display_width = max(8, `__max_len')
+            format `destvar' %`display_width'.0g
         }
+        else {
+            mata: st_vlmodify(st_local("this_label"), J(0,1,.), J(0,1,""))
+            label values `destvar' `this_label'
+        }
+        local source_label : variable label `srcvar'
+        label variable `destvar' `"`source_label'"'
 
         * Store rclass results for this variable
         return scalar N_unique = `n_unique'
 
         if `__do_timing' {
-            timer off 93
-            timer on 91
+            quietly _ctools_clock __ct_now
+            local __ct_elapsed93 = `__ct_elapsed93' + (`__ct_now' - `__ct_start93')
+            if "`__ct_elapsed91'" == "" local __ct_elapsed91 = 0
+            quietly _ctools_clock __ct_start91
         }
     }
 
+    _cencode_commit "`varlist'" "`staged'" "`generate'" `__do_replace' "`original_order'"
+
     if `__do_timing' {
-        timer off 91
+        quietly _ctools_clock __ct_now
+        local __ct_elapsed91 = `__ct_elapsed91' + (`__ct_now' - `__ct_start91')
     }
 
     * Store rclass results
     return scalar N_vars = `n_vars'
 
     if `__do_timing' {
-        timer off 90
+        quietly _ctools_clock __ct_now
+        local __ct_elapsed90 = `__ct_elapsed90' + (`__ct_now' - `__ct_start90')
 
         * Extract timer values
-        quietly timer list 90
-        local __time_total = r(t90)
+        * Elapsed seconds are held in caller-local timing state.
+        local __time_total = `__ct_elapsed90'
 
         * Extract sub-timer values
-        quietly timer list 91
-        local __time_preplugin = r(t91)
-        quietly timer list 92
-        local __time_plugin = r(t92)
-        quietly timer list 93
-        local __time_postplugin = r(t93)
+        * Elapsed seconds are held in caller-local timing state.
+        local __time_preplugin = `__ct_elapsed91'
+        * Elapsed seconds are held in caller-local timing state.
+        local __time_plugin = `__ct_elapsed92'
+        * Elapsed seconds are held in caller-local timing state.
+        local __time_postplugin = `__ct_elapsed93'
 
         * Calculate plugin call overhead
         capture local __plugin_time_total = _cencode_time_total
@@ -266,8 +317,8 @@ program define _cencode_impl, rclass
         di as text "{hline 55}"
         di as text "  C plugin internals:"
         di as text "    Argument parsing:       " as result %8.4f _cencode_time_parse " sec"
-        di as text "    Data load:              " as result %8.4f _cencode_time_load " sec"
-        di as text "    Collect unique values:  " as result %8.4f _cencode_time_collect " sec"
+        di as text "    Read and code strings:  " as result %8.4f _cencode_time_load " sec"
+        di as text "    Merge unique values:    " as result %8.4f _cencode_time_collect " sec"
         di as text "    Sort:                   " as result %8.4f _cencode_time_sort " sec"
         di as text "    Encode:                 " as result %8.4f _cencode_time_encode " sec"
         di as text "    Apply labels:           " as result %8.4f _cencode_time_labels " sec"
@@ -306,5 +357,170 @@ program define _cencode_impl, rclass
     }
 
     * Clean up any remaining scalars
-    capture scalar drop _cencode_n_unique
+    capture scalar drop _cencode_n_unique _cencode_max_len _cencode_protocol
+    capture scalar drop _cencode_fallback _cencode_n_new
+end
+
+* Encode one variable with encode itself into destvar; r(N_unique) counts the
+* distinct nonmissing codes (in C). No encoding phases run in C for it.
+program define _cencode_native, rclass
+    args srcvar destvar label qualifiers noextend
+    quietly encode `srcvar' `qualifiers', generate(`destvar') label(`label') `noextend'
+    _ctools_group `destvar', count
+    return scalar N_unique = r(N_groups)
+    foreach phase in parse load collect sort encode labels total {
+        scalar _cencode_time_`phase' = 0
+    }
+end
+
+* Give the staged outputs their final names; a Break cannot split this step.
+* staged lists the temporary outputs in varlist order. st_varrename() is built
+* in; rename is an ado file whose first use in a session costs about 10 ms.
+program define _cencode_commit
+    args varlist staged generate do_replace original_order
+    nobreak {
+        local i = 0
+        foreach srcvar of local varlist {
+            local ++i
+            local destvar : word `i' of `staged'
+            if `do_replace' {
+                drop `srcvar'
+                mata: st_varrename("`destvar'", "`srcvar'")
+            }
+            else {
+                mata: st_varrename("`destvar'", "`: word `i' of `generate''")
+            }
+        }
+        if `do_replace' order `original_order'
+    }
+end
+
+mata:
+struct _cencode_vl {
+    real scalar exists
+    real colvector values
+    string colvector text
+}
+
+/* Record each named value label exactly, or that it does not exist. */
+void _cencode_labels_save(string rowvector names)
+{
+    external struct _cencode_vl rowvector __cencode_vl_saved
+    external string rowvector __cencode_vl_names
+    real scalar i
+    real colvector values
+    string colvector text
+
+    __cencode_vl_names = cols(names) ? uniqrows(names')' : J(1, 0, "")
+    __cencode_vl_saved = _cencode_vl(cols(__cencode_vl_names))
+    for (i = 1; i <= cols(__cencode_vl_names); i++) {
+        __cencode_vl_saved[i].exists = st_vlexists(__cencode_vl_names[i])
+        if (__cencode_vl_saved[i].exists) {
+            st_vlload(__cencode_vl_names[i], values, text)
+            __cencode_vl_saved[i].values = values
+            __cencode_vl_saved[i].text = text
+        }
+    }
+}
+
+/* Put the recorded labels back: drop labels that did not exist, restore the rest. */
+void _cencode_labels_restore()
+{
+    external struct _cencode_vl rowvector __cencode_vl_saved
+    external string rowvector __cencode_vl_names
+    real scalar i
+
+    for (i = 1; i <= cols(__cencode_vl_names); i++) {
+        if (st_vlexists(__cencode_vl_names[i])) st_vldrop(__cencode_vl_names[i])
+        if (__cencode_vl_saved[i].exists) {
+            st_vlmodify(__cencode_vl_names[i], __cencode_vl_saved[i].values,
+                __cencode_vl_saved[i].text)
+        }
+    }
+}
+
+/* Hand an existing value label to the plugin as local __ce_map (format: see
+   cencode_label_read in src/cencode/cencode_impl.c). __ce_ok is 0 when encode
+   itself must handle the label: extended missing or non-integer values, more
+   than 65,536 mappings, text over 2,045 bytes, or a mapping too large for a
+   macro. */
+void _cencode_pack_label(string scalar label)
+{
+    real colvector values, lengths
+    string colvector text, entries
+    string scalar packed
+
+    st_local("__ce_ok", "0")
+    st_vlload(label, values, text)
+    if (rows(values) > 65536) return
+    if (rows(values) == 0) {
+        packed = "0 |"
+    }
+    else {
+        if (missing(values) | any(values :!= floor(values))) return
+        lengths = strlen(text)
+        if (max(lengths) > 2045) return
+        entries = strtrim(strofreal(values, "%12.0f")) :+ " " :+ strofreal(lengths) :+ " " :+ text
+        packed = strofreal(rows(values)) + " " + invtokens(entries', " ") + " |"
+        if (strlen(packed) != strlen(strofreal(rows(values))) + sum(strlen(entries)) + rows(values) + 2) return
+    }
+    if (strlen(packed) >= c("macrolen")) return
+    st_local("__ce_map", packed)
+    st_local("__ce_len", strofreal(strlen(packed), "%21.0f"))
+    st_local("__ce_ok", "1")
+}
+
+void _cencode_apply_labels(string scalar path, string scalar name, real scalar n)
+{
+    real scalar fh, i, valid
+    real rowvector header
+    real colvector codes
+    string colvector texts
+    string matrix part
+
+    codes = J(n, 1, .)
+    texts = J(n, 1, "")
+    fh = fopen(path, "r")
+    part = _fget(fh)
+    valid = 0
+    if (rows(part) == 1 & cols(part) == 1) valid = (part == "CTOOLS_LABELS_1")
+    for (i = 1; i <= n & valid; i++) {
+        part = _fget(fh)
+        if (rows(part) != 1 | cols(part) != 1) {
+            valid = 0
+            break
+        }
+        header = strtoreal(tokens(part))
+        if (cols(header) != 2) {
+            valid = 0
+            break
+        }
+        if (any(missing(header)) | any(header :!= floor(header))) {
+            valid = 0
+            break
+        }
+        if (abs(header[1]) > 2147483647 | header[2] < 0 | header[2] > 2045) {
+            valid = 0
+            break
+        }
+        part = (header[2] == 0 ? "" : _fread(fh, header[2]))
+        if (rows(part) != 1 | cols(part) != 1) {
+            valid = 0
+            break
+        }
+        if (strlen(part) != header[2]) {
+            valid = 0
+            break
+        }
+        codes[i] = header[1]
+        texts[i] = part
+    }
+    if (valid) {
+        part = _fread(fh, 1)
+        valid = (rows(part) == 0 & fstatus(fh) == -1)
+    }
+    fclose(fh)
+    if (!valid) _error(610)
+    st_vlmodify(name, codes, texts)
+}
 end

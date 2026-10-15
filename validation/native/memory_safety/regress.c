@@ -101,8 +101,9 @@ stata_retcode ctools_data_load(ctools_filtered_data *d, int *v, size_t n, size_t
 }
 #include "creghdfe/creghdfe_hdfe.c"
 #include "creghdfe/creghdfe_regress.c"
-#include "creghdfe/creghdfe_solver.c"
-#include "creghdfe/creghdfe_utils.c"
+#include "hdfe/hdfe_solver.c"
+#include "hdfe/hdfe_remap.c"
+#include "hdfe/hdfe_sample.c"
 #include "creghdfe/creghdfe_vce.c"
 #include "ctools_hdfe_utils.c"
 #include "ctools_matrix.c"

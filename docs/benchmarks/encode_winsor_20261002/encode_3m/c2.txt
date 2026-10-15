@@ -1,0 +1,300 @@
+-------------------------------------------------------------------------------
+      name:  <unnamed>
+       log:  /Users/Mike/Documents/GitHub/stata-ctools/temp/encode_performance_
+> 20261002/encode_3m/c2.log
+  log type:  text
+ opened on:   2 Oct 2026, 11:57:32
+
+. capture noisily do "/Users/Mike/Documents/GitHub/stata-ctools/temp/encode_per
+> formance_20261002/encode_3m/benchmark.do" "/Users/Mike/Documents/GitHub/stata
+> -ctools/temp/encode_performance_20261002/combined" c2 "/Users/Mike/Documents/
+> GitHub/stata-ctools/temp/encode_performance_20261002/encode_3m" "e1000 e10000
+>  e_filtered e_existing" 4 "8" 3000000 "2"
+
+. * Frozen public commands; setup, comparisons and disk reads are outside timer
+> s.
+. args buildpath label outdir cases reps threadlist rows refreps
+
+. clear all
+
+. set more off
+
+. set linesize 255
+
+. adopath ++ "`buildpath'"
+  [1]              "/Users/Mike/Documents/GitHub/stata-ctools/temp/encode_performance_20261002/combined"
+  [2]  (BASE)      "/Applications/StataNow/ado/base/"
+  [3]  (SITE)      "/Applications/StataNow/ado/site/"
+  [4]              "."
+  [5]  (PERSONAL)  "/Users/Mike/Documents/Stata/ado/personal/"
+  [6]  (PLUS)      "/Users/Mike/Library/Application Support/Stata/ado/plus/"
+  [7]  (OLDPLACE)  "~/ado/"
+
+. ctools, version
+ctools ado 1.0.2; plugin 1.0.2 (local)
+
+. about
+
+StataNow/MP 19.5 for Unix (Apple Silicon)
+Revision 12 Aug 2026
+Copyright 1985-2025 StataCorp LLC
+
+Total usable memory: 48.01 GB
+
+Stata license: Single-user 4-core , expiring  5 Oct 2027
+Serial number: [redacted]
+  Licensed to: [redacted]
+               
+
+. which encode
+built-in command:  encode
+
+. program perf_clock, plugin using("`outdir'/clock.plugin")
+
+. if "`cases'" == "" local cases e10 e1000 e10000 e50000 e_long e_unicode e_filtered e_existing
+
+. foreach case of local cases {
+  2.     clear
+  3.     set seed 928143
+  4.     local n = `rows'
+  5.     if "`case'" == "e_long" local n = min(`rows',100000)
+  6.     quietly set obs `n'
+  7.     local categories 1000
+  8.     if "`case'" == "e10" local categories 10
+  9.     if "`case'" == "e10000" local categories 10000
+ 10.     if "`case'" == "e50000" local categories 50000
+ 11.     quietly gen long id = _n
+ 12.     quietly gen str12 x = "value_" + string(mod(_n-1,`categories'), "%05.0f")
+ 13.     if "`case'" == "e_long" {
+ 14.         quietly recast str2045 x
+ 15.         mata: st_sstore(., "x", st_sdata(., "x") :+ invtokens(J(1,2034,"a"), ""))
+ 16.     }
+ 17.     if "`case'" == "e_unicode" {
+ 18.         quietly recast str40 x
+ 19.         quietly replace x = "é東京" + x
+ 20.     }
+ 21.     quietly replace x = "" if mod(id,37)==0
+ 22.     quietly gen double shuffle = runiform()
+ 23.     sort shuffle
+ 24.     drop shuffle
+ 25.     local subset
+ 26.     if "`case'" == "e_filtered" local subset if mod(id,3)==0 in 10/`n'
+ 27.     local labelopt
+ 28.     if "`case'" == "e_existing" {
+ 29.         quietly encode x, gen(seed) label(existing)
+ 30.         * Keep seed attached so save/use retains the existing label definition.
+.         local labelopt label(existing)
+ 31.     }
+ 32.     local command cencode x `subset', gen(y) `labelopt'
+ 33.     local reference encode x `subset', gen(y) `labelopt'
+ 34.     tempfile base expected
+ 35.     quietly save `base'
+ 36.     foreach threads of local threadlist {
+ 37.         forvalues rep=0/`reps' {
+ 38.             quietly use `base', clear
+ 39.             plugin call perf_clock, "start"
+ 40.             quietly `command' threads(`threads')
+ 41.             plugin call perf_clock, "stop"
+ 42.             di "PERF,`label',`case',ctools,`n',`threads',`rep'," %12.7f scalar(__ctools_perf_seconds)
+ 43.             foreach phase in load collect sort encode labels total {
+ 44.                 di "PHASE,`label',`case',`threads',`rep',`phase'," %12.7f scalar(_cencode_time_`phase')
+ 45.             }
+ 46.             if `rep' == 0 {
+ 47.                 quietly decode y, gen(text)
+ 48.                 quietly keep id y text
+ 49.                 if "`label'" == "b1" quietly save "`outdir'/expected_`case'_`threads'.dta", replace
+ 50.                 else cf _all using "`outdir'/expected_`case'_`threads'.dta"
+ 51.                 quietly save `expected', replace
+ 52.                 quietly use `base', clear
+ 53.                 quietly `reference'
+ 54.                 quietly decode y, gen(text)
+ 55.                 cf id y text using `expected'
+ 56.                 di "CORRECT,`label',`case',`threads',codes_and_label_bytes_all_rows"
+ 57.             }
+ 58.         }
+ 59.     }
+ 60.     forvalues rep=0/`refreps' {
+ 61.         quietly use `base', clear
+ 62.         plugin call perf_clock, "start"
+ 63.         quietly `reference'
+ 64.         plugin call perf_clock, "stop"
+ 65.         di "PERF,`label',`case',reference,`n',0,`rep'," %12.7f scalar(__ctools_perf_seconds)
+ 66.     }
+ 67. }
+PERF,c2,e1000,ctools,3000000,8,0,   0.1267800
+PHASE,c2,e1000,8,0,load,   0.0093688
+PHASE,c2,e1000,8,0,collect,   0.0771417
+PHASE,c2,e1000,8,0,sort,   0.0001413
+PHASE,c2,e1000,8,0,encode,   0.0048511
+PHASE,c2,e1000,8,0,labels,   0.0003590
+PHASE,c2,e1000,8,0,total,   0.0918629
+CORRECT,c2,e1000,8,codes_and_label_bytes_all_rows
+PERF,c2,e1000,ctools,3000000,8,1,   0.1228770
+PHASE,c2,e1000,8,1,load,   0.0097861
+PHASE,c2,e1000,8,1,collect,   0.0779771
+PHASE,c2,e1000,8,1,sort,   0.0001354
+PHASE,c2,e1000,8,1,encode,   0.0037460
+PHASE,c2,e1000,8,1,labels,   0.0004093
+PHASE,c2,e1000,8,1,total,   0.0920553
+PERF,c2,e1000,ctools,3000000,8,2,   0.1230760
+PHASE,c2,e1000,8,2,load,   0.0105658
+PHASE,c2,e1000,8,2,collect,   0.0774357
+PHASE,c2,e1000,8,2,sort,   0.0001506
+PHASE,c2,e1000,8,2,encode,   0.0030102
+PHASE,c2,e1000,8,2,labels,   0.0004106
+PHASE,c2,e1000,8,2,total,   0.0915741
+PERF,c2,e1000,ctools,3000000,8,3,   0.1210060
+PHASE,c2,e1000,8,3,load,   0.0093001
+PHASE,c2,e1000,8,3,collect,   0.0778076
+PHASE,c2,e1000,8,3,sort,   0.0001331
+PHASE,c2,e1000,8,3,encode,   0.0030997
+PHASE,c2,e1000,8,3,labels,   0.0003674
+PHASE,c2,e1000,8,3,total,   0.0907088
+PERF,c2,e1000,ctools,3000000,8,4,   0.1204610
+PHASE,c2,e1000,8,4,load,   0.0089516
+PHASE,c2,e1000,8,4,collect,   0.0777228
+PHASE,c2,e1000,8,4,sort,   0.0001323
+PHASE,c2,e1000,8,4,encode,   0.0030864
+PHASE,c2,e1000,8,4,labels,   0.0004038
+PHASE,c2,e1000,8,4,total,   0.0902979
+PERF,c2,e1000,reference,3000000,0,0,   0.9436720
+PERF,c2,e1000,reference,3000000,0,1,   0.9707000
+PERF,c2,e1000,reference,3000000,0,2,   0.9681230
+PERF,c2,e10000,ctools,3000000,8,0,   0.1575690
+PHASE,c2,e10000,8,0,load,   0.0086002
+PHASE,c2,e10000,8,0,collect,   0.0842926
+PHASE,c2,e10000,8,0,sort,   0.0016485
+PHASE,c2,e10000,8,0,encode,   0.0032580
+PHASE,c2,e10000,8,0,labels,   0.0012122
+PHASE,c2,e10000,8,0,total,   0.0990127
+CORRECT,c2,e10000,8,codes_and_label_bytes_all_rows
+PERF,c2,e10000,ctools,3000000,8,1,   0.1583620
+PHASE,c2,e10000,8,1,load,   0.0103612
+PHASE,c2,e10000,8,1,collect,   0.0837152
+PHASE,c2,e10000,8,1,sort,   0.0016458
+PHASE,c2,e10000,8,1,encode,   0.0037767
+PHASE,c2,e10000,8,1,labels,   0.0012499
+PHASE,c2,e10000,8,1,total,   0.1007498
+PERF,c2,e10000,ctools,3000000,8,2,   0.1590010
+PHASE,c2,e10000,8,2,load,   0.0104955
+PHASE,c2,e10000,8,2,collect,   0.0836268
+PHASE,c2,e10000,8,2,sort,   0.0016696
+PHASE,c2,e10000,8,2,encode,   0.0037285
+PHASE,c2,e10000,8,2,labels,   0.0012310
+PHASE,c2,e10000,8,2,total,   0.1007525
+PERF,c2,e10000,ctools,3000000,8,3,   0.1604520
+PHASE,c2,e10000,8,3,load,   0.0100099
+PHASE,c2,e10000,8,3,collect,   0.0840080
+PHASE,c2,e10000,8,3,sort,   0.0016731
+PHASE,c2,e10000,8,3,encode,   0.0042293
+PHASE,c2,e10000,8,3,labels,   0.0015484
+PHASE,c2,e10000,8,3,total,   0.1014701
+PERF,c2,e10000,ctools,3000000,8,4,   0.1653780
+PHASE,c2,e10000,8,4,load,   0.0102854
+PHASE,c2,e10000,8,4,collect,   0.0874393
+PHASE,c2,e10000,8,4,sort,   0.0016296
+PHASE,c2,e10000,8,4,encode,   0.0044458
+PHASE,c2,e10000,8,4,labels,   0.0014608
+PHASE,c2,e10000,8,4,total,   0.1052621
+PERF,c2,e10000,reference,3000000,0,0,   1.2749480
+PERF,c2,e10000,reference,3000000,0,1,   1.2296160
+PERF,c2,e10000,reference,3000000,0,2,   1.3239270
+PERF,c2,e_filtered,ctools,3000000,8,0,   0.1362780
+PHASE,c2,e_filtered,8,0,load,   0.0623314
+PHASE,c2,e_filtered,8,0,collect,   0.0266885
+PHASE,c2,e_filtered,8,0,sort,   0.0001329
+PHASE,c2,e_filtered,8,0,encode,   0.0020518
+PHASE,c2,e_filtered,8,0,labels,   0.0003568
+PHASE,c2,e_filtered,8,0,total,   0.0915625
+CORRECT,c2,e_filtered,8,codes_and_label_bytes_all_rows
+PERF,c2,e_filtered,ctools,3000000,8,1,   0.1376280
+PHASE,c2,e_filtered,8,1,load,   0.0639142
+PHASE,c2,e_filtered,8,1,collect,   0.0262933
+PHASE,c2,e_filtered,8,1,sort,   0.0001364
+PHASE,c2,e_filtered,8,1,encode,   0.0016453
+PHASE,c2,e_filtered,8,1,labels,   0.0003940
+PHASE,c2,e_filtered,8,1,total,   0.0923848
+PERF,c2,e_filtered,ctools,3000000,8,2,   0.1700960
+PHASE,c2,e_filtered,8,2,load,   0.0823667
+PHASE,c2,e_filtered,8,2,collect,   0.0332137
+PHASE,c2,e_filtered,8,2,sort,   0.0001357
+PHASE,c2,e_filtered,8,2,encode,   0.0033048
+PHASE,c2,e_filtered,8,2,labels,   0.0007135
+PHASE,c2,e_filtered,8,2,total,   0.1197356
+PERF,c2,e_filtered,ctools,3000000,8,3,   0.1872660
+PHASE,c2,e_filtered,8,3,load,   0.0842120
+PHASE,c2,e_filtered,8,3,collect,   0.0260840
+PHASE,c2,e_filtered,8,3,sort,   0.0001385
+PHASE,c2,e_filtered,8,3,encode,   0.0016204
+PHASE,c2,e_filtered,8,3,labels,   0.0002977
+PHASE,c2,e_filtered,8,3,total,   0.1123542
+PERF,c2,e_filtered,ctools,3000000,8,4,   0.1356390
+PHASE,c2,e_filtered,8,4,load,   0.0627498
+PHASE,c2,e_filtered,8,4,collect,   0.0261095
+PHASE,c2,e_filtered,8,4,sort,   0.0001346
+PHASE,c2,e_filtered,8,4,encode,   0.0015522
+PHASE,c2,e_filtered,8,4,labels,   0.0002718
+PHASE,c2,e_filtered,8,4,total,   0.0908191
+PERF,c2,e_filtered,reference,3000000,0,0,   0.3713380
+PERF,c2,e_filtered,reference,3000000,0,1,   0.3679220
+PERF,c2,e_filtered,reference,3000000,0,2,   0.3945890
+PERF,c2,e_existing,ctools,3000000,8,0,   2.0512760
+PHASE,c2,e_existing,8,0,load,   0.0000000
+PHASE,c2,e_existing,8,0,collect,   0.0000000
+PHASE,c2,e_existing,8,0,sort,   0.0000000
+PHASE,c2,e_existing,8,0,encode,   0.0000000
+PHASE,c2,e_existing,8,0,labels,   0.0000000
+PHASE,c2,e_existing,8,0,total,   0.0000000
+CORRECT,c2,e_existing,8,codes_and_label_bytes_all_rows
+PERF,c2,e_existing,ctools,3000000,8,1,   2.1129680
+PHASE,c2,e_existing,8,1,load,   0.0000000
+PHASE,c2,e_existing,8,1,collect,   0.0000000
+PHASE,c2,e_existing,8,1,sort,   0.0000000
+PHASE,c2,e_existing,8,1,encode,   0.0000000
+PHASE,c2,e_existing,8,1,labels,   0.0000000
+PHASE,c2,e_existing,8,1,total,   0.0000000
+PERF,c2,e_existing,ctools,3000000,8,2,   2.0252760
+PHASE,c2,e_existing,8,2,load,   0.0000000
+PHASE,c2,e_existing,8,2,collect,   0.0000000
+PHASE,c2,e_existing,8,2,sort,   0.0000000
+PHASE,c2,e_existing,8,2,encode,   0.0000000
+PHASE,c2,e_existing,8,2,labels,   0.0000000
+PHASE,c2,e_existing,8,2,total,   0.0000000
+PERF,c2,e_existing,ctools,3000000,8,3,   1.9556160
+PHASE,c2,e_existing,8,3,load,   0.0000000
+PHASE,c2,e_existing,8,3,collect,   0.0000000
+PHASE,c2,e_existing,8,3,sort,   0.0000000
+PHASE,c2,e_existing,8,3,encode,   0.0000000
+PHASE,c2,e_existing,8,3,labels,   0.0000000
+PHASE,c2,e_existing,8,3,total,   0.0000000
+PERF,c2,e_existing,ctools,3000000,8,4,   1.9661000
+PHASE,c2,e_existing,8,4,load,   0.0000000
+PHASE,c2,e_existing,8,4,collect,   0.0000000
+PHASE,c2,e_existing,8,4,sort,   0.0000000
+PHASE,c2,e_existing,8,4,encode,   0.0000000
+PHASE,c2,e_existing,8,4,labels,   0.0000000
+PHASE,c2,e_existing,8,4,total,   0.0000000
+PERF,c2,e_existing,reference,3000000,0,0,   0.9611110
+PERF,c2,e_existing,reference,3000000,0,1,   0.9491880
+PERF,c2,e_existing,reference,3000000,0,2,   0.9933660
+
+. di "ENCODE_BENCHMARK_COMPLETE"
+ENCODE_BENCHMARK_COMPLETE
+
+. 
+end of do-file
+
+. local rc=_rc
+
+. di "ENCODE_BENCHMARK_RC=`rc'"
+ENCODE_BENCHMARK_RC=0
+
+. di "CTOOLS_LAUNCH=ac27a86e568647c2b9dad238413700c7 RC=`rc'"
+CTOOLS_LAUNCH=ac27a86e568647c2b9dad238413700c7 RC=0
+
+. log close
+      name:  <unnamed>
+       log:  /Users/Mike/Documents/GitHub/stata-ctools/temp/encode_performance_20261002/encode_3m/c2.log
+  log type:  text
+ closed on:   2 Oct 2026, 11:58:08
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------

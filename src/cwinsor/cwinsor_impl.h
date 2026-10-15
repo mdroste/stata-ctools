@@ -43,4 +43,8 @@
 */
 ST_retcode cwinsor_main(const char *args);
 
+/* Free the undo copy an in-place call keeps (option undo) until
+ * "cwinsor commit" or "cwinsor rollback". */
+void cwinsor_cleanup_state(void);
+
 #endif /* CWINSOR_IMPL_H */

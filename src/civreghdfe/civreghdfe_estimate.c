@@ -78,12 +78,19 @@ ST_retcode ivest_compute_gmm2s(
     }
 
     /* Compute GMM estimator: β = (X'ZWZ'X)^-1 X'ZWZ'y */
-    /* 1. WZtX = W * Z'X */
-    ST_double *WZtX = (ST_double *)calloc(K_iv * K_total, sizeof(ST_double));
-    ctools_matmul_ab(ZOmegaZ_inv, ctx->ZtX, K_iv, K_iv, K_total, WZtX);
+    ST_double *XZW = (ST_double *)calloc((size_t)K_total * K_iv, sizeof(ST_double));
+    ST_double *XZWZX = (ST_double *)calloc((size_t)K_total * K_total, sizeof(ST_double));
+    ST_double *XZWZy = (ST_double *)calloc((size_t)K_total, sizeof(ST_double));
+    ST_double *XZWZX_L = (ST_double *)malloc((size_t)K_total * K_total * sizeof(ST_double));
+    ST_double *beta_temp = (ST_double *)calloc((size_t)K_total, sizeof(ST_double));
+    if (!XZW || !XZWZX || !XZWZy || !XZWZX_L || !beta_temp) {
+        free(ZOmegaZ); free(ZOmegaZ_inv);
+        free(XZW); free(XZWZX); free(XZWZy);
+        free(XZWZX_L); free(beta_temp);
+        return 920;
+    }
 
-    /* 2. XZW = (Z'X)' * W (K_total x K_iv) */
-    ST_double *XZW = (ST_double *)calloc(K_total * K_iv, sizeof(ST_double));
+    /* 1. XZW = (Z'X)' * W (K_total x K_iv) */
     for (i = 0; i < K_total; i++) {
         for (j = 0; j < K_iv; j++) {
             ST_double sum = 0.0;
@@ -94,8 +101,7 @@ ST_retcode ivest_compute_gmm2s(
         }
     }
 
-    /* 3. XZWZX = XZW * Z'X (K_total x K_total) */
-    ST_double *XZWZX = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+    /* 2. XZWZX = XZW * Z'X (K_total x K_total) */
     for (i = 0; i < K_total; i++) {
         for (j = 0; j < K_total; j++) {
             ST_double sum = 0.0;
@@ -106,8 +112,7 @@ ST_retcode ivest_compute_gmm2s(
         }
     }
 
-    /* 4. XZWZy = XZW * Z'y (K_total x 1) */
-    ST_double *XZWZy = (ST_double *)calloc(K_total, sizeof(ST_double));
+    /* 3. XZWZy = XZW * Z'y (K_total x 1) */
     for (i = 0; i < K_total; i++) {
         ST_double sum = 0.0;
         for (k = 0; k < K_iv; k++) {
@@ -116,15 +121,13 @@ ST_retcode ivest_compute_gmm2s(
         XZWZy[i] = sum;
     }
 
-    /* 5. Solve XZWZX * beta = XZWZy */
-    ST_double *XZWZX_L = (ST_double *)malloc(K_total * K_total * sizeof(ST_double));
-    ST_double *beta_temp = (ST_double *)calloc(K_total, sizeof(ST_double));
+    /* 4. Solve XZWZX * beta = XZWZy */
     memcpy(XZWZX_L, XZWZX, K_total * K_total * sizeof(ST_double));
 
     if (ctools_cholesky(XZWZX_L, K_total) != 0) {
         SF_error("civreghdfe: GMM2S X'ZWZ'X matrix is singular\n");
         free(ZOmegaZ); free(ZOmegaZ_inv);
-        free(WZtX); free(XZW); free(XZWZX); free(XZWZy);
+        free(XZW); free(XZWZX); free(XZWZy);
         free(XZWZX_L); free(beta_temp);
         return 198;
     }
@@ -152,33 +155,41 @@ ST_retcode ivest_compute_gmm2s(
         #pragma omp parallel for schedule(static) if(N > 10000)
         for (i = 0; i < N; i++) {
             ST_double pred = 0.0;
-            for (k = 0; k < K_total; k++) {
-                pred += ctx->X_all[(size_t)k * N + i] * beta[k];
+            /* the index is declared here: one shared across threads would race */
+            for (ST_int kk = 0; kk < K_total; kk++) {
+                pred += ctx->X_all[(size_t)kk * N + i] * beta[kk];
             }
             resid[i] = y[i] - pred;
         }
     }
 
-    /* Output the GMM Hessian inverse (X'ZWZ'X)^-1 if requested */
+    /* Output the GMM Hessian inverse (X'ZWZ'X)^-1 if requested; beta is
+       already the GMM estimate, so a failure here is an error (the caller
+       must not fall back to the 2SLS VCE) */
+    ST_retcode out_rc = STATA_OK;
     if (XZWZX_inv_out) {
-        /* XZWZX_L contains the Cholesky factor, compute the inverse */
-        ST_double *XZWZX_inv = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
-        if (XZWZX_inv) {
+        ST_double *XZWZX_inv = (ST_double *)calloc((size_t)K_total * K_total, sizeof(ST_double));
+        if (!XZWZX_inv) {
+            out_rc = 920;
+        } else {
             /* Re-compute Cholesky and inverse from XZWZX */
             memcpy(XZWZX_inv, XZWZX, K_total * K_total * sizeof(ST_double));
             if (ctools_cholesky(XZWZX_inv, K_total) == 0) {
-                ctools_invert_from_cholesky(XZWZX_inv, K_total, XZWZX_inv);
-                memcpy(XZWZX_inv_out, XZWZX_inv, K_total * K_total * sizeof(ST_double));
+                stata_retcode inverse_status = ctools_invert_from_cholesky(XZWZX_inv, K_total, XZWZX_inv);
+                if (inverse_status != STATA_OK)
+                    out_rc = ctools_stata_rc(inverse_status);
+                else
+                    memcpy(XZWZX_inv_out, XZWZX_inv, K_total * K_total * sizeof(ST_double));
             }
             free(XZWZX_inv);
         }
     }
 
     free(ZOmegaZ); free(ZOmegaZ_inv);
-    free(WZtX); free(XZW); free(XZWZX); free(XZWZy);
+    free(XZW); free(XZWZX); free(XZWZy);
     free(XZWZX_L); free(beta_temp);
 
-    return STATA_OK;
+    return out_rc;
 }
 
 /*
@@ -224,9 +235,15 @@ static ST_double cue_objective(
     /* Compute residuals */
     cue_compute_residuals(y, ctx->X_all, beta, N, ctx->K_total, work_resid);
 
-    /* g = Z'We (weighted moment conditions), then S(b)^-1 g */
+    /* g = Z'We (weighted moment conditions), then S(b)^-1 g. When memory
+       runs out, ctx->alloc_failed is set so the optimizer stops with r(920)
+       instead of taking the large value as a poor step. */
     ST_double *g = (ST_double *)calloc((size_t)K_iv * (K_iv + 2), sizeof(ST_double));
-    if (!g) return 1e30;  /* Return large value on allocation failure */
+    if (!g) {
+        #pragma omp atomic write
+        ctx->alloc_failed = 1;
+        return 1e30;
+    }
     ST_double *Sg = g + K_iv, *S = Sg + K_iv;
     for (ST_int j = 0; j < K_iv; j++) {
         const ST_double *zj = Z + (size_t)j * N;
@@ -244,6 +261,10 @@ static ST_double cue_objective(
         ST_double gWinvg = 0.0;
         for (ST_int j = 0; j < K_iv; j++) gWinvg += g[j] * Sg[j];
         Q = gWinvg / N;
+    } else {
+        /* both fail only when memory runs out */
+        #pragma omp atomic write
+        ctx->alloc_failed = 1;
     }
 
     free(g);
@@ -259,7 +280,10 @@ static ST_double cue_objective(
     Driscoll-Kraay or Kiefer, as ivreg2's m_cuecrit calls m_omega.
 
     Uses Newton's method with numerical derivatives to minimize Q(β).
-    Step sizes scale with |β| for numerical stability (matching Stata's optimize()).
+    Step sizes scale with max(|β_k|, u_k) (matching Stata's optimize()), and
+    convergence is tested on the gradient in units u_k = rms(y)/rms(x_k), so
+    the iterations do not depend on the units of y or of the regressors
+    (Q itself is invariant to them).
     For homoskedastic CUE (no kernel), the caller should use LIML directly.
 */
 ST_retcode ivest_compute_cue(
@@ -287,11 +311,25 @@ ST_retcode ivest_compute_cue(
     ST_double *gradient = (ST_double *)calloc(K_total, sizeof(ST_double));
     ST_double *hessian = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
     ST_double *direction = (ST_double *)calloc(K_total, sizeof(ST_double));
+    ST_double *unit = (ST_double *)malloc(K_total * sizeof(ST_double));
 
-    if (!current_resid || !gradient || !hessian || !direction) {
+    if (!current_resid || !gradient || !hessian || !direction || !unit) {
         free(current_resid); free(gradient);
-        free(hessian); free(direction);
+        free(hessian); free(direction); free(unit);
         return 920;
+    }
+
+    /* Natural unit of each coefficient: rms(y)/rms(x_k) */
+    {
+        ST_double yy = 0.0;
+        for (i = 0; i < N; i++) yy += y[i] * y[i];
+        for (k = 0; k < K_total; k++) {
+            const ST_double *xk = ctx->X_all + (size_t)k * N;
+            ST_double xx = 0.0;
+            for (i = 0; i < N; i++) xx += xk[i] * xk[i];
+            unit[k] = (yy > 0.0 && xx > 0.0) ? sqrt(yy / xx) : 1.0;
+            if (!isfinite(unit[k]) || unit[k] <= 0.0) unit[k] = 1.0;
+        }
     }
 
     /* Pre-allocate per-thread buffers for parallel CUE gradient/Hessian.
@@ -308,7 +346,7 @@ ST_retcode ivest_compute_cue(
     ST_double **thread_grad = (ST_double **)malloc(cue_nthreads * sizeof(ST_double *));
     if (!thread_beta || !thread_resid || !thread_grad) {
         free(current_resid); free(gradient);
-        free(hessian); free(direction);
+        free(hessian); free(direction); free(unit);
         free(thread_beta); free(thread_resid); free(thread_grad);
         return 920;
     }
@@ -327,7 +365,7 @@ ST_retcode ivest_compute_cue(
         }
         free(thread_beta); free(thread_resid); free(thread_grad);
         free(current_resid); free(gradient);
-        free(hessian); free(direction);
+        free(hessian); free(direction); free(unit);
         return 920;
     }
 
@@ -335,8 +373,16 @@ ST_retcode ivest_compute_cue(
         SF_display("civreghdfe: Computing CUE (Newton's method)\n");
     }
 
+    /* cue_objective sets ctx->alloc_failed when memory runs out */
+    ST_retcode out_rc = STATA_OK;
+    ctx->alloc_failed = 0;
+
     /* Compute initial objective */
     ST_double Q_current = cue_objective(ctx, y, beta, current_resid);
+    if (ctx->alloc_failed) {
+        out_rc = 920;
+        goto cue_done;
+    }
 
     if (ctx->verbose) {
         char buf[128];
@@ -348,8 +394,8 @@ ST_retcode ivest_compute_cue(
 
     for (iter = 0; iter < max_iter; iter++) {
         /* Adaptive step sizes (matching Stata's optimize() d0 convention) */
-        /* eps_g ≈ max(|β_k|, 1) * eps^(1/3) for gradient */
-        /* eps_h ≈ max(|β_k|, 1) * eps^(1/4) for Hessian */
+        /* eps_g ≈ max(|β_k|, u_k) * eps^(1/3) for gradient */
+        /* eps_h ≈ max(|β_k|, u_k) * eps^(1/4) for Hessian */
 
         /* Compute gradient using central differences with adaptive step.
            Each k is independent — parallelize with per-thread buffers. */
@@ -363,7 +409,7 @@ ST_retcode ivest_compute_cue(
             ST_double *my_resid = thread_resid[tid];
 
             ST_double scale = fabs(beta[k]);
-            if (scale < 1.0) scale = 1.0;
+            if (scale < unit[k]) scale = unit[k];
             ST_double eps_g = scale * 6e-6;  /* eps^(1/3) ≈ 6e-6 */
 
             memcpy(my_beta, beta, K_total * sizeof(ST_double));
@@ -376,11 +422,15 @@ ST_retcode ivest_compute_cue(
 
             gradient[k] = (Q_plus - Q_minus) / (2.0 * eps_g);
         }
+        if (ctx->alloc_failed) {
+            out_rc = 920;
+            goto cue_done;
+        }
 
-        /* Compute gradient norm */
+        /* Gradient norm in the coefficients' units */
         ST_double grad_norm = 0.0;
         for (k = 0; k < K_total; k++) {
-            grad_norm += gradient[k] * gradient[k];
+            grad_norm += gradient[k] * unit[k] * gradient[k] * unit[k];
         }
         grad_norm = sqrt(grad_norm);
 
@@ -406,7 +456,7 @@ ST_retcode ivest_compute_cue(
             ST_double *my_grad2 = thread_grad[tid];
 
             ST_double scale_j = fabs(beta[j]);
-            if (scale_j < 1.0) scale_j = 1.0;
+            if (scale_j < unit[j]) scale_j = unit[j];
             ST_double eps_h = scale_j * 1.2e-4;  /* eps^(1/4) ≈ 1.2e-4 */
 
             memcpy(my_beta, beta, K_total * sizeof(ST_double));
@@ -415,7 +465,7 @@ ST_retcode ivest_compute_cue(
             /* Compute gradient at shifted point */
             for (ST_int kk = 0; kk < K_total; kk++) {
                 ST_double scale_k = fabs(my_beta[kk]);
-                if (scale_k < 1.0) scale_k = 1.0;
+                if (scale_k < unit[kk]) scale_k = unit[kk];
                 ST_double eps_g = scale_k * 6e-6;
 
                 ST_double saved = my_beta[kk];
@@ -433,6 +483,10 @@ ST_retcode ivest_compute_cue(
             for (ST_int kk = 0; kk < K_total; kk++) {
                 hessian[j * K_total + kk] = (my_grad2[kk] - gradient[kk]) / eps_h;
             }
+        }
+        if (ctx->alloc_failed) {
+            out_rc = 920;
+            goto cue_done;
         }
 
         /* Symmetrize Hessian */
@@ -452,14 +506,18 @@ ST_retcode ivest_compute_cue(
             }
             free(thread_beta); free(thread_resid); free(thread_grad);
             free(current_resid); free(gradient);
-            free(hessian); free(direction);
+            free(hessian); free(direction); free(unit);
             return 920;
         }
         memcpy(H_copy, hessian, K_total * K_total * sizeof(ST_double));
 
         ST_int newton_ok = 0;
         if (ctools_cholesky(H_copy, K_total) == 0) {
-            ctools_invert_from_cholesky(H_copy, K_total, H_copy);
+            out_rc = ctools_stata_rc(ctools_invert_from_cholesky(H_copy, K_total, H_copy));
+            if (out_rc) {
+                free(H_copy);
+                goto cue_done;
+            }
             /* direction = -H^{-1} * gradient */
             for (j = 0; j < K_total; j++) {
                 direction[j] = 0.0;
@@ -475,7 +533,7 @@ ST_retcode ivest_compute_cue(
             /* Hessian not positive definite; use steepest descent with scaling */
             ST_double inv_grad_norm = 1.0 / (grad_norm + 1e-30);
             for (k = 0; k < K_total; k++) {
-                direction[k] = -gradient[k] * inv_grad_norm;
+                direction[k] = -gradient[k] * unit[k] * unit[k] * inv_grad_norm;
             }
         }
 
@@ -494,7 +552,7 @@ ST_retcode ivest_compute_cue(
         /* Ensure descent direction */
         if (dirderiv > 0) {
             for (k = 0; k < K_total; k++) {
-                direction[k] = -gradient[k];
+                direction[k] = -gradient[k] * unit[k] * unit[k];
             }
             dirderiv = -grad_norm * grad_norm;
         }
@@ -507,6 +565,10 @@ ST_retcode ivest_compute_cue(
             }
 
             Q_new = cue_objective(ctx, y, beta_test, current_resid);
+            if (ctx->alloc_failed) {
+                out_rc = 920;
+                goto cue_done;
+            }
 
             /* Armijo condition */
             if (Q_new <= Q_current + armijo_c * step * dirderiv) {
@@ -520,6 +582,14 @@ ST_retcode ivest_compute_cue(
         if (line_search_iter >= max_ls_iter) {
             if (ctx->verbose) {
                 SF_display("civreghdfe: CUE line search failed, stopping\n");
+            }
+            break;
+        }
+
+        /* No decrease: the gradient is at its rounding floor */
+        if (!(Q_new < Q_current)) {
+            if (ctx->verbose) {
+                SF_display("civreghdfe: CUE objective cannot decrease further, stopping\n");
             }
             break;
         }
@@ -546,23 +616,27 @@ ST_retcode ivest_compute_cue(
         memcpy(resid, current_resid, N * sizeof(ST_double));
     }
 
-    /* Compute XZWZX_inv for VCE using the weighting matrix at the estimate */
+    /* Compute XZWZX_inv for VCE using the weighting matrix at the estimate
+       (a failed allocation is an error: the caller must not post beta with
+       another VCE) */
     if (XZWZX_inv_out) {
         /* Build S from final residuals and invert */
         ST_double *ZOmegaZ = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
         ST_double *ZOmegaZ_inv = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
 
-        if (ZOmegaZ && ZOmegaZ_inv &&
-            civ_omega_build(ctx->om, current_resid, 1, Z, K_iv, ZOmegaZ) == 0) {
+        out_rc = (ZOmegaZ && ZOmegaZ_inv)
+                     ? civ_omega_build(ctx->om, current_resid, 1, Z, K_iv, ZOmegaZ) : 920;
+        if (!out_rc) {
             memcpy(ZOmegaZ_inv, ZOmegaZ, K_iv * K_iv * sizeof(ST_double));
             if (ctools_cholesky(ZOmegaZ_inv, K_iv) == 0) {
-                ctools_invert_from_cholesky(ZOmegaZ_inv, K_iv, ZOmegaZ_inv);
+                out_rc = ctools_stata_rc(ctools_invert_from_cholesky(ZOmegaZ_inv, K_iv, ZOmegaZ_inv));
 
                 /* Compute (X'Z * W * Z'X)^{-1} where W = ZOmegaZ_inv */
-                ST_double *XZW = (ST_double *)calloc(K_total * K_iv, sizeof(ST_double));
-                ST_double *XZWZX = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+                ST_double *XZW = (ST_double *)calloc((size_t)K_total * K_iv, sizeof(ST_double));
+                ST_double *XZWZX = (ST_double *)calloc((size_t)K_total * K_total, sizeof(ST_double));
+                if (!out_rc && (!XZW || !XZWZX)) out_rc = 920;
 
-                if (XZW && XZWZX) {
+                if (!out_rc) {
                     for (i = 0; i < K_total; i++) {
                         for (j = 0; j < K_iv; j++) {
                             ST_double sum = 0.0;
@@ -583,7 +657,7 @@ ST_retcode ivest_compute_cue(
                     }
 
                     if (ctools_cholesky(XZWZX, K_total) == 0) {
-                        ctools_invert_from_cholesky(XZWZX, K_total, XZWZX_inv_out);
+                        out_rc = ctools_stata_rc(ctools_invert_from_cholesky(XZWZX, K_total, XZWZX_inv_out));
                     }
                 }
                 if (XZW) free(XZW);
@@ -594,6 +668,7 @@ ST_retcode ivest_compute_cue(
         if (ZOmegaZ_inv) free(ZOmegaZ_inv);
     }
 
+cue_done:
     for (int t = 0; t < cue_nthreads; t++) {
         free(thread_beta[t]);
         free(thread_resid[t]);
@@ -606,8 +681,9 @@ ST_retcode ivest_compute_cue(
     free(gradient);
     free(hessian);
     free(direction);
+    free(unit);
 
-    return STATA_OK;
+    return out_rc;
 }
 
 /*
@@ -633,7 +709,7 @@ ST_retcode ivest_compute_2sls(
     const ST_double *weights,
     ST_int weight_type,
     ST_int N,
-    ST_int N_eff,  /* Effective sample size: sum(fw) for fweights, N otherwise */
+    ST_double N_eff,  /* Effective sample size: sum(fw) for fweights (may exceed INT_MAX), N otherwise */
     ST_int K_exog,
     ST_int K_endog,
     ST_int K_iv,
@@ -661,9 +737,22 @@ ST_retcode ivest_compute_2sls(
     const civreghdfe_test_cols *test_cols,
     ST_int n_absorbed_x,
     ST_int n_absorbed_iv,
-    ST_int n_absorbed_iv_all
+    ST_int n_absorbed_iv_all,
+    ST_int dofminus
 )
 {
+    /* Heap state released at est_cleanup; every error path after the first
+       allocation leaves through it */
+    ST_retcode est_rc = STATA_OK;
+    ST_double *ZtZ = NULL, *ZtZ_inv = NULL, *ZtX = NULL, *Zty = NULL;
+    ST_double *XtPzX = NULL, *XtPzy = NULL, *temp1 = NULL, *X_all = NULL, *resid = NULL;
+    ST_double *X_hat = NULL, *ZtZ_inv_Zty = NULL;
+    ST_double *XtX = NULL, *Xty = NULL, *XkX = NULL, *Xky = NULL;
+    ST_double *XkX_copy = NULL, *beta_temp = NULL, *S_main = NULL;
+    ST_double *gmm_hessian_inv = NULL, *XkX_inv = NULL;
+    civ_omega om;
+    memset(&om, 0, sizeof(om));
+
     ST_int K_total = K_exog + K_endog;  /* Total regressors */
     /* Regressor and instrument counts for the degrees of freedom: they
        include the fixed-effect-absorbed columns that ivreghdfe keeps in its
@@ -733,6 +822,11 @@ ST_retcode ivest_compute_2sls(
         /* LIML, Fuller, or homoskedastic CUE: compute lambda
            Homoskedastic CUE = LIML (both minimize e'Pze / e'e) */
         lambda = compute_liml_lambda(y, X_endog, X_exog, Z, weights, weight_type, N, K_exog, K_endog, K_iv);
+        if (isnan(lambda)) {
+            /* never 2SLS under the LIML label */
+            SF_error("civreghdfe: Memory allocation failed for the LIML eigenvalue\n");
+            return 920;
+        }
 
         /* For exactly identified models, lambda should be 1 */
         if (K_iv == K_total) {
@@ -792,22 +886,21 @@ ST_retcode ivest_compute_2sls(
     }
 
     /* Allocate work arrays (with overflow checks) */
-    ST_double *ZtZ = (ST_double *)ctools_safe_calloc3((size_t)K_iv, (size_t)K_iv, sizeof(ST_double));
-    ST_double *ZtZ_inv = (ST_double *)ctools_safe_calloc3((size_t)K_iv, (size_t)K_iv, sizeof(ST_double));
-    ST_double *ZtX = (ST_double *)ctools_safe_calloc3((size_t)K_iv, (size_t)K_total, sizeof(ST_double));
-    ST_double *Zty = (ST_double *)ctools_safe_calloc2((size_t)K_iv, sizeof(ST_double));
-    ST_double *XtPzX = (ST_double *)ctools_safe_calloc3((size_t)K_total, (size_t)K_total, sizeof(ST_double));
-    ST_double *XtPzy = (ST_double *)ctools_safe_calloc2((size_t)K_total, sizeof(ST_double));
-    ST_double *temp1 = (ST_double *)ctools_safe_calloc3((size_t)K_iv, (size_t)K_total, sizeof(ST_double));
-    ST_double *X_all = (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)K_total, sizeof(ST_double));
-    ST_double *resid = (ST_double *)ctools_safe_malloc2((size_t)N, sizeof(ST_double));
+    ZtZ = (ST_double *)ctools_safe_calloc3((size_t)K_iv, (size_t)K_iv, sizeof(ST_double));
+    ZtZ_inv = (ST_double *)ctools_safe_calloc3((size_t)K_iv, (size_t)K_iv, sizeof(ST_double));
+    ZtX = (ST_double *)ctools_safe_calloc3((size_t)K_iv, (size_t)K_total, sizeof(ST_double));
+    Zty = (ST_double *)ctools_safe_calloc2((size_t)K_iv, sizeof(ST_double));
+    XtPzX = (ST_double *)ctools_safe_calloc3((size_t)K_total, (size_t)K_total, sizeof(ST_double));
+    XtPzy = (ST_double *)ctools_safe_calloc2((size_t)K_total, sizeof(ST_double));
+    temp1 = (ST_double *)ctools_safe_calloc3((size_t)K_iv, (size_t)K_total, sizeof(ST_double));
+    X_all = (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)K_total, sizeof(ST_double));
+    resid = (ST_double *)ctools_safe_malloc2((size_t)N, sizeof(ST_double));
 
     if (!ZtZ || !ZtZ_inv || !ZtX || !Zty || !XtPzX || !XtPzy ||
         !temp1 || !X_all || !resid) {
         SF_error("civreghdfe: Memory allocation failed\n");
-        free(ZtZ); free(ZtZ_inv); free(ZtX); free(Zty);
-        free(XtPzX); free(XtPzy); free(temp1); free(X_all); free(resid);
-        return 920;
+        est_rc = 920;
+        goto est_cleanup;
     }
 
     /* Combine X_exog and X_endog into X_all */
@@ -816,9 +909,8 @@ ST_retcode ivest_compute_2sls(
         size_t exog_size;
         if (ctools_safe_alloc_size((size_t)N, (size_t)K_exog, sizeof(ST_double), &exog_size) != 0) {
             SF_error("civreghdfe: Size overflow in memcpy\n");
-            free(ZtZ); free(ZtZ_inv); free(ZtX); free(Zty);
-            free(XtPzX); free(XtPzy); free(temp1); free(X_all); free(resid);
-            return 920;
+            est_rc = 920;
+            goto est_cleanup;
         }
         memcpy(X_all, X_exog, exog_size);
     }
@@ -826,9 +918,8 @@ ST_retcode ivest_compute_2sls(
         size_t endog_size;
         if (ctools_safe_alloc_size((size_t)N, (size_t)K_endog, sizeof(ST_double), &endog_size) != 0) {
             SF_error("civreghdfe: Size overflow in memcpy\n");
-            free(ZtZ); free(ZtZ_inv); free(ZtX); free(Zty);
-            free(XtPzX); free(XtPzy); free(temp1); free(X_all); free(resid);
-            return 920;
+            est_rc = 920;
+            goto est_cleanup;
         }
         memcpy(X_all + (size_t)N * (size_t)K_exog, X_endog, endog_size);
     }
@@ -837,7 +928,7 @@ ST_retcode ivest_compute_2sls(
     if (weights && weight_type != 0) {
         matmul_atdb(Z, Z, weights, N, K_iv, K_iv, ZtZ);
     } else {
-        matmul_atb(Z, Z, N, K_iv, K_iv, ZtZ);
+        ctools_matmul_ata(Z, N, K_iv, ZtZ);
     }
 
     /* Step 2: Invert Z'Z */
@@ -848,16 +939,14 @@ ST_retcode ivest_compute_2sls(
     }
     if (ctools_cholesky(ZtZ_inv, K_iv) != 0) {
         SF_error("civreghdfe: Z'Z is singular (instruments may be collinear)\n");
-        free(ZtZ); free(ZtZ_inv); free(ZtX); free(Zty);
-        free(XtPzX); free(XtPzy); free(temp1); free(X_all); free(resid);
-        return 198;
+        est_rc = 198;
+        goto est_cleanup;
     }
     stata_retcode inverse_status_1 = ctools_invert_from_cholesky(ZtZ_inv, K_iv, ZtZ_inv);
     if (inverse_status_1 != STATA_OK) {
         SF_error("civreghdfe: Failed to invert Z'Z\n");
-        free(ZtZ); free(ZtZ_inv); free(ZtX); free(Zty);
-        free(XtPzX); free(XtPzy); free(temp1); free(X_all); free(resid);
-        return ctools_stata_rc(inverse_status_1);
+        est_rc = ctools_stata_rc(inverse_status_1);
+        goto est_cleanup;
     }
 
     /* Step 3: Compute Z'X and Z'y */
@@ -899,57 +988,43 @@ ST_retcode ivest_compute_2sls(
      * compact triple-product leaves only ~7 sigfigs after inversion. The
      * X_hat approach gives ~19 digit X'PzX precision (Kahan N-length dots),
      * leaving ~11 sigfigs after inversion. */
-    ST_double *X_hat = (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)K_total, sizeof(ST_double));
+    X_hat = (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)K_total, sizeof(ST_double));
     if (!X_hat) {
         SF_error("civreghdfe: Memory allocation failed for X_hat\n");
-        free(ZtZ); free(ZtZ_inv); free(ZtX); free(Zty);
-        free(XtPzX); free(XtPzy); free(temp1); free(X_all); free(resid);
-        return 920;
+        est_rc = 920;
+        goto est_cleanup;
     }
 
-    /* X_hat[i,j] = sum_{k=0}^{K_iv-1} Z[i,k] * temp1[k,j]
-     * Z stored column-major: Z[k*N + i], temp1 column-major: temp1[j*K_iv + k] */
+    /* X_hat[i,j] = sum_{k=0}^{K_iv-1} Z[i,k] * temp1[k,j], accumulated in
+     * that order for every element (row blocks in parallel).
+     * For weighted: X_hat = sqrt(W) * Z * temp1 so X_hat'X_hat = X'W*PzX */
+    ctools_matmul_xb(Z, N, K_iv, temp1, K_total, X_hat);
     if (weights && weight_type != 0) {
-        /* For weighted: X_hat = sqrt(W) * Z * temp1 so X_hat'X_hat = X'W*PzX */
+        #pragma omp parallel for schedule(static) if((size_t)N * K_total > 200000)
         for (j = 0; j < K_total; j++) {
-            for (i = 0; i < N; i++) {
-                ST_double sum = 0.0;
-                for (k = 0; k < K_iv; k++) {
-                    sum += Z[(size_t)k * N + i] * temp1[j * K_iv + k];
-                }
-                X_hat[(size_t)j * N + i] = sqrt(weights[i]) * sum;
-            }
-        }
-    } else {
-        for (j = 0; j < K_total; j++) {
-            for (i = 0; i < N; i++) {
-                ST_double sum = 0.0;
-                for (k = 0; k < K_iv; k++) {
-                    sum += Z[(size_t)k * N + i] * temp1[j * K_iv + k];
-                }
-                X_hat[(size_t)j * N + i] = sum;
-            }
+            ST_double *xh = X_hat + (size_t)j * N;
+            for (ST_int row = 0; row < N; row++) xh[row] = sqrt(weights[row]) * xh[row];
         }
     }
 
-    /* X'PzX = X_hat' * X_hat using Kahan-compensated dot products (symmetric) */
+    /* X'PzX = X_hat' * X_hat using Kahan-compensated dot products (symmetric);
+     * every element is an independent sum, so the columns run in parallel */
+    #pragma omp parallel for schedule(dynamic) if(K_total > 1 && (size_t)N * K_total > 200000)
     for (j = 0; j < K_total; j++) {
-        for (i = 0; i <= j; i++) {
-            ST_double val = kahan_dot(X_hat + (size_t)i * N, X_hat + (size_t)j * N, N);
-            XtPzX[j * K_total + i] = val;
-            XtPzX[i * K_total + j] = val;
+        for (ST_int a = 0; a <= j; a++) {
+            ST_double val = kahan_dot(X_hat + (size_t)a * N, X_hat + (size_t)j * N, N);
+            XtPzX[j * K_total + a] = val;
+            XtPzX[a * K_total + j] = val;
         }
     }
 
     /* X'Pzy = X_hat' * y_hat where y_hat = Z * (Z'Z)^{-1} * Z'y */
     /* Step 6: Compute (Z'Z)^-1 * Z'y */
-    ST_double *ZtZ_inv_Zty = (ST_double *)calloc(K_iv, sizeof(ST_double));
+    ZtZ_inv_Zty = (ST_double *)calloc(K_iv, sizeof(ST_double));
     if (!ZtZ_inv_Zty) {
         SF_error("civreghdfe: Memory allocation failed for ZtZ_inv_Zty\n");
-        free(ZtZ); free(ZtZ_inv); free(ZtX); free(Zty);
-        free(XtPzX); free(XtPzy); free(temp1); free(X_all); free(resid);
-        free(X_hat);
-        return 920;
+        est_rc = 920;
+        goto est_cleanup;
     }
     for (i = 0; i < K_iv; i++) {
         ST_double sum = 0.0;
@@ -963,43 +1038,41 @@ ST_retcode ivest_compute_2sls(
     {
         ST_double *y_hat = (ST_double *)malloc(N * sizeof(ST_double));
         if (!y_hat) {
-            free(ZtZ); free(ZtZ_inv); free(ZtX); free(Zty);
-            free(XtPzX); free(XtPzy); free(temp1); free(X_all); free(resid);
-            free(X_hat); free(ZtZ_inv_Zty);
-            return 920;
+            est_rc = 920;
+            goto est_cleanup;
         }
-        for (i = 0; i < N; i++) {
-            ST_double sum = 0.0;
-            for (k = 0; k < K_iv; k++) {
-                sum += Z[(size_t)k * N + i] * ZtZ_inv_Zty[k];
-            }
-            y_hat[i] = (weights && weight_type != 0) ? sqrt(weights[i]) * sum : sum;
+        ctools_matmul_xb(Z, N, K_iv, ZtZ_inv_Zty, 1, y_hat);
+        if (weights && weight_type != 0) {
+            for (i = 0; i < N; i++) y_hat[i] = sqrt(weights[i]) * y_hat[i];
         }
         /* X'Pzy[a] = X_hat[:,a] . y_hat */
+        #pragma omp parallel for schedule(static) if(K_total > 1 && (size_t)N * K_total > 200000)
         for (i = 0; i < K_total; i++) {
             XtPzy[i] = kahan_dot(X_hat + (size_t)i * N, y_hat, N);
         }
         free(y_hat);
     }
     free(X_hat);
+    X_hat = NULL;
 
     /* Step 6b: For k-class estimation (k != 1), compute X'X and X'y */
-    ST_double *XtX = NULL;
-    ST_double *Xty = NULL;
-    ST_double *XkX = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
-    ST_double *Xky = (ST_double *)calloc(K_total, sizeof(ST_double));
+    XkX = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+    Xky = (ST_double *)calloc(K_total, sizeof(ST_double));
 
     if (!XkX || !Xky) {
         SF_error("civreghdfe: Memory allocation failed for XkX/Xky\n");
-        free(ZtZ); free(ZtZ_inv); free(ZtX); free(Zty);
-        free(XtPzX); free(XtPzy); free(temp1); free(X_all); free(resid);
-        free(ZtZ_inv_Zty); free(XkX); free(Xky);
-        return 920;
+        est_rc = 920;
+        goto est_cleanup;
     }
 
     if (kclass != 1.0) {
         XtX = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
         Xty = (ST_double *)calloc(K_total, sizeof(ST_double));
+        if (!XtX || !Xty) {
+            SF_error("civreghdfe: Memory allocation failed for X'X/X'y\n");
+            est_rc = 920;
+            goto est_cleanup;
+        }
 
         /* Compute X'X */
         if (weights && weight_type != 0) {
@@ -1046,42 +1119,27 @@ ST_retcode ivest_compute_2sls(
     }
 
     /* Step 7: Solve XkX * beta = Xky */
-    ST_double *XkX_copy = (ST_double *)malloc(K_total * K_total * sizeof(ST_double));
+    XkX_copy = (ST_double *)malloc(K_total * K_total * sizeof(ST_double));
     if (!XkX_copy) {
         SF_error("civreghdfe: Memory allocation failed for XkX_copy\n");
-        free(ZtZ); free(ZtZ_inv); free(ZtX); free(Zty);
-        free(XtPzX); free(XtPzy); free(temp1); free(X_all); free(resid);
-        free(ZtZ_inv_Zty);
-        if (XtX) free(XtX);
-        if (Xty) free(Xty);
-        free(XkX); free(Xky);
-        return 920;
+        est_rc = 920;
+        goto est_cleanup;
     }
     memcpy(XkX_copy, XkX, K_total * K_total * sizeof(ST_double));
 
     /* Use Cholesky solve */
     if (ctools_cholesky(XkX_copy, K_total) != 0) {
         SF_error("civreghdfe: XkX matrix is singular\n");
-        free(ZtZ); free(ZtZ_inv); free(ZtX); free(Zty);
-        free(XtPzX); free(XtPzy); free(temp1); free(X_all); free(resid);
-        free(ZtZ_inv_Zty); free(XkX_copy);
-        if (XtX) free(XtX);
-        if (Xty) free(Xty);
-        free(XkX); free(Xky);
-        return 198;
+        est_rc = 198;
+        goto est_cleanup;
     }
 
     /* Forward substitution */
-    ST_double *beta_temp = (ST_double *)calloc(K_total, sizeof(ST_double));
+    beta_temp = (ST_double *)calloc(K_total, sizeof(ST_double));
     if (!beta_temp) {
         SF_error("civreghdfe: Memory allocation failed for beta_temp\n");
-        free(ZtZ); free(ZtZ_inv); free(ZtX); free(Zty);
-        free(XtPzX); free(XtPzy); free(temp1); free(X_all); free(resid);
-        free(ZtZ_inv_Zty); free(XkX_copy);
-        if (XtX) free(XtX);
-        if (Xty) free(Xty);
-        free(XkX); free(Xky);
-        return 920;
+        est_rc = 920;
+        goto est_cleanup;
     }
     for (i = 0; i < K_total; i++) {
         ST_double sum = Xky[i];
@@ -1125,8 +1183,7 @@ ST_retcode ivest_compute_2sls(
        the S behind the reported J and C statistics: from the 2SLS residuals
        for GMM2S (its first step), at the estimate for CUE, from the model's
        residuals otherwise, and sigma^2 Z'WZ when iid (set after the RSS). */
-    civ_omega om;
-    ST_double *S_main = (ST_double *)ctools_safe_calloc3((size_t)K_iv, (size_t)K_iv, sizeof(ST_double));
+    S_main = (ST_double *)ctools_safe_calloc3((size_t)K_iv, (size_t)K_iv, sizeof(ST_double));
     ST_retcode om_rc = civ_omega_init(&om, s_kind, s_kernel, s_bw, N, (ST_double)N_eff,
                                       weights, weight_type, cluster_ids, num_clusters,
                                       cluster2_ids, num_clusters2, ts);
@@ -1140,26 +1197,24 @@ ST_retcode ivest_compute_2sls(
        endogeneity statistics */
     ST_int s_fullrank = 1;
     if (!om_rc && s_noniid) {
-        s_fullrank = (civ_sym_rank(S_main, K_iv, 1.0 / (ST_double)N_eff) == K_iv);
-        if (!s_fullrank && (est_method == 4 || est_method == 5)) {
+        ST_int s_rank = civ_sym_rank(S_main, K_iv, 1.0 / (ST_double)N_eff);
+        if (s_rank < 0) {
+            SF_error("civreghdfe: Memory allocation failed for the moment covariance rank\n");
+            om_rc = 920;
+        }
+        s_fullrank = (s_rank == K_iv);
+        if (!om_rc && !s_fullrank && (est_method == 4 || est_method == 5)) {
             SF_error("civreghdfe: estimated covariance matrix of moment conditions not of full rank,\n");
             SF_error("            and optimal GMM weighting matrix not unique\n");
             om_rc = 506;
         }
     }
     if (om_rc) {
-        civ_omega_free(&om); free(S_main);
-        free(ZtZ); free(ZtZ_inv); free(ZtX); free(Zty);
-        free(XtPzX); free(XtPzy); free(temp1); free(X_all); free(resid);
-        free(ZtZ_inv_Zty); free(XkX_copy); free(beta_temp);
-        if (XtX) free(XtX);
-        if (Xty) free(Xty);
-        free(XkX); free(Xky);
-        return om_rc;
+        est_rc = om_rc;
+        goto est_cleanup;
     }
 
     /* Allocate GMM/CUE Hessian inverse for VCE computation */
-    ST_double *gmm_hessian_inv = NULL;
 
     /* Step 8b: For GMM2S, re-estimate with optimal weighting matrix */
     if (est_method == 4 && s_noniid) {
@@ -1172,6 +1227,11 @@ ST_retcode ivest_compute_2sls(
 
         /* Allocate storage for GMM Hessian inverse */
         gmm_hessian_inv = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+        if (!gmm_hessian_inv) {
+            SF_error("civreghdfe: Memory allocation failed for the GMM Hessian\n");
+            est_rc = 920;
+            goto est_cleanup;
+        }
 
         /* Create estimation context for GMM2S computation */
         IVEstContext gmm_ctx;
@@ -1194,12 +1254,19 @@ ST_retcode ivest_compute_2sls(
         gmm_ctx.X_all = X_all;
         gmm_ctx.om = &om;
         gmm_ctx.verbose = verbose;
+        gmm_ctx.alloc_failed = 0;
 
         ST_retcode gmm_rc = ivest_compute_gmm2s(
             &gmm_ctx, y, S_main, beta, resid, gmm_hessian_inv
         );
 
-        if (gmm_rc != STATA_OK) {
+        if (gmm_rc == 920) {
+            /* beta may already be the GMM estimate: never post it with the
+               2SLS VCE */
+            SF_error("civreghdfe: Memory allocation failed in GMM2S\n");
+            est_rc = gmm_rc;
+            goto est_cleanup;
+        } else if (gmm_rc != STATA_OK) {
             if (verbose) SF_display("civreghdfe: GMM2S re-estimation failed, using 2SLS\n");
             if (gmm_hessian_inv) { free(gmm_hessian_inv); gmm_hessian_inv = NULL; }
         } else {
@@ -1226,6 +1293,11 @@ ST_retcode ivest_compute_2sls(
 
         /* Allocate storage for CUE Hessian inverse */
         gmm_hessian_inv = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+        if (!gmm_hessian_inv) {
+            SF_error("civreghdfe: Memory allocation failed for the CUE Hessian\n");
+            est_rc = 920;
+            goto est_cleanup;
+        }
 
         /* Create estimation context for CUE computation */
         IVEstContext cue_ctx;
@@ -1248,6 +1320,7 @@ ST_retcode ivest_compute_2sls(
         cue_ctx.X_all = X_all;
         cue_ctx.om = &om;
         cue_ctx.verbose = verbose;
+        cue_ctx.alloc_failed = 0;
 
         const ST_int max_cue_iter = 100;
         const ST_double cue_tol = 1e-10;
@@ -1258,8 +1331,11 @@ ST_retcode ivest_compute_2sls(
         );
 
         if (cue_rc != STATA_OK) {
-            if (verbose) SF_display("civreghdfe: CUE computation failed, using 2SLS\n");
-            if (gmm_hessian_inv) { free(gmm_hessian_inv); gmm_hessian_inv = NULL; }
+            /* beta may already hold a Newton iterate: never post it with the
+               2SLS VCE (ivest_compute_cue fails only when memory runs out) */
+            SF_error("civreghdfe: Memory allocation failed in CUE estimation\n");
+            est_rc = cue_rc;
+            goto est_cleanup;
         } else {
             if (verbose) {
                 char buf[256];
@@ -1272,22 +1348,19 @@ ST_retcode ivest_compute_2sls(
             /* S at the CUE estimate: the J statistic is the CUE objective
                there (ivreg2's s_gmmcue), and the C statistic uses this S */
             om_rc = civ_omega_build(&om, resid, 1, Z, K_iv, S_main);
-            if (!om_rc) s_fullrank = (civ_sym_rank(S_main, K_iv, 1.0 / (ST_double)N_eff) == K_iv);
+            if (!om_rc) {
+                ST_int s_rank = civ_sym_rank(S_main, K_iv, 1.0 / (ST_double)N_eff);
+                if (s_rank < 0) om_rc = 920;
+                s_fullrank = (s_rank == K_iv);
+            }
         }
 
         /* Note: cue_ctx uses pointers to existing arrays, no need to free context members */
     }
     if (om_rc) {
         SF_error("civreghdfe: Cannot compute the moment covariance matrix\n");
-        civ_omega_free(&om); free(S_main);
-        free(ZtZ); free(ZtZ_inv); free(ZtX); free(Zty);
-        free(XtPzX); free(XtPzy); free(temp1); free(X_all); free(resid);
-        free(ZtZ_inv_Zty); free(XkX_copy); free(beta_temp);
-        if (gmm_hessian_inv) free(gmm_hessian_inv);
-        if (XtX) free(XtX);
-        if (Xty) free(Xty);
-        free(XkX); free(Xky);
-        return om_rc;
+        est_rc = om_rc;
+        goto est_cleanup;
     }
 
     /* Step 9: Compute VCE */
@@ -1298,31 +1371,17 @@ ST_retcode ivest_compute_2sls(
     memcpy(XkX_copy, XkX, K_total * K_total * sizeof(ST_double));
     if (ctools_cholesky(XkX_copy, K_total) != 0) {
         SF_error("civreghdfe: Cannot compute VCE (XkX singular)\n");
-        civ_omega_free(&om); free(S_main);
-        free(ZtZ); free(ZtZ_inv); free(ZtX); free(Zty);
-        free(XtPzX); free(XtPzy); free(temp1); free(X_all); free(resid);
-        free(ZtZ_inv_Zty); free(XkX_copy); free(beta_temp);
-        if (gmm_hessian_inv) free(gmm_hessian_inv);
-        if (XtX) free(XtX);
-        if (Xty) free(Xty);
-        free(XkX); free(Xky);
-        return 198;
+        est_rc = 198;
+        goto est_cleanup;
     }
 
-    ST_double *XkX_inv = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
-    if (!XkX_inv) {
-        SF_error("civreghdfe: Memory allocation failed for XkX_inv\n");
-        civ_omega_free(&om); free(S_main);
-        free(ZtZ); free(ZtZ_inv); free(ZtX); free(Zty);
-        free(XtPzX); free(XtPzy); free(temp1); free(X_all); free(resid);
-        free(ZtZ_inv_Zty); free(XkX_copy); free(beta_temp);
-        if (gmm_hessian_inv) free(gmm_hessian_inv);
-        if (XtX) free(XtX);
-        if (Xty) free(Xty);
-        free(XkX); free(Xky);
-        return 198;
+    XkX_inv = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+    ST_int inverse_rc = XkX_inv ? ctools_invert_from_cholesky(XkX_copy, K_total, XkX_inv) : -1;
+    if (inverse_rc != 0) {
+        SF_error("civreghdfe: Memory allocation failed for VCE inverse\n");
+        est_rc = 920;
+        goto est_cleanup;
     }
-    ctools_invert_from_cholesky(XkX_copy, K_total, XkX_inv);
 
     /* Compute RSS (needed for Sargan test; VCE helper computes its own internally) */
     ST_double rss = 0.0;
@@ -1332,9 +1391,10 @@ ST_retcode ivest_compute_2sls(
         for (i = 0; i < N; i++) rss += resid[i] * resid[i];
     }
 
-    /* iid S = sigma^2 Z'WZ with sigma^2 = e'We/N from the model's residuals */
+    /* iid S = sigma^2 Z'WZ with sigma^2 = e'We/(N-dofminus) from the model's
+       residuals */
     if (!s_noniid) {
-        ST_double sigma2_s = rss / (ST_double)N_eff;
+        ST_double sigma2_s = rss / (ST_double)(N_eff - dofminus);
         for (i = 0; i < K_iv * K_iv; i++) S_main[i] = sigma2_s * ZtZ[i];
     }
 
@@ -1350,9 +1410,11 @@ ST_retcode ivest_compute_2sls(
         ST_double G = (ST_double)s_nclust;
         dof_adj_s = ((ST_double)(N_eff - 1) / denom) * (G > 1.0 ? G / (G - 1.0) : 1.0);
     } else {
-        ST_int df_r_s = N_eff - K_dof - df_a;
+        /* (N-dofminus)/(N-K-dofminus-sdofminus); the iid S above carries
+           the 1/(N-dofminus) */
+        ST_double df_r_s = N_eff - K_dof - df_a - dofminus;
         if (df_r_s <= 0) df_r_s = 1;
-        dof_adj_s = (ST_double)N_eff / (ST_double)df_r_s;
+        dof_adj_s = (ST_double)(N_eff - dofminus) / (ST_double)df_r_s;
     }
 
     if (gmm_hessian_inv != NULL) {
@@ -1377,7 +1439,7 @@ ST_retcode ivest_compute_2sls(
         ST_int effective_df_a = df_a;
         if (df_a == 0 && nested_adj == 1) effective_df_a = 1;
         effective_df_a += n_absorbed_x;
-        ivvce_compute_twoway(
+        ST_retcode vce_rc = ivvce_compute_twoway(
             Z, resid, temp1, XkX_inv,
             weights, weight_type,
             N, N_eff, K_total, K_iv,
@@ -1386,6 +1448,11 @@ ST_retcode ivest_compute_2sls(
             effective_df_a,
             V
         );
+        if (vce_rc) {
+            SF_error("civreghdfe: Memory allocation failed for the two-way cluster VCE\n");
+            est_rc = vce_rc;
+            goto est_cleanup;
+        }
     } else if (s_kernel > 0 || s_kind == CIV_OMEGA_DKRAAY) {
         /*
            Kernel VCEs: HAC (robust + bw), AC (bw without robust),
@@ -1404,13 +1471,8 @@ ST_retcode ivest_compute_2sls(
         }
         ST_retcode vce_rc = ivvce_compute_sandwich(temp1, S_main, XkX_inv, K_total, K_iv, dof_adj_s, V);
         if (vce_rc) {
-            civ_omega_free(&om); free(S_main);
-            free(ZtZ); free(ZtZ_inv); free(ZtX); free(Zty);
-            free(XtPzX); free(XtPzy); free(temp1); free(X_all);
-            free(resid); free(ZtZ_inv_Zty); free(XkX_copy); free(beta_temp);
-            free(XkX_inv); free(gmm_hessian_inv); free(XtX); free(Xty);
-            free(XkX); free(Xky);
-            return vce_rc;
+            est_rc = vce_rc;
+            goto est_cleanup;
         }
     } else {
         /*
@@ -1423,15 +1485,23 @@ ST_retcode ivest_compute_2sls(
         ST_double *XtPzX_inv_cue = NULL;
         if (est_method == 5 && !s_noniid) {
             XtPzX_inv_cue = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+            /* a failed allocation must not leave the LIML bread in place */
+            ST_int cue_inv_rc = XtPzX_inv_cue ? 0 : 920;
             if (XtPzX_inv_cue) {
                 memcpy(XtPzX_inv_cue, XtPzX, K_total * K_total * sizeof(ST_double));
                 if (ctools_cholesky(XtPzX_inv_cue, K_total) == 0) {
-                    ctools_invert_from_cholesky(XtPzX_inv_cue, K_total, XtPzX_inv_cue);
+                    cue_inv_rc = ctools_stata_rc(ctools_invert_from_cholesky(XtPzX_inv_cue, K_total, XtPzX_inv_cue));
                     vce_bread = XtPzX_inv_cue;
                 } else {
                     free(XtPzX_inv_cue);
                     XtPzX_inv_cue = NULL;
                 }
+            }
+            if (cue_inv_rc) {
+                SF_error("civreghdfe: Memory allocation failed for the CUE VCE\n");
+                free(XtPzX_inv_cue);
+                est_rc = cue_inv_rc;
+                goto est_cleanup;
             }
         }
 
@@ -1443,19 +1513,14 @@ ST_retcode ivest_compute_2sls(
             /* the absorbed columns count like absorbed dof, after the
                nested-fixed-effect adjustment */
             ((vce_type == CIVREGHDFE_VCE_CLUSTER && df_a == 0 && nested_adj == 1) ? 1 : df_a) + n_absorbed_x,
-            0,
+            0, dofminus,
             V
         );
 
         if (XtPzX_inv_cue) free(XtPzX_inv_cue);
         if (vce_rc) {
-            civ_omega_free(&om); free(S_main);
-            free(ZtZ); free(ZtZ_inv); free(ZtX); free(Zty);
-            free(XtPzX); free(XtPzy); free(temp1); free(X_all);
-            free(resid); free(ZtZ_inv_Zty); free(XkX_copy); free(beta_temp);
-            free(XkX_inv); free(gmm_hessian_inv); free(XtX); free(Xty);
-            free(XkX); free(Xky);
-            return vce_rc;
+            est_rc = vce_rc;
+            goto est_cleanup;
         }
     }
 
@@ -1476,19 +1541,32 @@ ST_retcode ivest_compute_2sls(
             }
             if (xx <= 0) xx = 1.0;
 
-            /* Compute R²_full: R² from projecting X_e onto all instruments Z */
+            /* Compute R²_full: R² from projecting X_e onto all instruments Z.
+               The first-stage coefficients (Z'Z)^-1 Z'X_e do not depend on
+               the observation, so they are formed once; P_Z X_e then
+               accumulates over the instruments in order. */
             ST_double xpx_full = 0.0;
-            for (i = 0; i < N; i++) {
-                ST_double pz_xe = 0.0;
+            {
+                ST_double *fs_coef = (ST_double *)calloc((size_t)(K_iv > 0 ? K_iv : 1), sizeof(ST_double));
+                ST_double *pz_xe = (ST_double *)ctools_safe_malloc2((size_t)(N > 0 ? N : 1), sizeof(ST_double));
+                if (!fs_coef || !pz_xe) {
+                    free(fs_coef); free(pz_xe);
+                    est_rc = 920;
+                    goto est_cleanup;
+                }
                 for (k = 0; k < K_iv; k++) {
                     ST_double ziz_inv_zx = 0.0;
                     for (j = 0; j < K_iv; j++) {
                         ziz_inv_zx += ZtZ_inv[k * K_iv + j] * ZtX[(K_exog + e) * K_iv + j];
                     }
-                    pz_xe += Z[(size_t)k * N + i] * ziz_inv_zx;
+                    fs_coef[k] = ziz_inv_zx;
                 }
-                ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
-                xpx_full += w * X_e[i] * pz_xe;
+                ctools_matmul_xb(Z, N, K_iv, fs_coef, 1, pz_xe);
+                for (i = 0; i < N; i++) {
+                    ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+                    xpx_full += w * X_e[i] * pz_xe[i];
+                }
+                free(fs_coef); free(pz_xe);
             }
             ST_double r2_full = xpx_full / xx;
             if (r2_full > 1.0) r2_full = 1.0;
@@ -1501,6 +1579,13 @@ ST_retcode ivest_compute_2sls(
                 ST_double *ZeZe = (ST_double *)calloc(K_exog * K_exog, sizeof(ST_double));
                 ST_double *ZeZe_inv = (ST_double *)calloc(K_exog * K_exog, sizeof(ST_double));
                 ST_double *ZeXe = (ST_double *)calloc(K_exog, sizeof(ST_double));
+                if (!ZeZe || !ZeZe_inv || !ZeXe) {
+                    /* R2_reduced = 0 would overstate the first-stage F */
+                    free(ZeZe); free(ZeZe_inv); free(ZeXe);
+                    SF_error("civreghdfe: Memory allocation failed for the first-stage F\n");
+                    est_rc = 920;
+                    goto est_cleanup;
+                }
 
                 if (ZeZe && ZeZe_inv && ZeXe) {
                     /* Extract Z_exog'Z_exog from ZtZ */
@@ -1522,8 +1607,15 @@ ST_retcode ivest_compute_2sls(
 
                     /* Invert Z_exog'Z_exog */
                     memcpy(ZeZe_inv, ZeZe, K_exog * K_exog * sizeof(ST_double));
-                    if (ctools_cholesky(ZeZe_inv, K_exog) == 0 &&
-                        ctools_invert_from_cholesky(ZeZe_inv, K_exog, ZeZe_inv) == 0) {
+                    ST_int ze_ok = (ctools_cholesky(ZeZe_inv, K_exog) == 0);
+                    stata_retcode ze_status = ze_ok ? ctools_invert_from_cholesky(ZeZe_inv, K_exog, ZeZe_inv) : STATA_OK;
+                    if (ze_status != STATA_OK) {
+                        free(ZeZe); free(ZeZe_inv); free(ZeXe);
+                        SF_error("civreghdfe: Memory allocation failed for the first-stage F\n");
+                        est_rc = ctools_stata_rc(ze_status);
+                        goto est_cleanup;
+                    }
+                    if (ze_ok) {
 
                         /* Compute X_e'P_exog X_e = ZeXe' * ZeZe_inv * ZeXe */
                         ST_double xpx_reduced = 0.0;
@@ -1552,7 +1644,7 @@ ST_retcode ivest_compute_2sls(
             /* F = (partial_R² / L) / ((1 - R²_full) / df_resid) */
             ST_int L = K_iv - K_exog;  /* Number of excluded instruments */
             if (L <= 0) L = 1;
-            ST_int denom_df = N_eff - Kiv_dof - df_a;
+            ST_double denom_df = N_eff - Kiv_dof - df_a - dofminus;
             if (denom_df <= 0) denom_df = 1;
 
             ST_double denom = (1.0 - r2_full) / (ST_double)denom_df;
@@ -1561,10 +1653,11 @@ ST_retcode ivest_compute_2sls(
             first_stage_F[e] = (partial_r2 / (ST_double)L) / denom;
             if (first_stage_F[e] < 0) first_stage_F[e] = 0;
 
-            /* Save partial R² for ffirst display */
+            /* Save the partial R² for ffirst display: ivreg2's pr2 from the
+               classical Wald statistic, (R²_full - R²_reduced)/(1 - R²_reduced) */
             char r2_name[64];
             snprintf(r2_name, sizeof(r2_name), "__civreghdfe_partial_r2_%d", (int)(e + 1));
-            ctools_scal_save(r2_name, partial_r2);
+            ctools_scal_save(r2_name, (r2_reduced < 1.0) ? partial_r2 / (1.0 - r2_reduced) : 0.0);
 
             if (verbose) {
                 char buf[256];
@@ -1590,12 +1683,18 @@ ST_retcode ivest_compute_2sls(
     ST_double cd_f = 0.0;       /* Cragg-Donald Wald F (homoskedastic) */
     ST_double kp_f = 0.0;       /* Kleibergen-Paap rk Wald F (robust) */
 
-    civreghdfe_compute_underid_test(
+    /* The tests return 920 when memory runs out; a statistic they cannot
+       compute otherwise is posted as missing */
+    est_rc = civreghdfe_compute_underid_test(
         X_endog, Z,
         weights, weight_type, N, N_eff, K_exog, K_endog, K_iv, df_a_full + n_absorbed_iv_all,
         &rk_om, rk_cluster, s_nclust,
         &underid_stat, &underid_df, &cd_f, &kp_f
     );
+    if (est_rc) {
+        SF_error("civreghdfe: Memory allocation failed for the diagnostic tests\n");
+        goto est_cleanup;
+    }
 
     /* Store underidentification test result */
     ctools_scal_save("__civreghdfe_underid", underid_stat);
@@ -1608,12 +1707,16 @@ ST_retcode ivest_compute_2sls(
     ST_double sargan_stat = 0.0;
     ST_int overid_df = K_iv - K_total;
 
-    civreghdfe_compute_hansen_j(
+    est_rc = civreghdfe_compute_hansen_j(
         y, X_all, K_total, Z, K_iv,
         weights, weight_type, N, S_main,
         (s_noniid && est_method != 4 && est_method != 5) ? NULL : resid,
         &sargan_stat, &overid_df
     );
+    if (est_rc) {
+        SF_error("civreghdfe: Memory allocation failed for the diagnostic tests\n");
+        goto est_cleanup;
+    }
 
     /* Store diagnostic statistics as Stata scalars (J not reported when S
        is rank deficient) */
@@ -1629,11 +1732,15 @@ ST_retcode ivest_compute_2sls(
     ST_double endog_f = 0.0;
     ST_int endog_df = K_endog;
 
-    civreghdfe_compute_dwh_test(
+    est_rc = civreghdfe_compute_dwh_test(
         y, X_exog, X_endog, Z, temp1,
         N, K_exog, K_endog, K_iv, df_a_full,
         &endog_chi2, &endog_f, &endog_df
     );
+    if (est_rc) {
+        SF_error("civreghdfe: Memory allocation failed for the diagnostic tests\n");
+        goto est_cleanup;
+    }
 
     ctools_scal_save("__civreghdfe_endog_chi2", endog_chi2);
     ctools_scal_save("__civreghdfe_endog_f", endog_f);
@@ -1646,12 +1753,16 @@ ST_retcode ivest_compute_2sls(
         ST_int cstat_df = test_cols->n_orthog;
 
         /* C = J - J_r with the S behind J (ivreg2's smatrix()) */
-        civreghdfe_compute_cstat(
+        est_rc = civreghdfe_compute_cstat(
             y, X_all, K_total, Z, K_iv, K_exog,
             weights, weight_type, N, S_main, sargan_stat,
             test_cols->orthog, test_cols->n_orthog,
             &cstat, &cstat_df
         );
+        if (est_rc) {
+            SF_error("civreghdfe: Memory allocation failed for the diagnostic tests\n");
+            goto est_cleanup;
+        }
 
         ctools_scal_save("__civreghdfe_cstat", s_fullrank ? cstat : SV_missval);
         ctools_scal_save("__civreghdfe_cstat_df", (ST_double)cstat_df);
@@ -1664,12 +1775,16 @@ ST_retcode ivest_compute_2sls(
         /* ivreg2 re-estimates with liml (LIML, Fuller) or gmm2s; 2SLS
            otherwise (cue and kclass are not passed) */
         ST_int endog_est = (est_method == 1 || est_method == 2) ? 1 : (est_method == 4 ? 4 : 0);
-        civreghdfe_compute_endogtest_subset(
+        est_rc = civreghdfe_compute_endogtest_subset(
             y, X_exog, X_endog, Z, N, weights, weight_type,
             K_exog, K_endog, K_iv, endog_est, &rk_om,
             test_cols->endogtest, test_cols->n_endogtest,
             &endogtest_stat, &endogtest_df_out
         );
+        if (est_rc) {
+            SF_error("civreghdfe: Memory allocation failed for the diagnostic tests\n");
+            goto est_cleanup;
+        }
 
         ctools_scal_save("__civreghdfe_endogtest_stat", s_fullrank ? endogtest_stat : SV_missval);
         ctools_scal_save("__civreghdfe_endogtest_df", (ST_double)endogtest_df_out);
@@ -1679,38 +1794,30 @@ ST_retcode ivest_compute_2sls(
         ST_double redund_stat = 0.0;
         ST_int redund_df = K_endog * test_cols->n_redundant;
 
-        civreghdfe_compute_redundant(
+        est_rc = civreghdfe_compute_redundant(
             X_endog, Z, N, weights, weight_type,
             K_exog, K_endog, K_iv, &rk_om,
             test_cols->redundant, test_cols->n_redundant,
             &redund_stat, &redund_df
         );
+        if (est_rc) {
+            SF_error("civreghdfe: Memory allocation failed for the diagnostic tests\n");
+            goto est_cleanup;
+        }
 
         ctools_scal_save("__civreghdfe_redund_stat", redund_stat);
         ctools_scal_save("__civreghdfe_redund_df", (ST_double)redund_df);
     }
 
-    /* Cleanup */
+est_cleanup:
+    /* Single exit: releases whatever the stage reached had allocated */
     civ_omega_free(&om);
     free(S_main);
-    free(ZtZ);
-    free(ZtZ_inv);
-    free(ZtX);
-    free(Zty);
-    free(XtPzX);
-    free(XtPzy);
-    free(temp1);
-    free(X_all);
-    free(resid);
-    free(ZtZ_inv_Zty);
-    free(XkX_copy);
-    free(beta_temp);
-    free(XkX_inv);
-    if (gmm_hessian_inv) free(gmm_hessian_inv);
-    if (XtX) free(XtX);
-    if (Xty) free(Xty);
-    free(XkX);
-    free(Xky);
+    free(ZtZ); free(ZtZ_inv); free(ZtX); free(Zty);
+    free(XtPzX); free(XtPzy); free(temp1); free(X_all); free(resid);
+    free(X_hat); free(ZtZ_inv_Zty);
+    free(XkX_copy); free(beta_temp); free(XkX_inv); free(gmm_hessian_inv);
+    free(XtX); free(Xty); free(XkX); free(Xky);
 
-    return STATA_OK;
+    return est_rc;
 }

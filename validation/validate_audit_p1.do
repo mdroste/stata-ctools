@@ -160,12 +160,20 @@ program p1_bins
     cbinscatter y x, by(g) nquantiles(4) nograph
     assert e(N) == 40 & e(num_groups) == 2
     matrix bins = e(bindata)
+    * binscatter bins every group on the pooled quartiles of x (10, 20, 30, 40):
+    * the groups' disjoint x ranges each fill two of them, and the remaining
+    * rows of the 4-bins-per-group matrix stay missing
     assert rowsof(bins) == 8
     scalar total = 0
+    scalar filled = 0
     forvalues i=1/8 {
+        if missing(bins[`i',1]) continue
+        scalar filled = filled + 1
         assert !missing(bins[`i',3],bins[`i',4],bins[`i',5])
+        assert bins[`i',1] == 1 + (`i' > 2) & bins[`i',5] == 10
         scalar total = total + bins[`i',5]
     }
+    assert filled == 4
     assert total == 40
     replace g = cond(_n<=20,-.1,1e12)
     cbinscatter y x, by(g) nquantiles(4) nodraw

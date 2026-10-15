@@ -14,7 +14,19 @@ upstream changes before using the maintainer-only `--record` option to change
 the manifest. The binary datasets are cached locally rather than redistributed
 as part of the ctools installation package.
 
-`ctools_fixture` in `validation/validate_setup.do` loads these files. Missing
+`hdfe_manifest.json` pins a second, opt-in collection the same way: the 15
+Stata files (about 227 MB) of Sergio Correia's
+[HDFE benchmark collection](https://www.scorreia.com/data/hdfe/index.html),
+cached in `data/hdfe/`. Only `validation/run_hdfe_datasets.py` uses it; the
+offline gate does not require it. See
+[the walkthrough](../../docs/HDFE_BENCHMARK_DATASETS.md).
+
+```sh
+python3 scripts/fetch_validation_data.py --collection hdfe
+python3 scripts/fetch_validation_data.py --collection hdfe --check-only
+```
+
+`ctools_fixture` in `validation/validate_setup.do` loads the official examples. Missing
 fixtures fail the component. Built-in `sysuse` examples remain local to Stata.
 The import suite uses available official examples for generic CSV round trips;
 obsolete, unavailable example names are not treated as skipped checks.

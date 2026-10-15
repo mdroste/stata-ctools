@@ -98,13 +98,12 @@ int ctools_str_hash_lookup(ctools_str_hash_table *ht, const char *key, int *valu
 #define CTOOLS_MAX_LABELS       65536
 
 /*
- * Write label entries as a .do file that rebuilds each label with Mata
- * st_vlmodify() from byte literals. Used by cencode to pass new labels back
- * to the .ado file.
+ * Write CTOOLS_LABELS_1 data for cencode's Mata label reader: an ASCII magic
+ * line, then "code byte_count\n" followed by exactly byte_count raw bytes for
+ * each entry. The strings are borrowed; the file contains no executable code.
  * Returns 0 on success, -1 on error.
  */
-int ctools_label_write_stata_file(const char **strings, const int *codes,
-                                   size_t n_labels, const char *label_name,
-                                   const char *filepath);
+int ctools_label_write_file(const char **strings, const int *codes, size_t n_labels,
+                            const char *filepath);
 
 #endif /* CTOOLS_HASH_H */

@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <limits.h>
 #include <math.h>
 
 #include "stplugin.h"
@@ -308,14 +309,15 @@ static bool cexport_string_needs_quoting(const char *str, char delimiter)
     return false;
 }
 
+/* Returns the quoted length, -1 when buf is too small, or CEXPORT_ROW_TOO_LONG
+ * when the quoted field alone exceeds INT_MAX bytes. */
 static int cexport_write_quoted_string(const char *str, char *buf, size_t buf_size)
 {
     if (!str) str = "";
     size_t need = 3; /* outer quotes and terminator */
     for (const char *p = str; *p; p++) {
-        size_t add = *p == '"' ? 2 : 1;
-        if (need > buf_size || add > buf_size - need) return -1;
-        need += add;
+        need += *p == '"' ? 2 : 1;
+        if (need - 1 > (size_t)INT_MAX) return CEXPORT_ROW_TOO_LONG;
     }
     if (need > buf_size) return -1;
     size_t pos = 0;
@@ -365,7 +367,7 @@ int cexport_format_row_numeric(const cexport_context *ctx, size_t row_idx,
         }
     }
 
-    return (int)pos;
+    return pos > (size_t)INT_MAX ? CEXPORT_ROW_TOO_LONG : (int)pos;
 }
 
 int cexport_format_row(const cexport_context *ctx, size_t row_idx,
@@ -407,6 +409,7 @@ int cexport_format_row(const cexport_context *ctx, size_t row_idx,
 
             if (need_quote) {
                 field_len = cexport_write_quoted_string(str, buf + pos, buf_size - pos);
+                if (field_len == CEXPORT_ROW_TOO_LONG) return field_len;
                 if (field_len < 0 || pos + (size_t)field_len + 2 + (size_t)line_end_len > buf_size) return -1;
             } else {
                 field_len = (int)strlen(str);
@@ -426,7 +429,8 @@ int cexport_format_row(const cexport_context *ctx, size_t row_idx,
         }
     }
 
-    return (int)pos;
+    /* Loaded strL cells can make a row longer than the int return reports. */
+    return pos > (size_t)INT_MAX ? CEXPORT_ROW_TOO_LONG : (int)pos;
 }
 
 /* Stata fixed strings hold at most 2045 bytes; SF_sdata adds a terminator. */
@@ -477,7 +481,7 @@ int cexport_format_row_stream(const cexport_context *ctx, ST_int obs,
         }
     }
 
-    return (int)pos;
+    return pos > (size_t)INT_MAX ? CEXPORT_ROW_TOO_LONG : (int)pos;
 }
 
 int cexport_format_header(const cexport_context *ctx, char *buf, size_t buf_size)

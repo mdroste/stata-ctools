@@ -4,7 +4,7 @@ typedef struct {
   uint32_t decimal, group;
   const char *negative, *exponent;
 } cimport_locale_profile;
-#include "cimport_locale_profiles.inc"
+#include "generated/cimport_locale_profiles.inc"
 static cimport_locale_profile cimport_active_locale;
 static bool cimport_locale_enabled;
 static int cimport_locale_compare(const void *key, const void *entry) {

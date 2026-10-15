@@ -1,0 +1,62 @@
+{
+  "credit": {
+    "sha256": "960f1c5e97630aee84073da553f63274107d4206bbed777a0c42339ddb3ee668",
+    "url": "https://f001.backblazeb2.com/file/sergio-public-data/credit.dta"
+  },
+  "credit2": {
+    "sha256": "54b22bafdc2de5c9d2b4e6bd3e2bd6335644ef593cc999932c5066220c62e1c5",
+    "url": "https://f001.backblazeb2.com/file/sergio-public-data/credit2.dta"
+  },
+  "directors": {
+    "sha256": "feb0b3021106a333d228b28ab6f615a2c77b0d9a36cc443eb9b387eac3cd4646",
+    "url": "https://f001.backblazeb2.com/file/sergio-public-data/directors.dta"
+  },
+  "enron": {
+    "sha256": "03e00a98e71edf1abbba6bba526505c642de0ca54542677600772c51f00bc75d",
+    "url": "https://f001.backblazeb2.com/file/sergio-public-data/enron.dta"
+  },
+  "github": {
+    "sha256": "817b61de3a271cc1a47fd82460dd4f2bfd7d98dfe57e207fab9445e2a738cc3a",
+    "url": "https://f001.backblazeb2.com/file/sergio-public-data/github.dta"
+  },
+  "patents": {
+    "sha256": "8ef6e6e1f66defe2675e8496952fad1c1b98bc826b69d7f40e0118882e542167",
+    "url": "https://f001.backblazeb2.com/file/sergio-public-data/patents.dta"
+  },
+  "schools": {
+    "sha256": "7bad104c607f7e947d0a6d459a883e4df3302db6a547d0398f3510db7f18e221",
+    "url": "https://f001.backblazeb2.com/file/sergio-public-data/schools.dta"
+  },
+  "soccer": {
+    "sha256": "7269a9535290f15bc574a2f47e1a0c64684b93825389bcd32b1ac65f9cb89f71",
+    "url": "https://f001.backblazeb2.com/file/sergio-public-data/soccer.dta"
+  },
+  "synthetic-assortative": {
+    "sha256": "8a6a01aeeb4bc082fac1c6e6f305dd39b1a99941dd63def4c98faaa20c3d2e82",
+    "url": "https://f001.backblazeb2.com/file/sergio-public-data/synthetic-assortative.dta"
+  },
+  "synthetic-complete": {
+    "sha256": "ea07270032e30a0211da46c992c7e2c813f83175fd76ec22ea0a98681aef5938",
+    "url": "https://f001.backblazeb2.com/file/sergio-public-data/synthetic-complete.dta"
+  },
+  "synthetic-uniform-easy": {
+    "sha256": "96f99a6fd679ccbc23a3cf361500a602a62a044e2a1823d0a256736f6339bf4d",
+    "url": "https://f001.backblazeb2.com/file/sergio-public-data/synthetic-uniform-easy.dta"
+  },
+  "synthetic-uniform-hard": {
+    "sha256": "7679936e1c39ae738ca4733b0dc9ca25c801c6dfca9bb6ecd4bd09b99918957e",
+    "url": "https://f001.backblazeb2.com/file/sergio-public-data/synthetic-uniform-hard.dta"
+  },
+  "synthetic-uniform-harder": {
+    "sha256": "c2b5a31bbd7718a51242a42e4a5ff6ec92a872f0ece95978e3fce90796fa1645",
+    "url": "https://f001.backblazeb2.com/file/sergio-public-data/synthetic-uniform-harder.dta"
+  },
+  "synthetic-zigzag": {
+    "sha256": "dd0d41f630d0bef71e15fd0629f8570c57beeb2a7d032bcac1c53611de2edb79",
+    "url": "https://f001.backblazeb2.com/file/sergio-public-data/synthetic-zigzag.dta"
+  },
+  "workers": {
+    "sha256": "134f6dd37dacc9305325261c96664148b000365f429d363ae41568c953f27f50",
+    "url": "https://f001.backblazeb2.com/file/sergio-public-data/workers.dta"
+  }
+}

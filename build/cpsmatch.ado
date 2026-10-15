@@ -106,12 +106,14 @@ program define cpsmatch, rclass sortpreserve
     * Verbose timing
     local __do_timing = ("`verbose'" != "")
     if `__do_timing' {
-        timer clear 90
-        timer clear 91
-        timer clear 92
-        timer clear 94
-        timer on 90
-        timer on 91
+        local __ct_elapsed90 = 0
+        local __ct_elapsed91 = 0
+        local __ct_elapsed92 = 0
+        local __ct_elapsed94 = 0
+        if "`__ct_elapsed90'" == "" local __ct_elapsed90 = 0
+        quietly _ctools_clock __ct_start90
+        if "`__ct_elapsed91'" == "" local __ct_elapsed91 = 0
+        quietly _ctools_clock __ct_start91
     }
 
     * =========================================================================
@@ -199,8 +201,10 @@ program define cpsmatch, rclass sortpreserve
     }
 
     if `__do_timing' {
-        timer off 91
-        timer on 92
+        quietly _ctools_clock __ct_now
+        local __ct_elapsed91 = `__ct_elapsed91' + (`__ct_now' - `__ct_start91')
+        if "`__ct_elapsed92'" == "" local __ct_elapsed92 = 0
+        quietly _ctools_clock __ct_start92
     }
 
     * =========================================================================
@@ -219,7 +223,8 @@ program define cpsmatch, rclass sortpreserve
     plugin call ctools_plugin `allvars' if `touse', "cpsmatch `threads_code' `args'"
 
     if `__do_timing' {
-        timer off 92
+        quietly _ctools_clock __ct_now
+        local __ct_elapsed92 = `__ct_elapsed92' + (`__ct_now' - `__ct_start92')
     }
 
     * =========================================================================
@@ -234,7 +239,8 @@ program define cpsmatch, rclass sortpreserve
     * =========================================================================
 
     if `__do_timing' {
-        timer on 94
+        if "`__ct_elapsed94'" == "" local __ct_elapsed94 = 0
+        quietly _ctools_clock __ct_start94
     }
 
     local att = .
@@ -243,9 +249,10 @@ program define cpsmatch, rclass sortpreserve
 
     if "`outcome'" != "" {
         * Calculate weighted mean difference
-        quietly summarize `outcome' if _treated == 1 & _support == 1 [aw=_weight]
+        quietly summarize `outcome' if _treated == 1 & _support == 1
         local y1_bar = r(mean)
         local n1 = r(N)
+        local var1 = r(Var)
 
         quietly summarize `outcome' if _treated == 0 & _support == 1 [aw=_weight]
         local y0_bar = r(mean)
@@ -254,14 +261,17 @@ program define cpsmatch, rclass sortpreserve
         if `n1' > 0 & `n0' > 0 {
             local att = `y1_bar' - `y0_bar'
 
-            * Approximate SE using matched sample variance
-            quietly summarize `outcome' if _treated == 1 & _support == 1 [aw=_weight]
-            local var1 = r(Var)
-
-            quietly summarize `outcome' if _treated == 0 & _support == 1 [aw=_weight]
+            * psmatch2 default ATT variance: unweighted group variances,
+            * with squared match-frequency weights for reused controls.
+            * cpsmatch stores unused controls with zero weight; psmatch2
+            * stores them as missing. Exclude both representations.
+            quietly summarize `outcome' if _treated == 0 & _weight > 0 & _weight < .
             local var0 = r(Var)
-
-            local att_se = sqrt(`var1'/`n1' + `var0'/`n0')
+            tempvar weight_squared
+            quietly generate double `weight_squared' = _weight^2 if _treated == 0
+            quietly summarize `weight_squared', meanonly
+            local sum_weight_squared = r(sum)
+            local att_se = sqrt(`var1'/`n1' + `var0'*`sum_weight_squared'/`n1'^2)
             if `att_se' > 0 {
                 local att_t = `att' / `att_se'
             }
@@ -288,7 +298,12 @@ program define cpsmatch, rclass sortpreserve
         quietly summarize `outcome' if _treated == 0
         local var0_u = r(Var)
         local n0_u = r(N)
-        local unmatched_se = sqrt(`var1_u'/`n1_u' + `var0_u'/`n0_u')
+        * psmatch2 displays the OLS SE from regressing outcome on treatment.
+        * Use its pooled residual variance; a singleton group contributes zero SSE.
+        local sse1_u = cond(`n1_u' > 1, (`n1_u'-1)*`var1_u', 0)
+        local sse0_u = cond(`n0_u' > 1, (`n0_u'-1)*`var0_u', 0)
+        local pooled_var = (`sse1_u' + `sse0_u')/(`n1_u' + `n0_u' - 2)
+        local unmatched_se = sqrt(`pooled_var'*(1/`n1_u' + 1/`n0_u'))
         local unmatched_t = `unmatched_diff' / `unmatched_se'
 
         di as text "{hline 78}"
@@ -301,7 +316,8 @@ program define cpsmatch, rclass sortpreserve
     }
 
     if `__do_timing' {
-        timer off 94
+        quietly _ctools_clock __ct_now
+        local __ct_elapsed94 = `__ct_elapsed94' + (`__ct_now' - `__ct_start94')
     }
 
     * Treatment assignment table (psmatch2 format)
@@ -347,16 +363,17 @@ program define cpsmatch, rclass sortpreserve
     * =========================================================================
 
     if `__do_timing' {
-        timer off 90
+        quietly _ctools_clock __ct_now
+        local __ct_elapsed90 = `__ct_elapsed90' + (`__ct_now' - `__ct_start90')
 
-        quietly timer list 90
-        local __time_total = r(t90)
-        quietly timer list 91
-        local __time_preplugin = r(t91)
-        quietly timer list 92
-        local __time_plugin = r(t92)
-        quietly timer list 94
-        local __time_att = r(t94)
+        * Elapsed seconds are held in caller-local timing state.
+        local __time_total = `__ct_elapsed90'
+        * Elapsed seconds are held in caller-local timing state.
+        local __time_preplugin = `__ct_elapsed91'
+        * Elapsed seconds are held in caller-local timing state.
+        local __time_plugin = `__ct_elapsed92'
+        * Elapsed seconds are held in caller-local timing state.
+        local __time_att = `__ct_elapsed94'
 
         di as text "{hline 55}"
         di as text "cpsmatch timing breakdown:"
@@ -408,6 +425,7 @@ program define cpsmatch, rclass sortpreserve
     if "`outcome'" != "" & `att' != . {
         return scalar att = `att'
         return scalar att_se = `att_se'
+        return scalar seatt = `att_se'
         return scalar att_t = `att_t'
     }
 

@@ -1,0 +1,69 @@
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+      name:  <unnamed>
+       log:  /Users/Mike/Documents/GitHub/stata-ctools/temp/encode_performance_20261002/integrated_test_cwinsor.log
+  log type:  text
+ opened on:   2 Oct 2026, 12:06:54
+
+. cd "/Users/Mike/Documents/GitHub/stata-ctools/temp/encode_performance_20261002/tests"
+/Users/Mike/Documents/GitHub/stata-ctools/temp/encode_performance_20261002/tests
+
+. capture noisily do validation/validate_cwinsor.do
+
+. /*******************************************************************************
+>  * validate_cwinsor.do
+>  *
+>  * Comprehensive validation tests for cwinsor vs winsor2 (documented replacement)
+>  * Tests all options: cuts, p/q, trim, by, suffix/prefix, replace
+>  *
+>  * VERIFICATION: All tests compare winsorized/trimmed values between
+>  * winsor2 and cwinsor using significant figures comparison. Direct gstats
+>  * checks below are supplementary checks on fixtures where the references agree.
+>  ******************************************************************************/
+. 
+. * Load setup (works from project root or validation dir)
+. capture do "validation/validate_setup.do"
+
+. if _rc != 0 {
+.     do "validate_setup.do"
+. }
+
+. 
+. quietly {
+Running validation tests for cwinsor...
+(1 variables winsorized at [1, 99] percentiles)
+
+. 
+. print_summary "cwinsor"
+
+---------------------------------------------
+  cwinsor validation results
+---------------------------------------------
+  Passed: 62
+  Failed: 1
+  Skipped: 0
+  Total:  63
+---------------------------------------------
+  SOME TESTS FAILED
+  large dataset (100k obs): x: 1000 values differ beyond tolerance
+---------------------------------------------
+
+r(9);
+
+end of do-file
+
+. local rc=_rc
+
+. if $TESTS_FAILED > 0 local rc=9
+
+. di "TEST_RC=`rc'"
+TEST_RC=9
+
+. di "CTOOLS_LAUNCH=d08d4b16b3be4576b99bb104900ae3b3 RC=`rc'"
+CTOOLS_LAUNCH=d08d4b16b3be4576b99bb104900ae3b3 RC=9
+
+. log close
+      name:  <unnamed>
+       log:  /Users/Mike/Documents/GitHub/stata-ctools/temp/encode_performance_20261002/integrated_test_cwinsor.log
+  log type:  text
+ closed on:   2 Oct 2026, 12:06:54
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------

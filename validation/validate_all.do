@@ -18,7 +18,6 @@ local total_passed = 0
 local total_failed = 0
 local total_tests = 0
 local total_skipped = 0
-local total_expected_skipped = 0
 
 * Track all failures across all components (with component prefix)
 local all_failure_count = 0
@@ -52,17 +51,16 @@ foreach script of local scripts {
     global TESTS_FAILED = 0
     global TESTS_TOTAL = 0
     global TESTS_SKIPPED = 0
-    global TESTS_EXPECTED_SKIPPED = 0
     global CTOOLS_COMPONENT_COMPLETE ""
     global FAILURE_COUNT = 0
-    * Run the script silently
-    capture quietly do "validation/validate_`script'.do"
+    * Components control their own verbosity. An outer quietly suppresses even
+    * named logs inside display-capture tests, leaving those assertions no output.
+    capture noisily do "validation/validate_`script'.do"
     local rc_`script_idx' = _rc
     if "${CTOOLS_COMPONENT_COMPLETE}" != "`script'" & `rc_`script_idx'' == 0 {
         local rc_`script_idx' = 9
     }
     noi di "CTOOLS_COMPONENT=`script' RC=`rc_`script_idx'' COMPLETE=${CTOOLS_COMPONENT_COMPLETE}"
-    local total_expected_skipped = `total_expected_skipped' + $TESTS_EXPECTED_SKIPPED
     if `rc_`script_idx'' != 0 & $TESTS_FAILED == 0 {
         global TESTS_FAILED = 1
         global TESTS_TOTAL = $TESTS_TOTAL + 1
@@ -159,9 +157,9 @@ noi di as text ""
 
 } /* end quietly */
 
-di "CTOOLS_FULL_PASSED=`total_passed' FAILED=`total_failed' SKIPPED=`total_skipped' EXPECTED_SKIPPED=`total_expected_skipped'"
-if `total_skipped' != `total_expected_skipped' {
-    di as error "Unexpected validation skips are release-blocking"
+di "CTOOLS_FULL_PASSED=`total_passed' FAILED=`total_failed' SKIPPED=`total_skipped' EXPECTED_SKIPPED=0"
+if `total_skipped' != 0 {
+    di as error "All validation skips are release-blocking"
     exit 9
 }
 

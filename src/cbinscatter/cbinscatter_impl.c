@@ -23,7 +23,7 @@
 #include "ctools_runtime.h"
 #include "../ctools_config.h"
 #include "../ctools_hdfe_utils.h"
-#include "../creghdfe/creghdfe_utils.h"
+#include "hdfe/hdfe_remap.h"
 #include "cbinscatter_impl.h"
 #include "cbinscatter_types.h"
 #include "cbinscatter_bins.h"
@@ -341,50 +341,44 @@ static ST_retcode load_data(
     /* Build valid index array - check for missing values in variables.
      * Note: SF_ifobs is already handled by ctools_data_load(). */
     N_valid = 0;
-    for (i = 0; i < N; i++) {
-        int valid = 1;
-
-        /* Check y and x for missing values */
-        if (SF_is_missing(y[i]) || SF_is_missing(x[i])) {
-            valid = 0;
-        }
-
-        /* Check controls */
-        if (valid && controls) {
-            for (j = 0; j < config->num_controls; j++) {
-                if (SF_is_missing(controls[(size_t)j * N + i])) {
-                    valid = 0;
-                    break;
+    {
+        /* Flags first, one column at a time over blocks of rows (sequential
+         * reads; blocks in parallel), then the index list in row order. A
+         * value is missing when it is not below Stata's missing code, which
+         * for stored data is what SF_is_missing() tests. */
+        const ST_double missval = SV_missval;
+        const ST_int block = 16384;
+        const ST_int num_blocks = N / block + (N % block != 0); /* no N + block overflow */
+        ST_int blk;
+        #pragma omp parallel for schedule(static) private(j) if (N > 100000)
+        for (blk = 0; blk < num_blocks; blk++) {
+            const ST_int i0 = blk * block;
+            const ST_int i1 = (N - i0 < block) ? N : i0 + block;
+            ST_int r;
+            /* y and x */
+            for (r = i0; r < i1; r++) valid_idx[r] = (y[r] < missval) && (x[r] < missval);
+            if (controls) {
+                for (j = 0; j < config->num_controls; j++) {
+                    const ST_double *col = controls + (size_t)j * N;
+                    for (r = i0; r < i1; r++) if (!(col[r] < missval)) valid_idx[r] = 0;
                 }
             }
-        }
-
-        /* Check absorb variables (any non-missing code is a valid level) */
-        if (valid && fe_codes) {
-            for (j = 0; j < config->num_absorb; j++) {
-                if (SF_is_missing(fe_codes[(size_t)j * N + i])) {
-                    valid = 0;
-                    break;
+            /* absorb variables (any non-missing code is a valid level) */
+            if (fe_codes) {
+                for (j = 0; j < config->num_absorb; j++) {
+                    const ST_double *col = fe_codes + (size_t)j * N;
+                    for (r = i0; r < i1; r++) if (!(col[r] < missval)) valid_idx[r] = 0;
                 }
             }
-        }
-
-        /* Check by variable */
-        if (valid && by_groups) {
-            if (by_groups[i] < 0) {
-                valid = 0;
+            if (by_groups) {
+                for (r = i0; r < i1; r++) if (by_groups[r] < 0) valid_idx[r] = 0;
+            }
+            if (weights) {
+                for (r = i0; r < i1; r++) if (!(weights[r] < missval) || weights[r] <= 0) valid_idx[r] = 0;
             }
         }
-
-        /* Check weights */
-        if (valid && weights) {
-            if (SF_is_missing(weights[i]) || weights[i] <= 0) {
-                valid = 0;
-            }
-        }
-
-        if (valid) {
-            valid_idx[N_valid++] = i;
+        for (i = 0; i < N; i++) {
+            if (valid_idx[i]) valid_idx[N_valid++] = i;
         }
     }
 
@@ -519,6 +513,8 @@ static ST_retcode do_compute_bins(void) {
     ST_int *by_groups = NULL;
     ST_double *weights = NULL;
     ST_int *group_sizes = NULL;
+    ST_double *pooled_cutpoints = NULL;
+    ST_int pooled_nq = 0;
     ST_int N, N_valid;
 
     cbinscatter_results_init(&results);
@@ -626,7 +622,8 @@ static ST_retcode do_compute_bins(void) {
             }
 
             if (rc != CBINSCATTER_OK) {
-                SF_error("cbinscatter: residualization failed\n");
+                if (rc != CBINSCATTER_ERR_HDFE)
+                    SF_error("cbinscatter: residualization failed\n");
                 goto cleanup;
             }
 
@@ -700,6 +697,20 @@ static ST_retcode do_compute_bins(void) {
                              ((config.has_controls && config.num_controls > 0) ||
                               config.has_absorb));
     double t_group_fit = 0.0;
+
+    /* binscatter's by() bins every group on the quantiles of the pooled
+     * (residualized) x; binsreg's method bins each group separately */
+    if (config.has_by && config.method == 0 && !config.discrete) {
+        rc = compute_pooled_cutpoints(x, weights, N_valid, config.nquantiles,
+                                      &pooled_cutpoints, &pooled_nq);
+        if (rc != CBINSCATTER_OK) goto cleanup;
+    }
+
+    /* store_results writes every group's bins into __cbinscatter_bins, which
+     * the ado sized (500 rows per group for discrete). Bins that cannot be
+     * stored fail here, before the binsreg adjustment does N x bins work. */
+    const ST_int bin_capacity = SF_row("__cbinscatter_bins");
+    ST_int bins_used = 0;
 
     /* Process each by-group */
     for (ST_int g = 0; g < num_groups; g++) {
@@ -783,7 +794,18 @@ static ST_retcode do_compute_bins(void) {
                                        config.compute_se, group, bin_ids);
         } else {
             rc = compute_bins_single_group(y_group, x_group, w_group, n_group,
-                                           &config, group, bin_ids);
+                                           &config, pooled_cutpoints, pooled_nq,
+                                           group, bin_ids);
+        }
+
+        if (rc == CBINSCATTER_OK) {
+            if (group->num_bins > bin_capacity - bins_used) {
+                SF_error("cbinscatter: x has too many distinct values for option discrete "
+                         "(at most 500 per group)\n");
+                rc = 503; /* as the store of a row past the matrix would fail */
+            } else {
+                bins_used += group->num_bins;
+            }
         }
 
         /* Binsreg method: regression-adjust the Y-means of the bins assigned
@@ -816,7 +838,8 @@ static ST_retcode do_compute_bins(void) {
                                       &config, group);
             t_group_fit += ctools_timer_seconds() - t_fit_start;
             /* As in fit_all_groups: a group without a line is not an error */
-            if (rc != CBINSCATTER_ERR_MEMORY && num_groups > 1) rc = CBINSCATTER_OK;
+            if (rc != CBINSCATTER_ERR_MEMORY && rc != CBINSCATTER_ERR_HDFE && num_groups > 1)
+                rc = CBINSCATTER_OK;
         }
 
         free(y_group);
@@ -863,6 +886,8 @@ static ST_retcode do_compute_bins(void) {
     /* Verbose output handled by .ado file using stored scalars */
 
 cleanup:
+    if (rc == CBINSCATTER_ERR_HDFE)
+        SF_error("cbinscatter: the absorbed effects did not converge\n");
     free(y);
     free(x);
     free(controls);
@@ -870,6 +895,7 @@ cleanup:
     free(by_groups);
     free(weights);
     free(group_sizes);
+    free(pooled_cutpoints);
     cbinscatter_results_free(&results);
 
     return rc;

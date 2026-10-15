@@ -361,45 +361,21 @@ ST_retcode adjust_bins_binsreg_hdfe(
     }
 
     /* Build X'X and X'y for [bin_indicators_dm | controls_hdfe] */
-    for (ST_int i = 0; i < N; i++) {
-        ST_int b = bin_ids[i] - 1;
-        if (b < 0 || b >= num_bins) continue;
-
-        ST_double w = (weights != NULL) ? weights[i] : 1.0;
-
-        /* Bin indicators part */
-        for (ST_int j = 0; j < num_bins; j++) {
-            ST_double xj = bin_indicators_dm[(size_t)j * N + i];
-            Xty_full[j] += w * xj * y_hdfe[i];
-
-            /* Bin x Bin */
-            for (ST_int k = j; k < num_bins; k++) {
-                XtX_full[(size_t)j * num_regressors + k] += w * xj * bin_indicators_dm[(size_t)k * N + i];
-            }
-
-            /* Bin x Control */
-            if (controls_hdfe != NULL) {
-                for (ST_int k = 0; k < K_ctrl; k++) {
-                    ST_int col_idx = num_bins + k;
-                    XtX_full[(size_t)j * num_regressors + col_idx] += w * xj * controls_hdfe[(size_t)k * N + i];
-                }
-            }
+    {
+        const ST_double **reg_cols = (const ST_double **)malloc((size_t)num_regressors * sizeof(*reg_cols));
+        if (!reg_cols || (K_ctrl > 0 && controls_hdfe == NULL)) {
+            free(reg_cols);
+            free(XtX_full);
+            free(Xty_full);
+            free(coef);
+            rc = (K_ctrl > 0 && controls_hdfe == NULL) ? CBINSCATTER_ERR_INVALID : CBINSCATTER_ERR_MEMORY;
+            goto cleanup;
         }
-
-        /* Controls part */
-        if (controls_hdfe != NULL) {
-            for (ST_int j = 0; j < K_ctrl; j++) {
-                ST_int row_idx = num_bins + j;
-                ST_double wj = controls_hdfe[(size_t)j * N + i];
-                Xty_full[row_idx] += w * wj * y_hdfe[i];
-
-                /* Control x Control */
-                for (ST_int k = j; k < K_ctrl; k++) {
-                    ST_int col_idx = num_bins + k;
-                    XtX_full[(size_t)row_idx * num_regressors + col_idx] += w * wj * controls_hdfe[(size_t)k * N + i];
-                }
-            }
-        }
+        for (ST_int j = 0; j < num_bins; j++) reg_cols[j] = &bin_indicators_dm[(size_t)j * N];
+        for (ST_int k = 0; k < K_ctrl; k++) reg_cols[num_bins + k] = &controls_hdfe[(size_t)k * N];
+        cbinscatter_normal_equations(reg_cols, num_regressors, y_hdfe, weights, bin_ids, num_bins, N,
+                                     XtX_full, Xty_full);
+        free(reg_cols);
     }
 
     /* Mirror to lower triangle */

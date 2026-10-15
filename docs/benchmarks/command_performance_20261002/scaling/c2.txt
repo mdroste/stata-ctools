@@ -1,0 +1,223 @@
+-------------------------------------------------------------------------------
+      name:  <unnamed>
+       log:  /Users/Mike/Documents/GitHub/stata-ctools/temp/command_performance
+> _20261002/scaling/c2.log
+  log type:  text
+ opened on:   2 Oct 2026, 10:50:37
+
+. capture noisily do "/Users/Mike/Documents/GitHub/stata-ctools/temp/command_pe
+> rformance_20261002/scaling/benchmark.do" "/Users/Mike/Documents/GitHub/stata-
+> ctools/temp/command_performance_20261002/final" c2 "/Users/Mike/Documents/Git
+> Hub/stata-ctools/temp/command_performance_20261002/scaling" "rs1000 rs_median
+>  w_single" 4 "8" 3000000 "1"
+
+. * One frozen plugin per process. Timers include the entire public command.
+. args buildpath label outdir cases reps threadlist rows refreps
+
+. clear all
+
+. set more off
+
+. set linesize 255
+
+. set seed 928143
+
+. adopath ++ "`buildpath'"
+  [1]              "/Users/Mike/Documents/GitHub/stata-ctools/temp/command_performance_20261002/final"
+  [2]  (BASE)      "/Applications/StataNow/ado/base/"
+  [3]  (SITE)      "/Applications/StataNow/ado/site/"
+  [4]              "."
+  [5]  (PERSONAL)  "/Users/Mike/Documents/Stata/ado/personal/"
+  [6]  (PLUS)      "/Users/Mike/Library/Application Support/Stata/ado/plus/"
+  [7]  (OLDPLACE)  "~/ado/"
+
+. ctools, version
+ctools ado 1.0.2; plugin 1.0.2 (local)
+
+. about
+
+StataNow/MP 19.5 for Unix (Apple Silicon)
+Revision 12 Aug 2026
+Copyright 1985-2025 StataCorp LLC
+
+Total usable memory: 48.01 GB
+
+Stata license: Single-user 4-core , expiring  5 Oct 2027
+Serial number: [omitted]
+  Licensed to: [omitted]
+               
+
+. which rangestat
+/Users/Mike/Library/Application Support/Stata/ado/plus/r/rangestat.ado
+*! 1.1.1                        09may2017
+*! 1.1.0                        16apr2017
+*! 1.0.0            29mar2016 
+*! Robert Picard    picard@netbox.com
+*! Nicholas J. Cox  n.j.cox@durham.ac.uk 
+*! Roberto Ferrer   refp16@gmail.com
+
+. which gstats
+/Users/Mike/Library/Application Support/Stata/ado/plus/g/gstats.ado
+*! version 0.5.0 11Jun2019 Mauricio Caceres Bravo, mauricio.caceres.bravo@gmail.com
+*! Implementation of several statistical functions and transformations
+
+. program perf_clock, plugin using("`outdir'/clock.plugin")
+
+. if "`reps'" == "" local reps 3
+
+. if "`refreps'" == "" local refreps `reps'
+
+. if "`threadlist'" == "" local threadlist 1 8
+
+. if "`rows'" == "" local rows 1000000
+
+. if "`cases'" == "" local cases rs20 rs200 rs1000 rs5000 rs_single rs_ties rs_median rs_skew w20 w200 w1000 w_single w_wide
+
+. foreach case of local cases {
+  2.     clear
+  3.     set seed 928143
+  4.     quietly set obs `rows'
+  5.     local size 200
+  6.     if inlist("`case'", "rs20", "w20") local size 20
+  7.     if inlist("`case'", "rs1000", "w1000") local size 1000
+  8.     if "`case'" == "rs5000" local size 5000
+  9.     if inlist("`case'", "rs_single", "w_single") local size `rows'
+ 10.     quietly gen long id = _n
+ 11.     quietly gen long g = floor((_n-1)/`size')
+ 12.     quietly gen double key = mod(_n-1,`size')
+ 13.     if "`case'" == "rs_ties" quietly replace key = floor(key/20)
+ 14.     if "`case'" == "rs_median" quietly replace key = floor(key/10)
+ 15.     if "`case'" == "rs_skew" quietly replace g = 0 if _n <= .9*`rows'
+ 16.     quietly gen double x = 100 + 5*rnormal()
+ 17.     quietly replace x = . if mod(id,37)==0
+ 18.     quietly replace x = .a if mod(id,107)==0
+ 19.     local vars x
+ 20.     if "`case'" == "w_wide" {
+ 21.         forvalues k=2/8 {
+ 22.             quietly gen double x`k' = 100 + 5*rnormal()
+ 23.             local vars `vars' x`k'
+ 24.         }
+ 25.     }
+ 26.     * Randomize row order to include sorting and restoration costs.
+.     quietly gen double shuffle = runiform()
+ 27.     sort shuffle
+ 28.     drop shuffle
+ 29.     local stat mean
+ 30.     if "`case'" == "rs_median" local stat median
+ 31.     local isrange = (substr("`case'",1,2)=="rs")
+ 32.     if `isrange' {
+ 33.         local command crangestat (`stat') result=x, interval(key -5 5) by(g)
+ 34.         local reference rangestat (`stat') result=x, interval(key -5 5) by(g)
+ 35.         local results result
+ 36.     }
+ 37.     else {
+ 38.         local command cwinsor `vars', by(g) suffix(_w) cuts(1 99)
+ 39.         local reference gstats winsor `vars', by(g) suffix(_w) cuts(1 99)
+ 40.         local results
+ 41.         foreach v of local vars {
+ 42.             local results `results' `v'_w
+ 43.         }
+ 44.     }
+ 45.     tempfile base expected
+ 46.     quietly save `base'
+ 47.     foreach threads of local threadlist {
+ 48.         forvalues rep=0/`reps' {
+ 49.             quietly use `base', clear
+ 50.             plugin call perf_clock, "start"
+ 51.             quietly `command' threads(`threads')
+ 52.             plugin call perf_clock, "stop"
+ 53.             di "PERF,`label',`case',ctools,`rows',`threads',`rep'," %12.7f scalar(__ctools_perf_seconds)
+ 54.             if `isrange' {
+ 55.                 di "PHASE,`label',`case',`threads',`rep'," %12.7f scalar(_crangestat_time_load) "," %12.7f scalar(_crangestat_time_sort) "," %12.7f scalar(_crangestat_time_compute) "," %12.7f scalar(_crangestat_time_store)
+ 56.             }
+ 57.             else {
+ 58.                 di "PHASE,`label',`case',`threads',`rep'," %12.7f scalar(_cwinsor_time_load) "," %12.7f scalar(_cwinsor_time_sort) "," %12.7f scalar(_cwinsor_time_winsor) "," %12.7f scalar(_cwinsor_time_store)
+ 59.             }
+ 60.             if `rep' == 0 {
+ 61.                 if "`label'" == "b1" quietly save "`outdir'/expected_`case'_`threads'.dta", replace
+ 62.                 else cf _all using "`outdir'/expected_`case'_`threads'.dta"
+ 63.                 quietly keep id `results'
+ 64.                 quietly save `expected', replace
+ 65.                 quietly use `base', clear
+ 66.                 quietly `reference'
+ 67.                 foreach v of local results {
+ 68.                     rename `v' ref_`v'
+ 69.                 }
+ 70.                 quietly merge 1:1 id using `expected', assert(match) nogenerate
+ 71.                 foreach v of local results {
+ 72.                     assert missing(`v') == missing(ref_`v')
+ 73.                     assert `v' == ref_`v' | abs(`v'-ref_`v')/max(abs(`v'),abs(ref_`v')) < 1e-7 if !missing(`v')
+ 74.                 }
+ 75.                 di "CORRECT,`label',`case',`threads',all_rows"
+ 76.             }
+ 77.         }
+ 78.     }
+ 79.     * Reference timings use the same saved input, outside comparison/merge work.
+.     forvalues rep=0/`refreps' {
+ 80.         quietly use `base', clear
+ 81.         plugin call perf_clock, "start"
+ 82.         quietly `reference'
+ 83.         plugin call perf_clock, "stop"
+ 84.         di "PERF,`label',`case',reference,`rows',0,`rep'," %12.7f scalar(__ctools_perf_seconds)
+ 85.     }
+ 86. }
+PERF,c2,rs1000,ctools,3000000,8,0,   0.1170910
+PHASE,c2,rs1000,8,0,   0.0095651,   0.0272989,   0.0025232,   0.0541500
+CORRECT,c2,rs1000,8,all_rows
+PERF,c2,rs1000,ctools,3000000,8,1,   0.1109710
+PHASE,c2,rs1000,8,1,   0.0079385,   0.0269377,   0.0025081,   0.0559882
+PERF,c2,rs1000,ctools,3000000,8,2,   0.1081330
+PHASE,c2,rs1000,8,2,   0.0098589,   0.0224897,   0.0022387,   0.0560994
+PERF,c2,rs1000,ctools,3000000,8,3,   0.1228130
+PHASE,c2,rs1000,8,3,   0.0098310,   0.0277765,   0.0022072,   0.0657082
+PERF,c2,rs1000,ctools,3000000,8,4,   0.1071740
+PHASE,c2,rs1000,8,4,   0.0078065,   0.0228256,   0.0024883,   0.0561857
+PERF,c2,rs1000,reference,3000000,0,0,   6.4744020
+PERF,c2,rs1000,reference,3000000,0,1,   6.4652900
+PERF,c2,rs_median,ctools,3000000,8,0,   0.1368580
+PHASE,c2,rs_median,8,0,   0.0096826,   0.0229950,   0.0296183,   0.0559839
+CORRECT,c2,rs_median,8,all_rows
+PERF,c2,rs_median,ctools,3000000,8,1,   0.1487720
+PHASE,c2,rs_median,8,1,   0.0088605,   0.0232224,   0.0295361,   0.0692835
+PERF,c2,rs_median,ctools,3000000,8,2,   0.1354530
+PHASE,c2,rs_median,8,2,   0.0091628,   0.0218124,   0.0299930,   0.0567695
+PERF,c2,rs_median,ctools,3000000,8,3,   0.1315610
+PHASE,c2,rs_median,8,3,   0.0083106,   0.0198378,   0.0296694,   0.0563752
+PERF,c2,rs_median,ctools,3000000,8,4,   0.1325170
+PHASE,c2,rs_median,8,4,   0.0072267,   0.0189501,   0.0294894,   0.0591082
+PERF,c2,rs_median,reference,3000000,0,0,   5.7546090
+PERF,c2,rs_median,reference,3000000,0,1,   5.7761620
+PERF,c2,w_single,ctools,3000000,8,0,   0.1486780
+PHASE,c2,w_single,8,0,   0.0666062,   0.0038367,   0.0298680,   0.0039730
+CORRECT,c2,w_single,8,all_rows
+PERF,c2,w_single,ctools,3000000,8,1,   0.1467740
+PHASE,c2,w_single,8,1,   0.0664965,   0.0035122,   0.0299241,   0.0029517
+PERF,c2,w_single,ctools,3000000,8,2,   0.1473750
+PHASE,c2,w_single,8,2,   0.0663250,   0.0034764,   0.0299874,   0.0032087
+PERF,c2,w_single,ctools,3000000,8,3,   0.1466420
+PHASE,c2,w_single,8,3,   0.0665800,   0.0035920,   0.0298886,   0.0029054
+PERF,c2,w_single,ctools,3000000,8,4,   0.1471360
+PHASE,c2,w_single,8,4,   0.0666891,   0.0038820,   0.0301541,   0.0028826
+PERF,c2,w_single,reference,3000000,0,0,   0.0960190
+PERF,c2,w_single,reference,3000000,0,1,   0.0920210
+
+. di "GROUP_BENCHMARK_COMPLETE"
+GROUP_BENCHMARK_COMPLETE
+
+. 
+end of do-file
+
+. local rc=_rc
+
+. di "GROUP_BENCHMARK_RC=`rc'"
+GROUP_BENCHMARK_RC=0
+
+. di "CTOOLS_LAUNCH=12e45cf1cdc045af9f7d4d27e1810b38 RC=`rc'"
+CTOOLS_LAUNCH=12e45cf1cdc045af9f7d4d27e1810b38 RC=0
+
+. log close
+      name:  <unnamed>
+       log:  /Users/Mike/Documents/GitHub/stata-ctools/temp/command_performance_20261002/scaling/c2.log
+  log type:  text
+ closed on:   2 Oct 2026, 10:51:21
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------

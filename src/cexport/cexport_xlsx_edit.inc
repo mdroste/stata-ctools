@@ -421,7 +421,11 @@ static char *xedit_styles(char *xml, unsigned *base) {
   }
   if (!result)
     return NULL;
-  xedit_find(result, result + strlen(result), "cellXfs", &xfs);
+  /* xfs still points into xml; never apply it to result. */
+  if (!xedit_find(result, result + strlen(result), "cellXfs", &xfs)) {
+    free(result);
+    return NULL;
+  }
   char *node = xedit_set_attr(&xfs, "count", *base + 3);
   if (!node) {
     free(result);
@@ -584,6 +588,8 @@ static ST_retcode xlsx_edit_file(XLSXExportContext *ctx,
   }
   xlsx_worksheet_segments segs;
   if (!xlsx_gen_worksheet_segments(ctx, filtered, &segs)) {
+    snprintf(ctx->error_message, sizeof(ctx->error_message),
+             "Memory allocation failed for worksheet\n");
     rc = 920;
     goto done;
   }

@@ -80,28 +80,28 @@
       "variant": "baseline",
       "label": "b0_baseline",
       "directory": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/commands/b0_baseline",
-      "shell": "oldstata -q -b do /Users/Mike/Documents/GitHub/stata-ctools/validation/benchmark_transport_commands.do /Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/production_baseline/build /Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/commands/b0_baseline b0_baseline 7 8"
+      "shell": "stata -q -b do /Users/Mike/Documents/GitHub/stata-ctools/validation/benchmark_transport_commands.do /Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/production_baseline/build /Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/commands/b0_baseline b0_baseline 7 8"
     },
     {
       "block": 0,
       "variant": "candidate",
       "label": "b0_candidate",
       "directory": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/commands/b0_candidate",
-      "shell": "oldstata -q -b do /Users/Mike/Documents/GitHub/stata-ctools/validation/benchmark_transport_commands.do /Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/production_candidate/build /Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/commands/b0_candidate b0_candidate 7 8"
+      "shell": "stata -q -b do /Users/Mike/Documents/GitHub/stata-ctools/validation/benchmark_transport_commands.do /Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/production_candidate/build /Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/commands/b0_candidate b0_candidate 7 8"
     },
     {
       "block": 1,
       "variant": "candidate",
       "label": "b1_candidate",
       "directory": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/commands/b1_candidate",
-      "shell": "oldstata -q -b do /Users/Mike/Documents/GitHub/stata-ctools/validation/benchmark_transport_commands.do /Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/production_candidate/build /Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/commands/b1_candidate b1_candidate 7 8"
+      "shell": "stata -q -b do /Users/Mike/Documents/GitHub/stata-ctools/validation/benchmark_transport_commands.do /Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/production_candidate/build /Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/commands/b1_candidate b1_candidate 7 8"
     },
     {
       "block": 1,
       "variant": "baseline",
       "label": "b1_baseline",
       "directory": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/commands/b1_baseline",
-      "shell": "oldstata -q -b do /Users/Mike/Documents/GitHub/stata-ctools/validation/benchmark_transport_commands.do /Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/production_baseline/build /Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/commands/b1_baseline b1_baseline 7 8"
+      "shell": "stata -q -b do /Users/Mike/Documents/GitHub/stata-ctools/validation/benchmark_transport_commands.do /Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/production_baseline/build /Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/commands/b1_baseline b1_baseline 7 8"
     }
   ]
 }

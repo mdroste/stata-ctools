@@ -1,0 +1,9 @@
+regress: allocation and output failures passed
+ppml: allocation and output failures passed
+sampling: allocation and output failures passed
+bootstrap: allocation and output failures passed
+rangestat: allocation and output failures passed
+remap: passed
+timsort: passed
+threads: passed
+styles: all parser/growth failures passed; 707 command injections

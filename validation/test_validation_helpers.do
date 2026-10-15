@@ -35,6 +35,24 @@ assert r(sigfigs) < 7
 sigfigs_cancellation 0 1e-16 0
 assert r(sigfigs) < 7
 
+/* Inference comparison rejects wrong or missing results from cpsmatch,
+   including cases where the reference SE is zero or undefined. */
+foreach se in 0 . 30 {
+    assert_psmatch_inference `se' -.6666666666666667 3 -2 7 "corrupt matching SE"
+    helper_expect 1 0
+}
+assert_psmatch_inference 3 0 3 -2 7 "corrupt matching t"
+helper_expect 1 0
+assert_psmatch_inference 3 -.6666666666666667 3 -2 7 "correct matching inference"
+helper_expect 0 1
+assert_psmatch_inference . . . -2 7 "singleton undefined SE"
+helper_expect 0 1
+assert_psmatch_inference 0 . . -2 7 "singleton false zero SE"
+helper_expect 1 0
+assert_psmatch_inference 0 . 0 0 7 "zero variance undefined t"
+helper_expect 0 1
+assert_psmatch_inference 0 0 0 0 7 "zero variance false t"
+helper_expect 1 0
 capture program drop csort
 program define csort, rclass
     syntax varlist [, ALGorithm(string) STReam(integer 0) VERBOSE]

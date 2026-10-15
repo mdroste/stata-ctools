@@ -1,3 +1,4 @@
+#include "ctools_linalg.h"
 /*
  * ctools_ols.c
  *
@@ -29,26 +30,26 @@ ST_int ctools_cholesky(ST_double *A, ST_int n)
     ST_int i, j, k;
 
     for (j = 0; j < n; j++) {
-        ST_double sum = A[j * n + j];
+        ST_double sum = A[(size_t)j * n + j];
         for (k = 0; k < j; k++) {
-            sum -= A[j * n + k] * A[j * n + k];
+            sum -= A[(size_t)j * n + k] * A[(size_t)j * n + k];
         }
         if (!isfinite(sum) || sum <= 0.0) return STATA_ERR_SINGULAR;  /* Not positive definite */
-        A[j * n + j] = sqrt(sum);
+        A[(size_t)j * n + j] = sqrt(sum);
 
         for (i = j + 1; i < n; i++) {
-            sum = A[i * n + j];
+            sum = A[(size_t)i * n + j];
             for (k = 0; k < j; k++) {
-                sum -= A[i * n + k] * A[j * n + k];
+                sum -= A[(size_t)i * n + k] * A[(size_t)j * n + k];
             }
-            A[i * n + j] = sum / A[j * n + j];
+            A[(size_t)i * n + j] = sum / A[(size_t)j * n + j];
         }
     }
 
     /* Zero upper triangle */
     for (i = 0; i < n; i++) {
         for (j = i + 1; j < n; j++) {
-            A[i * n + j] = 0.0;
+            A[(size_t)i * n + j] = 0.0;
         }
     }
 
@@ -72,22 +73,22 @@ ST_int ctools_invert_from_cholesky(const ST_double *L, ST_int n, ST_double *inv)
 
     /* Invert L (lower triangular) */
     for (i = 0; i < n; i++) {
-        L_inv[i * n + i] = 1.0 / L[i * n + i];
+        L_inv[(size_t)i * n + i] = 1.0 / L[(size_t)i * n + i];
         for (j = i + 1; j < n; j++) {
             ST_double sum = 0.0;
             for (k = i; k < j; k++) {
-                sum -= L[j * n + k] * L_inv[k * n + i];
+                sum -= L[(size_t)j * n + k] * L_inv[(size_t)k * n + i];
             }
-            L_inv[j * n + i] = sum / L[j * n + j];
+            L_inv[(size_t)j * n + i] = sum / L[(size_t)j * n + j];
         }
     }
 
     /* Compute inv = L_inv' * L_inv */
     for (i = 0; i < n; i++) {
         for (j = 0; j < n; j++) {
-            inv[i * n + j] = 0.0;
+            inv[(size_t)i * n + j] = 0.0;
             for (k = (i > j ? i : j); k < n; k++) {
-                inv[i * n + j] += L_inv[k * n + i] * L_inv[k * n + j];
+                inv[(size_t)i * n + j] += L_inv[(size_t)k * n + i] * L_inv[(size_t)k * n + j];
             }
         }
     }
@@ -104,7 +105,6 @@ ST_int ctools_solve_cholesky(const ST_double *A, const ST_double *b, ST_int n, S
 {
     if (n == 0) return STATA_OK;
     if (!A || !b || !x || n < 0) return STATA_ERR_INVALID_INPUT;
-    ST_int i, j;
     ST_double *L = (ST_double *)ctools_safe_malloc3((size_t)n, (size_t)n, sizeof(ST_double));
     ST_double *y = (ST_double *)ctools_safe_malloc2((size_t)n, sizeof(ST_double));
 
@@ -123,23 +123,8 @@ ST_int ctools_solve_cholesky(const ST_double *A, const ST_double *b, ST_int n, S
         return status;
     }
 
-    /* Forward substitution: solve Ly = b */
-    for (i = 0; i < n; i++) {
-        ST_double sum = b[i];
-        for (j = 0; j < i; j++) {
-            sum -= L[i * n + j] * y[j];
-        }
-        y[i] = sum / L[i * n + i];
-    }
-
-    /* Backward substitution: solve L'x = y */
-    for (i = n - 1; i >= 0; i--) {
-        ST_double sum = y[i];
-        for (j = i + 1; j < n; j++) {
-            sum -= L[j * n + i] * x[j];
-        }
-        x[i] = sum / L[i * n + i];
-    }
+    ctools_solve_lower_factor(L, b, n, y);
+    ctools_solve_lower_transpose(L, y, n, x);
 
     free(L);
     free(y);
@@ -243,6 +228,49 @@ ST_double dd_sum_sq_dev_weighted(const ST_double *x, ST_double mean,
     return sum.hi + sum.lo;
 }
 
+dd_real dd_dot_weighted(const ST_double *x, const ST_double *y, const ST_double *w, ST_int N)
+{
+    dd_real sum = {0.0, 0.0};
+    ST_int i;
+
+    for (i = 0; i < N; i++) {
+        ST_double wx = w ? w[i] * x[i] : x[i];
+        dd_real prod = two_prod(wx, y[i]);
+        sum = dd_add_d(sum, prod.hi);
+        sum = dd_add_d(sum, prod.lo);
+    }
+    return sum;
+}
+
+void dd_dot_weighted_multi(const ST_double *x, const ST_double *const *ys, ST_int n,
+                           const ST_double *w, ST_int N, dd_real *out)
+{
+    ST_int t = 0;
+
+    for (; t + 3 < n; t += 4) {
+        const ST_double *y0 = ys[t], *y1 = ys[t + 1], *y2 = ys[t + 2], *y3 = ys[t + 3];
+        dd_real s0 = {0.0, 0.0}, s1 = {0.0, 0.0}, s2 = {0.0, 0.0}, s3 = {0.0, 0.0};
+        for (ST_int i = 0; i < N; i++) {
+            ST_double wx = w ? w[i] * x[i] : x[i];
+            dd_real p0 = two_prod(wx, y0[i]);
+            dd_real p1 = two_prod(wx, y1[i]);
+            dd_real p2 = two_prod(wx, y2[i]);
+            dd_real p3 = two_prod(wx, y3[i]);
+            s0 = dd_add_d(dd_add_d(s0, p0.hi), p0.lo);
+            s1 = dd_add_d(dd_add_d(s1, p1.hi), p1.lo);
+            s2 = dd_add_d(dd_add_d(s2, p2.hi), p2.lo);
+            s3 = dd_add_d(dd_add_d(s3, p3.hi), p3.lo);
+        }
+        out[t] = s0;
+        out[t + 1] = s1;
+        out[t + 2] = s2;
+        out[t + 3] = s3;
+    }
+    for (; t < n; t++) {
+        out[t] = dd_dot_weighted(x, ys[t], w, N);
+    }
+}
+
 /* ========================================================================
  * BLAS-like optimized dot product - uses ctools K-way unrolling abstraction
  * ======================================================================== */
@@ -271,7 +299,7 @@ void compute_xtx_xty(
     const ST_double *y = &data[0];  /* Column 0 is y */
 
     /* Initialize output */
-    memset(xtx, 0, K_x * K_x * sizeof(ST_double));
+    memset(xtx, 0, (size_t)K_x * K_x * sizeof(ST_double));
     memset(xty, 0, K_x * sizeof(ST_double));
 
     /* Kahan-compensated dot products for numerical stability.
@@ -286,7 +314,7 @@ void compute_xtx_xty(
     for (j = 0; j < K_x; j++) {
         const ST_double *xj = &data[(size_t)(j + 1) * N];
         xty[j] = kahan_dot(xj, y, N);
-        xtx[j * K_x + j] = kahan_dot(xj, xj, N);
+        xtx[(size_t)j * K_x + j] = kahan_dot(xj, xj, N);
     }
 
     /* Off-diagonal elements (symmetric, trivially parallelizable) */
@@ -298,8 +326,8 @@ void compute_xtx_xty(
         for (k = j + 1; k < K_x; k++) {
             const ST_double *xk = &data[(size_t)(k + 1) * N];
             ST_double val = kahan_dot(xj, xk, N);
-            xtx[j * K_x + k] = val;
-            xtx[k * K_x + j] = val;  /* Symmetric */
+            xtx[(size_t)j * K_x + k] = val;
+            xtx[(size_t)k * K_x + j] = val;  /* Symmetric */
         }
     }
 }
@@ -333,7 +361,7 @@ void compute_xtx_xty_weighted(
     }
 
     /* Initialize output */
-    memset(xtx, 0, K_x * K_x * sizeof(ST_double));
+    memset(xtx, 0, (size_t)K_x * K_x * sizeof(ST_double));
     memset(xty, 0, K_x * sizeof(ST_double));
 
     /* Pre-normalize weights if needed to avoid branch per observation */
@@ -346,38 +374,43 @@ void compute_xtx_xty_weighted(
     }
     const ST_double *w_eff = w_scaled ? w_scaled : weights;
 
-    /* Cache-blocked scalar path: process observations in blocks to keep
-     * partial X'WX contributions in L1 cache for large K. */
-    #define WXTX_BLOCK_SIZE 256
-
-    for (ST_int b0 = 0; b0 < N; b0 += WXTX_BLOCK_SIZE) {
-        ST_int b1 = b0 + WXTX_BLOCK_SIZE;
-        if (b1 > N) b1 = N;
-
-        for (i = b0; i < b1; i++) {
-            ST_double w = w_eff[i];
-            ST_double yi = y[i];
-
-            for (j = 0; j < K_x; j++) {
-                ST_double xj = data[(size_t)(j + 1) * N + i];
-                ST_double wxj = w * xj;
-
-                xty[j] += wxj * yi;
-                xtx[j * K_x + j] += wxj * xj;
-
-                for (k = j + 1; k < K_x; k++) {
-                    xtx[j * K_x + k] += wxj * data[(size_t)(k + 1) * N + i];
-                }
+    /* xty[j] = sum_i (w_i x_ij) y_i and xtx[j,k] = sum_i (w_i x_ij) x_ik for
+     * k >= j, every element accumulated over the observations in order with
+     * plain double arithmetic. The elements are independent sums, so the rows
+     * of the upper triangle run in parallel, four right-hand columns per
+     * pass over the data. */
+    #pragma omp parallel for schedule(dynamic) private(i, k) if(K_x > 1 && (size_t)N * (size_t)K_x > 100000)
+    for (j = 0; j < K_x; j++) {
+        const ST_double *xj = data + (size_t)(j + 1) * N;
+        /* right-hand columns: y, then x_j .. x_{K_x-1} */
+        const ST_int n_rhs = K_x - j + 1;
+        for (ST_int t = 0; t < n_rhs; t += 4) {
+            const ST_double *r[4];
+            ST_double acc[4] = {0.0, 0.0, 0.0, 0.0};
+            const ST_int n_now = (n_rhs - t < 4) ? n_rhs - t : 4;
+            for (ST_int q = 0; q < 4; q++) {
+                ST_int rhs = t + (q < n_now ? q : 0);
+                r[q] = (rhs == 0) ? y : data + (size_t)(j + rhs) * N;
+            }
+            for (i = 0; i < N; i++) {
+                ST_double wxj = w_eff[i] * xj[i];
+                acc[0] += wxj * r[0][i];
+                acc[1] += wxj * r[1][i];
+                acc[2] += wxj * r[2][i];
+                acc[3] += wxj * r[3][i];
+            }
+            for (ST_int q = 0; q < n_now; q++) {
+                ST_int rhs = t + q;
+                if (rhs == 0) xty[j] = acc[q];
+                else xtx[(size_t)j * K_x + (j + rhs - 1)] = acc[q];
             }
         }
     }
 
-    #undef WXTX_BLOCK_SIZE
-
     /* Mirror upper triangle to lower */
     for (j = 0; j < K_x; j++) {
         for (k = j + 1; k < K_x; k++) {
-            xtx[k * K_x + j] = xtx[j * K_x + k];
+            xtx[(size_t)k * K_x + j] = xtx[(size_t)j * K_x + k];
         }
     }
 
@@ -401,10 +434,10 @@ ST_int detect_collinearity(const ST_double *xx, ST_int K, ST_int *is_collinear, 
 
     (void)verbose;  /* Unused for now */
 
-    L = (ST_double *)malloc(K * K * sizeof(ST_double));
+    L = (ST_double *)ctools_safe_malloc3((size_t)K, (size_t)K, sizeof(ST_double));
     if (!L) return -1;
 
-    memcpy(L, xx, K * K * sizeof(ST_double));
+    memcpy(L, xx, (size_t)K * K * sizeof(ST_double));
 
     for (i = 0; i < K; i++) {
         is_collinear[i] = 0;
@@ -413,12 +446,12 @@ ST_int detect_collinearity(const ST_double *xx, ST_int K, ST_int *is_collinear, 
     /* Modified Cholesky that detects collinearity */
     for (k = 0; k < K; k++) {
         /* Save original diagonal before subtraction for relative check */
-        ST_double orig_diag = L[k * K + k];
+        ST_double orig_diag = L[(size_t)k * K + k];
 
         /* Compute L[k,k] */
-        sum = L[k * K + k];
+        sum = L[(size_t)k * K + k];
         for (j = 0; j < k; j++) {
-            sum -= L[k * K + j] * L[k * K + j];
+            sum -= L[(size_t)k * K + j] * L[(size_t)k * K + j];
         }
 
         /* Check if diagonal is effectively zero (collinear)
@@ -428,22 +461,22 @@ ST_int detect_collinearity(const ST_double *xx, ST_int K, ST_int *is_collinear, 
          *   leaves a residual of O(N * eps * diag), which can exceed abs_tol */
         if (sum < abs_tol || (orig_diag > 0 && sum / orig_diag < rel_tol)) {
             is_collinear[k] = 1;
-            L[k * K + k] = 0.0;
+            L[(size_t)k * K + k] = 0.0;
             for (i = k + 1; i < K; i++) {
-                L[i * K + k] = 0.0;
+                L[(size_t)i * K + k] = 0.0;
             }
             continue;
         }
 
         diag_elem = sqrt(sum);
-        L[k * K + k] = diag_elem;
+        L[(size_t)k * K + k] = diag_elem;
 
         for (i = k + 1; i < K; i++) {
-            sum = L[i * K + k];
+            sum = L[(size_t)i * K + k];
             for (j = 0; j < k; j++) {
-                sum -= L[i * K + j] * L[k * K + j];
+                sum -= L[(size_t)i * K + j] * L[(size_t)k * K + j];
             }
-            L[i * K + k] = sum / diag_elem;
+            L[(size_t)i * K + k] = sum / diag_elem;
         }
     }
 
@@ -454,6 +487,86 @@ ST_int detect_collinearity(const ST_double *xx, ST_int K, ST_int *is_collinear, 
 
     free(L);
     return num_collinear;
+}
+
+/* ========================================================================
+ * Scale-invariant collinearity detection (see ctools_ols.h)
+ * ======================================================================== */
+ST_int detect_collinearity_scaled(ST_double *xx, ST_int K, ST_int *is_collinear, ST_int verbose)
+{
+    ST_int i, j, num_collinear;
+    ST_int *excluded = (ST_int *)malloc((size_t)(K > 0 ? K : 1) * sizeof(ST_int));
+
+    if (!excluded) return -1;
+    memcpy(excluded, is_collinear, (size_t)K * sizeof(ST_int));
+
+    /* Excluded variables get zero rows and columns, so the equilibration
+     * leaves them at zero and the factorization flags them without involving
+     * the other columns */
+    for (i = 0; i < K; i++) {
+        if (!excluded[i]) continue;
+        for (j = 0; j < K; j++) {
+            xx[(size_t)j * K + i] = 0.0;
+            xx[(size_t)i * K + j] = 0.0;
+        }
+    }
+
+    /* Equilibrate to a correlation matrix, which keeps mixed-scale
+     * variables from producing false positives */
+    for (i = 0; i < K; i++) {
+        ST_double d = xx[(size_t)i * K + i];
+        if (d > 0.0) {
+            ST_double scale = 1.0 / sqrt(d);
+            for (j = 0; j < K; j++) {
+                xx[(size_t)j * K + i] *= scale;
+                xx[(size_t)i * K + j] *= scale;
+            }
+        }
+    }
+
+    /* detect_collinearity() resets the flags; on failure they are restored */
+    num_collinear = detect_collinearity(xx, K, is_collinear, verbose);
+    if (num_collinear < 0) {
+        memcpy(is_collinear, excluded, (size_t)K * sizeof(ST_int));
+    } else {
+        for (i = 0; i < K; i++) {
+            if (excluded[i]) is_collinear[i] = 1;
+        }
+    }
+    free(excluded);
+    return num_collinear;
+}
+
+/* ========================================================================
+ * Inverse cross-product matrix with a constant (see ctools_ols.h)
+ * ======================================================================== */
+void ctools_inverse_add_constant(const ST_double *inv, ST_int K, const ST_double *means,
+                                 ST_double sum_w, ST_double *out)
+{
+    ST_int i, j;
+    const ST_int Kc = K + 1;
+
+    /* side = -inv * means, kept in the last column of out */
+    for (j = 0; j < K; j++) {
+        ST_double side = 0.0;
+        for (i = 0; i < K; i++) {
+            side -= means[i] * inv[(size_t)i * K + j];
+        }
+        out[(size_t)j * Kc + K] = side;
+    }
+
+    ST_double corner = 1.0 / sum_w;
+    for (i = 0; i < K; i++) {
+        corner -= means[i] * out[(size_t)i * Kc + K];
+    }
+
+    for (i = 0; i < K; i++) {
+        for (j = 0; j < K; j++) {
+            out[(size_t)i * Kc + j] = inv[(size_t)i * K + j];
+        }
+        out[(size_t)K * Kc + i] = out[(size_t)i * Kc + K];
+    }
+    out[(size_t)K * Kc + K] = corner;
 }
 
 /* ========================================================================
@@ -484,12 +597,12 @@ ST_int ctools_invsym(const ST_double *A, ST_int K, ST_double *inv, ST_int *rank_
         /* Largest remaining diagonal among the columns not yet pivoted */
         ST_int p = -1;
         for (i = 0; i < K; i++) {
-            if (!swept[i] && (p < 0 || W[i * K + i] > W[p * K + p])) p = i;
+            if (!swept[i] && (p < 0 || W[(size_t)i * K + i] > W[(size_t)p * K + p])) p = i;
         }
         if (p < 0) break;
 
-        ST_double d = W[p * K + p];
-        ST_double d0 = A[p * K + p];
+        ST_double d = W[(size_t)p * K + p];
+        ST_double d0 = A[(size_t)p * K + p];
         if (!(d > 0.0) || !(d0 > 0.0) || d < 1e-9 * d0 || d < 1e-19) {
             swept[p] = 2;
             continue;
@@ -498,33 +611,33 @@ ST_int ctools_invsym(const ST_double *A, ST_int K, ST_double *inv, ST_int *rank_
         /* Sweep on column/row p (Gauss-Jordan pivot for symmetric matrix).
          * L is small (number of excluded instruments, typically 2-10),
          * so parallelization would be pure overhead — do not add OMP here. */
-        ST_double inv_d = 1.0 / W[p * K + p];
+        ST_double inv_d = 1.0 / W[(size_t)p * K + p];
 
         /* Update off-diagonal block: W[i,j] -= W[i,p] * W[p,j] / d
          * W[.,p] and W[p,.] are read-only during this loop (only W[i!=p, j!=p] written),
          * so we precompute scaled pivot column to avoid repeated division. */
         for (i = 0; i < K; i++) {
             if (i == p) continue;
-            ST_double wip = W[p * K + i] * inv_d;  /* W[i,p] / d, constant for inner loop */
+            ST_double wip = W[(size_t)p * K + i] * inv_d;  /* W[i,p] / d, constant for inner loop */
             for (j = i; j < K; j++) {
                 if (j == p) continue;
-                W[j * K + i] -= wip * W[j * K + p];
-                if (i != j) W[i * K + j] = W[j * K + i];
+                W[(size_t)j * K + i] -= wip * W[(size_t)j * K + p];
+                if (i != j) W[(size_t)i * K + j] = W[(size_t)j * K + i];
             }
         }
 
         /* Update pivot row/col: W[i,p] /= d, W[p,i] /= d */
         for (i = 0; i < K; i++) {
             if (i != p) {
-                W[p * K + i] *= inv_d;
-                W[i * K + p] *= inv_d;
+                W[(size_t)p * K + i] *= inv_d;
+                W[(size_t)i * K + p] *= inv_d;
             }
         }
 
         /* Pivot diagonal: the symmetric sweep keeps the swept block as
          * -inverse (the later updates use W[p,p] with that sign), so the
          * result is negated below. */
-        W[p * K + p] = -inv_d;
+        W[(size_t)p * K + p] = -inv_d;
         swept[p] = 1;
         rank++;
     }
@@ -534,9 +647,9 @@ ST_int ctools_invsym(const ST_double *A, ST_int K, ST_double *inv, ST_int *rank_
     for (i = 0; i < K; i++) {
         for (j = 0; j < K; j++) {
             if (swept[i] == 1 && swept[j] == 1) {
-                inv[j * K + i] = -W[j * K + i];
+                inv[(size_t)j * K + i] = -W[(size_t)j * K + i];
             } else {
-                inv[j * K + i] = 0.0;
+                inv[(size_t)j * K + i] = 0.0;
             }
         }
     }

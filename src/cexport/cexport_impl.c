@@ -59,6 +59,8 @@
 /* export_mmap: chunk windows were too small; redo with export_pwrite */
 #define CEXPORT_RETRY_PWRITE (-1)
 
+#define CEXPORT_ROW_TOO_LONG_MSG "cexport: an observation exceeds 2 GiB of delimited text\n"
+
 /* ========================================================================
    Global Context
    ======================================================================== */
@@ -178,6 +180,7 @@ static void *format_chunk_thread(void *arg)
     format_chunk_args_t *args = (format_chunk_args_t *)arg;
     size_t pos = 0;
     args->read_error = 0;
+    args->row_too_long = 0;
 
     for (size_t i = args->start_row; i < args->end_row; i++) {
         int row_len;
@@ -196,7 +199,9 @@ static void *format_chunk_thread(void *arg)
             args->buffer_size = *args->size_slot = grown;
         }
         if (row_len < 0) {
-            args->read_error = 1;
+            /* -2: unreadable Stata data; CEXPORT_ROW_TOO_LONG: no buffer helps */
+            args->row_too_long = row_len == CEXPORT_ROW_TOO_LONG;
+            args->read_error = !args->row_too_long;
             args->success = 0;
             args->bytes_written = pos;
             return NULL;
@@ -207,6 +212,13 @@ static void *format_chunk_thread(void *arg)
     args->success = 1;
     args->bytes_written = pos;
     return NULL;
+}
+
+/* Message for a chunk that failed to format */
+static char *chunk_error_message(const format_chunk_args_t *args)
+{
+    if (args->row_too_long) return CEXPORT_ROW_TOO_LONG_MSG;
+    return args->read_error ? "cexport: failed to read Stata data\n" : "cexport: formatting failed\n";
 }
 
 /*
@@ -280,7 +292,7 @@ static int write_rows_buffered(FILE *fp, size_t nobs, size_t avg_row_size, size_
         }
         if (row_len < 0) {
             free(buffer);
-            return -1;
+            return row_len == CEXPORT_ROW_TOO_LONG ? row_len : -1;
         }
 
         buf_pos += row_len;
@@ -333,7 +345,14 @@ static ST_retcode export_single_threaded(size_t nobs, size_t avg_row_size,
     free(header_buf);
 
     size_t rows_written = 0;
-    if (write_rows_buffered(g_ctx.fp, nobs, avg_row_size, &rows_written) != 0) {
+    int write_rc = write_rows_buffered(g_ctx.fp, nobs, avg_row_size, &rows_written);
+    if (write_rc == CEXPORT_ROW_TOO_LONG) {
+        SF_error(CEXPORT_ROW_TOO_LONG_MSG);
+        fclose(g_ctx.fp);
+        g_ctx.fp = NULL;
+        return 920;
+    }
+    if (write_rc != 0) {
         SF_error("cexport: write error during buffered write\n");
         fclose(g_ctx.fp);
         g_ctx.fp = NULL;
@@ -534,6 +553,7 @@ static ST_retcode export_pwrite(size_t nobs, size_t avg_row_size, size_t chunk_s
         chunk_args[c].bytes_written = 0;
         chunk_args[c].success = 0;
         chunk_args[c].read_error = 0;
+        chunk_args[c].row_too_long = 0;
     }
 
     /* Estimate total file size for pre-sizing */
@@ -614,8 +634,7 @@ static ST_retcode export_pwrite(size_t nobs, size_t avg_row_size, size_t chunk_s
                 if (wave_buffers[u]) free(wave_buffers[u]);
             }
             cexport_io_close(&outfile, 0);
-            SF_error(chunk_args[wave_start + w].read_error ? "cexport: failed to read Stata data\n"
-                                                           : "cexport: formatting failed\n");
+            SF_error(chunk_error_message(&chunk_args[wave_start + w]));
             return 920;
         }
     }
@@ -683,8 +702,7 @@ static ST_retcode export_pwrite(size_t nobs, size_t avg_row_size, size_t chunk_s
                     if (wave_buffers[u]) free(wave_buffers[u]);
                 }
                 cexport_io_close(&outfile, 0);
-                SF_error(chunk_args[next_start + w].read_error ? "cexport: failed to read Stata data\n"
-                                                               : "cexport: formatting failed\n");
+                SF_error(chunk_error_message(&chunk_args[next_start + w]));
                 return 920;
             }
         }
@@ -782,7 +800,7 @@ ST_retcode cexport_main(const char *args)
 
     ctools_filtered_data_init(&g_ctx.filtered);
     rc = g_ctx.stream ? ctools_data_select(&g_ctx.filtered, 0, 0, CTOOLS_LOAD_CHECK_IF)
-       : longtext ? cexport_load_text_data(&g_ctx.filtered, SF_nvars(), false)
+       : longtext ? ctools_load_text_data(&g_ctx.filtered, SF_nvars(), (ctools_text_policy){0, 0})
                   : ctools_data_load(&g_ctx.filtered, NULL, 0, 0, 0, CTOOLS_LOAD_CHECK_IF | CTOOLS_LOAD_NO_SORT_ORDER);
     if (rc != STATA_OK) {
         snprintf(msg, sizeof(msg), "cexport: failed to load data (error %d)\n", rc);
@@ -872,13 +890,13 @@ ST_retcode cexport_main(const char *args)
         header_len = (size_t)hlen;
     }
 
-    cexport_output output;
-    rc = cexport_output_prepare(&output, g_ctx.filename, g_ctx.replace);
+    ctools_output output;
+    rc = ctools_output_prepare(&output, g_ctx.filename, g_ctx.replace);
     if (rc) { free(header_buf); cexport_context_cleanup(&g_ctx); return rc; }
     free(g_ctx.filename);
     g_ctx.filename = strdup(output.temporary);
     if (!g_ctx.filename) {
-        free(header_buf); cexport_output_cleanup(&output);
+        free(header_buf); ctools_output_cleanup(&output);
         cexport_context_cleanup(&g_ctx); return 920;
     }
 
@@ -933,8 +951,8 @@ ST_retcode cexport_main(const char *args)
         if (fclose(g_ctx.fp) && !export_rc) export_rc = 603;
         g_ctx.fp = NULL;
     }
-    if (!export_rc) export_rc = cexport_output_commit(&output);
-    cexport_output_cleanup(&output);
+    if (!export_rc) export_rc = ctools_output_commit(&output);
+    ctools_output_cleanup(&output);
     if (export_rc != 0) {
         cexport_context_cleanup(&g_ctx);
         return export_rc;

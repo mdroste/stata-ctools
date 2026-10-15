@@ -1,0 +1,282 @@
+--- a/package/ado/cencode.ado
++++ b/package/ado/cencode.ado
+@@ -41,6 +41,7 @@
+ 
+     * Count input variables
+     local n_vars : word count `varlist'
++    unab original_order : _all
+ 
+     * Handle replace vs generate
+     local __do_replace = 0
+@@ -68,12 +69,23 @@
+ 
+     if _N == 0 {
+         forvalues i=1/`n_vars' {
++            local srcvar : word `i' of `varlist'
+             if `__do_replace' {
+-                local target : word `i' of `varlist'
+-                drop `target'
+-            }
+-            else local target : word `i' of `generate'
+-            quietly generate long `target' = .
++                tempvar target
++                local final_name "`srcvar'"
++            }
++            else {
++                local target : word `i' of `generate'
++                local final_name "`target'"
++            }
++            local this_label "`label'"
++            if "`this_label'"=="" local this_label "`final_name'"
++            quietly encode `srcvar' `if' `in', generate(`target') label(`this_label') `noextend'
++            if `__do_replace' {
++                drop `srcvar'
++                rename `target' `srcvar'
++                order `original_order'
++            }
+         }
+         return scalar N_unique = 0
+         return scalar N_vars = `n_vars'
+@@ -151,6 +163,7 @@
+             if `__do_replace' {
+                 drop `srcvar'
+                 rename `destvar' `srcvar'
++                order `original_order'
+             }
+             * No C phases ran for this variable.
+             foreach phase in parse load collect sort encode labels total {
+@@ -220,10 +233,24 @@
+             label values `destvar' `this_label'
+         }
+ 
++        * encode sizes the display to UTF-8 bytes, with a minimum of eight.
++        * With no categories it retains long's default format and empty label.
++        if `n_unique' > 0 {
++            mata: st_local("display_width",strofreal(max((8, max(strlen(select(st_sdata(.,st_local("srcvar")),st_data(.,st_local("destvar")):<.)))))))
++            format `destvar' %`display_width'.0g
++        }
++        else {
++            mata: st_vlmodify(st_local("this_label"), J(0,1,.), J(0,1,""))
++            label values `destvar' `this_label'
++        }
++        local source_label : variable label `srcvar'
++        label variable `destvar' `"`source_label'"'
++
+         * Handle replace option: drop original var and rename temp var
+         if `__do_replace' {
+             capture drop `srcvar'
+             rename `destvar' `srcvar'
++            order `original_order'
+         }
+ 
+         * Store rclass results for this variable
+--- a/package/ado/cwinsor.ado
++++ b/package/ado/cwinsor.ado
+@@ -118,7 +118,7 @@
+                 di as error "cwinsor: variable `newvar' already exists"
+                 exit 110
+             }
+-            quietly gen double `newvar' = `v' if `touse'
++            quietly gen double `newvar' = `v' if `touse' & !missing(`v')
+             local target_varlist "`target_varlist' `newvar'"
+         }
+     }
+@@ -135,6 +135,15 @@
+     * Build options
+     local opts "p=`p' q=`q'"
+     if "`trim'" != "" local opts "`opts' trim"
++    * winsor2 expands non-grouped bounds through numeric local macros. This
++    * rounding can change whether an observed percentile is trimmed. Keep C's
++    * quickselect, but perform the same Stata expansion before comparisons.
++    if "`trim'"!="" & "`by'"=="" {
++        tempname cwinsor_bounds
++        matrix `cwinsor_bounds' = J(`nvars', 2, .)
++        local opts "`opts' returnbounds"
++    }
++
+     if "`verbose'" != "" local opts "`opts' verbose"
+ 
+     local threads_opt ""
+@@ -156,6 +165,41 @@
+ 
+     plugin call ctools_plugin `target_varlist' `by' if `touse', ///
+         "cwinsor `threads_opt' `nvars_target' `nby' `store_indices' `opts'"
++
++    if "`trim'"!="" & "`by'"=="" {
++        local bound_index=0
++        foreach target of local target_varlist {
++            local ++bound_index
++            local lower = `cwinsor_bounds'[`bound_index',1]
++            local upper = `cwinsor_bounds'[`bound_index',2]
++            quietly replace `target' = . if `touse' & !missing(`target') & ///
++                (`target'<`lower' | `target'>`upper')
++        }
++    }
++
++    * Match winsor2's output metadata and final storage. Keep the working
++    * copy double until after computing the bounds, so creation does not round
++    * the input before percentile calculation.
++    local target_index=0
++    foreach v of local varlist {
++        local ++target_index
++        local target : word `target_index' of `target_varlist'
++        local source_label : variable label `v'
++        if `"`source_label'"'=="" local source_label "`v'"
++        label variable `target' `"`source_label'"'
++        if "`target'"!="`v'" {
++            local output_type : type `v'
++            if "`by'"!="" & "`trim'"=="" local output_type "`c(type)'"
++            recast `output_type' `target', force
++            * recast retains the double working copy's format. gen/egen use
++            * the default format for the final storage type instead.
++            tempvar format_probe
++            quietly gen `output_type' `format_probe' = .
++            local output_format : format `format_probe'
++            format `target' `output_format'
++            drop `format_probe'
++        }
++    }
+ 
+     * The plugin changed the variables in place: as with replace, drop Stata's
+     * sort marker when it involves one of them (trimmed values sort last, and
+--- a/package/ado/crangestat.ado
++++ b/package/ado/crangestat.ado
+@@ -196,9 +196,9 @@
+             local source_var = strtrim(substr("`var_spec'", `eq_pos' + 1, .))
+         }
+         else {
+-            * Default: result var is stat_name_varname
++            * Native rangestat names results source_stat.
+             local source_var "`var_spec'"
+-            local result_var "`stat_name'_`source_var'"
++            local result_var "`source_var'_`stat_name'"
+         }
+ 
+         * Validate source variable
+@@ -236,6 +236,7 @@
+ 
+         local stat_codes "`stat_codes' `stat_code'"
+         local result_vars "`result_vars' `result_var'"
++        local result_label_`=`nstats'+1' "`stat_name' of `source_var'"
+         local nstats = `nstats' + 1
+     }
+ 
+@@ -245,8 +246,11 @@
+     }
+ 
+     _ctools_newvars `result_vars'
++    local result_index=0
+     foreach output of local result_vars {
++        local ++result_index
+         quietly generate double `output' = .
++        label variable `output' "`result_label_`result_index''"
+     }
+ 
+     * Load plugin
+--- a/src/cwinsor/cwinsor_impl.c
++++ b/src/cwinsor/cwinsor_impl.c
+@@ -34,7 +34,7 @@
+ #define CWINSOR_MODULE "cwinsor"
+ #define DEFAULT_LOWER_PCTL 1.0
+ #define DEFAULT_UPPER_PCTL 99.0
+-#define MIN_OBS_WINSOR 3
++#define MIN_OBS_WINSOR 1
+ 
+ /* Note: By-variable sorting now uses ctools_sort_dispatch() instead of qsort */
+ 
+@@ -167,6 +167,7 @@
+     double lower_pctl;
+     double upper_pctl;
+     int trim;
++    int return_bounds;
+     int verbose;
+ } cwinsor_config;
+ 
+@@ -236,6 +237,7 @@
+     config.lower_pctl = ctools_parse_double_option(args, "p", DEFAULT_LOWER_PCTL);
+     config.upper_pctl = ctools_parse_double_option(args, "q", DEFAULT_UPPER_PCTL);
+     config.trim = ctools_parse_bool_option(args, "trim");
++    config.return_bounds = ctools_parse_bool_option(args, "returnbounds");
+     config.verbose = ctools_parse_bool_option(args, "verbose");
+ 
+     if (!isfinite(config.lower_pctl) || !isfinite(config.upper_pctl) ||
+@@ -270,6 +272,14 @@
+     }
+     size_t nby = (size_t)nby_value;
+     size_t nload = nvars + nby;
++    char bounds_name[256] = {0};
++    if (config.return_bounds) {
++        if (nby != 0) return 198;
++        ST_retcode rc = SF_macro_use("_cwinsor_bounds", bounds_name, sizeof(bounds_name));
++        if (rc) return rc;
++        if (!bounds_name[0]) return 198;
++    }
++
+ 
+     /* Parse plugin-local store indices. */
+     store_indices = (int *)malloc(nvars * sizeof(int));
+@@ -476,6 +486,19 @@
+         }
+     }
+ 
++    /* Only the caller thread may use the host matrix API. Workers collect
++     * exact quantiles here for the ado's winsor2-compatible macro expansion. */
++    int store_rc = STATA_OK;
++    double *bounds = NULL;
++    if (config.return_bounds) {
++        bounds = ctools_safe_malloc2(nvars, 2 * sizeof(double));
++        if (!bounds) {
++            store_rc = STATA_ERR_MEMORY;
++            goto cleanup;
++        }
++        for (size_t v = 0; v < 2 * nvars; v++) bounds[v] = SV_missval;
++    }
++
+     if (ngroups == 1) {
+         #ifdef _OPENMP
+         #pragma omp parallel for schedule(static)
+@@ -506,7 +529,10 @@
+                 upper = tmp;
+             }
+ 
+-            if (config.trim) {
++            if (config.return_bounds) {
++                bounds[2 * v] = lower;
++                bounds[2 * v + 1] = upper;
++            } else if (config.trim) {
+                 apply_trim_bounds(data, count, lower, upper);
+             } else {
+                 apply_winsor_bounds(data, count, lower, upper);
+@@ -561,7 +587,13 @@
+     /* === Store Phase using obs_map === */
+     double store_start = ctools_timer_seconds();
+ 
+-    int store_rc = STATA_OK;
++    if (config.return_bounds) {
++        for (size_t v = 0; v < nvars && !store_rc; v++) {
++            store_rc = SF_mat_store(bounds_name, v + 1, 1, bounds[2 * v]);
++            if (!store_rc)
++                store_rc = SF_mat_store(bounds_name, v + 1, 2, bounds[2 * v + 1]);
++        }
++    }
+     perm_idx_t *write_map = obs_map;
+     perm_idx_t *composed_map = NULL;
+     if (nby > 0 && sort_indices != NULL) {
+@@ -572,7 +604,7 @@
+             write_map = composed_map;
+         }
+     }
+-    if (!store_rc) {
++    if (!store_rc && !config.return_bounds) {
+         if (nvars == 1) {
+             store_rc = ctools_store_filtered_rowpar(var_data[0], nobs, store_indices[0], write_map);
+         } else {
+@@ -588,6 +620,8 @@
+     t_store = ctools_timer_seconds() - store_start;
+ 
+     /* === Cleanup === */
++cleanup:
++    free(bounds);
+     for (int t = 0; t < num_threads; t++) {
+         free(work_arrays[t]);
+     }

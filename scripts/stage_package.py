@@ -9,8 +9,8 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'validation'))
-from check_package import check_package
+sys.path.insert(0, str(ROOT))
+from scripts.package_contract import check_package
 
 PLATFORMS = ('mac_arm', 'mac_x86', 'windows', 'linux')
 
@@ -22,12 +22,19 @@ def native_platform():
     raise ValueError(f'unsupported platform: {system} {machine}')
 
 
-def stage(source, output, selected, revision):
+def stage(source, output, selected, revision, binaries=None):
     source, output = source.resolve(), output.resolve()
     if output == source or source in output.parents:
         raise ValueError('stage outside the source build directory')
     if output.exists():
         raise ValueError(f'output already exists; choose a fresh staging directory: {output}')
+    binaries = (binaries or source).resolve()
+    def entry_path(entry):
+        if entry.endswith('.plugin'):
+            flat = binaries / entry
+            nested = binaries / entry.removesuffix('.plugin') / entry
+            return flat if flat.is_file() else nested
+        return source / entry
     lines = (source / 'ctools.pkg').read_text().splitlines()
     keep = {f'ctools_{p}.plugin' for p in selected}
     staged_lines = [line for line in lines if not line.startswith('d Platforms: ')
@@ -35,14 +42,14 @@ def stage(source, output, selected, revision):
     staged_lines.insert(1, 'd Platforms: ' + ' '.join(selected))
     entries = [line[2:] for line in staged_lines if line.startswith('f ')]
     for entry in entries + ['stata.toc']:
-        if Path(entry).name != entry or not (source / entry).is_file():
+        if Path(entry).name != entry or not entry_path(entry).is_file():
             raise ValueError(f'missing or invalid package entry: {entry}')
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='.ctools-package-', dir=output.parent) as tmp:
         stage_dir = Path(tmp) / 'package'
         stage_dir.mkdir()
         for entry in entries + ['stata.toc']:
-            shutil.copy2(source / entry, stage_dir / entry)
+            shutil.copy2(entry_path(entry), stage_dir / entry)
         (stage_dir / 'ctools.pkg').write_text('\n'.join(staged_lines) + '\n')
         errors = check_package(stage_dir)
         if errors: raise ValueError('\n'.join(errors))
@@ -56,12 +63,13 @@ def stage(source, output, selected, revision):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source', type=Path, default=ROOT/'build')
+    parser.add_argument('--binaries', type=Path, help='flat directory or downloaded CI artifact directories')
     parser.add_argument('--output', type=Path, default=ROOT/'dist/ctools')
     parser.add_argument('--platform', choices=(*PLATFORMS, 'all'), default=native_platform())
     parser.add_argument('--revision', required=True, help='revision embedded when compiling the selected plugins')
     args = parser.parse_args()
     selected = list(PLATFORMS) if args.platform == 'all' else [args.platform]
-    try: result = stage(args.source,args.output,selected,args.revision)
+    try: result = stage(args.source,args.output,selected,args.revision,args.binaries)
     except ValueError as error: raise SystemExit(str(error))
     print(f'Complete {", ".join(selected)} package: {result}')
 

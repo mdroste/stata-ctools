@@ -2842,6 +2842,38 @@ set obs 0
 gen str10 x = ""
 test_error_match, stata_cmd(encode x, generate(test)) ctools_cmd(cencode x, generate(test)) testname("empty dataset")
 
+* Compare observable metadata as well as codes and label definitions.
+quietly do validation/coverage_helpers.do
+foreach width in 1 9 40 200 {
+    clear
+    set obs 4
+    gen long id=_n
+    local repeated ""
+    forvalues i=1/`width' {
+        local repeated "`repeated'x"
+    }
+    gen str244 text="`repeated'"
+    replace text="東京 café" in 2
+    replace text="" in 4
+    label variable text "Original text label"
+    gen byte tail=1
+    coverage_data, reference(encode text, gen(code)) ///
+        candidate(cencode text, gen(code)) name("encode observed width `width' and metadata")
+    coverage_data, reference(coverage_codec_replace text, command(encode)) ///
+        candidate(cencode text, replace) name("encode replace width `width' and variable order")
+}
+clear
+set obs 3
+gen str8 text=""
+coverage_data, reference(encode text, gen(code)) ///
+    candidate(cencode text, gen(code)) name("encode all empty strings and format")
+drop if _n>0
+label variable text "Empty dataset source label"
+coverage_data, reference(encode text, gen(code)) ///
+    candidate(cencode text, gen(code)) name("encode zero observations and metadata")
+coverage_data, reference(coverage_codec_replace text, command(encode)) ///
+    candidate(cencode text, replace) name("encode zero observations with replace")
+
 /*******************************************************************************
  * SUMMARY
  ******************************************************************************/

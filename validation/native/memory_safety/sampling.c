@@ -2,6 +2,7 @@
 #include "alloc.h"
 #include "ctools_types.h"
 #include "ctools_parse.c"
+#include "ctools_group.c"
 #include "stplugin.h"
 #include <math.h>
 static int store_at, store_calls;

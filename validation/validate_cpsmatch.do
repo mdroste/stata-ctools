@@ -824,6 +824,117 @@ else {
     }
 }
 
+/* Reused control: s1^2=4, s0^2=18, n1=3, sum(w0^2)=5; SE=sqrt(34/3).
+   Direct inference fixtures cover reused controls, constant outcomes, and an
+   undefined SE when only one treated observation remains. */
+clear
+input byte treat double(ps y)
+0 .1 2
+0 .8 8
+1 .11 1
+1 .12 3
+1 .79 5
+0 .99 1000
+end
+capture noisily {
+    cpsmatch treat, pscore(ps) outcome(y)
+    assert reldif(r(att_se),sqrt(34/3)) < 1e-12
+    assert reldif(r(att_t),-1/sqrt(34/3)) < 1e-12
+    assert r(seatt) == r(att_se)
+    assert _weight[1] == 2 & _weight[2] == 1
+}
+if _rc test_fail "inference with reused control" "r(`=_rc')"
+else test_pass "inference with reused control"
+foreach scale in 1e-12 1e12 {
+    gen double scaled_y = y*`scale'
+    benchmark_psmatch2 treat, pscore(ps) outcome(scaled_y) ///
+        testname("inference outcome scale `scale'")
+    drop scaled_y
+}
+replace y = 4
+capture noisily {
+    cpsmatch treat, pscore(ps) outcome(y)
+    assert r(att) == 0 & r(att_se) == 0 & missing(r(att_t))
+}
+if _rc test_fail "inference with constant outcomes" "r(`=_rc')"
+else test_pass "inference with constant outcomes"
+drop in 4/5
+capture noisily {
+    cpsmatch treat, pscore(ps) outcome(y)
+    assert r(att) == 0 & missing(r(att_se)) & missing(r(att_t))
+}
+if _rc test_fail "inference with singleton match" "r(`=_rc')"
+else test_pass "inference with singleton match"
+
+/* Two neighbors produce control weights (1, 1.5, .5), so
+   s0^2=84 and sum(w0^2)=3.5. SE^2=4/3+84*3.5/9=34. */
+clear
+input byte treat double(ps y)
+0 .1 2
+0 .5 8
+0 .9 20
+1 .11 1
+1 .12 3
+1 .8 5
+end
+capture noisily {
+    cpsmatch treat, pscore(ps) outcome(y) neighbor(2)
+    assert reldif(r(att_se),sqrt(34)) < 1e-12
+    assert reldif(r(att_t),-5/sqrt(34)) < 1e-12
+    assert r(seatt) == r(att_se)
+    assert _weight[1] == 1 & _weight[2] == 1.5 & _weight[3] == .5
+}
+if _rc test_fail "inference with fractional control weights" "r(`=_rc')"
+else test_pass "inference with fractional control weights"
+benchmark_psmatch2 treat, pscore(ps) outcome(y) neighbor(2) ///
+    testname("fractional-weight inference vs psmatch2")
+
+/* psmatch2's Unmatched row uses regress, including for unequal group sizes
+   and singleton groups. Check the actual displayed SE and t-statistic.
+   The table is wider than 80 columns, so widen the line to keep each row on
+   one logged line regardless of the caller's linesize. */
+local caller_linesize = c(linesize)
+set linesize 255
+foreach sample in unequal singleton_treated singleton_control {
+    clear
+    set obs 5
+    gen byte treat = _n > 2
+    gen double ps = cond(_n==1,.1,cond(_n==2,.8,cond(_n==3,.11,cond(_n==4,.12,.79))))
+    gen double y = cond(_n==1,2,cond(_n==2,8,2*_n-5))
+    if "`sample'" == "singleton_treated" drop in 4/5
+    if "`sample'" == "singleton_control" drop in 2
+    regress y treat
+    local expected_se : display %12.6g _se[treat]
+    local expected_t : display %9.2f _b[treat]/_se[treat]
+    tempfile output_log
+    tempname output_name output_handle
+    log using "`output_log'", text replace name(`output_name')
+    capture noisily cpsmatch treat, pscore(ps) outcome(y)
+    local match_rc = _rc
+    log close `output_name'
+    local found = 0
+    local displayed_se = .
+    local displayed_t = .
+    file open `output_handle' using "`output_log'", read text
+    file read `output_handle' line
+    while r(eof) == 0 {
+        if strpos(`"`line'"', "Unmatched |") {
+            local row = substr(`"`line'"', strpos(`"`line'"', "|")+1, .)
+            local displayed_se : word 4 of `row'
+            local displayed_t : word 5 of `row'
+            local found = 1
+        }
+        file read `output_handle' line
+    }
+    file close `output_handle'
+    if `match_rc' == 0 & `found' & ///
+        `displayed_se' == `expected_se' & `displayed_t' == `expected_t' {
+        test_pass "unmatched inference `sample'"
+    }
+    else test_fail "unmatched inference `sample'" "displayed SE/t differ from regress"
+}
+set linesize `caller_linesize'
+
 /*******************************************************************************
  * SUMMARY
  ******************************************************************************/

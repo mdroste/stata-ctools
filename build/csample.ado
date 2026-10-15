@@ -10,8 +10,9 @@ program define csample
         exit 920
     }
 
-    timer clear 90
-    timer on 90
+    local __ct_elapsed90 = 0
+    if "`__ct_elapsed90'" == "" local __ct_elapsed90 = 0
+    quietly _ctools_clock __ct_start90
 
     syntax [anything(name=percent)] [if] [in], [Count(integer 0) BY(varlist) Verbose THReads(integer 0)]
 
@@ -127,10 +128,12 @@ program define csample
     }
 
     * Record pre-plugin time
-    timer off 90
-    quietly timer list 90
-    local __time_preplugin = r(t90)
-    timer on 90
+    quietly _ctools_clock __ct_now
+    local __ct_elapsed90 = `__ct_elapsed90' + (`__ct_now' - `__ct_start90')
+    * Elapsed seconds are held in caller-local timing state.
+    local __time_preplugin = `__ct_elapsed90'
+    if "`__ct_elapsed90'" == "" local __ct_elapsed90 = 0
+    quietly _ctools_clock __ct_start90
 
     * Call plugin with ALL variables (cencode pattern)
     * Pass keep_idx so C code knows which variable to write to
@@ -144,11 +147,12 @@ program define csample
     drop `__keep'
 
     * Finish timing
-    timer off 90
+    quietly _ctools_clock __ct_now
+    local __ct_elapsed90 = `__ct_elapsed90' + (`__ct_now' - `__ct_start90')
 
     if `__do_timing' {
-        quietly timer list 90
-        local __time_total = r(t90)
+        * Elapsed seconds are held in caller-local timing state.
+        local __time_total = `__ct_elapsed90'
 
         di as text ""
         di as text "{hline 60}"

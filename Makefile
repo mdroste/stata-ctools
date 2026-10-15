@@ -59,18 +59,14 @@ endif
 # ------------------------------------------------------------------------------
 # Source Files (auto-discovered from src/ directory tree)
 # ------------------------------------------------------------------------------
-# All .c files under src/ are compiled, all .h files tracked for dependencies,
-# and all subdirectories are added as include paths. Adding new files or modules
-# under src/ requires no changes to this Makefile.
-#
-# Third-party sources (libdeflate) are compiled separately with warnings
-# suppressed to keep our own code warning-clean.
-ALL_SOURCES  = $(shell find $(SRC_DIR) -name '*.c')
-LIBDEFLATE_SRCS = $(shell find $(SRC_DIR)/cimport/libdeflate -name '*.c' 2>/dev/null)
+# First-party includes are module-qualified. Vendor compatibility includes and
+# warnings are scoped by scripts/build_plugin.py to each dependency.
+ALL_SOURCES  = $(shell find $(SRC_DIR) -name '*.c' | sort)
+LIBDEFLATE_SRCS = $(shell find $(SRC_DIR)/vendor/libdeflate -name '*.c' 2>/dev/null | sort)
 SOURCES      = $(filter-out $(LIBDEFLATE_SRCS),$(ALL_SOURCES))
 HEADERS      = $(shell find $(SRC_DIR) -name '*.h')
 BUILD_REVISION ?= local
-INCLUDE_DIRS = -DHAVE_ZLIB=1 -DCTOOLS_BUILD_REVISION=\"$(BUILD_REVISION)\" $(addprefix -I,$(sort $(dir $(ALL_SOURCES) $(HEADERS))))
+INCLUDE_DIRS = -DCTOOLS_BUILD_REVISION=\"$(BUILD_REVISION)\" -I$(SRC_DIR)
 
 # ------------------------------------------------------------------------------
 # Output Configuration
@@ -403,7 +399,7 @@ $(BUILD_DIR):
 # ------------------------------------------------------------------------------
 # macOS Apple Silicon (arm64)
 # ------------------------------------------------------------------------------
-macos-arm: $(BUILD_DIR) $(SOURCES) $(HEADERS)
+macos-arm: $(BUILD_DIR) package-sources
 ifeq ($(MAC_ARM_HAS_OMP),yes)
 	@python3 validation/check_dependencies.py macos "$(LIBOMP_PREFIX)/lib/libomp.a" --arch arm64 --archive
 endif
@@ -422,25 +418,16 @@ endif
 ifeq ($(MAC_ARM_HAS_OMP),no)
 	@echo "    OpenMP:    Build a compatible static runtime; see docs/PLATFORMS.md"
 endif
-	@set -e; \
-		objdir=$$(mktemp -d "$(BUILD_DIR)/.ctools-arm.XXXXXX"); \
-		trap 'rm -rf "$$objdir"' 0; trap 'exit 1' 1 2 3 15; \
-		set --; \
-		for f in $(LIBDEFLATE_SRCS); do \
-			d=$$(basename $$(dirname $$f)); b=$$(basename $$f .c); \
-			object="$$objdir/ld_$${d}_$${b}.o"; \
-			$(CC_MAC) $(CFLAGS_MAC_ARM) -w -c $$f -o "$$object"; \
-			set -- "$$@" "$$object"; \
-		done; \
-		$(CC_MAC) $(CFLAGS_MAC_ARM) -o "$$objdir/ctools.plugin" $(SOURCES) "$$@" $(LDFLAGS_MAC_ARM); \
-		mv -f "$$objdir/ctools.plugin" "$(PLUGIN_MAC_ARM)"
+	@python3 scripts/build_plugin.py --platform arm --cc '$(CC_MAC)' \
+		--cflags='$(CFLAGS_MAC_ARM)' --ldflags='$(LDFLAGS_MAC_ARM)' \
+		--sources='$(LIBDEFLATE_SRCS) $(SOURCES)' --output '$(PLUGIN_MAC_ARM)' --objects '$(BUILD_DIR)/obj'
 	@echo "    Output:    $(PLUGIN_MAC_ARM)"
 	@printf "    Size:      " && ls -lh $(PLUGIN_MAC_ARM) | awk '{print $$5}'
 
 # ------------------------------------------------------------------------------
 # macOS Intel (x86_64)
 # ------------------------------------------------------------------------------
-macos-intel: $(BUILD_DIR) $(SOURCES) $(HEADERS)
+macos-intel: $(BUILD_DIR) package-sources
 ifeq ($(MAC_X86_HAS_OMP),yes)
 	@python3 validation/check_dependencies.py macos "$(LIBOMP_INTEL)/lib/libomp.a" --arch x86_64 --archive
 endif
@@ -456,18 +443,9 @@ endif
 else
 	@echo "    OpenMP:    Disabled (pthread only)"
 endif
-	@set -e; \
-		objdir=$$(mktemp -d "$(BUILD_DIR)/.ctools-x86.XXXXXX"); \
-		trap 'rm -rf "$$objdir"' 0; trap 'exit 1' 1 2 3 15; \
-		set --; \
-		for f in $(LIBDEFLATE_SRCS); do \
-			d=$$(basename $$(dirname $$f)); b=$$(basename $$f .c); \
-			object="$$objdir/ld_$${d}_$${b}.o"; \
-			$(CC_MAC) $(CFLAGS_MAC_X86) -w -c $$f -o "$$object"; \
-			set -- "$$@" "$$object"; \
-		done; \
-		$(CC_MAC) $(CFLAGS_MAC_X86) -o "$$objdir/ctools.plugin" $(SOURCES) "$$@" $(LDFLAGS_MAC_X86); \
-		mv -f "$$objdir/ctools.plugin" "$(PLUGIN_MAC_X86)"
+	@python3 scripts/build_plugin.py --platform x86 --cc '$(CC_MAC)' \
+		--cflags='$(CFLAGS_MAC_X86)' --ldflags='$(LDFLAGS_MAC_X86)' \
+		--sources='$(LIBDEFLATE_SRCS) $(SOURCES)' --output '$(PLUGIN_MAC_X86)' --objects '$(BUILD_DIR)/obj'
 	@echo "    Output:    $(PLUGIN_MAC_X86)"
 	@printf "    Size:      " && ls -lh $(PLUGIN_MAC_X86) | awk '{print $$5}'
 
@@ -506,7 +484,7 @@ endif
 # ------------------------------------------------------------------------------
 # Windows x64
 # ------------------------------------------------------------------------------
-windows: $(BUILD_DIR) $(SOURCES) $(HEADERS)
+windows: $(BUILD_DIR) package-sources
 ifeq ($(CC_WIN),)
 	@echo ""
 	@echo "  ERROR: No Windows cross-compiler found."
@@ -526,18 +504,9 @@ ifeq ($(WIN_HAS_OMP),yes)
 else
 	@echo "    OpenMP:    Disabled"
 endif
-	@set -e; \
-		objdir=$$(mktemp -d "$(BUILD_DIR)/.ctools-win.XXXXXX"); \
-		trap 'rm -rf "$$objdir"' 0; trap 'exit 1' 1 2 3 15; \
-		set --; \
-		for f in $(LIBDEFLATE_SRCS); do \
-			d=$$(basename $$(dirname $$f)); b=$$(basename $$f .c); \
-			object="$$objdir/ld_$${d}_$${b}.o"; \
-			$(CC_WIN) $(CFLAGS_WIN) -w -c $$f -o "$$object"; \
-			set -- "$$@" "$$object"; \
-		done; \
-		$(CC_WIN) $(CFLAGS_WIN) -o "$$objdir/ctools.plugin" $(SOURCES) "$$@" $(LDFLAGS_WIN); \
-		mv -f "$$objdir/ctools.plugin" "$(PLUGIN_WINDOWS)"
+	@python3 scripts/build_plugin.py --platform win --cc '$(CC_WIN)' \
+		--cflags='$(CFLAGS_WIN)' --ldflags='$(LDFLAGS_WIN)' \
+		--sources='$(LIBDEFLATE_SRCS) $(SOURCES)' --output '$(PLUGIN_WINDOWS)' --objects '$(BUILD_DIR)/obj'
 	@echo "    Output:    $(PLUGIN_WINDOWS)"
 	@printf "    Size:      " && ls -lh $(PLUGIN_WINDOWS) | awk '{print $$5}'
 endif
@@ -545,7 +514,7 @@ endif
 # ------------------------------------------------------------------------------
 # Linux x64
 # ------------------------------------------------------------------------------
-linux: $(BUILD_DIR) $(SOURCES) $(HEADERS)
+linux: $(BUILD_DIR) package-sources
 ifeq ($(CC_LINUX),)
 	@echo ""
 	@echo "  ERROR: No Linux cross-compiler found."
@@ -568,18 +537,9 @@ ifeq ($(LINUX_HAS_OMP),yes)
 else
 	@echo "    OpenMP:    Disabled"
 endif
-	@set -e; \
-		objdir=$$(mktemp -d "$(BUILD_DIR)/.ctools-linux.XXXXXX"); \
-		trap 'rm -rf "$$objdir"' 0; trap 'exit 1' 1 2 3 15; \
-		set --; \
-		for f in $(LIBDEFLATE_SRCS); do \
-			d=$$(basename $$(dirname $$f)); b=$$(basename $$f .c); \
-			object="$$objdir/ld_$${d}_$${b}.o"; \
-			$(CC_LINUX) $(CFLAGS_LINUX) -w -c $$f -o "$$object"; \
-			set -- "$$@" "$$object"; \
-		done; \
-		$(CC_LINUX) $(CFLAGS_LINUX) -o "$$objdir/ctools.plugin" $(SOURCES) "$$@" $(LDFLAGS_LINUX); \
-		mv -f "$$objdir/ctools.plugin" "$(PLUGIN_LINUX)"
+	@python3 scripts/build_plugin.py --platform linux --cc '$(CC_LINUX)' \
+		--cflags='$(CFLAGS_LINUX)' --ldflags='$(LDFLAGS_LINUX)' \
+		--sources='$(LIBDEFLATE_SRCS) $(SOURCES)' --output '$(PLUGIN_LINUX)' --objects '$(BUILD_DIR)/obj'
 	@echo "    Output:    $(PLUGIN_LINUX)"
 	@printf "    Size:      " && ls -lh $(PLUGIN_LINUX) | awk '{print $$5}'
 endif
@@ -621,6 +581,7 @@ windows-docker: $(BUILD_DIR)
 clean:
 	@echo ""
 	@echo "  Cleaning build artifacts..."
+	@python3 -c 'from pathlib import Path; import shutil; p=Path("$(BUILD_DIR)"); shutil.rmtree(p/"obj", ignore_errors=True); [f.unlink() for f in p.glob("*.plugin.build.json")]'
 ifeq ($(DETECTED_OS),Windows)
 	@-del /Q $(BUILD_DIR)\ctools_*.plugin 2>NUL
 	@-del /Q $(BUILD_DIR)\*.o 2>NUL
@@ -643,3 +604,8 @@ PACKAGE_DIR ?= dist/ctools
 .PHONY: package
 package: default
 	python3 scripts/stage_package.py --source "$(BUILD_DIR)" --output "$(PACKAGE_DIR)" --revision "$(BUILD_REVISION)"
+
+.PHONY: package-sources
+package-sources:
+	@python3 scripts/sync_release.py
+	@python3 scripts/sync_package.py

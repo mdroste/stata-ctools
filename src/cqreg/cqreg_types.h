@@ -21,8 +21,6 @@
 /* Default configuration */
 #define CQREG_DEFAULT_MAXITER     50
 #define CQREG_DEFAULT_TOL         1e-8
-#define CQREG_DEFAULT_MU_INIT     0.1
-#define CQREG_DEFAULT_SIGMA       0.1
 /* Thread limit is managed centrally via ctools_get_max_threads() in ctools_config.h */
 /* Aligned allocation uses ctools_cacheline_alloc / ctools_aligned_free from ctools_config.h */
 
@@ -77,20 +75,15 @@ typedef enum {
  * stay in ST_int: cqreg_full_regression rejects K above this limit. */
 #define CQREG_MAX_K 46340
 
-/* IPM solver configuration */
+/* Frisch-Newton solver configuration */
 typedef struct {
     ST_int maxiter;           /* Maximum iterations (default: 50) */
-    ST_double tol_primal;     /* Primal feasibility tolerance */
-    ST_double tol_dual;       /* Dual feasibility tolerance */
     ST_double tol_gap;        /* Duality gap tolerance */
     ST_int verbose;           /* Verbosity level (0=none, 1=summary, 2=detailed) */
-    ST_int use_mehrotra;      /* Use predictor-corrector (default: 1) */
     ST_int skip_crossover;    /* Skip crossover + residuals (for auxiliary solves) */
-    ST_double mu_init;        /* Initial barrier parameter */
-    ST_double sigma;          /* Centering parameter (0.1-0.3) */
 } cqreg_ipm_config;
 
-/* IPM solver state - primal-dual interior point method */
+/* Solver state of the Frisch-Newton interior point method (cqreg_fn_solve) */
 typedef struct {
     /* Problem dimensions */
     ST_int N;                 /* Number of observations */
@@ -99,47 +92,14 @@ typedef struct {
     /* Coefficient vector */
     ST_double *beta;          /* Regression coefficients (K) */
 
-    /* Primal variables (size N each) */
+    /* Crossover results, absent when config.skip_crossover is set (size N each) */
     ST_double *u;             /* Positive deviations: y - X*beta = u - v */
     ST_double *v;             /* Negative deviations */
-
-    /* Dual variables (size N each) */
-    ST_double *lambda_u;      /* Dual for u >= 0 */
-    ST_double *lambda_v;      /* Dual for v >= 0 */
-
-    /* Diagonal scaling for normal equations */
-    ST_double *D;             /* D[i] = 1/(lambda_u[i]/u[i] + lambda_v[i]/v[i]) */
+    ST_double *r_primal;      /* Residuals y - X*beta */
 
     /* Normal equations storage */
-    ST_double *XDX;           /* X' * D * X (K x K) */
-    ST_double *XDXcopy;       /* Copy for Cholesky (K x K) */
-    ST_double *L;             /* Cholesky factor of XDX (K x K, lower triangular) */
+    ST_double *XDX;           /* X' * D * X, then its Cholesky factor (K x K) */
     ST_double *rhs;           /* Right-hand side for normal equations (K) */
-
-    /* Search directions */
-    ST_double *delta_beta;    /* Search direction for beta (K) */
-    ST_double *delta_u;       /* Search direction for u (N) */
-    ST_double *delta_v;       /* Search direction for v (N) */
-    ST_double *delta_lambda_u;/* Search direction for lambda_u (N) */
-    ST_double *delta_lambda_v;/* Search direction for lambda_v (N) */
-
-    /* Mehrotra predictor-corrector affine directions */
-    ST_double *delta_u_aff;       /* Affine direction for u (N) */
-    ST_double *delta_v_aff;       /* Affine direction for v (N) */
-    ST_double *delta_lambda_u_aff;/* Affine direction for lambda_u (N) */
-    ST_double *delta_lambda_v_aff;/* Affine direction for lambda_v (N) */
-
-    /* Residuals */
-    ST_double *r_primal;      /* Primal residual: y - X*beta - u + v (N) */
-    ST_double *r_dual;        /* Dual residual: X'*(lambda_u - lambda_v) - c (K) */
-
-    /* Working arrays */
-    ST_double *work_N;        /* General workspace (N) */
-    ST_double *work_K;        /* General workspace (K) */
-
-    /* Per-thread buffers for parallel operations */
-    ST_double **thread_buf;   /* num_threads x N scratch buffers */
-    ST_int num_threads;
 
     /* Frisch-Newton solver workspace (pre-allocated to avoid malloc in hot loop) */
     ST_double *fn_xp;         /* Primal x (N) */
@@ -161,14 +121,6 @@ typedef struct {
     ST_double *fn_tmp;        /* Temp array (N) */
     ST_double *fn_sinv;       /* 1/s for corrector (N) */
     ST_double *fn_Xq;         /* Weighted RHS, q*r (N) */
-
-    /* Barrier and convergence tracking */
-    ST_double mu;             /* Current barrier parameter */
-    ST_double primal_obj;     /* Primal objective value */
-    ST_double dual_obj;       /* Dual objective value */
-    ST_double gap;            /* Duality gap */
-    ST_double primal_infeas;  /* Primal infeasibility */
-    ST_double dual_infeas;    /* Dual infeasibility */
 
     /* Configuration */
     cqreg_ipm_config config;
@@ -273,18 +225,22 @@ typedef struct {
  * Memory management function declarations
  * ============================================================================ */
 
-/* Initialize IPM config with defaults */
+/* Initialize solver config with defaults */
 void cqreg_ipm_config_init(cqreg_ipm_config *config);
 
-/* Create and initialize IPM solver state */
-cqreg_ipm_state *cqreg_ipm_create(ST_int N, ST_int K, const cqreg_ipm_config *config);
-
-/* Create lightweight IPM state with only Frisch-Newton solver arrays.
- * Use for direct and auxiliary FN solves; the legacy IPM needs the full state. */
+/* Create the solver state of cqreg_fn_solve. u, v, r_primal and the basis
+ * are allocated only when the crossover runs (config NULL or
+ * config->skip_crossover == 0). */
 cqreg_ipm_state *cqreg_ipm_create_lite(ST_int N, ST_int K, const cqreg_ipm_config *config);
 
-/* Free IPM solver state (works for both full and lite states) */
+/* Free solver state */
 void cqreg_ipm_free(cqreg_ipm_state *ipm);
+
+/* Objective sum_i q*u_i + (1-q)*v_i of a solved state (crossover required) */
+ST_double cqreg_ipm_get_objective(const cqreg_ipm_state *ipm, ST_double q);
+
+/* Residuals y - X*beta = u - v of a solved state (crossover required), N values */
+void cqreg_ipm_get_residuals(const cqreg_ipm_state *ipm, ST_double *residuals);
 
 /* Create sparsity estimation state */
 cqreg_sparsity_state *cqreg_sparsity_create(ST_int N, ST_double quantile, cqreg_bw_method method);

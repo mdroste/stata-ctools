@@ -1137,16 +1137,27 @@ static ST_int cqreg_fn_solve_core(cqreg_ipm_state *ipm,
     /* y_d = -X \ Y (OLS with sign flip - this is the dual variable) */
     /* Compute X'X */
     memset(XqX, 0, (size_t)K * K * sizeof(ST_double));
+    /* Each element is a plain sum over the rows in order; the rows of the
+     * triangle are independent and take four columns k per pass */
+    #pragma omp parallel for schedule(dynamic) private(i) if(K > 1 && (size_t)N * (size_t)K > 200000)
     for (j = 0; j < K; j++) {
         const ST_double *Xj = &X[(size_t)j * N];
-        for (ST_int k = j; k < K; k++) {
-            const ST_double *Xk = &X[(size_t)k * N];
-            ST_double sum = 0.0;
+        for (ST_int k0 = j; k0 < K; k0 += 4) {
+            const ST_int nk = (K - k0 < 4) ? K - k0 : 4;
+            const ST_double *Xk[4];
+            ST_double sum[4] = {0.0, 0.0, 0.0, 0.0};
+            for (ST_int q = 0; q < 4; q++) Xk[q] = &X[(size_t)(k0 + (q < nk ? q : 0)) * N];
             for (i = 0; i < N; i++) {
-                sum += Xj[i] * Xk[i];
+                const ST_double xj = Xj[i];
+                sum[0] += xj * Xk[0][i];
+                sum[1] += xj * Xk[1][i];
+                sum[2] += xj * Xk[2][i];
+                sum[3] += xj * Xk[3][i];
             }
-            XqX[j * K + k] = sum;
-            XqX[k * K + j] = sum;
+            for (ST_int q = 0; q < nk; q++) {
+                XqX[j * K + (k0 + q)] = sum[q];
+                XqX[(k0 + q) * K + j] = sum[q];
+            }
         }
     }
 

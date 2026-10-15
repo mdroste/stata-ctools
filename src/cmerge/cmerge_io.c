@@ -22,7 +22,7 @@ void *cmerge_write_keepusing_var_thread(void *arg)
 
     if (src->type == STATA_TYPE_DOUBLE) {
         /* Numeric keepusing variable */
-        for (size_t i = 0; i < output_nobs; i++) {
+        for (size_t i = a->row_start; i < output_nobs; i++) {
             int32_t using_row = specs[i].using_sorted_row;
             int8_t merge_result = specs[i].merge_result;
 
@@ -67,13 +67,15 @@ void *cmerge_write_keepusing_var_thread(void *arg)
             }
 
             if (should_write && using_row >= 0 && using_row < (int32_t)src->nobs) {
-                SF_vstore(dest_idx, (ST_int)(i + 1), src->data.dbl[using_row]);
+                /* Checked store: other workers write other variables and
+                 * row ranges at the same time (see ctools_transport_internal.h). */
+                (_stata_)->safestore(dest_idx, (ST_int)(i + 1), src->data.dbl[using_row]);
             }
         }
     } else {
         /* String keepusing variable */
         char str_buf[2049];
-        for (size_t i = 0; i < output_nobs; i++) {
+        for (size_t i = a->row_start; i < output_nobs; i++) {
             int32_t using_row = specs[i].using_sorted_row;
             int8_t merge_result = specs[i].merge_result;
 

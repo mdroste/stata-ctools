@@ -49,6 +49,9 @@ where {it:merge_type} is one of
 {synopt:{opt update}}update missing values of same-named variables with using data{p_end}
 {synopt:{opt replace}}replace all values of same-named variables with using data{p_end}
 {synopt:{opt preserve_order(#)}}preserve observation order from master dataset (0=no, 1=yes){p_end}
+{syntab:Failure handling}
+{synopt:{opt snap:shot}}{help preserve} the whole dataset, as {cmd:merge} users may expect; written to disk above {cmd:c(max_preservemem)}{p_end}
+{synopt:{opt fast}}keep no copy of the master; a failure or Break can leave the data partly merged{p_end}
 {syntab:Reporting}
 {synopt:{opt norep:ort}}do not display result summary{p_end}
 {synopt:{opt verbose}}display detailed timing and progress information{p_end}
@@ -111,6 +114,27 @@ error (r(5)).
 The master storage type is retained, and incompatible using-side values are
 missing. Key variables must have matching string/numeric types even with
 {opt force}; otherwise the command returns error 106 before modifying data.
+{p_end}
+
+{phang}
+{opt snapshot} restores the master after a failed or interrupted merge from a
+{help preserve} snapshot of the whole dataset, as earlier versions of
+{cmd:cmerge} did. Stata keeps the snapshot in memory up to
+{cmd:c(max_preservemem)} (1 GB by default) and writes it to disk above that, so
+large merges take longer and write the whole dataset once. By default
+{cmd:cmerge} writes no snapshot; see {help cmerge##failure:failure behavior}.
+{p_end}
+
+{phang}
+{opt fast} makes {cmd:cmerge} keep no copy of the master data at all, in the
+manner of {cmd:collapse, fast}. It saves memory, and time where a copy would
+otherwise be taken ({opt keep()} or {opt update} on data already in key order,
+strL variables, empty datasets). If the merge then fails after it has started
+changing the data, or Break is pressed, the error is reported but the data in
+memory are left partly merged, with variables added, observations reordered,
+or values replaced. Errors in the keys (unsorted data with {opt sorted},
+duplicate keys, mismatched key types) are still found before anything changes.
+{opt fast} may not be combined with {opt snapshot}.
 {p_end}
 {p 8 12 2}2. High-performance radix sort on key variables{p_end}
 {p 8 12 2}3. Single-pass sorted merge join{p_end}
@@ -204,5 +228,10 @@ Online: {help merge}, {help joinby}, {help ctools}, {help csort}
 {title:Validation and failure behavior}
 
 {pstd}
-Shared numeric and fixed-string variables are widened before updates or using-only rows are written. A long/float combination uses double to preserve both inputs. Key variables must have matching string/numeric types even with force. For incompatible non-key types, force retains the master type and treats the using-side values as missing. String writes retain the shared plugin limit of str2045. When the master or the using keys or kept variables include strL variables, {cmd:cmerge} runs {help merge} itself (with a note). With {opt update}, matched observations are coded 4 (missing master values updated) or 5 (nonmissing conflict), as with {help merge}. New variables keep the using data's formats, labels, notes, and characteristics; a value label already defined in the master keeps the master's definition. If {opt assert()} fails, the merged result stays in memory, as with {help merge}; other failed merges restore the master dataset.
+Shared numeric and fixed-string variables are widened before updates or using-only rows are written. A long/float combination uses double to preserve both inputs. Key variables must have matching string/numeric types even with force. For incompatible non-key types, force retains the master type and treats the using-side values as missing. String writes retain the shared plugin limit of str2045. When the master or the using keys or kept variables include strL variables, {cmd:cmerge} runs {help merge} itself (with a note). With {opt update}, matched observations are coded 4 (missing master values updated) or 5 (nonmissing conflict), as with {help merge}. New variables keep the using data's formats, labels, notes, and characteristics; a value label already defined in the master keeps the master's definition. If {opt assert()} fails, the merged result stays in memory, as with {help merge}; any other failed or interrupted merge (including {help break:Break}) restores the master dataset.
+{p_end}
+
+{marker failure}{...}
+{pstd}
+By default {cmd:cmerge} restores the master without writing a snapshot to disk. Key, sortedness, and uniqueness errors are found before the master is changed. Before the plugin overwrites a master observation it keeps a copy of every master observation in memory (the copy the merged output is written from); after a failure it restores the observations from that copy, and {cmd:cmerge} removes the variables and observations it added and puts back storage types, formats, value labels, notes, characteristics, the sort order, and {cmd:c(changed)}. The few merges that cannot be undone that way (strL variables, which {help merge} runs; empty data with {opt keep()} or a 1:1 sort that would drop or reorder master observations) keep a snapshot in memory, in a {help frame} that {cmd:cmerge} drops when it finishes; such a merge fails with a memory error, before changing anything, if the copy does not fit. Before Stata 16, which has no frames, these merges use {help preserve}. Option {opt snapshot} uses {help preserve} for every merge instead, and option {opt fast} keeps no copy at all.
 {p_end}

@@ -4,6 +4,7 @@ Compile actual production sources with a mocked Stata host. A tracked allocator
 checks local/global ownership, while ASan/UBSan check invalid access/arithmetic.
 Each regression and PPML failure is followed by a successful call in-process.
 """
+from native.support.compiler import compile_native
 import os
 from pathlib import Path
 import platform
@@ -31,7 +32,7 @@ def main():
                        *flags, *parallel, str(FIXTURES / f"{source or name}.c"), "-o", str(exe),
                        "-Wl,-dead_strip" if SYSTEM == "APPLEMAC" else "-Wl,--gc-sections",
                        "-lm", "-pthread"]
-            subprocess.run(command, check=True, cwd=ROOT, capture_output=True, text=True)
+            compile_native(command, check=True, cwd=ROOT, capture_output=True, text=True)
             return exe
 
         def run(exe, *args):

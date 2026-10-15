@@ -29,6 +29,10 @@ where {it:stat_specification} is
 {p 8 17 2}
 {cmd:(}{it:statname}{cmd:)} [{it:newvar}{cmd:=}]{varname}
 
+{pstd}
+Without an explicit {it:newvar}, the result is named {it:varname_statname},
+matching {cmd:rangestat}; for example, {cmd:(mean) price} creates {cmd:price_mean}.
+
 {synoptset 24 tabbed}{...}
 {synopthdr}
 {synoptline}
@@ -40,6 +44,10 @@ where {it:stat_specification} is
 {synopt:{opt excludeself}}exclude current observation from calculations{p_end}
 {synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
 {synopt:{opt v:erbose}}display timing breakdown{p_end}
+
+{syntab:Failure handling}
+{synopt:{opt snap:shot}}{help preserve} the whole dataset, as earlier versions did; written to disk above {cmd:c(max_preservemem)}{p_end}
+{synopt:{opt fast}}undo nothing; a failure or Break can leave the result variables behind{p_end}
 {synoptline}
 
 
@@ -106,6 +114,27 @@ operations. By default, {cmd:crangestat} uses all available CPU cores.
 {phang}
 {opt verbose} displays detailed progress information and timing breakdown.
 
+{dlgtab:Failure handling}
+
+{pstd}
+By default a failed or interrupted {cmd:crangestat} leaves the data as they were
+without writing a snapshot of the dataset: it only adds its result variables,
+so after a failure or Break it drops them again and resets {cmd:c(changed)}.
+
+{phang}
+{opt snapshot} restores the data after a failed or interrupted call from a
+{help preserve} snapshot of the whole dataset instead, as earlier versions of
+{cmd:crangestat} did. Stata keeps the snapshot in memory up to
+{cmd:c(max_preservemem)} (1 GB by default) and writes it to disk above that, so
+large datasets take longer and write the whole dataset once.
+{p_end}
+
+{phang}
+{opt fast} undoes nothing: if the call fails after creating the result
+variables, or Break is pressed, the error is reported but the new variables
+stay in the data. {opt fast} may not be combined with {opt snapshot}.
+{p_end}
+
 
 {marker statistics}{...}
 {title:Statistics}
@@ -125,8 +154,8 @@ The following statistics are available:
 {p2col :{opt variance}}variance (N-1 denominator){p_end}
 {p2col :{opt median}}median (50th percentile){p_end}
 {p2col :{opt iqr}}interquartile range (p75 - p25){p_end}
-{p2col :{opt first}}first value (by key variable order){p_end}
-{p2col :{opt last}}last value (by key variable order){p_end}
+{p2col :{opt first}}first value, including missing (by key variable order){p_end}
+{p2col :{opt last}}last value, including missing (by key variable order){p_end}
 {p2col :{opt firstnm}}first non-missing value{p_end}
 {p2col :{opt lastnm}}last non-missing value{p_end}
 {p2col :{opt p1}}1st percentile{p_end}

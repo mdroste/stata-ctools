@@ -45,7 +45,7 @@
 {syntab:Optimization}
 {synopt:{opt tol:erance(#)}}convergence tolerance; default is {cmd:tolerance(1e-12)}{p_end}
 {synopt:{opt max:iter(#)}}maximum iterations; default is {cmd:maxiter(200)}{p_end}
-{synopt:{opt nopreprocess(#)}}disable preprocessing algorithm; default is {cmd:nopreprocess(0)}{p_end}
+{synopt:{opt nopreprocess(#)}}accepted for backward compatibility; has no effect{p_end}
 {synoptline}
 
 
@@ -164,12 +164,10 @@ breakdown, or produces nonfinite results, {cmd:cqreg} returns error 430 and does
 not post new estimates.
 
 {phang}
-{opt nopreprocess(#)} controls the preprocessing algorithm from Chernozhukov,
-Fernández-Val, and Melly (2020). This option is {bf:experimental}. The default
-value of 0 disables preprocessing, using the direct Frisch-Newton solver. Set to -1 to enable preprocessing
-(experimental), which attempts to speed up estimation by solving on a subsample
-first. The preprocessing implementation is still under development and may be
-slow or unstable for some datasets.
+{opt nopreprocess(#)} is accepted for backward compatibility and has no effect:
+{cmd:cqreg} always uses the direct Frisch-Newton solver. The experimental
+preprocessing solver that {cmd:nopreprocess(-1)} used to select has been
+removed, and {cmd:nopreprocess(-1)} returns error 198.
 
 
 {marker examples}{...}
@@ -262,14 +260,6 @@ The Interior Point Method solves this linear program using a primal-dual
 approach with Mehrotra predictor-corrector steps. This provides O(sqrt(N))
 convergence, which is significantly faster than the simplex method used by
 native {cmd:qreg} for large datasets.
-
-{pstd}
-An experimental preprocessing algorithm based on Chernozhukov, Fernández-Val,
-and Melly (2020) is available via the {opt nopreprocess(-1)} option. This algorithm
-exploits the fact that most observations will have residuals with a predictable
-sign, allowing the QR problem to be solved on a smaller subsample first. However,
-the current implementation has performance issues and is disabled by default.
-The direct Frisch-Newton solver is recommended for all use cases.
 
 {pstd}
 Standard errors follow {cmd:qreg}. The IID variance formula is:

@@ -87,6 +87,7 @@ jobs:
         run: |
           python3 validation/test_transport_adaptive_native.py
           python3 validation/test_transport_store_native.py
+          python3 validation/test_rowstage_native.py
 
       - name: Build Linux plugin
         run: make linux BUILD_REVISION=${{ github.sha }}
@@ -249,27 +250,10 @@ jobs:
 
       - name: Organize plugins
         run: |
-          mkdir -p release/build
-
-          # Move plugins to build directory
-          cp plugins/ctools_linux/ctools_linux.plugin release/build/
-          cp plugins/ctools_mac_arm/ctools_mac_arm.plugin release/build/
-          cp plugins/ctools_mac_x86/ctools_mac_x86.plugin release/build/
-          cp plugins/ctools_windows/ctools_windows.plugin release/build/
-
-          # Copy ado and help files, then every other non-plugin file the
-          # manifest lists (licences and notices included)
-          cp build/*.ado build/*.sthlp release/build/
-          cp build/ctools.pkg build/stata.toc build/LICENSE build/THIRD_PARTY_NOTICES release/build/
-          grep '^f ' build/ctools.pkg | cut -c3- | grep -v '\.plugin$' | while read -r entry; do
-            cp "build/$entry" release/build/
-          done
-          printf '%s\n' '${{ github.sha }}' > release/SOURCE_COMMIT
           python3 scripts/sync_release.py --check
-          python3 validation/check_package.py release/build
-
-          echo "Release package contents:"
-          ls -la release/build/
+          python3 scripts/sync_package.py --check
+          python3 scripts/stage_package.py --platform all --binaries plugins --output release/build --revision '${{ github.sha }}'
+          printf '%s\n' '${{ github.sha }}' > release/SOURCE_COMMIT
 
       - name: Upload combined package
         uses: actions/upload-artifact@v4

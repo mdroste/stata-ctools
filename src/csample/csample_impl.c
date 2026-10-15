@@ -24,6 +24,9 @@
 #include <omp.h>
 #endif
 
+/* Checked SPI writes resolve positions in the plugin varlist, even after
+ * estimation has introduced internal Stata variables. */
+#define SD_SAFEMODE
 #include "stplugin.h"
 #include "ctools_types.h"
 #include "ctools_parse.h"
@@ -33,173 +36,8 @@
 
 #define CSAMPLE_MODULE "csample"
 
-/* ===========================================================================
-   High-quality PRNG: xoshiro256** (Blackman & Vigna)
-   Much better statistical properties than rand()
-   =========================================================================== */
-
-typedef struct {
-    uint64_t s[4];
-} xoshiro256_state;
-
-static inline uint64_t rotl64(const uint64_t x, int k) {
-    return (x << k) | (x >> (64 - k));
-}
-
-static uint64_t xoshiro256_next(xoshiro256_state *state) {
-    const uint64_t result = rotl64(state->s[1] * 5, 7) * 9;
-    const uint64_t t = state->s[1] << 17;
-
-    state->s[2] ^= state->s[0];
-    state->s[3] ^= state->s[1];
-    state->s[1] ^= state->s[2];
-    state->s[0] ^= state->s[3];
-
-    state->s[2] ^= t;
-    state->s[3] = rotl64(state->s[3], 45);
-
-    return result;
-}
-
-/* SplitMix64 for seeding */
-static uint64_t splitmix64(uint64_t *state) {
-    uint64_t z = (*state += 0x9e3779b97f4a7c15ULL);
-    z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
-    z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
-    return z ^ (z >> 31);
-}
-
-static void xoshiro256_seed(xoshiro256_state *state, uint64_t seed) {
-    uint64_t sm_state = seed;
-    state->s[0] = splitmix64(&sm_state);
-    state->s[1] = splitmix64(&sm_state);
-    state->s[2] = splitmix64(&sm_state);
-    state->s[3] = splitmix64(&sm_state);
-}
-
-/* Generate uniform random in [0, n) */
-static inline size_t xoshiro256_uniform(xoshiro256_state *state, size_t n) {
-    if (n == 0) return 0;
-    /* Rejection sampling to avoid modulo bias */
-    uint64_t threshold = (UINT64_MAX - n + 1) % n;
-    uint64_t r;
-    do {
-        r = xoshiro256_next(state);
-    } while (r < threshold);
-    return (size_t)(r % n);
-}
-
-/* ===========================================================================
-   Group Detection
-   =========================================================================== */
-
-typedef struct {
-    size_t start;
-    size_t count;
-} group_info;
-
-/* Check if two adjacent observations are in the same group */
-static inline int same_group_check(stata_data *data, size_t nvars, size_t i, double miss) {
-    (void)miss;
-    for (size_t b = 0; b < nvars; b++) {
-        const stata_variable *var = &data->vars[b];
-        if (var->type == STATA_TYPE_STRING) {
-            const char *prev = var->data.str[i - 1];
-            const char *curr = var->data.str[i];
-            if (strcmp(prev ? prev : "", curr ? curr : "") != 0) return 0;
-        } else if (var->data.dbl[i - 1] != var->data.dbl[i]) {
-            return 0;
-        }
-    }
-    return 1;
-}
-
-/* Detect groups from sorted stata_data (data must already be sorted/permuted)
-   Parallelized for large datasets using boundary detection */
-static void detect_groups_from_data(stata_data *data, size_t nvars,
-                                     group_info *groups, size_t *ngroups) {
-    size_t nobs = data->nobs;
-    if (nobs == 0) {
-        *ngroups = 0;
-        return;
-    }
-
-    const double miss = SV_missval;
-
-    #ifdef _OPENMP
-    int num_threads = ctools_get_max_threads();
-
-    /* For small datasets or few threads, use sequential version */
-    if (nobs < 10000 || num_threads <= 1) {
-    #endif
-        /* Sequential version */
-        size_t g = 0;
-        groups[0].start = 0;
-        groups[0].count = 1;
-
-        for (size_t i = 1; i < nobs; i++) {
-            if (same_group_check(data, nvars, i, miss)) {
-                groups[g].count++;
-            } else {
-                g++;
-                groups[g].start = i;
-                groups[g].count = 1;
-            }
-        }
-        *ngroups = g + 1;
-        return;
-    #ifdef _OPENMP
-    }
-
-    /* Parallel version: first find all group boundaries */
-    uint8_t *boundaries = (uint8_t *)calloc(nobs, sizeof(uint8_t));
-    if (!boundaries) {
-        /* Fallback to sequential */
-        size_t g = 0;
-        groups[0].start = 0;
-        groups[0].count = 1;
-        for (size_t i = 1; i < nobs; i++) {
-            if (same_group_check(data, nvars, i, miss)) {
-                groups[g].count++;
-            } else {
-                g++;
-                groups[g].start = i;
-                groups[g].count = 1;
-            }
-        }
-        *ngroups = g + 1;
-        return;
-    }
-
-    boundaries[0] = 1;  /* First obs is always a boundary */
-
-    /* Phase 1: Parallel boundary detection */
-    #pragma omp parallel for schedule(static)
-    for (size_t i = 1; i < nobs; i++) {
-        if (!same_group_check(data, nvars, i, miss)) {
-            boundaries[i] = 1;
-        }
-    }
-
-    /* Phase 2: Sequential group construction */
-    size_t g = 0;
-    for (size_t i = 0; i < nobs; i++) {
-        if (boundaries[i]) {
-            if (g > 0) {
-                groups[g - 1].count = i - groups[g - 1].start;
-            }
-            groups[g].start = i;
-            g++;
-        }
-    }
-    if (g > 0) {
-        groups[g - 1].count = nobs - groups[g - 1].start;
-    }
-
-    free(boundaries);
-    *ngroups = g;
-    #endif
-}
+#include "ctools_rng.h"
+#include "ctools_group.h"
 
 /* ===========================================================================
    Argument Parsing
@@ -237,7 +75,7 @@ ST_retcode csample_main(const char *args) {
     int *by_indices = NULL;
     int *sort_vars = NULL;
     uint8_t *keep_flags = NULL;
-    group_info *groups = NULL;
+    ctools_group_range *groups = NULL;
     perm_idx_t *sort_perm = NULL;  /* Saved permutation for mapping back */
     size_t *work_indices = NULL;
     ctools_filtered_data by_filtered;
@@ -245,7 +83,7 @@ ST_retcode csample_main(const char *args) {
     ST_int obs_start = 0;  /* For null obs_map: first observation number */
     stata_retcode rc = STATA_OK;
     int num_threads = 1;
-    xoshiro256_state *thread_rngs = NULL;
+    ctools_rng *thread_rngs = NULL;
 
     ctools_filtered_data_init(&by_filtered);
     t_start = ctools_timer_seconds();
@@ -401,7 +239,7 @@ ST_retcode csample_main(const char *args) {
     /* === Sort Phase using ctools_sort_dispatch (if by-variables) === */
     double sort_start = ctools_timer_seconds();
 
-    groups = (group_info *)malloc((nobs + 1) * sizeof(group_info));
+    groups = (ctools_group_range *)malloc((nobs + 1) * sizeof(ctools_group_range));
     if (!groups) {
         if (nby > 0) ctools_filtered_data_free(&by_filtered);
         else if (obs_map) free(obs_map);
@@ -468,7 +306,7 @@ ST_retcode csample_main(const char *args) {
         free(sort_vars);
 
         /* Detect groups from sorted data */
-        detect_groups_from_data(&by_filtered.data, nby, groups, &ngroups);
+        ctools_group_ranges(&by_filtered.data, NULL, NULL, nby, groups, &ngroups);
     } else {
         groups[0].start = 0;
         groups[0].count = nobs;
@@ -486,7 +324,7 @@ ST_retcode csample_main(const char *args) {
     }
     num_threads = ctools_workspace_threads(num_threads, ngroups,
                                            max_group_size * sizeof(size_t));
-    thread_rngs = (xoshiro256_state *)ctools_safe_malloc2((size_t)num_threads, sizeof(xoshiro256_state));
+    thread_rngs = (ctools_rng *)ctools_safe_malloc2((size_t)num_threads, sizeof(ctools_rng));
     work_indices = (size_t *)ctools_safe_malloc3((size_t)num_threads, max_group_size, sizeof(size_t));
     if (!thread_rngs || !work_indices) {
         ctools_error_alloc(CSAMPLE_MODULE);
@@ -539,12 +377,12 @@ ST_retcode csample_main(const char *args) {
             }
 
             /* Seed RNG based on group index (not thread) for reproducibility */
-            xoshiro256_seed(&thread_rngs[tid], config.seed + (uint64_t)g * 0x9e3779b97f4a7c15ULL);
-            xoshiro256_state *rng = &thread_rngs[tid];
+            ctools_rng_seed(&thread_rngs[tid], config.seed + (uint64_t)g * 0x9e3779b97f4a7c15ULL);
+            ctools_rng *rng = &thread_rngs[tid];
 
             /* Fisher-Yates partial shuffle */
             for (size_t i = 0; i < keep_count; i++) {
-                size_t j = i + xoshiro256_uniform(rng, count - i);
+                size_t j = i + ctools_rng_uniform(rng, count - i);
                 size_t tmp = indices[i];
                 indices[i] = indices[j];
                 indices[j] = tmp;

@@ -136,6 +136,21 @@ static void win_cleanup_batch(cexport_io_file *file)
     file->batch_capacity = 0;
 }
 
+/*
+ * Retire the first `issued` batch writes before an error return: the caller
+ * frees their buffers and cexport_io_close frees their OVERLAPPED blocks and
+ * events, so none may still be in flight.
+ */
+static void win_drain_batch(cexport_io_file *file, size_t issued)
+{
+    if (issued == 0) return;
+    CancelIoEx(file->handle, NULL);
+    for (size_t j = 0; j < issued; j++) {
+        DWORD ignored = 0;
+        GetOverlappedResult(file->handle, &file->batch_overlapped[j], &ignored, TRUE);
+    }
+}
+
 int cexport_io_open(cexport_io_file *file, const char *filename,
                     cexport_io_backend_t backend, cexport_io_flags_t flags)
 {
@@ -418,11 +433,14 @@ ssize_t cexport_io_write_batch(cexport_io_file *file,
         BOOL success = WriteFile(file->handle, entries[i].buf,
                                   (DWORD)entries[i].len, &written, ov);
 
-        if (!success && GetLastError() != ERROR_IO_PENDING) {
-            snprintf(file->error_message, sizeof(file->error_message),
-                     "WriteFile batch[%zu] failed: Windows error %lu",
-                     i, GetLastError());
-            return -1;
+        if (!success) {
+            DWORD err = GetLastError();
+            if (err != ERROR_IO_PENDING) {
+                win_drain_batch(file, i);
+                snprintf(file->error_message, sizeof(file->error_message),
+                         "WriteFile batch[%zu] failed: Windows error %lu", i, err);
+                return -1;
+            }
         }
     }
 
@@ -435,9 +453,10 @@ ssize_t cexport_io_write_batch(cexport_io_file *file,
     );
 
     if (wait_result == WAIT_FAILED) {
+        DWORD err = GetLastError();
+        win_drain_batch(file, count);
         snprintf(file->error_message, sizeof(file->error_message),
-                 "WaitForMultipleObjects failed: Windows error %lu",
-                 GetLastError());
+                 "WaitForMultipleObjects failed: Windows error %lu", err);
         return -1;
     }
 

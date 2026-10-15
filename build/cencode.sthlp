@@ -114,20 +114,27 @@ operations. By default, {cmd:cencode} uses all available CPU cores.
 {cmd:cencode} uses a high-performance C plugin that parallelizes the encoding
 process. The algorithm works as follows:
 
-{p 8 12 2}1. {bf:Parallel string loading:} String values are loaded from Stata
-into C memory using parallel I/O when the dataset is large enough.{p_end}
+{p 8 12 2}1. {bf:Parallel coding:} Each thread reads its share of the observations
+directly from Stata and records each string in its own hash table. Only the
+distinct strings are kept in memory.{p_end}
 
-{p 8 12 2}2. {bf:Unique value collection:} A hash table is used to efficiently
-identify all unique string values in O(n) time.{p_end}
+{p 8 12 2}2. {bf:Alphabetical numbering:} The threads' distinct strings are
+merged and sorted bytewise, and numbered 1, 2, 3, ... as {cmd:encode} does. When
+the value label already exists, strings it labels keep their values (the
+smallest, if a text appears more than once) and new strings are numbered after
+its largest value.{p_end}
 
-{p 8 12 2}3. {bf:Alphabetical sorting:} Unique values are sorted alphabetically
-to ensure consistent integer code assignment across runs.{p_end}
+{p 8 12 2}3. {bf:Parallel writing:} Each thread writes the codes for its
+observations to the new variable.{p_end}
 
-{p 8 12 2}4. {bf:Parallel encoding:} Integer codes are written to the new
-variable using parallel writes when the dataset is large enough.{p_end}
+{p 8 12 2}4. {bf:Value label creation:} The new string-to-integer mappings are
+passed to Stata to create or extend the value label.{p_end}
 
-{p 8 12 2}5. {bf:Value label creation:} The string-to-integer mapping is passed
-to Stata to create the value label definition.{p_end}
+{pstd}
+{cmd:encode} itself is used for strL variables, for {opt noextend} when a string
+is not already labeled, and for existing labels that map extended missing
+values, contain text longer than 2,045 bytes, or would need codes beyond the
+range of a {cmd:long}.{p_end}
 
 {pstd}
 For large datasets (millions of observations), {cmd:cencode} can be significantly

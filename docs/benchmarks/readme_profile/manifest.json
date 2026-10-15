@@ -1,0 +1,498 @@
+{
+  "date": "2026-10-14",
+  "timezone": "America/Los_Angeles",
+  "cpu": "Apple M4 Pro",
+  "logical_processors": 12,
+  "memory_bytes": 51539607552,
+  "os": "macOS 26.7.1 (25G241)",
+  "stata": "StataNow/MP 19.5 for Unix (Apple Silicon), revision 12 Aug 2026",
+  "stata_processors": 4,
+  "ctools_threads": 12,
+  "seed": 95183,
+  "sortseed": 95183,
+  "observations": [
+    1000000,
+    10000000,
+    25000000
+  ],
+  "variables": 20,
+  "warmups": 0,
+  "repetitions": 1,
+  "order": [
+    "reference",
+    "ctools"
+  ],
+  "timer": "Stata timer around complete command; preparation/reloads/checks excluded",
+  "git_head_context": "a6eb6d344dbb5a59813bd1c2eb3d21bfee49cf5c",
+  "build_note": "build/ rebuilt with `make macos-arm` from the working tree on 2026-10-14, ctools 1.0.2 (local). Working tree has uncommitted changes. Git HEAD is context only, not the binary source identity; binary and loaded wrapper hashes below identify the measured files.",
+  "files": {
+    "build/_cio_export.ado": {
+      "sha256": "4b962c0541f2b5572c11599e2efcbb17aec45c4e2e3ea9b01bd85370b6930a48",
+      "version_comments": [
+        "*! Binary statistical writers; serialization is provided by C."
+      ]
+    },
+    "build/_cio_import.ado": {
+      "sha256": "531ff673c9ddd6d8dbf27b3c7526790ade5a6ba45ca940c4b5127add1b0bb277",
+      "version_comments": [
+        "*! Binary statistical readers; parsing and values are provided by C."
+      ]
+    },
+    "build/_cio_shp_export.ado": {
+      "sha256": "d1a3d19294b5897c4b7f2ae9e86a6932362e278ea9e442a7670cb5ffc3d442ca",
+      "version_comments": []
+    },
+    "build/_civreghdfe_fvstrip.ado": {
+      "sha256": "5fa5bafe01d884dc1ec060094976d3a07aa9a2294f32c85981c27c7ae401879c",
+      "version_comments": [
+        "*! Private helper for civreghdfe; maintained in package/ado."
+      ]
+    },
+    "build/_civreghdfe_optflags.ado": {
+      "sha256": "4780d784a7ed0bfd773b89108e6a29d6f530fb0713d6cb847d68c54e934f52f9",
+      "version_comments": [
+        "*! Private helper for civreghdfe; maintained in package/ado."
+      ]
+    },
+    "build/_cmerge_assert.ado": {
+      "sha256": "c93069a83759788da7aa91a259a0c62a5cd145a6018cc8e738a1fe27425e5071",
+      "version_comments": [
+        "*! Private helper for cmerge; maintained in package/ado."
+      ]
+    },
+    "build/_cmerge_clear_sortedby.ado": {
+      "sha256": "b2a80b30c0cc8a2ebeadb9fea42b09dbe8d096c887aacbdead1781be06597903",
+      "version_comments": [
+        "*! Private helper for cmerge; maintained in package/ado."
+      ]
+    },
+    "build/_cmerge_keys_sorted.ado": {
+      "sha256": "060ee0dedd258a4ab0eaa9b83f1cde3dd8326dca34611d0ed77e99ad589603d5",
+      "version_comments": [
+        "*! Private helper for cmerge; maintained in package/ado."
+      ]
+    },
+    "build/_cmerge_label_mergevar.ado": {
+      "sha256": "fed55726efc6126ad3f5140fe7d625c88b30cd8e84b28c78b0be05859b949880",
+      "version_comments": [
+        "*! Private helper for cmerge; maintained in package/ado."
+      ]
+    },
+    "build/_cmerge_native.ado": {
+      "sha256": "e14ab1ff9441f70c289104415b7f99ead495e3f7da2790e7d2f024f79f24b6d0",
+      "version_comments": [
+        "*! Private helper for cmerge; maintained in package/ado."
+      ]
+    },
+    "build/_cmerge_results.ado": {
+      "sha256": "548e687d5685c0494128360adf433f0f6a3c77f932aae5874c617911b7031bc1",
+      "version_comments": [
+        "*! Private helper for cmerge; maintained in package/ado."
+      ]
+    },
+    "build/_cmerge_table.ado": {
+      "sha256": "43dde44b4d923185f661252b69f12d3cd83c2f0543ef78e74058de2aac501da7",
+      "version_comments": [
+        "*! Private helper for cmerge; maintained in package/ado."
+      ]
+    },
+    "build/_cmerge_template.ado": {
+      "sha256": "bffcc68575ecd76c4f4a69c1718e78d00faf3a75e0f71539aeb895935cd2643f",
+      "version_comments": [
+        "*! Private helper for cmerge; maintained in package/ado."
+      ]
+    },
+    "build/_cpplmhdfe_abs_options.ado": {
+      "sha256": "6b9c2975c191b7e875f8642d966b7800a45dd7443edfeab7fa3e42d664c6fd08",
+      "version_comments": [
+        "*! Private helper for cpplmhdfe; maintained in package/ado."
+      ]
+    },
+    "build/_ctools_cleanup.ado": {
+      "sha256": "b3d41fb21acf68c1643a9c5c0831a33dfdd1b5d5b615f520f78e3efded2e20b2",
+      "version_comments": [
+        "*! ctools: drop the scalars and matrices a command and its plugin leave behind"
+      ]
+    },
+    "build/_ctools_clock.ado": {
+      "sha256": "69c1d2be9d1872629345fbc5b1e607fa47e4e86e7430056900bcbcc87cdff1d3",
+      "version_comments": [
+        "*! Private monotonic timestamp in seconds; no public Stata timer IDs."
+      ]
+    },
+    "build/_ctools_ebv.ado": {
+      "sha256": "a21770f4fc1521f07a85b561dff0bb356a9b385a4ea23f1b668f398d5eac959d",
+      "version_comments": [
+        "*! ctools: e(b) and e(V) from a plugin's compact results"
+      ]
+    },
+    "build/_ctools_fvsplit.ado": {
+      "sha256": "1005d78498a8af196c60b0ae9b6fce1f823006c50174630b963beb1ca798abc1",
+      "version_comments": [
+        "*! ctools: estimated terms and base/omitted placeholders of an fvexpand-ed list"
+      ]
+    },
+    "build/_ctools_lap.ado": {
+      "sha256": "6fa79e3a607771db9c808f3d65da893cae55c75bba07737c38748b35d243738d",
+      "version_comments": [
+        "*! ctools: seconds since the previous lap of a caller-local wall clock"
+      ]
+    },
+    "build/_ctools_load.ado": {
+      "sha256": "48025766b138e7890be00c49b5ccf5b96e060c5d76a2e130502a9ecadd0eafaa",
+      "version_comments": [
+        "*! Shared plugin loader and identity contract"
+      ]
+    },
+    "build/_ctools_newvars.ado": {
+      "sha256": "1daf4e28a684f242c6c6e28356d72e01760c16a25365cbea70b893af189423f1",
+      "version_comments": [
+        "*! ctools output-name validation"
+      ]
+    },
+    "build/_ctools_strw.ado": {
+      "sha256": "2f8e63a34301d8bb0fd3b750171cc31a0c784d7c0a62f07da803b5bc0bfd20dd",
+      "version_comments": [
+        "*! _ctools_strw — set string width metadata for ctools flat buffer optimization",
+        "*!",
+        "*! Usage:  _ctools_strw varlist",
+        "*!",
+        "*! Sets local __ctools_strw in CALLER's scope containing comma-separated",
+        "*! string variable widths (0 = numeric, >0 = str width e.g. 17 for str17).",
+        "*! The ctools C plugin reads this local automatically via SF_macro_use",
+        "*! to enable flat buffer string I/O (eliminates per-string strlen, memcpy,"
+      ]
+    },
+    "build/_ctools_vce.ado": {
+      "sha256": "d9354f7b5941172914ef03098fcae3b01e15b65b2392f33340d386018c3e9ea0",
+      "version_comments": [
+        "*! ctools: classify a vce() specification"
+      ]
+    },
+    "build/_ctools_weight.ado": {
+      "sha256": "f6d868d00af858bb6c1b979f60057abb8525248bba28e27f66def7193602099d",
+      "version_comments": [
+        "*! ctools weight-expression staging; caller owns generate() tempvar"
+      ]
+    },
+    "build/cbinscatter.ado": {
+      "sha256": "a5a4398c307ff7f43ca7e8a40fb91c0619c54327a792edc163b459fc8263aece",
+      "version_comments": [
+        "*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools"
+      ]
+    },
+    "build/cbsample.ado": {
+      "sha256": "cafb5f1d3cbe6ab84662606e166d86ca07d85d7c82745da91a6fb2e2da37e52c",
+      "version_comments": [
+        "*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools"
+      ]
+    },
+    "build/cdecode.ado": {
+      "sha256": "90f1cbd94012eeb0f696f4a3b0ab238a7419f9eda1aa6e186cb923b7ad906ed1",
+      "version_comments": [
+        "*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools"
+      ]
+    },
+    "build/cdestring.ado": {
+      "sha256": "321af78ae4add1cbd4d8d133fbee7732df5a1cf45872a977e9d570723ab5f6a7",
+      "version_comments": [
+        "*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools"
+      ]
+    },
+    "build/cencode.ado": {
+      "sha256": "7e34d4e0c833f1f279662ad07a9af332392bad740f78c5e370299db214a2fac9",
+      "version_comments": [
+        "*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools"
+      ]
+    },
+    "build/cexport.ado": {
+      "sha256": "17b7a5a4b40f9950fda555a77adb9ebc9ef67ba9617ed11d2a557b9661a63454",
+      "version_comments": [
+        "*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools"
+      ]
+    },
+    "build/cimport.ado": {
+      "sha256": "2d381a9b8ac5c5a630bb1684158de9c9c28f60fa0b1fec4c1e72c6283794e437",
+      "version_comments": [
+        "*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools"
+      ]
+    },
+    "build/cipolate.ado": {
+      "sha256": "ab8651e3bdd1b6a2b323a71499c67c94e54b80104cc12e9692ab924f3818a3e7",
+      "version_comments": [
+        "*! C-accelerated linear interpolation (ctools)"
+      ]
+    },
+    "build/civreghdfe.ado": {
+      "sha256": "269043c457c5bec38ba7a2430363e25a4348ec4a71855b32151ada8a2a142e2b",
+      "version_comments": [
+        "*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools"
+      ]
+    },
+    "build/civreghdfe_p.ado": {
+      "sha256": "5912fc494af312f57e16a677c2f7ce802659a7291e1f298fce33d2102dedba05",
+      "version_comments": [
+        "*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools"
+      ]
+    },
+    "build/cmerge.ado": {
+      "sha256": "28aaff1e2bf2dae8e64bfefcd608667815a316bddd329e240e3115d943e49fa9",
+      "version_comments": [
+        "*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools"
+      ]
+    },
+    "build/cpplmhdfe.ado": {
+      "sha256": "a6ef247e1612a2c8c1cccb5cea95b01deba2e306be8e527331a5d5f9ba457c30",
+      "version_comments": [
+        "*! version 1.1.0 25sep2026 github.com/mdroste/stata-ctools"
+      ]
+    },
+    "build/cpplmhdfe_p.ado": {
+      "sha256": "0a2a622432208718ea74b9a69b4d9ece369aa66aabefdac0787c980c1c44c8e1",
+      "version_comments": [
+        "*! version 1.1.0 25sep2026 github.com/mdroste/stata-ctools"
+      ]
+    },
+    "build/cpsmatch.ado": {
+      "sha256": "3c7f44094f5fbdf63f9fef870009b04f92461d03c103341234f69b3548ec1115",
+      "version_comments": [
+        "*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools"
+      ]
+    },
+    "build/cqreg.ado": {
+      "sha256": "6cbaa3e4c5d75763382b90d2a3e5fbf49169b621c7ee60236de66177a5143da7",
+      "version_comments": [
+        "*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools"
+      ]
+    },
+    "build/crangejoin.ado": {
+      "sha256": "bc2d3f08b30e38b6aa1b1c59d77fec19f56d155d95ace5bcfd623f03cda28962",
+      "version_comments": [
+        "*! C-accelerated interval joins (ctools)"
+      ]
+    },
+    "build/crangestat.ado": {
+      "sha256": "6272ed15fb9acac61ac0f7cafeb250b323301c7ed0a9b3d0e58279498bcac9a7",
+      "version_comments": [
+        "*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools"
+      ]
+    },
+    "build/creghdfe.ado": {
+      "sha256": "72b4f79aa4f2534e1b1159cfa4bd491e2924b44c59cd9b0b46728ad7b9412e44",
+      "version_comments": [
+        "*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools"
+      ]
+    },
+    "build/creghdfe_p.ado": {
+      "sha256": "e55bb708c5acb62e2907507f545cfea7a7ef4fd2c84ec24cf778ca4edb424a80",
+      "version_comments": [
+        "*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools"
+      ]
+    },
+    "build/csample.ado": {
+      "sha256": "635886f0867eba1bf6b48064d857eef2d8516bca36fa27967a298e49ccd6d4b3",
+      "version_comments": [
+        "*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools"
+      ]
+    },
+    "build/csort.ado": {
+      "sha256": "94ce3d6cc10673fa9926ad8c56229849bf17f35c31af71046c0373737d0c21f2",
+      "version_comments": [
+        "*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools"
+      ]
+    },
+    "build/csplit.ado": {
+      "sha256": "e1e04f1cce24128c53f5e1564281f90da52c7e161097160bbffd5c03f68abcdf",
+      "version_comments": [
+        "*! C-accelerated string splitting (ctools)"
+      ]
+    },
+    "build/ctools.ado": {
+      "sha256": "6fb3e9587c4e2d0409d6734e07a596a2148e4c0b3ad784213ba5a093e0c4832d",
+      "version_comments": [
+        "*! version 1.0.2 20260920 github.com/mdroste/stata-ctools"
+      ]
+    },
+    "build/ctools_mac_arm.plugin": {
+      "sha256": "2c920cfce6157838098037208ad3528766e9f5a42cf678b3bf339724986231f8"
+    },
+    "build/cwinsor.ado": {
+      "sha256": "9ff0bf6423b5734361c482e91d3e7b381cf45dfb543d7211b80623db0a2436a1",
+      "version_comments": [
+        "*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools"
+      ]
+    },
+    "validation/profile_readme.do": {
+      "sha256": "d1e7399a84c813c4f119c860dd42cbb81f2e6e974dbb6503ce574a0690c80f2e"
+    },
+    "validation/summarize_readme_profile.py": {
+      "sha256": "31d05602a43e875d833150fedd040b7ebdd9cc3b4356a27df7978db7935bb87b"
+    }
+  },
+  "reference_files": {
+    "PLUS/r/rangejoin.ado": {
+      "sha256": "7b646bb7f9f3c93a13806666f6637f830c1706a67eb247aa2d7de86dac626111",
+      "version_comments": [
+        "*! version 1.1.3, 13apr2021, Robert Picard, robertpicard@gmail.com",
+        "*! requires -rangestat- version 1.1.0, available from SSC",
+        "*! uses local copy of -sidebyside- version 1.0.0  12mar2016 Robert Picard"
+      ]
+    },
+    "PLUS/r/rangestat.ado": {
+      "sha256": "7bde60817b53fd3897ac2c626b82086b98de7ba45e54a895b8619346c778d552",
+      "version_comments": [
+        "*! 1.1.1\t\t\t09may2017",
+        "*! 1.1.0\t\t\t16apr2017",
+        "*! 1.0.0            29mar2016 ",
+        "*! Robert Picard    picard@netbox.com",
+        "*! Nicholas J. Cox  n.j.cox@durham.ac.uk ",
+        "*! Roberto Ferrer   refp16@gmail.com"
+      ]
+    },
+    "PLUS/r/rangestat_run.ado": {
+      "sha256": "96bec1b87e385097922773eb570b00d7b3dfc96c31a4246bb825b2578ad28a48",
+      "version_comments": [
+        "*! version 1.0.0  22mar2017 Robert Picard, picard@netbox.com"
+      ]
+    },
+    "PLUS/g/gstats.ado": {
+      "sha256": "2bff86fa8036d0fdb282c0ba1437076dc2338d648cc153d384b00ee6205e7611",
+      "version_comments": [
+        "*! version 0.5.0 11Jun2019 Mauricio Caceres Bravo, mauricio.caceres.bravo@gmail.com",
+        "*! Implementation of several statistical functions and transformations"
+      ]
+    },
+    "PLUS/_/_gtools_internal.ado": {
+      "sha256": "8127e53809c75435fcecf4d9ab2c52cdcbeca85399bf09b99a5ca0a8ec33ad9d",
+      "version_comments": [
+        "*! version 1.10.1 05Dec2022 Mauricio Caceres Bravo, mauricio.caceres.bravo@gmail.com",
+        "*! gtools function internals"
+      ]
+    },
+    "PLUS/p/psmatch2.ado": {
+      "sha256": "d8ea98dbd1a6c8514dc8086d32aaa8f0f5af3842657a88ad91de60547d125ed5",
+      "version_comments": [
+        "*! version 4.0.12 30jan2016 E. Leuven, B. Sianesi"
+      ]
+    },
+    "PLUS/b/binscatter.ado": {
+      "sha256": "22fdea36d927459d3b0a470a088479986040ed31c63fb1b7813f9227582d0496",
+      "version_comments": [
+        "*! version 7.02  24nov2013  Michael Stepner, stepner@mit.edu"
+      ]
+    },
+    "PLUS/r/reghdfe.ado": {
+      "sha256": "0c700ea38de4ed110d0cbb57acd3e24351a5ab68b61dd84fcb0e5bc8f02d941a",
+      "version_comments": [
+        "*! version 6.13.1 10Jan2026"
+      ]
+    },
+    "PLUS/i/ivreghdfe.ado": {
+      "sha256": "d1605318c15d3b7975b28a365e2176cd885fbf6b9378a60feaf97458c32d966e",
+      "version_comments": [
+        "*! ivreghdfe 1.1.4  29nov2025 (bugfix for github issue #61)",
+        "*! ivreghdfe 1.1.3  04Jan2023 (bugfix for github issue #48)",
+        "*! ivreghdfe 1.1.2  29Sep2022 (bugfix for github issue #44)",
+        "*! ivreghdfe 1.1.1  14Dec2021 (experimental -margins- support)",
+        "*! ivreghdfe 1.1.0  25Feb2021",
+        "*! ivreg2 4.1.11  22Nov2019",
+        "*! authors cfb & mes",
+        "*! see end of file for version comments"
+      ]
+    },
+    "PLUS/p/ppmlhdfe.ado": {
+      "sha256": "92888a6e4e67213c71e09a50f9ec043c0320828105b553757d6cee01ca5a0b82",
+      "version_comments": [
+        "*! version 2.3.3 02nov2025",
+        "*! Authors: Sergio Correia, Paulo Guimarães, Thomas Zylkin",
+        "*! URL: https://github.com/sergiocorreia/ppmlhdfe"
+      ]
+    },
+    "PLUS/f/ftools.ado": {
+      "sha256": "c7eba3272b5fcd1dfa157e65c37840a051c6e2bf327d5ee31d42df65cf330b00",
+      "version_comments": [
+        "*! version 2.50.0 09jan2026"
+      ]
+    },
+    "PLUS/i/ivreg2.ado": {
+      "sha256": "0e93b020dcd4d9b2806db9e4bb432fa0381756ec2c64dc50275957ad58ef3fb4",
+      "version_comments": [
+        "*! ivreg2 4.1.12  14aug2024",
+        "*! authors cfb & mes",
+        "*! see end of file for version comments"
+      ]
+    },
+    "PLUS/r/ranktest.ado": {
+      "sha256": "484c00ea5e4781f74419f21e9e4aeb333c00dfa24a3eb85f580b52c923690b28",
+      "version_comments": [
+        "*! ranktest 2.0.04  21sept2020",
+        "*! authors mes & fw; KP stat based on code by fk",
+        "*! see end of file for version comments"
+      ]
+    },
+    "BASE/i/import.ado": {
+      "sha256": "5eb21268e1f15340d6164e24ff20ff188b759bf3b4a7c04bb6a9942f5ce3f22d",
+      "version_comments": [
+        "*! version 1.1.5  14oct2025"
+      ]
+    },
+    "BASE/e/export.ado": {
+      "sha256": "3345060f808e0b0cdddc10a726d62cffdaeb500b4acd8dbbec0bbd71822d3892",
+      "version_comments": [
+        "*! version 1.0.13  11jul2022"
+      ]
+    },
+    "BASE/s/sample.ado": {
+      "sha256": "f486b293b1b4305d1ed7285ecac126e2839f685b444c04ca8411811f192e6dbc",
+      "version_comments": [
+        "*! version 2.4.0  20jan2021"
+      ]
+    },
+    "BASE/b/bsample.ado": {
+      "sha256": "9acab77180a9dc177fc965f6eca63cd58fce099cfe3ae5f793403eb45bc8aca1",
+      "version_comments": [
+        "*! version 2.0.8  17jan2025"
+      ]
+    },
+    "BASE/d/destring.ado": {
+      "sha256": "567b75080cca56690d0e1ad84aa7a89bf8359a80ae1a991638905f6445d264fe",
+      "version_comments": [
+        "*! version 2.4.4  15sep2016"
+      ]
+    },
+    "BASE/i/ipolate.ado": {
+      "sha256": "0e87bc56bc8afb75829544529a0713ec8e91e9a313f77236fac549c1ab217dd8",
+      "version_comments": [
+        "*! version 1.3.5  23apr2020"
+      ]
+    },
+    "BASE/s/split.ado": {
+      "sha256": "dce48843ec193e854767857dfdc863428f58f497d5f413a46d7de1407d245093",
+      "version_comments": [
+        "*! version 2.1.0  02nov2021"
+      ]
+    },
+    "BASE/q/qreg.ado": {
+      "sha256": "37445109f025518d513ec900e6af53945214fddaaba7ace14de5cd51700a0174",
+      "version_comments": [
+        "*! version 4.4.2  08may2020"
+      ]
+    }
+  },
+  "completed_calls": 120,
+  "command_failures": 0,
+  "basic_check_failures": 0,
+  "result_files": {
+    "timings.csv": {
+      "sha256": "f6b7e6969dbec8f19627b8ec89cda17fa324641e6fbba0494d2fba4f3ae5d5bf"
+    },
+    "results.md": {
+      "sha256": "932ab784e11f613e20ef882996da39125d6f42674ff51bed9ffd09ea8fa5c9dc"
+    },
+    "profile.log": {
+      "sha256": "362c3fcf3d5db185910a70ccb0e47f612b5e057ff87ae0388140282639494216"
+    }
+  },
+  "ctools_threads_note": "ctools commands ran without threads(); ctools used its default (all logical CPUs). Stata reference commands ran with set processors 4 (license limit).",
+  "harness_note": "validation/profile_readme.do is hashed after a one-line comment was added during the run (documenting that ctools commands take no threads() option); the executed commands are identical."
+}

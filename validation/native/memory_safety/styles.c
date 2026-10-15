@@ -6,7 +6,7 @@ ST_plugin mock;
 ST_plugin *_stata_ = &mock;
 #include "alloc.h"
 #include "cimport/cimport_xlsx.c"
-#include "cimport/cimport_xlsx_xml.c"
+#include "formats/xlsx_xml.c"
 int main(int argc, char **argv) {
     fail_at = argc > 1 ? atoi(argv[1]) : 0;
     XLSXContext ctx = {0};

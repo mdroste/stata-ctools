@@ -1,6 +1,6 @@
 /* Portable C adaptation of Unicode ICU 67.1 charset recognition.
    Copyright (C) 1996-2014 IBM and others; (C) 2016-2020 Unicode, Inc.
-   See src/io/vendor/icu_charset/LICENSE and README.md for provenance.
+   See src/vendor/icu_charset/LICENSE and README.md for provenance.
    Like ICU's InputStream detector, recognition samples at most 8,000 bytes. */
 typedef struct {
   const char *name, *c1name;
@@ -8,7 +8,7 @@ typedef struct {
   const uint32_t (*grams)[64];
   size_t languages;
 } charset_sbcs_model;
-#include "cimport_charset_tables.inc"
+#include "generated/cimport_charset_tables.inc"
 
 static int charset_has(const uint32_t *table, size_t length, uint32_t value) {
   size_t lo = 0, hi = length;

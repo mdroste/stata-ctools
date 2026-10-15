@@ -45,32 +45,37 @@ cencode make if foreign == 1, generate(foreign_make)
 
 ## Algorithm
 
-`cencode` uses an optimized two-pass streaming algorithm:
+`cencode` uses a two-pass streaming algorithm for fixed-width string variables:
 
-### Pass 1: Collect Unique Values
-- Streams through the string variable once
-- Uses a hash table to identify unique values in O(1) average time
-- Only stores K unique strings (not all N observations)
-- Memory usage: O(K) where K is the number of unique values
+### Pass 1: Read and Code
+- Each thread reads its share of the observations directly from Stata
+- A thread-local hash table gives each distinct string a provisional code; only those strings and a 4-byte code per observation are kept
+- The threads' distinct strings are merged and sorted bytewise; with an existing value label, labeled strings keep their (smallest) value and new ones are numbered after its largest value, as `encode` does
 
-### Pass 2: Encode Values
-- Re-reads strings from Stata
-- Looks up each string in the hash table (O(1) average)
-- Writes the numeric code to the output variable
+### Pass 2: Write Codes
+- Each thread writes the final codes for its observations to the output variable
+- Without `if`/`in`, the output variable is created without initial values and every observation is written
+
+strL variables load the column first and are coded on one thread. `encode` itself handles `noextend` with an unlabeled string, existing labels with extended missing values or text longer than 2,045 bytes, and codes beyond the `long` range.
 
 ### Speedup Tricks
-1. **Streaming two-pass design**: Only K unique strings are stored in memory (not all N observations), keeping the memory footprint at O(K) instead of O(N)
-2. **FNV-1a hash table**: O(1) average lookup for both the uniqueness check (pass 1) and the encoding lookup (pass 2)—avoids the O(K) linear scans native `encode` uses
+1. **Streaming two-pass design**: Only K unique strings and a 4-byte code per observation are stored in memory, not the strings themselves
+2. **Thread-local FNV-1a hash tables**: O(1) average lookup per observation without locks; tables are merged once at the end
 3. **Arena allocator**: Unique strings are bulk-allocated in a contiguous arena with O(1) bump-pointer allocation and a single bulk free, eliminating per-string `malloc`/`free` overhead
 4. **Alphabetical ordering**: After collecting uniques, codes are assigned in sorted order (1, 2, 3, ...) matching Stata's `encode` convention
 
 ## Performance
 
-| Dataset Size | Unique Values | `encode` | `cencode` | Speedup |
-|-------------|---------------|----------|-----------|---------|
-| 100,000 | 100 | 0.012s | 0.008s | 1.5x |
-| 1,000,000 | 100 | 0.21s | 0.098s | 2.1x |
-| 1,000,000 | 1,000 | 0.25s | 0.11s | 2.3x |
+Measured October 14, 2026 on an Apple M4 Pro with StataNow/MP 19.5, both
+commands limited to four processors, on the 20-variable README profiler dataset
+(`validation/profile_readme.do`): `encode region, gen(result)` with four distinct
+`str8` values. Median of three calls.
+
+| Observations | `encode` | `cencode` | Speedup |
+|-------------:|---------:|----------:|--------:|
+| 1,000,000 | 0.21s | 0.010s | ~20x |
+| 10,000,000 | 3.0s | 0.085s | ~35x |
+| 10,000,000, existing value label | 2.7s | 0.06s | ~45x |
 
 Performance gains are most significant with:
 - Large datasets (100K+ observations)
@@ -86,8 +91,8 @@ cencode timing breakdown:
 -------------------------------------------------------
   C plugin internals:
     Argument parsing:         0.0000 sec
-    Load strings:             0.0343 sec
-    Collect unique:           0.0000 sec
+    Read and code strings:    0.0343 sec
+    Merge unique values:      0.0000 sec
     Sort unique:              0.0000 sec
     Encode values:            0.0376 sec
     Store labels:             0.0000 sec
@@ -112,7 +117,7 @@ cencode timing breakdown:
 | Scalar | Description |
 |--------|-------------|
 | `_cencode_n_unique` | Number of unique string values encoded |
-| `_cencode_time_load` | Time to read strings from Stata (seconds) |
+| `_cencode_time_load` | Time to read and code strings (pass 1, seconds) |
 | `_cencode_time_sort` | Time to sort unique values (seconds) |
 | `_cencode_time_encode` | Time to encode and write values (seconds) |
 | `_cencode_time_total` | Total C plugin time (seconds) |

@@ -5,6 +5,7 @@
  * Part of the ctools suite.
  */
 
+#include "../ctools_hdfe_utils.h"
 #include "cqreg_vce.h"
 #include "cqreg_linalg.h"
 #include "cqreg_blas.h"
@@ -60,21 +61,23 @@ static void vce_debug_close(void) {
  * ============================================================================ */
 
 /* Compute X'X (K x K, full symmetric)
- * OPTIMIZED: Uses cqreg_dot and cqreg_dot_self which have 8x unrolling.
- * NOTE: OpenMP is INTENTIONALLY DISABLED here.
- * When enabled, it causes heap corruption during ctools_aligned_free()
- * later in cqreg_compute_xtx_inv. This appears to be an interaction between
- * OpenMP and the Stata plugin's memory allocation (posix_memalign).
- * Since K is typically small (3-20), parallelization provides minimal
- * benefit anyway. Keep this serial for stability.
+ * Each element is one unrolled dot product (cqreg_dot, cqreg_dot_self on the
+ * diagonal); the rows of the upper triangle are independent, write disjoint
+ * elements, and run in parallel.
+ *
+ * An earlier note here said OpenMP had to stay off because it corrupted the
+ * heap freed in cqreg_compute_xtx_inv. This loop only reads X and writes
+ * inside the K x K output, and the same loop runs in parallel in
+ * ctools_matmul_ata(); the symptom did not reproduce (see the audit notes).
  */
 static void cqreg_compute_xtx(ST_double *XtX, const ST_double *X,
                               ST_int N, ST_int K)
 {
-    ST_int j, k;
+    ST_int j;
 
     memset(XtX, 0, (size_t)K * K * sizeof(ST_double));
 
+    #pragma omp parallel for schedule(dynamic) if(K > 2 && (size_t)N * (size_t)K > 200000)
     for (j = 0; j < K; j++) {
         const ST_double *Xj = &X[(size_t)j * N];
 
@@ -82,7 +85,7 @@ static void cqreg_compute_xtx(ST_double *XtX, const ST_double *X,
         XtX[j * K + j] = cqreg_dot_self(Xj, N);
 
         /* Off-diagonal - cqreg_dot already uses 8x unrolling */
-        for (k = j + 1; k < K; k++) {
+        for (ST_int k = j + 1; k < K; k++) {
             const ST_double *Xk = &X[(size_t)k * N];
             ST_double dot = cqreg_dot(Xj, Xk, N);
             XtX[j * K + k] = dot;
@@ -153,10 +156,15 @@ cleanup:
     return rc;
 }
 
-static void cqreg_sandwich_product(ST_double *V,
-                                   const ST_double *A,
-                                   const ST_double *B,
-                                   ST_int K)
+/*
+ * V = A * B * A'. Returns 0, or 920 when the K x K temporary cannot be
+ * allocated (V is then not written: zero standard errors must never pass
+ * as a result).
+ */
+static ST_int cqreg_sandwich_product(ST_double *V,
+                                     const ST_double *A,
+                                     const ST_double *B,
+                                     ST_int K)
 {
     ST_int i, j, k;
     ST_double *AB = NULL;
@@ -164,15 +172,13 @@ static void cqreg_sandwich_product(ST_double *V,
     /* Compute size with overflow check */
     size_t kk_size;
     if (ctools_safe_alloc_size((size_t)K, (size_t)K, sizeof(ST_double), &kk_size) != 0) {
-        memset(V, 0, (size_t)K * (size_t)K * sizeof(ST_double));
-        return;
+        return 920;
     }
 
     /* Allocate temporary for A * B */
     AB = (ST_double *)ctools_cacheline_alloc(kk_size);
     if (AB == NULL) {
-        memset(V, 0, kk_size);
-        return;
+        return 920;
     }
 
     /* Compute AB = A * B */
@@ -200,6 +206,7 @@ static void cqreg_sandwich_product(ST_double *V,
     }
 
     ctools_aligned_free(AB);
+    return 0;
 }
 
 static ST_int cqreg_map_clusters(const ST_int *cluster_ids,
@@ -207,63 +214,8 @@ static ST_int cqreg_map_clusters(const ST_int *cluster_ids,
                                  ST_int *cluster_map,
                                  ST_int *num_clusters)
 {
-    /* Simple approach: find unique values and assign indices */
-    /* For large N, could use hash table for O(N) instead of O(N*G) */
-
-    ST_int *unique = NULL;
-    ST_int n_unique = 0;
-    ST_int i, j;
-    ST_int capacity = 1000;
-
-    unique = (ST_int *)malloc(capacity * sizeof(ST_int));
-    if (unique == NULL) return -1;
-
-    for (i = 0; i < N; i++) {
-        ST_int cid = cluster_ids[i];
-        ST_int found = -1;
-
-        /* Search for existing cluster */
-        for (j = 0; j < n_unique; j++) {
-            if (unique[j] == cid) {
-                found = j;
-                break;
-            }
-        }
-
-        if (found < 0) {
-            /* New cluster */
-            if (n_unique >= capacity) {
-                /* Check for overflow in capacity doubling */
-                if (capacity > INT32_MAX / 2) {
-                    free(unique);
-                    return -1;
-                }
-                ST_int new_capacity = capacity * 2;
-                /* Check for overflow in realloc size */
-                if ((size_t)new_capacity > SIZE_MAX / sizeof(ST_int)) {
-                    free(unique);
-                    return -1;
-                }
-                ST_int *tmp = (ST_int *)realloc(unique, (size_t)new_capacity * sizeof(ST_int));
-                if (tmp == NULL) {
-                    free(unique);
-                    return -1;
-                }
-                unique = tmp;
-                capacity = new_capacity;
-            }
-            unique[n_unique] = cid;
-            found = n_unique;
-            n_unique++;
-        }
-
-        cluster_map[i] = found;
-    }
-
-    *num_clusters = n_unique;
-    free(unique);
-
-    return 0;
+    /* Dense 0-based indices in order of first appearance (sort-based) */
+    return ctools_dense_cluster_ids(cluster_ids, N, cluster_map, num_clusters);
 }
 
 /* ============================================================================
@@ -442,7 +394,10 @@ static ST_int cqreg_vce_robust_kernel(ST_double *V,
     if (cqreg_kernel_hessian_inv(H, X, kval, N, K, kbwidth) != 0) goto cleanup;
     cqreg_compute_xtx(XtX, X, N, K);
 
-    cqreg_sandwich_product(V, H, XtX, K);
+    if (cqreg_sandwich_product(V, H, XtX, K) != 0) {
+        rc = 920;
+        goto cleanup;
+    }
     for (ST_int j = 0; j < K * K; j++) {
         V[j] *= q * (1.0 - q);
     }
@@ -486,15 +441,11 @@ static ST_int cqreg_vce_cluster_kernel(ST_double *V,
     cluster_map = (ST_int *)ctools_safe_malloc2((size_t)N, sizeof(ST_int));
     if (H == NULL || M == NULL || cluster_map == NULL) goto cleanup;
 
-    /* Dense 0-based cluster indices: the ado passes egen group() ids 1..G;
-     * other ids fall back to the general mapping */
+    /* Dense 0-based cluster indices in ascending id order: for egen group()
+     * ids 1..G these are the ids minus one, and an integer cluster variable
+     * passed as it is gets the indices its egen ids would */
     ST_int G_all = 0;
-    for (i = 0; i < N; i++) {
-        if (cluster_ids[i] < 1 || cluster_ids[i] > N) break;
-        cluster_map[i] = cluster_ids[i] - 1;
-        if (cluster_ids[i] > G_all) G_all = cluster_ids[i];
-    }
-    if (i < N && cqreg_map_clusters(cluster_ids, N, cluster_map, &G_all) != 0) goto cleanup;
+    if (ctools_dense_cluster_ids_sorted(cluster_ids, N, cluster_map, &G_all) != 0) goto cleanup;
 
     u = (ST_double *)calloc((size_t)G_all * K, sizeof(ST_double));
     used = (unsigned char *)calloc((size_t)G_all, 1);
@@ -526,7 +477,10 @@ static ST_int cqreg_vce_cluster_kernel(ST_double *V,
     if (G < 2) goto cleanup;
 
     if (cqreg_kernel_hessian_inv(H, X, kval, N, K, kbwidth) != 0) goto cleanup;
-    cqreg_sandwich_product(V, H, M, K);
+    if (cqreg_sandwich_product(V, H, M, K) != 0) {
+        rc = 920;
+        goto cleanup;
+    }
     ST_double adj = (ST_double)G / (ST_double)(G - 1);
     for (j = 0; j < K * K; j++) {
         V[j] *= adj;
@@ -540,6 +494,66 @@ cleanup:
     free(u);
     free(used);
     return rc;
+}
+
+/*
+ * out = X' diag(d) X (d == NULL: X'X), K x K symmetric.
+ *
+ * Each element is accumulated in eight lanes (row i goes to lane i mod 8, the
+ * rows past the last full group of eight to lane 0) that are combined as
+ * ((s0+s4)+(s1+s5))+((s2+s6)+(s3+s7)). The elements are independent, so the
+ * rows of the upper triangle run in parallel.
+ */
+static void cqreg_xtdx_lanes(ST_double *out, const ST_double *X, const ST_double *d,
+                             ST_int N, ST_int K)
+{
+    const ST_int N8 = N - (N & 7);
+    ST_int j;
+
+    memset(out, 0, (size_t)K * K * sizeof(ST_double));
+
+    #pragma omp parallel for schedule(dynamic) if(K > 1 && (size_t)N * (size_t)K > 200000)
+    for (j = 0; j < K; j++) {
+        const ST_double *Xj = &X[(size_t)j * N];
+        for (ST_int k = j; k < K; k++) {
+            const ST_double *Xk = &X[(size_t)k * N];
+            ST_double s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0;
+            ST_double s4 = 0.0, s5 = 0.0, s6 = 0.0, s7 = 0.0;
+            ST_int i;
+            if (d) {
+                for (i = 0; i < N8; i += 8) {
+                    s0 += d[i]     * Xj[i]     * Xk[i];
+                    s1 += d[i + 1] * Xj[i + 1] * Xk[i + 1];
+                    s2 += d[i + 2] * Xj[i + 2] * Xk[i + 2];
+                    s3 += d[i + 3] * Xj[i + 3] * Xk[i + 3];
+                    s4 += d[i + 4] * Xj[i + 4] * Xk[i + 4];
+                    s5 += d[i + 5] * Xj[i + 5] * Xk[i + 5];
+                    s6 += d[i + 6] * Xj[i + 6] * Xk[i + 6];
+                    s7 += d[i + 7] * Xj[i + 7] * Xk[i + 7];
+                }
+                for (; i < N; i++) {
+                    s0 += d[i] * Xj[i] * Xk[i];
+                }
+            } else {
+                for (i = 0; i < N8; i += 8) {
+                    s0 += Xj[i]     * Xk[i];
+                    s1 += Xj[i + 1] * Xk[i + 1];
+                    s2 += Xj[i + 2] * Xk[i + 2];
+                    s3 += Xj[i + 3] * Xk[i + 3];
+                    s4 += Xj[i + 4] * Xk[i + 4];
+                    s5 += Xj[i + 5] * Xk[i + 5];
+                    s6 += Xj[i + 6] * Xk[i + 6];
+                    s7 += Xj[i + 7] * Xk[i + 7];
+                }
+                for (; i < N; i++) {
+                    s0 += Xj[i] * Xk[i];
+                }
+            }
+            ST_double total = ((s0 + s4) + (s1 + s5)) + ((s2 + s6) + (s3 + s7));
+            out[j * K + k] = total;
+            out[k * K + j] = total;
+        }
+    }
 }
 
 /* ============================================================================
@@ -594,106 +608,13 @@ static ST_int cqreg_vce_robust_fitted(ST_double *V,
         goto cleanup;
     }
 
-    /* Compute X'DX = sum_i f_i * X_i * X_i'
-     * OPTIMIZED: Column-major traversal with 8x loop unrolling */
-    memset(XDX, 0, kk_size);
-    ST_int N8 = N - (N & 7);
-
-    for (j = 0; j < K; j++) {
-        const ST_double *Xj = &X[(size_t)j * N];
-
-        /* Diagonal element with 8x unrolling */
-        ST_double d0 = 0.0, d1 = 0.0, d2 = 0.0, d3 = 0.0;
-        ST_double d4 = 0.0, d5 = 0.0, d6 = 0.0, d7 = 0.0;
-        for (i = 0; i < N8; i += 8) {
-            d0 += obs_density[i]     * Xj[i]     * Xj[i];
-            d1 += obs_density[i + 1] * Xj[i + 1] * Xj[i + 1];
-            d2 += obs_density[i + 2] * Xj[i + 2] * Xj[i + 2];
-            d3 += obs_density[i + 3] * Xj[i + 3] * Xj[i + 3];
-            d4 += obs_density[i + 4] * Xj[i + 4] * Xj[i + 4];
-            d5 += obs_density[i + 5] * Xj[i + 5] * Xj[i + 5];
-            d6 += obs_density[i + 6] * Xj[i + 6] * Xj[i + 6];
-            d7 += obs_density[i + 7] * Xj[i + 7] * Xj[i + 7];
-        }
-        for (; i < N; i++) {
-            d0 += obs_density[i] * Xj[i] * Xj[i];
-        }
-        XDX[j * K + j] = ((d0 + d4) + (d1 + d5)) + ((d2 + d6) + (d3 + d7));
-
-        /* Off-diagonal elements with 8x unrolling */
-        for (k = j + 1; k < K; k++) {
-            const ST_double *Xk = &X[(size_t)k * N];
-            ST_double s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0;
-            ST_double s4 = 0.0, s5 = 0.0, s6 = 0.0, s7 = 0.0;
-            for (i = 0; i < N8; i += 8) {
-                s0 += obs_density[i]     * Xj[i]     * Xk[i];
-                s1 += obs_density[i + 1] * Xj[i + 1] * Xk[i + 1];
-                s2 += obs_density[i + 2] * Xj[i + 2] * Xk[i + 2];
-                s3 += obs_density[i + 3] * Xj[i + 3] * Xk[i + 3];
-                s4 += obs_density[i + 4] * Xj[i + 4] * Xk[i + 4];
-                s5 += obs_density[i + 5] * Xj[i + 5] * Xk[i + 5];
-                s6 += obs_density[i + 6] * Xj[i + 6] * Xk[i + 6];
-                s7 += obs_density[i + 7] * Xj[i + 7] * Xk[i + 7];
-            }
-            for (; i < N; i++) {
-                s0 += obs_density[i] * Xj[i] * Xk[i];
-            }
-            ST_double total = ((s0 + s4) + (s1 + s5)) + ((s2 + s6) + (s3 + s7));
-            XDX[j * K + k] = total;
-            XDX[k * K + j] = total;
-        }
-    }
+    /* Compute X'DX = sum_i f_i * X_i * X_i' */
+    cqreg_xtdx_lanes(XDX, X, obs_density, N, K);
 
     vce_debug_log("  XDX[0,0] = %.6e\n", XDX[0]);
 
-    /* Compute X'X
-     * OPTIMIZED: 8x loop unrolling */
-    memset(XtX, 0, kk_size);
-
-    for (j = 0; j < K; j++) {
-        const ST_double *Xj = &X[(size_t)j * N];
-
-        /* Diagonal with 8x unrolling */
-        ST_double d0 = 0.0, d1 = 0.0, d2 = 0.0, d3 = 0.0;
-        ST_double d4 = 0.0, d5 = 0.0, d6 = 0.0, d7 = 0.0;
-        for (i = 0; i < N8; i += 8) {
-            d0 += Xj[i]     * Xj[i];
-            d1 += Xj[i + 1] * Xj[i + 1];
-            d2 += Xj[i + 2] * Xj[i + 2];
-            d3 += Xj[i + 3] * Xj[i + 3];
-            d4 += Xj[i + 4] * Xj[i + 4];
-            d5 += Xj[i + 5] * Xj[i + 5];
-            d6 += Xj[i + 6] * Xj[i + 6];
-            d7 += Xj[i + 7] * Xj[i + 7];
-        }
-        for (; i < N; i++) {
-            d0 += Xj[i] * Xj[i];
-        }
-        XtX[j * K + j] = ((d0 + d4) + (d1 + d5)) + ((d2 + d6) + (d3 + d7));
-
-        /* Off-diagonal with 8x unrolling */
-        for (k = j + 1; k < K; k++) {
-            const ST_double *Xk = &X[(size_t)k * N];
-            ST_double s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0;
-            ST_double s4 = 0.0, s5 = 0.0, s6 = 0.0, s7 = 0.0;
-            for (i = 0; i < N8; i += 8) {
-                s0 += Xj[i]     * Xk[i];
-                s1 += Xj[i + 1] * Xk[i + 1];
-                s2 += Xj[i + 2] * Xk[i + 2];
-                s3 += Xj[i + 3] * Xk[i + 3];
-                s4 += Xj[i + 4] * Xk[i + 4];
-                s5 += Xj[i + 5] * Xk[i + 5];
-                s6 += Xj[i + 6] * Xk[i + 6];
-                s7 += Xj[i + 7] * Xk[i + 7];
-            }
-            for (; i < N; i++) {
-                s0 += Xj[i] * Xk[i];
-            }
-            ST_double total = ((s0 + s4) + (s1 + s5)) + ((s2 + s6) + (s3 + s7));
-            XtX[j * K + k] = total;
-            XtX[k * K + j] = total;
-        }
-    }
+    /* Compute X'X */
+    cqreg_xtdx_lanes(XtX, X, NULL, N, K);
 
     vce_debug_log("  XtX[0,0] = %.6e\n", XtX[0]);
 
@@ -891,7 +812,10 @@ static ST_int cqreg_vce_cluster(ST_double *V,
     }
 
     /* Sandwich product: temp = (X'X)^{-1} * M * (X'X)^{-1} */
-    cqreg_sandwich_product(V, XtX_inv, M, K);
+    if (cqreg_sandwich_product(V, XtX_inv, M, K) != 0) {
+        rc = 920;
+        goto cleanup;
+    }
 
     /* Scale by sparsity^2 to convert to coefficient variance */
     ST_double sparsity_sq = sparsity * sparsity;

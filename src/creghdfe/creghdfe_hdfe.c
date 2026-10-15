@@ -6,7 +6,7 @@
  */
 
 #include "creghdfe_hdfe.h"
-#include "creghdfe_utils.h"
+#include "hdfe/hdfe_remap.h"
 #include "../ctools_hdfe_utils.h"
 #include "../ctools_config.h"
 #include "../ctools_spi.h"  /* Error-checking SPI wrappers */

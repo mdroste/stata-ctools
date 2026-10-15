@@ -30,15 +30,17 @@ def logs():
     nonce = 'current-run'
     log = '\n' + '\n'.join(
         f'CTOOLS_COMPONENT={name} RC=0 COMPLETE={name}' for name in runner.COMPONENTS)
-    log += '\nCTOOLS_FULL_PASSED=2000 FAILED=0 SKIPPED=48 EXPECTED_SKIPPED=48\n'
+    log += '\nCTOOLS_FULL_PASSED=2000 FAILED=0 SKIPPED=0 EXPECTED_SKIPPED=0\n'
     log += f'CTOOLS_DRIVER={nonce} RC=0\n'
-    assert runner.validate_log(log, nonce) == (2000, 48)
+    assert runner.validate_log(log, nonce) == (2000, 0)
     for bad in (
         log.replace(nonce, 'stale-run'),
         log.replace('COMPLETE=cpplmhdfe', 'COMPLETE='),
         log.replace('cmerge RC=0', 'cmerge RC=679'),
         log.replace('FAILED=0', 'FAILED=1'),
-        log.replace('SKIPPED=48 EXPECTED', 'SKIPPED=49 EXPECTED'),
+        log.replace('SKIPPED=0 EXPECTED', 'SKIPPED=1 EXPECTED'),
+        log.replace('SKIPPED=0 EXPECTED_SKIPPED=0', 'SKIPPED=48 EXPECTED_SKIPPED=48'),
+        log.replace('EXPECTED_SKIPPED=0', 'EXPECTED_SKIPPED=1'),
         log.replace('PASSED=2000', 'PASSED=0'),
         log.replace('CTOOLS_FULL_', 'MISSING_FULL_'),
         log.replace(f'CTOOLS_DRIVER={nonce} RC=0', f'CTOOLS_DRIVER={nonce} RC=1'),

@@ -7,10 +7,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <windows.h>
-typedef struct {
+typedef struct
+{
     UINT source, destination;
 } *iconv_t;
-static inline UINT cio_codepage(const char *name) {
+static inline UINT cio_codepage(const char *name)
+{
     char s[80];
     size_t j = 0;
     for (size_t i = 0; name[i] && j < sizeof(s) - 1; i++)
@@ -57,15 +59,18 @@ static inline UINT cio_codepage(const char *name) {
         return (UINT)atoi(s + 3);
     return 0;
 }
-static inline iconv_t cio_iconv_open(const char *to, const char *from) {
+static inline iconv_t cio_iconv_open(const char *to, const char *from)
+{
     UINT source = cio_codepage(from), dest = cio_codepage(to);
     if (!source || !dest || (source != 1200 && source != 1201 && !IsValidCodePage(source)) ||
-        (dest != 1200 && dest != 1201 && !IsValidCodePage(dest))) {
+        (dest != 1200 && dest != 1201 && !IsValidCodePage(dest)))
+    {
         errno = EINVAL;
         return (iconv_t)-1;
     }
     iconv_t c = malloc(sizeof(*c));
-    if (!c) {
+    if (!c)
+    {
         errno = ENOMEM;
         return (iconv_t)-1;
     }
@@ -73,66 +78,89 @@ static inline iconv_t cio_iconv_open(const char *to, const char *from) {
     c->destination = dest;
     return c;
 }
-static inline int cio_iconv_close(iconv_t c) {
+static inline int cio_iconv_close(iconv_t c)
+{
     free(c);
     return 0;
 }
-static inline size_t cio_iconv(iconv_t c, char **in, size_t *inleft, char **out, size_t *outleft) {
+static inline size_t cio_iconv(iconv_t c, char **in, size_t *inleft, char **out, size_t *outleft)
+{
     if (!in || !*in)
         return 0;
-    if (*inleft > INT_MAX) {
+    if (*inleft > INT_MAX)
+    {
         errno = E2BIG;
         return (size_t)-1;
     }
-    int n;
-    if (c->source == 1200 || c->source == 1201) {
-        if (*inleft % 2) {
-            errno = EINVAL;
-            return (size_t)-1;
-        }
-        n = (int)(*inleft / 2);
-    } else
-        n = MultiByteToWideChar(c->source, 0, *in, (int)*inleft, NULL, 0);
-    if (!n && *inleft) {
+    /* Like iconv, convert every complete unit and leave an incomplete
+       trailing UTF-16 byte in *inleft, reported as EINVAL. */
+    size_t usable = *inleft;
+    int partial = 0, n;
+    if (c->source == 1200 || c->source == 1201)
+    {
+        partial = (int)(usable % 2);
+        usable -= (size_t)partial;
+        n = (int)(usable / 2);
+    }
+    else
+        n = MultiByteToWideChar(c->source, 0, *in, (int)usable, NULL, 0);
+    if (!n && usable)
+    {
         errno = EILSEQ;
         return (size_t)-1;
     }
     WCHAR *wide = malloc(((size_t)n + 1) * sizeof(WCHAR));
-    if (!wide) {
+    if (!wide)
+    {
         errno = ENOMEM;
         return (size_t)-1;
     }
-    if (c->source == 1200 || c->source == 1201) {
-        for (int i = 0; i < n; i++) {
+    if (c->source == 1200 || c->source == 1201)
+    {
+        for (int i = 0; i < n; i++)
+        {
             unsigned char *b = (unsigned char *)*in + 2 * i;
             wide[i] = c->source == 1200 ? (WCHAR)(b[0] | b[1] << 8) : (WCHAR)(b[1] | b[0] << 8);
         }
-    } else
-        MultiByteToWideChar(c->source, 0, *in, (int)*inleft, wide, n);
+    }
+    else
+        MultiByteToWideChar(c->source, 0, *in, (int)usable, wide, n);
     int bytes = c->destination == 1200 || c->destination == 1201
                     ? n * 2
                     : WideCharToMultiByte(c->destination, 0, wide, n, NULL, 0, NULL, NULL);
-    if (bytes < 0 || (size_t)bytes > *outleft) {
+    /* A failed size query (e.g. output over INT_MAX) is E2BIG, not EILSEQ,
+       so a caller that skips bad bytes does not retry the whole buffer. */
+    if (bytes < 0 || (!bytes && n) || (size_t)bytes > *outleft)
+    {
         free(wide);
         errno = E2BIG;
         return (size_t)-1;
     }
-    if (c->destination == 1200 || c->destination == 1201) {
-        for (int i = 0; i < n; i++) {
+    if (c->destination == 1200 || c->destination == 1201)
+    {
+        for (int i = 0; i < n; i++)
+        {
             unsigned char *b = (unsigned char *)*out + 2 * i;
             b[c->destination == 1200 ? 0 : 1] = (unsigned char)wide[i];
             b[c->destination == 1200 ? 1 : 0] = (unsigned char)(wide[i] >> 8);
         }
-    } else if (!WideCharToMultiByte(c->destination, 0, wide, n, *out, bytes, NULL, NULL) && n) {
+    }
+    else if (!WideCharToMultiByte(c->destination, 0, wide, n, *out, bytes, NULL, NULL) && n)
+    {
         free(wide);
         errno = EILSEQ;
         return (size_t)-1;
     }
     free(wide);
-    *in += *inleft;
-    *inleft = 0;
+    *in += usable;
+    *inleft -= usable;
     *out += bytes;
     *outleft -= (size_t)bytes;
+    if (partial)
+    {
+        errno = EINVAL;
+        return (size_t)-1;
+    }
     return 0;
 }
 #define iconv_open cio_iconv_open

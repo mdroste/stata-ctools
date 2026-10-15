@@ -2,7 +2,7 @@
    Args: frozen plugin/ado directory, output directory, variant label,
          repetitions (default 7), threads (default 8).
    The output directory must contain clock.plugin, built from
-   validation/benchmark_clock.c. Run only through oldstata.
+   validation/benchmark_clock.c. Run only through stata.
    Rep 0 is a warmup; reps 1..7 are timed. Fixture generation, loading,
    native reference sorting and every value assertion are outside timing. */
 args plugin_dir out label reps threads

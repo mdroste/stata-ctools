@@ -55,7 +55,7 @@ for block in range(2):
     driver=directory/'run.do'
     driver.write_text('\n'.join(lines)+'\n')
     resources=directory/'resources.txt'
-    shell='oldstata -q -b do '+shlex.quote(str(driver))
+    shell='stata -q -b do '+shlex.quote(str(driver))
     command=shlex.join(['/usr/bin/time','-l','/bin/zsh','-lic',shell])+' 2>'+shlex.quote(str(resources))
     runs.append(dict(name=f'b{block}',block=block,variant='runtime_toggle',cases=[c['name'] for c in cases],
                      driver=str(driver),log=str(directory/'transport.log'),resources=str(resources),command=command))

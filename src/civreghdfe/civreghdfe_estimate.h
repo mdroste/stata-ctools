@@ -64,6 +64,9 @@ typedef struct {
 
     /* Verbose output */
     ST_int verbose;
+
+    /* Set by the CUE objective when memory runs out (stops the optimizer) */
+    int alloc_failed;
 } IVEstContext;
 
 /*
@@ -172,6 +175,8 @@ typedef struct {
     - n_absorbed_iv_all: all absorbed exogenous regressors (included
       instruments), which count in the Cragg-Donald / KP Wald F dof as in
       ivreghdfe's variable-list instrument count
+    - dofminus: ivreg2's large-sample dofminus(); df_a and sdofminus already
+      include the small-sample sdofminus() and partialled-out regressors
 
     Returns STATA_OK on success.
 */
@@ -183,7 +188,7 @@ ST_retcode ivest_compute_2sls(
     const ST_double *weights,
     ST_int weight_type,
     ST_int N,
-    ST_int N_eff,  /* Effective sample size: sum(fw) for fweights, N otherwise */
+    ST_double N_eff,  /* Effective sample size: sum(fw) for fweights (may exceed INT_MAX), N otherwise */
     ST_int K_exog,
     ST_int K_endog,
     ST_int K_iv,
@@ -211,7 +216,8 @@ ST_retcode ivest_compute_2sls(
     const civreghdfe_test_cols *test_cols,
     ST_int n_absorbed_x,
     ST_int n_absorbed_iv,
-    ST_int n_absorbed_iv_all
+    ST_int n_absorbed_iv_all,
+    ST_int dofminus
 );
 
 #endif /* CIVREGHDFE_ESTIMATE_H */

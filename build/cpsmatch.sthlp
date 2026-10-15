@@ -208,11 +208,19 @@ weighted mean difference in outcomes between matched treated and control
 observations. Only ATT is reported; ATE/ATU and observation-weight syntax are not supported.
 
 {pstd}
-{cmd:r(att_se)} is an approximate matched-sample standard error,
-sqrt(s1^2/n1 + s0^2/n0), using matching-weighted sample variances and counts.
-It is not the {cmd:psmatch2} variance estimator and does not incorporate
-propensity-score estimation uncertainty. Agreement of ATT does not imply
-agreement of standard errors.
+{cmd:r(att_se)} (also returned as {cmd:r(seatt)}) uses the default
+{cmd:psmatch2} ATT standard-error formula:
+sqrt(s1^2/n1 + s0^2*sum(w0^2)/n1^2). Here n1 is the number of treated
+observations on support, s1^2 and s0^2 are the unweighted sample outcome
+variances among treated observations on support and matched controls,
+and w0 is each control's matching weight. Squared weights account for control
+reuse and fractional matches. This approximation treats propensity scores as
+fixed and does not incorporate their estimation uncertainty. The optional
+{cmd:psmatch2} {cmd:ai()} variance estimator is not supported.
+
+{pstd}
+The Unmatched row uses the pooled-variance standard error from an ordinary
+least-squares regression of the outcome on treatment, as in {cmd:psmatch2}.
 
 
 {marker examples}{...}
@@ -265,7 +273,8 @@ agreement of standard errors.
 {synopt:{cmd:r(common_min)}}minimum propensity score in common support{p_end}
 {synopt:{cmd:r(common_max)}}maximum propensity score in common support{p_end}
 {synopt:{cmd:r(att)}}estimated ATT (if outcome specified){p_end}
-{synopt:{cmd:r(att_se)}}approximate matched-sample SE of ATT (see Methods){p_end}
+{synopt:{cmd:r(att_se)}}psmatch2-compatible SE of ATT (see Methods){p_end}
+{synopt:{cmd:r(seatt)}}alias for {cmd:r(att_se)}, as in {cmd:psmatch2}{p_end}
 {synopt:{cmd:r(att_t)}}t-statistic for ATT (if outcome specified){p_end}
 
 {p2col 5 24 28 2: Macros}{p_end}

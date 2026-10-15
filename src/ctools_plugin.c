@@ -166,29 +166,30 @@ static int parse_threads_arg(char *cmd_args)
 
     return num_threads;
 }
-#include "csort_impl.h"
-#include "creghdfe_impl.h"
-#include "civreghdfe_impl.h"
-#include "cimport_impl.h"
+#include "csort/csort_impl.h"
+#include "creghdfe/creghdfe_impl.h"
+#include "civreghdfe/civreghdfe_impl.h"
+#include "cimport/cimport_impl.h"
 #include "io/cio.h"
 #include "io/cexport_xls.h"
-#include "cexport_impl.h"
-#include "cexport_xlsx.h"
-#include "cmerge_impl.h"
-#include "cqreg_impl.h"
-#include "cbinscatter_impl.h"
-#include "cencode_impl.h"
-#include "cwinsor_impl.h"
-#include "cdestring_impl.h"
-#include "cdecode_impl.h"
-#include "csample_impl.h"
-#include "cbsample_impl.h"
-#include "crangestat_impl.h"
-#include "cpsmatch_impl.h"
-#include "cpplmhdfe_impl.h"
-#include "cipolate_impl.h"
-#include "csplit_impl.h"
-#include "crangejoin_impl.h"
+#include "cexport/cexport_impl.h"
+#include "cexport/cexport_xlsx.h"
+#include "cmerge/cmerge_impl.h"
+#include "cqreg/cqreg_impl.h"
+#include "cbinscatter/cbinscatter_impl.h"
+#include "cencode/cencode_impl.h"
+#include "cwinsor/cwinsor_impl.h"
+#include "cdestring/cdestring_impl.h"
+#include "cdecode/cdecode_impl.h"
+#include "csample/csample_impl.h"
+#include "cbsample/cbsample_impl.h"
+#include "crangestat/crangestat_impl.h"
+#include "cpsmatch/cpsmatch_impl.h"
+#include "cpplmhdfe/cpplmhdfe_impl.h"
+#include "cipolate/cipolate_impl.h"
+#include "csplit/csplit_impl.h"
+#include "crangejoin/crangejoin_impl.h"
+#include "cgroup/cgroup_impl.h"
 
 static const ctools_command_descriptor commands[] = {
 #define CTOOLS_COMMAND(name, owner, handler, cleanup) {name, owner, handler, cleanup},
@@ -220,6 +221,13 @@ STDLL stata_call(int argc, char *argv[])
         ST_retcode version_rc = SF_macro_save("_ctools_plugin_version", CTOOLS_VERSION);
         if (version_rc) return version_rc;
         return SF_macro_save("_ctools_plugin_revision", CTOOLS_BUILD_REVISION);
+    }
+
+    /* Read-only monotonic clock query: preserve phase caches and caller timers. */
+    if (argc > 0 && argv[0] && strcmp(argv[0], "clock") == 0) {
+        char seconds[32];
+        snprintf(seconds, sizeof(seconds), "%.17g", ctools_timer_seconds());
+        return SF_macro_save("_ctools_clock_value", seconds);
     }
 
     /* Initialize OpenMP safely before any parallel code runs */

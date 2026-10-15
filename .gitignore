@@ -14,3 +14,20 @@ CLAUDE.md
 
 /dist/
 __pycache__/
+
+/temp/
+/build/*.build.json
+/build/*.tmp
+!validation/fixtures/**/*.csv
+!validation/fixtures/**/*.dta
+
+# Downloaded examples are a cache, pinned by fixtures/manifest.json.
+/validation/fixtures/data/
+
+!docs/benchmarks/command_performance_20261002/**/*.csv
+
+!docs/benchmarks/encode_winsor_20261002/**/*.csv
+
+!docs/benchmarks/hdfe_datasets_*.csv
+
+!docs/benchmarks/readme_profile/timings.csv

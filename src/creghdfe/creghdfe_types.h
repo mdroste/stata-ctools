@@ -22,6 +22,7 @@
 
 /* Shared FE_Factor and HDFE_State types */
 #include "../ctools_hdfe_utils.h"
+#include "../hdfe/hdfe_sample.h"
 
 /* Thread limit is managed centrally via ctools_get_max_threads() in ctools_config.h */
 
@@ -33,17 +34,12 @@
 #endif
 
 /* Global state pointer - defined in creghdfe_hdfe.c */
-extern HDFE_State *g_state;
+
 
 /* ========================================================================
  * Factor data structure for initialization
  * ======================================================================== */
 
-typedef struct {
-    ST_int *levels;      /* Level assignment for each obs (1-indexed) */
-    ST_int *counts;      /* Count of obs per level */
-    ST_int num_levels;   /* Number of unique levels */
-    ST_int num_obs;      /* Number of observations */
-} FactorData;
+typedef HDFE_LoadedFactor FactorData;
 
 #endif /* CREGHDFE_TYPES_H */

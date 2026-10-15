@@ -1,3 +1,37 @@
+* Coefficient and covariance agreement in significant figures. An entry
+* that is zero in exact arithmetic (a symmetric design, an exactly fitted
+* model) is reported at roundoff by both programs, and relative digits of two
+* roundoff values carry no information. Such an entry agrees when both values
+* lie below a roundoff bound in the entry's own units, as in
+* sigfigs_cancellation (16*epsdouble):
+*   b_j:  16*eps*SE_j, roundoff at the coefficient's sampling scale.
+*   V_ij: max(16*eps*SE_i*SE_j, r_i*r_j) with r_j = 16*eps*|b_j|. The first
+*         term is the benchmark_helpers covariance bound; the second treats a
+*         standard error below 16 ulps of its coefficient as unresolvable.
+* Scales come from the reference (or analytic oracle) b and V. Every other
+* entry must agree to the requested significant figures.
+capture program drop ppml_min_sigfigs
+program define ppml_min_sigfigs, rclass
+    args A B kind refb refV
+    tempname a c bound
+    local min_sf 15
+    local tol=16*c(epsdouble)
+    forvalues i=1/`=rowsof(`A')' {
+        forvalues j=1/`=colsof(`A')' {
+            scalar `a'=`A'[`i',`j']
+            scalar `c'=`B'[`i',`j']
+            if "`kind'"=="b" scalar `bound'=`tol'*sqrt(`refV'[`j',`j'])
+            else scalar `bound'=max(`tol'*sqrt(`refV'[`i',`i'])*sqrt(`refV'[`j',`j']), ///
+                `tol'^2*abs(`refb'[1,`i']*`refb'[1,`j']))
+            if missing(`bound') scalar `bound'=0
+            if !missing(`a',`c') & abs(`a')<=`bound' & abs(`c')<=`bound' continue
+            sigfigs `a' `c'
+            local min_sf=min(`min_sf',r(sigfigs))
+        }
+    }
+    return scalar min_sigfigs=`min_sf'
+end
+
 * Native PPML compatibility: compare full results and retained rows, then
 * exercise prediction after estimates store/restore. No reference fallback.
 capture program drop ppml_native_compare
@@ -47,8 +81,10 @@ program define ppml_native_compare
         }
         assert colsof(rb)==colsof(cb)
         if mreldif(rb,cb)>=1e-7 noi di "MISMATCH `name': coefficients " mreldif(rb,cb)
-        assert mreldif(rb,cb)<1e-7
-        assert mreldif(rv,cv)<1e-7
+        ppml_min_sigfigs rb cb b rb rv
+        assert r(min_sigfigs)>=$DEFAULT_SIGFIGS
+        ppml_min_sigfigs rv cv V rb rv
+        assert r(min_sigfigs)>=$DEFAULT_SIGFIGS
         forvalues j=1/`=colsof(cb)' {
             assert abs(sqrt(cv[`j',`j'])-sqrt(rv[`j',`j'])) < 1e-6*sqrt(rv[`j',`j'])+1e-12
             if "`vceref'" != "" & rv[`j',`j'] > 0 {
@@ -59,14 +95,35 @@ program define ppml_native_compare
             estimates store native_restore
             quietly regress `: word 1 of `varlist''
             estimates restore native_restore
+            * Predictions must agree to 7 significant figures (1e-7) relative
+            * to max(|entry|, S). The linear index xb + d = eta is built from
+            * global quantities (coefficients, fixed effects) whose errors do
+            * not shrink where a row's sum crosses zero, so for xb, d, eta and
+            * xbd S is their common sup norm over the estimation sample.
+            * Without fixed effects d is identically zero and pure roundoff in
+            * both programs. Residual-type predictions are differences of y
+            * and mu terms, and stdp is the root of a signed quadratic form
+            * x'Vx; each uses its own sup norm (normwise relative error). mu
+            * has no cancellation and keeps elementwise relative error (S=0).
+            local linear_scale 0
+            foreach comp in xb d eta {
+                quietly summarize `rp_`comp'' if `refsample', meanonly
+                if r(N) local linear_scale=max(`linear_scale',abs(r(min)),abs(r(max)))
+            }
             foreach opt of local prediction_types {
+                local scale 0
+                if inlist("`opt'","xb","d","eta","xbd") local scale `linear_scale'
+                else if "`opt'"!="mu" {
+                    quietly summarize `rp_`opt'' if `refsample', meanonly
+                    if r(N) local scale=max(abs(r(min)),abs(r(max)))
+                }
                 tempvar cp
                 quietly predict double `cp', `opt'
                 quietly count if missing(`rp_`opt'')!=missing(`cp') | ///
                     (abs(`cp'-`rp_`opt'')>=1e-6*(1+abs(`rp_`opt'')) & !missing(`cp'))
                 if r(N) noi di "MISMATCH `name': prediction `opt' in " r(N) " rows"
                 assert missing(`rp_`opt'')==missing(`cp')
-                assert abs(`cp'-`rp_`opt'') < 1e-6*(1+abs(`rp_`opt'')) if !missing(`cp')
+                assert `cp'==`rp_`opt'' | abs(`cp'-`rp_`opt'') <= 1e-7*max(abs(`cp'),abs(`rp_`opt''),`scale') if !missing(`cp')
             }
             estimates drop native_restore
         }

@@ -1,702 +1,87 @@
-/*
- * cpsmatch_impl.c
- *
- * C-accelerated propensity score matching for Stata
- * Part of the ctools suite
- *
- * High-performance implementation of propensity score matching algorithms:
- * - Parallel nearest neighbor search over controls sorted by propensity score
- * - Radius/caliper matching
- * - Kernel matching with various kernel functions
- *
- * Algorithm Overview:
- * 1. Load treatment indicator and propensity scores from Stata using ctools_data_load()
- * 2. Sort control observations by propensity score
- * 3. For each treated observation, find matches using specified method
- * 4. Compute matching weights
- * 5. Store results back to Stata (_weight, _id, _support, etc.)
- */
-
-#include <stdlib.h>
-#include <string.h>
-#include <stdio.h>
-#include <math.h>
-#include <float.h>
-
-#ifdef _OPENMP
-#include <omp.h>
-#endif
-
-/* Checked SPI writes resolve positions in the plugin varlist, even after
- * estimation has introduced internal Stata variables. */
-#define SD_SAFEMODE
-#include "stplugin.h"
-#include "ctools_types.h"
-#include "ctools_runtime.h"
-#include "ctools_config.h"
-#include "ctools_threads.h"
+#include "cpsmatch_internal.h"
 #include "cpsmatch_impl.h"
 
-/* ============================================================================
- * Configuration
- * ============================================================================ */
-
-#define CPSMATCH_MAX_NEIGHBORS 100
-#define CPSMATCH_DEFAULT_CALIPER 0.25  /* Default: 0.25 * SD of pscore */
-
-/* Matching methods */
-typedef enum {
-    MATCH_NEAREST = 0,     /* Nearest neighbor matching */
-    MATCH_RADIUS = 1,      /* Radius/caliper matching */
-    MATCH_KERNEL = 2       /* Kernel matching */
-} match_method_t;
-
-/* Kernel types for kernel matching */
-typedef enum {
-    KERNEL_EPAN = 0,       /* Epanechnikov kernel */
-    KERNEL_NORMAL = 1,     /* Gaussian/normal kernel */
-    KERNEL_BIWEIGHT = 2,   /* Biweight kernel */
-    KERNEL_UNIFORM = 3,    /* Uniform kernel */
-    KERNEL_TRICUBE = 4     /* Tricube kernel */
-} kernel_type_t;
-
-/* Matching options structure */
-typedef struct {
-    int treat_idx;          /* 1-based index of treatment variable */
-    int pscore_idx;         /* 1-based index of propensity score variable */
-    int outcome_idx;        /* 1-based index of outcome variable (0 if none) */
-    int out_weight_idx;     /* 1-based index for output weight variable */
-    int out_nn_idx;         /* actual eligible controls used for each treated row */
-    int out_match_idx;      /* 1-based index for output match ID variable */
-    int out_support_idx;    /* 1-based index for common support indicator */
-    size_t nobs;            /* Number of observations */
-    match_method_t method;  /* Matching method */
-    int n_neighbors;        /* Number of neighbors for NN matching */
-    double caliper;         /* Caliper width (in SD units or absolute) */
-    int common_support;     /* Impose common support */
-    kernel_type_t kernel;   /* Kernel type for kernel matching */
-    double bandwidth;       /* Bandwidth for kernel matching */
-    int with_replace;       /* Match with replacement */
-    int ties;               /* Handle ties (use all tied matches) */
-    int descending;         /* Process in descending pscore order */
-    int verbose;            /* Verbose output */
-} cpsmatch_options;
-
-/* Match result for a single observation */
-typedef struct {
-    size_t *match_ids;      /* Array of matched control indices (0-based) */
-    double *match_weights;  /* Array of weights for matches */
-    int n_matches;          /* Number of matches found */
-    int on_support;         /* 1 if on common support, 0 otherwise */
-} match_result;
-
-/* ============================================================================
- * Kernel Functions
- * ============================================================================ */
-
-static inline double kernel_epan(double u)
+/* Nearest-neighbor matching with ties(), with replacement, step by step as
+ * psmatch2's match_pscore() does it (its weights are the reference):
+ * - controls and treated are in psmatch2's order (pscore, ascending or
+ *   descending, then observation), and treated are visited in that order;
+ * - the nearest control is found by scanning on from the previous one in the
+ *   current direction while the distance does not increase (the first of
+ *   equal distances wins); once it reaches the last control, the direction
+ *   turns backward and the scan no longer moves;
+ * - ties() adds the controls that follow it in that direction at no greater
+ *   distance, and neighbor(k) then adds the k-1 closest around it from both
+ *   sides, so a control can enter a treated's list twice;
+ * - every list entry gets 1/(list length), and a match needs a distance below
+ *   caliper() (strict, as psmatch2). */
+static int cpsmatch_match_psmatch2_ties(const sorted_control_t *controls, size_t n_controls,
+                                        const sorted_control_t *treated, size_t n_treated,
+                                        const size_t *treated_idx, const size_t *control_idx,
+                                        const perm_idx_t *obs_map,
+                                        int n_neighbors, double caliper,
+                                        double *out_weight, double *out_match, double *out_nn,
+                                        double *out_support, int *n_matched, int *n_off)
 {
-    if (fabs(u) > 1.0) return 0.0;
-    return 0.75 * (1.0 - u * u);
-}
-
-static inline double kernel_normal(double u)
-{
-    return exp(-0.5 * u * u) / sqrt(2.0 * M_PI);
-}
-
-static inline double kernel_biweight(double u)
-{
-    if (fabs(u) > 1.0) return 0.0;
-    double v = 1.0 - u * u;
-    return 0.9375 * v * v;
-}
-
-static inline double kernel_uniform(double u)
-{
-    if (fabs(u) > 1.0) return 0.0;
-    return 0.5;
-}
-
-static inline double kernel_tricube(double u)
-{
-    if (fabs(u) > 1.0) return 0.0;
-    double v = 1.0 - fabs(u * u * u);
-    return 70.0 / 81.0 * v * v * v;
-}
-
-static double apply_kernel(double u, kernel_type_t kernel)
-{
-    switch (kernel) {
-        case KERNEL_EPAN:    return kernel_epan(u);
-        case KERNEL_NORMAL:  return kernel_normal(u);
-        case KERNEL_BIWEIGHT: return kernel_biweight(u);
-        case KERNEL_UNIFORM: return kernel_uniform(u);
-        case KERNEL_TRICUBE: return kernel_tricube(u);
-        default:             return kernel_epan(u);
-    }
-}
-
-/* ============================================================================
- * Comparison functions for sorting
- * ============================================================================ */
-
-typedef struct {
-    size_t idx;
-    double dist;
-} idx_dist_pair;
-
-/* ============================================================================
- * Per-thread reusable workspace to eliminate per-match malloc/free
- * ============================================================================ */
-
-#define MATCH_WORKSPACE_INITIAL_CAP 256
-
-typedef struct {
-    idx_dist_pair *candidates;   /* NN: candidate pairs during search */
-    size_t candidates_cap;
-    size_t *match_ids;           /* Output: matched control indices */
-    double *match_weights;       /* Output: match weights */
-    size_t match_cap;
-} match_workspace;
-
-static void match_workspace_init(match_workspace *ws, size_t initial_cap)
-{
-    ws->candidates = malloc(initial_cap * sizeof(idx_dist_pair));
-    ws->candidates_cap = ws->candidates ? initial_cap : 0;
-    ws->match_ids = malloc(initial_cap * sizeof(size_t));
-    ws->match_weights = malloc(initial_cap * sizeof(double));
-    ws->match_cap = (ws->match_ids && ws->match_weights) ? initial_cap : 0;
-}
-
-static void match_workspace_free(match_workspace *ws)
-{
-    free(ws->candidates);
-    free(ws->match_ids);
-    free(ws->match_weights);
-    ws->candidates = NULL;
-    ws->match_ids = NULL;
-    ws->match_weights = NULL;
-    ws->candidates_cap = 0;
-    ws->match_cap = 0;
-}
-
-static int match_workspace_ensure_candidates(match_workspace *ws, size_t needed)
-{
-    if (needed <= ws->candidates_cap) return 0;
-    size_t new_cap = ws->candidates_cap ? ws->candidates_cap : MATCH_WORKSPACE_INITIAL_CAP;
-    while (new_cap < needed) new_cap *= 2;
-    idx_dist_pair *p = realloc(ws->candidates, new_cap * sizeof(idx_dist_pair));
-    if (!p) return -1;
-    ws->candidates = p;
-    ws->candidates_cap = new_cap;
-    return 0;
-}
-
-static int match_workspace_ensure_match(match_workspace *ws, size_t needed)
-{
-    if (needed <= ws->match_cap) return 0;
-    size_t new_cap = ws->match_cap ? ws->match_cap : MATCH_WORKSPACE_INITIAL_CAP;
-    while (new_cap < needed) new_cap *= 2;
-    size_t *p1 = realloc(ws->match_ids, new_cap * sizeof(size_t));
-    double *p2 = realloc(ws->match_weights, new_cap * sizeof(double));
-    if (!p1 || !p2) {
-        if (p1) ws->match_ids = p1;
-        if (p2) ws->match_weights = p2;
-        return -1;
-    }
-    ws->match_ids = p1;
-    ws->match_weights = p2;
-    ws->match_cap = new_cap;
-    return 0;
-}
-
-/* Structure for sorted control index */
-typedef struct {
-    size_t orig_idx;     /* Original index in control arrays */
-    size_t obs_idx;      /* Original Stata observation index (for stable sort) */
-    double pscore;       /* Propensity score for binary search */
-} sorted_control_t;
-
-/* Sort by pscore, then by observation index for stability (matches psmatch2 behavior) */
-static int compare_by_pscore(const void *a, const void *b)
-{
-    const sorted_control_t *pa = (const sorted_control_t *)a;
-    const sorted_control_t *pb = (const sorted_control_t *)b;
-    if (pa->pscore < pb->pscore) return -1;
-    if (pa->pscore > pb->pscore) return 1;
-    /* Tie-breaker: sort by Stata observation index (ascending) */
-    if (pa->obs_idx < pb->obs_idx) return -1;
-    if (pa->obs_idx > pb->obs_idx) return 1;
-    return 0;
-}
-
-static int compare_by_pscore_desc(const void *a, const void *b)
-{
-    const sorted_control_t *pa = (const sorted_control_t *)a;
-    const sorted_control_t *pb = (const sorted_control_t *)b;
-    if (pa->pscore > pb->pscore) return -1;
-    if (pa->pscore < pb->pscore) return 1;
-    /* Tie-breaker: sort by Stata observation index (ascending) */
-    if (pa->obs_idx < pb->obs_idx) return -1;
-    if (pa->obs_idx > pb->obs_idx) return 1;
-    return 0;
-}
-
-/* Binary search to find leftmost index where pscore >= target */
-static size_t binary_search_left(const sorted_control_t *sorted, size_t n, double target)
-{
-    size_t lo = 0, hi = n;
-    while (lo < hi) {
-        size_t mid = lo + (hi - lo) / 2;
-        if (sorted[mid].pscore < target) {
-            lo = mid + 1;
+    if (n_controls == 0 || n_treated == 0) return 0;
+    size_t *list = malloc((n_controls + (size_t)n_neighbors + 1) * sizeof(size_t));
+    if (!list) return 920;
+    const ssize_t j1 = (ssize_t)n_controls - 1;
+    const double cal = caliper > 0.0 ? caliper : INFINITY;
+    ssize_t jmatch = 0;
+    int forward = 1;
+    for (size_t t = 0; t < n_treated; t++) {
+        double p = treated[t].pscore;
+        size_t obs_idx = treated_idx[treated[t].orig_idx];
+        ssize_t j = jmatch;
+        double dif0, dif1 = fabs(p - controls[j].pscore);
+        while (j >= 0 && j < j1) {
+            j += forward ? 1 : -1;
+            if (j < 0 || j > j1) break;
+            dif0 = dif1;
+            dif1 = fabs(p - controls[j].pscore);
+            if (dif1 > dif0) j = j1;
+            if (dif1 < dif0) jmatch = j;
+        }
+        if (fabs(p - controls[jmatch].pscore) < cal) {
+            size_t n = 0;
+            list[n++] = (size_t)jmatch;
+            /* ties(): onward in the scan direction */
+            double tie = fabs(p - controls[jmatch].pscore);
+            for (ssize_t k = jmatch + (forward ? 1 : -1);
+                 k >= 0 && k <= j1 && fabs(p - controls[k].pscore) <= tie;
+                 k += forward ? 1 : -1) {
+                list[n++] = (size_t)k;
+            }
+            /* neighbor(k): the k-1 closest around the nearest, left on equal
+             * distance */
+            ssize_t pos0 = jmatch - 1, pos1 = jmatch + 1, jm = jmatch;
+            double d0 = 0.0, d1 = 0.0;
+            for (int k = 1; k < n_neighbors; ) {
+                if (pos0 >= 0) d0 = fabs(p - controls[pos0].pscore);
+                if (pos1 <= j1) d1 = fabs(p - controls[pos1].pscore);
+                if (pos0 >= 0 && (d0 <= d1 || pos1 > j1)) jm = pos0--;
+                else if (pos1 <= j1) jm = pos1++;
+                else break;
+                if (!(fabs(p - controls[jm].pscore) < cal)) break;
+                list[n++] = (size_t)jm;
+                k++;
+            }
+            for (size_t m = 0; m < n; m++) {
+                out_weight[control_idx[controls[list[m]].orig_idx]] += 1.0 / (double)n;
+            }
+            out_match[obs_idx] = (double)obs_map[control_idx[controls[jmatch].orig_idx]];
+            out_nn[obs_idx] = (double)n;
+            out_weight[obs_idx] = 1.0;
+            (*n_matched)++;
         } else {
-            hi = mid;
+            out_support[obs_idx] = 0.0;
+            (*n_off)++;
         }
+        if (jmatch == j1 && t + 1 < n_treated) forward = 0;
     }
-    return lo;
-}
-
-/* Binary search to find rightmost index where pscore <= target */
-static size_t binary_search_right(const sorted_control_t *sorted, size_t n, double target)
-{
-    size_t lo = 0, hi = n;
-    while (lo < hi) {
-        size_t mid = lo + (hi - lo) / 2;
-        if (sorted[mid].pscore <= target) {
-            lo = mid + 1;
-        } else {
-            hi = mid;
-        }
-    }
-    return lo;
-}
-
-/* ============================================================================
- * Argument Parsing
- * ============================================================================ */
-
-static int parse_options(const char *args, cpsmatch_options *opts)
-{
-    const char *p = args;
-    char *endptr;
-    int val;
-
-    /* Initialize defaults */
-    memset(opts, 0, sizeof(cpsmatch_options));
-    opts->n_neighbors = 1;
-    opts->caliper = 0.0;  /* 0 means no caliper */
-    opts->with_replace = 1;
-    opts->ties = 0;
-    opts->descending = 0;
-    opts->verbose = 0;
-    opts->kernel = KERNEL_EPAN;
-    opts->bandwidth = 0.06;
-
-    /* Parse space-separated arguments */
-    /* Expected format: treat_idx pscore_idx outcome_idx out_weight_idx out_match_idx
-     *                  out_support_idx nobs method neighbor caliper common
-     *                  kernel bwidth with_replace ties descending verbose */
-
-    /* Parse treat_idx */
-    while (*p == ' ') p++;
-    if (*p == '\0') return -1;
-    val = strtol(p, &endptr, 10);
-    if (endptr == p) return -1;
-    opts->treat_idx = val;
-    p = endptr;
-
-    /* Parse pscore_idx */
-    while (*p == ' ') p++;
-    if (*p == '\0') return -1;
-    val = strtol(p, &endptr, 10);
-    if (endptr == p) return -1;
-    opts->pscore_idx = val;
-    p = endptr;
-
-    /* Parse outcome_idx */
-    while (*p == ' ') p++;
-    if (*p == '\0') return -1;
-    val = strtol(p, &endptr, 10);
-    if (endptr == p) return -1;
-    opts->outcome_idx = val;
-    p = endptr;
-
-    /* Parse out_weight_idx */
-    while (*p == ' ') p++;
-    if (*p == '\0') return -1;
-    val = strtol(p, &endptr, 10);
-    if (endptr == p) return -1;
-    opts->out_weight_idx = val;
-    p = endptr;
-
-    /* Parse out_match_idx */
-    while (*p == ' ') p++;
-    if (*p == '\0') return -1;
-    val = strtol(p, &endptr, 10);
-    if (endptr == p) return -1;
-    opts->out_match_idx = val;
-    p = endptr;
-
-    /* Parse out_support_idx */
-    while (*p == ' ') p++;
-    if (*p == '\0') return -1;
-    val = strtol(p, &endptr, 10);
-    if (endptr == p) return -1;
-    opts->out_support_idx = val;
-    p = endptr;
-
-    /* Parse nobs */
-    while (*p == ' ') p++;
-    if (*p == '\0') return -1;
-    size_t nobs_val = strtoul(p, &endptr, 10);
-    if (endptr == p) return -1;
-    opts->nobs = nobs_val;
-    p = endptr;
-
-    /* Parse method */
-    while (*p == ' ') p++;
-    if (*p == '\0') return -1;
-    val = strtol(p, &endptr, 10);
-    if (endptr == p) return -1;
-    opts->method = (match_method_t)val;
-    p = endptr;
-
-    /* Parse n_neighbors */
-    while (*p == ' ') p++;
-    if (*p == '\0') return -1;
-    val = strtol(p, &endptr, 10);
-    if (endptr == p) return -1;
-    opts->n_neighbors = val;
-    p = endptr;
-
-    /* Parse caliper */
-    while (*p == ' ') p++;
-    if (*p == '\0') return -1;
-    double dval = strtod(p, &endptr);
-    if (endptr == p) return -1;
-    opts->caliper = dval;
-    p = endptr;
-
-    /* Parse common_support */
-    while (*p == ' ') p++;
-    if (*p == '\0') return -1;
-    val = strtol(p, &endptr, 10);
-    if (endptr == p) return -1;
-    opts->common_support = val;
-    p = endptr;
-
-    /* Parse kernel */
-    while (*p == ' ') p++;
-    if (*p == '\0') return -1;
-    val = strtol(p, &endptr, 10);
-    if (endptr == p) return -1;
-    opts->kernel = (kernel_type_t)val;
-    p = endptr;
-
-    /* Parse bandwidth */
-    while (*p == ' ') p++;
-    if (*p == '\0') return -1;
-    dval = strtod(p, &endptr);
-    if (endptr == p) return -1;
-    opts->bandwidth = dval;
-    p = endptr;
-
-    /* Parse with_replace */
-    while (*p == ' ') p++;
-    if (*p == '\0') return -1;
-    val = strtol(p, &endptr, 10);
-    if (endptr == p) return -1;
-    opts->with_replace = val;
-    p = endptr;
-
-    /* Parse ties */
-    while (*p == ' ') p++;
-    if (*p == '\0') return -1;
-    val = strtol(p, &endptr, 10);
-    if (endptr == p) return -1;
-    opts->ties = val;
-    p = endptr;
-
-    /* Parse descending */
-    while (*p == ' ') p++;
-    if (*p == '\0') return -1;
-    val = strtol(p, &endptr, 10);
-    if (endptr == p) return -1;
-    opts->descending = val;
-    p = endptr;
-
-    /* Parse verbose (optional) */
-    while (*p == ' ') p++;
-    if (*p != '\0') {
-        val = strtol(p, &endptr, 10);
-        if (endptr != p) {
-            opts->verbose = val;
-        }
-    }
-
+    free(list);
     return 0;
 }
-
-/* ============================================================================
- * Nearest Neighbor Matching (Original O(n) version for noreplacement)
- * Note: Currently unused - replaced by binary search version.
- *       Retained for potential future use with different matching algorithms.
- * ============================================================================ */
-
-/* ============================================================================
- * FAST Nearest Neighbor Matching using sorted index (O(log n) per treated)
- * ============================================================================ */
-
-static int find_nearest_neighbors_fast(
-    double pscore_treated,
-    const sorted_control_t *sorted_controls,
-    size_t *control_indices,
-    size_t n_controls,
-    int n_neighbors,
-    double caliper,
-    int handle_ties,
-    match_workspace *ws,
-    match_result *result)
-{
-    if (n_controls == 0) {
-        result->n_matches = 0;
-        result->on_support = 0;
-        return 0;
-    }
-
-    /* Binary search to find insertion point */
-    size_t insert_pos = binary_search_left(sorted_controls, n_controls, pscore_treated);
-
-    /* For k-NN, we need to find k nearest neighbors around insert_pos
-     * Use two pointers expanding outward from insert_pos */
-
-    /* Ensure workspace has room for initial candidates */
-    size_t initial_cap = (size_t)n_neighbors * 2 + 10;
-    if (initial_cap > n_controls) initial_cap = n_controls;
-    if (match_workspace_ensure_candidates(ws, initial_cap) != 0) return -1;
-
-    int n_candidates = 0;
-
-    /* Two-pointer expansion from insert_pos */
-    ssize_t left = (ssize_t)insert_pos - 1;
-    size_t right = insert_pos;
-
-    /* First, find the k nearest neighbors */
-    while (n_candidates < n_neighbors && (left >= 0 || right < n_controls)) {
-        double dist_left = (left >= 0) ? fabs(pscore_treated - sorted_controls[left].pscore) : DBL_MAX;
-        double dist_right = (right < n_controls) ? fabs(pscore_treated - sorted_controls[right].pscore) : DBL_MAX;
-
-        if (dist_left <= dist_right) {
-            if (caliper > 0.0 && dist_left > caliper) {
-                left = -1;  /* No more valid on left */
-            } else {
-                ws->candidates[n_candidates].idx = sorted_controls[left].orig_idx;
-                ws->candidates[n_candidates].dist = dist_left;
-                n_candidates++;
-                left--;
-            }
-        } else {
-            if (caliper > 0.0 && dist_right > caliper) {
-                right = n_controls;  /* No more valid on right */
-            } else {
-                ws->candidates[n_candidates].idx = sorted_controls[right].orig_idx;
-                ws->candidates[n_candidates].dist = dist_right;
-                n_candidates++;
-                right++;
-            }
-        }
-    }
-
-    if (n_candidates == 0) {
-        result->n_matches = 0;
-        result->on_support = 0;
-        return 0;
-    }
-
-    /* Handle ties: include all observations at the same distance as the k-th */
-    if (handle_ties && n_candidates >= n_neighbors) {
-        double last_dist = ws->candidates[n_candidates - 1].dist;
-
-        /* Continue expanding to find ties */
-        while (left >= 0 || right < n_controls) {
-            double dist_left = (left >= 0) ? fabs(pscore_treated - sorted_controls[left].pscore) : DBL_MAX;
-            double dist_right = (right < n_controls) ? fabs(pscore_treated - sorted_controls[right].pscore) : DBL_MAX;
-
-            double min_dist = (dist_left < dist_right) ? dist_left : dist_right;
-            if (min_dist > last_dist + 1e-12) break;  /* No more ties */
-
-            /* Grow workspace if needed */
-            if ((size_t)n_candidates >= ws->candidates_cap) {
-                if (match_workspace_ensure_candidates(ws, (size_t)n_candidates + 1) != 0)
-                    return -1;
-            }
-
-            if (dist_left <= dist_right && dist_left <= last_dist + 1e-12) {
-                ws->candidates[n_candidates].idx = sorted_controls[left].orig_idx;
-                ws->candidates[n_candidates].dist = dist_left;
-                n_candidates++;
-                left--;
-            } else if (dist_right <= last_dist + 1e-12) {
-                ws->candidates[n_candidates].idx = sorted_controls[right].orig_idx;
-                ws->candidates[n_candidates].dist = dist_right;
-                n_candidates++;
-                right++;
-            } else {
-                break;
-            }
-        }
-    }
-
-    /* Ensure workspace match buffers are large enough */
-    if (match_workspace_ensure_match(ws, (size_t)n_candidates) != 0) return -1;
-
-    double total_weight = (double)n_candidates;
-    for (int i = 0; i < n_candidates; i++) {
-        ws->match_ids[i] = control_indices[ws->candidates[i].idx];
-        ws->match_weights[i] = 1.0 / total_weight;
-    }
-
-    /* Point result at workspace buffers (no ownership transfer) */
-    result->match_ids = ws->match_ids;
-    result->match_weights = ws->match_weights;
-    result->n_matches = n_candidates;
-    result->on_support = 1;
-
-    return 0;
-}
-
-/* ============================================================================
- * FAST Radius Matching - returns range info only, no memory allocation
- * ============================================================================ */
-
-typedef struct {
-    size_t start;       /* Start index in sorted_controls */
-    size_t end;         /* End index (exclusive) in sorted_controls */
-    int n_matches;      /* Number of matches = end - start */
-    int on_support;     /* 1 if any matches found */
-} radius_match_info;
-
-static void find_radius_range_fast(
-    double pscore_treated,
-    const sorted_control_t *sorted_controls,
-    size_t n_controls,
-    double radius,
-    radius_match_info *info)
-{
-    if (n_controls == 0 || radius <= 0.0) {
-        info->n_matches = 0;
-        info->on_support = 0;
-        return;
-    }
-
-    /* Binary search to find range [low_target, high_target] */
-    double low_target = pscore_treated - radius;
-    double high_target = pscore_treated + radius;
-
-    info->start = binary_search_left(sorted_controls, n_controls, low_target);
-    info->end = binary_search_right(sorted_controls, n_controls, high_target);
-    info->n_matches = (int)(info->end - info->start);
-    info->on_support = (info->n_matches > 0) ? 1 : 0;
-}
-
-/* ============================================================================
- * FAST Kernel Matching using sorted index
- * ============================================================================ */
-
-static int find_kernel_matches_fast(
-    double pscore_treated,
-    const sorted_control_t *sorted_controls,
-    size_t *control_indices,
-    size_t n_controls,
-    double bandwidth,
-    kernel_type_t kernel,
-    double caliper,
-    match_workspace *ws,
-    match_result *result)
-{
-    if (n_controls == 0 || bandwidth <= 0.0) {
-        result->n_matches = 0;
-        result->on_support = 0;
-        return 0;
-    }
-
-    /* Determine search range based on kernel type and caliper */
-    double search_radius = bandwidth;  /* Most kernels have support [-1, 1] */
-    if (kernel == KERNEL_NORMAL) {
-        search_radius = 6.0 * bandwidth;  /* Normal has infinite support, use 6 SD for precision */
-    }
-    if (caliper > 0.0 && caliper < search_radius) {
-        search_radius = caliper;
-    }
-
-    /* Binary search to find range */
-    double low_target = pscore_treated - search_radius;
-    double high_target = pscore_treated + search_radius;
-
-    size_t start = binary_search_left(sorted_controls, n_controls, low_target);
-    size_t end = binary_search_right(sorted_controls, n_controls, high_target);
-
-    if (start >= end) {
-        result->n_matches = 0;
-        result->on_support = 0;
-        return 0;
-    }
-
-    /* Ensure workspace can hold max possible matches */
-    size_t range_size = end - start;
-    if (match_workspace_ensure_match(ws, range_size) != 0) return -1;
-
-    /* Single pass: fill match buffers and accumulate total weight */
-    int n_matches = 0;
-    double total_weight = 0.0;
-
-    for (size_t i = start; i < end; i++) {
-        double dist = fabs(pscore_treated - sorted_controls[i].pscore);
-        if (caliper > 0.0 && dist > caliper) continue;
-
-        double u = dist / bandwidth;
-        double w = apply_kernel(u, kernel);
-        if (w > 0.0) {
-            ws->match_ids[n_matches] = control_indices[sorted_controls[i].orig_idx];
-            ws->match_weights[n_matches] = w;
-            total_weight += w;
-            n_matches++;
-        }
-    }
-
-    if (n_matches == 0) {
-        result->n_matches = 0;
-        result->on_support = 0;
-        return 0;
-    }
-
-    /* Normalize weights in-place */
-    for (int i = 0; i < n_matches; i++) {
-        ws->match_weights[i] /= total_weight;
-    }
-
-    /* Point result at workspace buffers (no ownership transfer) */
-    result->match_ids = ws->match_ids;
-    result->match_weights = ws->match_weights;
-    result->n_matches = n_matches;
-    result->on_support = 1;
-
-    return 0;
-}
-
-/* ============================================================================
- * Kernel Matching - currently unused, retained for future kernel matching
- * ============================================================================ */
-
-/* ============================================================================
- * Radius Matching - currently unused, replaced by optimized binary search version
- * ============================================================================ */
-
-/* ============================================================================
- * Main Entry Point
- * ============================================================================ */
 
 ST_retcode cpsmatch_main(const char *args)
 {
@@ -714,7 +99,7 @@ ST_retcode cpsmatch_main(const char *args)
         return 198;
     }
 
-    if (parse_options(args, &opts) != 0) {
+    if (cpsmatch_parse_options(args, &opts) != 0) {
         SF_error("cpsmatch: failed to parse arguments\n");
         return 198;
     }
@@ -947,9 +332,9 @@ ST_retcode cpsmatch_main(const char *args)
 
         /* Sort: ascending (default) or descending */
         if (opts.descending) {
-            qsort(sorted_treated, n_treated, sizeof(sorted_control_t), compare_by_pscore_desc);
+            qsort(sorted_treated, n_treated, sizeof(sorted_control_t), cpsmatch_compare_by_pscore_desc);
         } else {
-            qsort(sorted_treated, n_treated, sizeof(sorted_control_t), compare_by_pscore);
+            qsort(sorted_treated, n_treated, sizeof(sorted_control_t), cpsmatch_compare_by_pscore);
         }
 
         /* Copy sorted indices to treated_order */
@@ -1000,7 +385,7 @@ ST_retcode cpsmatch_main(const char *args)
             sorted_controls[i].pscore = control_pscore[i];
             sorted_available[i] = 1;
         }
-        qsort(sorted_controls, n_controls, sizeof(sorted_control_t), compare_by_pscore);
+        qsort(sorted_controls, n_controls, sizeof(sorted_control_t), cpsmatch_compare_by_pscore);
 
         /* End sort phase, start matching phase */
         t_sort = ctools_timer_seconds() - t_sort;
@@ -1032,7 +417,7 @@ ST_retcode cpsmatch_main(const char *args)
             out_support[obs_idx] = 1.0;
 
             /* Binary search to find insertion point */
-            size_t insert_pos = binary_search_left(sorted_controls, n_controls, ps);
+            size_t insert_pos = cpsmatch_binary_search_left(sorted_controls, n_controls, ps);
 
             /* Compare the nearest available control on each side of insertion.
              * Equal distances choose the left candidate deterministically. */
@@ -1113,12 +498,61 @@ ST_retcode cpsmatch_main(const char *args)
         }
 
         /* Sort controls by propensity score */
-        qsort(sorted_controls, n_controls, sizeof(sorted_control_t), compare_by_pscore);
+        qsort(sorted_controls, n_controls, sizeof(sorted_control_t), cpsmatch_compare_by_pscore);
 
         /* End sort phase, start matching phase */
         t_sort = ctools_timer_seconds() - t_sort;
         t_match = ctools_timer_seconds();
 
+        if (opts.method == MATCH_NEAREST && opts.ties) {
+            /* psmatch2's sequential ties() algorithm, in its sort order */
+            sorted_control_t *ctrl = malloc((n_controls ? n_controls : 1) * sizeof(sorted_control_t));
+            sorted_control_t *trt = malloc((n_treated ? n_treated : 1) * sizeof(sorted_control_t));
+            if (!ctrl || !trt) {
+                free(ctrl); free(trt);
+                rc = 920;
+            } else {
+                int (*cmp)(const void *, const void *) = opts.descending ?
+                    cpsmatch_compare_by_pscore_desc : cpsmatch_compare_by_pscore;
+                memcpy(ctrl, sorted_controls, n_controls * sizeof(sorted_control_t));
+                if (opts.descending) qsort(ctrl, n_controls, sizeof(sorted_control_t), cmp);
+                size_t n_on = 0;
+                for (size_t t = 0; t < n_treated; t++) {
+                    size_t obs_idx = treated_idx[t];
+                    double ps = treated_pscore[t];
+                    if (opts.common_support && (ps < common_min || ps > common_max)) {
+                        out_support[obs_idx] = 0.0;
+                        n_off_support++;
+                        continue;
+                    }
+                    out_support[obs_idx] = 1.0;
+                    trt[n_on].orig_idx = t;
+                    trt[n_on].obs_idx = obs_map[obs_idx];
+                    trt[n_on].pscore = ps;
+                    n_on++;
+                }
+                qsort(trt, n_on, sizeof(sorted_control_t), cmp);
+                rc = cpsmatch_match_psmatch2_ties(ctrl, n_controls, trt, n_on, treated_idx,
+                                                  control_idx, obs_map, opts.n_neighbors, caliper,
+                                                  out_weight, out_match, out_nn, out_support,
+                                                  &n_matched_treated, &n_off_support);
+                free(ctrl); free(trt);
+            }
+            if (rc) {
+                free(sorted_controls);
+                ctools_filtered_data_free(&filtered);
+                free(treated_idx);
+                free(control_idx);
+                free(treated_pscore);
+                free(control_pscore);
+                free(out_weight);
+                free(out_match);
+                free(out_support); free(out_nn);
+                free(treated_order);
+                SF_error("cpsmatch: memory allocation failed\n");
+                return 920;
+            }
+        } else {
         /* Optimized parallel matching using fast O(log n) algorithms */
 
         /* Get number of threads */
@@ -1158,7 +592,7 @@ ST_retcode cpsmatch_main(const char *args)
                 return 920;
             }
             for (int i = 0; i < n_threads; i++) {
-                match_workspace_init(&thread_ws[i], MATCH_WORKSPACE_INITIAL_CAP);
+                cpsmatch_match_workspace_init(&thread_ws[i], MATCH_WORKSPACE_INITIAL_CAP);
             }
         }
 
@@ -1192,7 +626,7 @@ ST_retcode cpsmatch_main(const char *args)
 
                     /* Fast range query - no allocation */
                     radius_match_info info;
-                    find_radius_range_fast(ps, sorted_controls, n_controls, radius, &info);
+                    cpsmatch_find_radius_range_fast(ps, sorted_controls, n_controls, radius, &info);
 
                     if (info.n_matches > 0) {
                         n_matched_treated++;
@@ -1262,19 +696,19 @@ ST_retcode cpsmatch_main(const char *args)
 
                     switch (opts.method) {
                         case MATCH_NEAREST:
-                            match_rc = find_nearest_neighbors_fast(
+                            match_rc = cpsmatch_find_nearest_neighbors_fast(
                                 ps, sorted_controls, control_idx, n_controls,
                                 opts.n_neighbors, caliper, opts.ties, ws, &result);
                             break;
 
                         case MATCH_KERNEL:
-                            match_rc = find_kernel_matches_fast(
+                            match_rc = cpsmatch_find_kernel_matches_fast(
                                 ps, sorted_controls, control_idx, n_controls,
                                 opts.bandwidth, opts.kernel, caliper, ws, &result);
                             break;
 
                         default:
-                            match_rc = find_nearest_neighbors_fast(
+                            match_rc = cpsmatch_find_nearest_neighbors_fast(
                                 ps, sorted_controls, control_idx, n_controls,
                                 opts.n_neighbors, caliper, opts.ties, ws, &result);
                             break;
@@ -1335,10 +769,11 @@ ST_retcode cpsmatch_main(const char *args)
         /* Free per-thread workspaces */
         if (thread_ws) {
             for (int i = 0; i < n_threads; i++) {
-                match_workspace_free(&thread_ws[i]);
+                cpsmatch_match_workspace_free(&thread_ws[i]);
             }
             free(thread_ws);
         }
+        } /* end parallel matching */
 
         free(sorted_controls);
     }

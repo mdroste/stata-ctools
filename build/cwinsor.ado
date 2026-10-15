@@ -2,14 +2,44 @@
 
 program define cwinsor
     version 14.1
-    preserve
-    capture noisily _cwinsor_impl `0'
-    local rc = _rc
-    if `rc' {
-        restore
-        exit `rc'
+    * A failed or interrupted call leaves the data as they were without a
+    * snapshot of the dataset. New variables (suffix(), prefix()) are only
+    * added at the end and dropped again. In place, the plugin keeps the
+    * original values of the observations it rewrites until cwinsor finishes
+    * and writes them back after a failure; _ctools_undo then restores the
+    * variable labels, the sort marker and c(changed). Option snapshot
+    * preserves the whole dataset instead (on disk above c(max_preservemem));
+    * option fast keeps no copy and undoes nothing.
+    _ctools_mode `0'
+    * Break is recognized only inside _cwinsor_impl.
+    nobreak {
+        macro drop CTOOLS_cwinsor_plugin CTOOLS_cwinsor_targets
+        if "`mode'" == "snapshot" preserve
+        else if "`mode'" == "" _ctools_undo record CTOOLS_u_cwinsor_
+        capture noisily break _cwinsor_impl `0'
+        local rc = _rc
+        if `rc' {
+            if "`mode'" == "" {
+                * Values first, then labels, sort marker and c(changed)
+                if "$CTOOLS_cwinsor_plugin" != "" {
+                    capture program ctools_plugin, plugin using("$CTOOLS_cwinsor_plugin")
+                    capture noisily plugin call ctools_plugin $CTOOLS_cwinsor_targets, "cwinsor rollback"
+                    if _rc di as error "cwinsor: the original values could not be restored"
+                }
+                _ctools_undo rollback CTOOLS_u_cwinsor_
+            }
+            else if "`mode'" == "snapshot" restore
+            macro drop CTOOLS_cwinsor_plugin CTOOLS_cwinsor_targets
+            exit `rc'
+        }
+        if "$CTOOLS_cwinsor_plugin" != "" {
+            capture program ctools_plugin, plugin using("$CTOOLS_cwinsor_plugin")
+            capture plugin call ctools_plugin, "cwinsor commit"
+        }
+        macro drop CTOOLS_cwinsor_plugin CTOOLS_cwinsor_targets
+        if "`mode'" == "snapshot" restore, not
+        else if "`mode'" == "" _ctools_undo clear CTOOLS_u_cwinsor_
     }
-    restore, not
 end
 
 program define _cwinsor_impl
@@ -23,12 +53,13 @@ program define _cwinsor_impl
     }
 
     * Start total timing FIRST
-    timer clear 90
-    timer clear 91
-    timer clear 92
-    timer on 90
+    local __ct_elapsed90 = 0
+    local __ct_elapsed91 = 0
+    local __ct_elapsed92 = 0
+    if "`__ct_elapsed90'" == "" local __ct_elapsed90 = 0
+    quietly _ctools_clock __ct_start90
 
-    syntax varlist(numeric) [if] [in], [Cuts(numlist min=2 max=2 >=0 <=100) P(real 1) Q(real 99) TRIM BY(varlist) SUFfix(string) PREfix(string) REPLACE Verbose THReads(integer 0)]
+    syntax varlist(numeric) [if] [in], [Cuts(numlist min=2 max=2 >=0 <=100) P(real 1) Q(real 99) TRIM BY(varlist) SUFfix(string) PREfix(string) REPLACE Verbose THReads(integer 0) SNAPshot FAST]
 
     local __do_timing = ("`verbose'" != "")
 
@@ -92,12 +123,14 @@ program define _cwinsor_impl
     }
 
     * Count by-variables (sorting now done in C for speed)
-    timer on 91
+    if "`__ct_elapsed91'" == "" local __ct_elapsed91 = 0
+    quietly _ctools_clock __ct_start91
     local nby = 0
     if "`by'" != "" {
         local nby : word count `by'
     }
-    timer off 91
+    quietly _ctools_clock __ct_now
+    local __ct_elapsed91 = `__ct_elapsed91' + (`__ct_now' - `__ct_start91')
 
     * Handle generate new variables
     local target_varlist "`varlist'"
@@ -115,10 +148,23 @@ program define _cwinsor_impl
                 di as error "cwinsor: variable `newvar' already exists"
                 exit 110
             }
-            quietly gen double `newvar' = `v' if `touse'
+            quietly gen double `newvar' = `v' if `touse' & !missing(`v')
             local target_varlist "`target_varlist' `newvar'"
         }
     }
+
+    * In place, the default keeps an undo copy of the targets in the plugin,
+    * and their variable labels in the record
+    local inplace = "`suffix'`prefix'" == ""
+    local undo_opt ""
+    if `inplace' & "`snapshot'`fast'" == "" {
+        local undo_opt "undo"
+        _ctools_undo varlabels CTOOLS_u_cwinsor_ `varlist'
+    }
+    * Validation hooks: fail as Break would once new variables exist, or have
+    * the plugin fail after writing half the observations
+    if "$CTOOLS_cwinsor_fault" == "outputs" error 1
+    if "$CTOOLS_cwinsor_fault" == "store" local undo_opt "`undo_opt' fault_store"
 
     * Checked SPI stores use positions in the plugin varlist, just like reads.
     * Only target variables need store indices; by-variables are read-only.
@@ -132,6 +178,15 @@ program define _cwinsor_impl
     * Build options
     local opts "p=`p' q=`q'"
     if "`trim'" != "" local opts "`opts' trim"
+    * winsor2 expands non-grouped bounds through numeric local macros. This
+    * rounding can change whether an observed percentile is trimmed. Keep C's
+    * quickselect, but perform the same Stata expansion before comparisons.
+    if "`trim'"!="" & "`by'"=="" {
+        tempname cwinsor_bounds
+        matrix `cwinsor_bounds' = J(`nvars', 2, .)
+        local opts "`opts' returnbounds"
+    }
+
     if "`verbose'" != "" local opts "`opts' verbose"
 
     local threads_opt ""
@@ -140,17 +195,59 @@ program define _cwinsor_impl
     }
 
     * Record pre-plugin time
-    timer off 90
-    quietly timer list 90
-    local __time_preplugin = r(t90)
-    timer on 90
+    quietly _ctools_clock __ct_now
+    local __ct_elapsed90 = `__ct_elapsed90' + (`__ct_now' - `__ct_start90')
+    * Elapsed seconds are held in caller-local timing state.
+    local __time_preplugin = `__ct_elapsed90'
+    if "`__ct_elapsed90'" == "" local __ct_elapsed90 = 0
+    quietly _ctools_clock __ct_start90
 
     * Call plugin with only needed variables (target + by)
     * C uses plugin-local indices for both loading and writing
     local nvars_target : word count `target_varlist'
 
     plugin call ctools_plugin `target_varlist' `by' if `touse', ///
-        "cwinsor `threads_opt' `nvars_target' `nby' `store_indices' `opts'"
+        "cwinsor `threads_opt' `nvars_target' `nby' `store_indices' `opts' `undo_opt'"
+    if strpos("`undo_opt'", "undo") {
+        * The plugin holds the original values until cwinsor commits
+        global CTOOLS_cwinsor_plugin "`__ctools_plugin'"
+        global CTOOLS_cwinsor_targets "`target_varlist'"
+    }
+
+    if "`trim'"!="" & "`by'"=="" {
+        local bound_index=0
+        foreach target of local target_varlist {
+            local ++bound_index
+            local lower = `cwinsor_bounds'[`bound_index',1]
+            local upper = `cwinsor_bounds'[`bound_index',2]
+            quietly replace `target' = . if `touse' & !missing(`target') & ///
+                (`target'<`lower' | `target'>`upper')
+        }
+    }
+
+    * Match winsor2's output metadata and final storage. Keep the working
+    * copy double until after computing the bounds, so creation does not round
+    * the input before percentile calculation.
+    local target_index=0
+    foreach v of local varlist {
+        local ++target_index
+        local target : word `target_index' of `target_varlist'
+        local source_label : variable label `v'
+        if `"`source_label'"'=="" local source_label "`v'"
+        label variable `target' `"`source_label'"'
+        if "`target'"!="`v'" {
+            local output_type : type `v'
+            if "`by'"!="" & "`trim'"=="" local output_type "`c(type)'"
+            recast `output_type' `target', force
+            * recast retains the double working copy's format. gen/egen use
+            * the default format for the final storage type instead.
+            tempvar format_probe
+            quietly gen `output_type' `format_probe' = .
+            local output_format : format `format_probe'
+            format `target' `output_format'
+            drop `format_probe'
+        }
+    }
 
     * The plugin changed the variables in place: as with replace, drop Stata's
     * sort marker when it involves one of them (trimmed values sort last, and
@@ -160,21 +257,26 @@ program define _cwinsor_impl
         local hit : list marked & target_varlist
         if "`hit'" != "" _cwinsor_clear_sortedby
     }
+    * Validation hook: fail after the targets were written and relabeled
+    if "$CTOOLS_cwinsor_fault" == "post" error 1
 
     * Record post-plugin time
-    timer on 92
+    if "`__ct_elapsed92'" == "" local __ct_elapsed92 = 0
+    quietly _ctools_clock __ct_start92
 
     * Finish timing
-    timer off 90
-    timer off 92
+    quietly _ctools_clock __ct_now
+    local __ct_elapsed90 = `__ct_elapsed90' + (`__ct_now' - `__ct_start90')
+    quietly _ctools_clock __ct_now
+    local __ct_elapsed92 = `__ct_elapsed92' + (`__ct_now' - `__ct_start92')
 
     if `__do_timing' {
-        quietly timer list 90
-        local __time_total = r(t90)
-        quietly timer list 91
-        local __time_sort = r(t91)
-        quietly timer list 92
-        local __time_postplugin = r(t92)
+        * Elapsed seconds are held in caller-local timing state.
+        local __time_total = `__ct_elapsed90'
+        * Elapsed seconds are held in caller-local timing state.
+        local __time_sort = `__ct_elapsed91'
+        * Elapsed seconds are held in caller-local timing state.
+        local __time_postplugin = `__ct_elapsed92'
 
         * Calculate pre-plugin time (excluding sort which is timed separately)
         local __time_preplugin_other = `__time_preplugin' - `__time_sort'

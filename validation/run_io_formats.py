@@ -54,11 +54,11 @@ def shapefiles(directory):
 
 
 def codec_fixtures(directory):
-    vendor = ROOT / 'src/io/vendor'
+    vendor = ROOT / 'src/vendor'
     sources = [*sorted((vendor / 'readstat').rglob('*.c')),
                *sorted((vendor / 'zlib').glob('*.c')),
                # vendor/zlib/zlib.h maps ReadStat's zlib calls onto miniz.
-               *sorted((ROOT / 'src/cimport/miniz').glob('*.c'))]
+               *sorted((ROOT / 'src/vendor/miniz').glob('*.c'))]
     with tempfile.TemporaryDirectory(prefix='ctools-format-fixtures-') as tmp:
         binary = Path(tmp) / 'fixtures'
         command = [os.environ.get('CC', 'cc'), '-std=c11', '-O2', '-DHAVE_ZLIB=1',

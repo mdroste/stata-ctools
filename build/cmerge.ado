@@ -2,6 +2,8 @@
 
 * Mata helpers for optimized operations
 capture mata: mata drop _cmerge_shared_flags()
+capture mata: mata drop _cmerge_chars_record()
+capture mata: mata drop _cmerge_chars_restore()
 mata:
 void _cmerge_shared_flags(string rowvector keepusing, string rowvector master_vars)
 {
@@ -27,6 +29,42 @@ void _cmerge_shared_flags(string rowvector keepusing, string rowvector master_va
 
     st_local("shared_var_flags", result)
 }
+
+/* Characteristics of evarname ev (a variable or _dta), kept in the globals
+   <p>n (the names) and <p>1, <p>2, ... (the values) */
+void _cmerge_chars_record(string scalar ev, string scalar p)
+{
+    string colvector names
+    real scalar i
+
+    names = st_dir("char", ev, "*")
+    st_global(p + "n", invtokens(names'))
+    for (i = 1; i <= rows(names); i++) {
+        st_global(p + strofreal(i), st_global(ev + "[" + names[i] + "]"))
+    }
+}
+
+/* Put back the characteristics _cmerge_chars_record kept: drop the ones added
+   since and rewrite the ones whose values changed */
+void _cmerge_chars_restore(string scalar ev, string scalar p)
+{
+    string rowvector old
+    string colvector now
+    string scalar value
+    real scalar i
+
+    old = tokens(st_global(p + "n"))
+    now = st_dir("char", ev, "*")
+    for (i = 1; i <= rows(now); i++) {
+        if (!anyof(old, now[i])) st_global(ev + "[" + now[i] + "]", "")
+    }
+    for (i = 1; i <= cols(old); i++) {
+        value = st_global(p + strofreal(i))
+        if (st_global(ev + "[" + old[i] + "]") != value) {
+            st_global(ev + "[" + old[i] + "]", value)
+        }
+    }
+}
 end
 
 program define cmerge, rclass
@@ -36,24 +74,167 @@ program define cmerge, rclass
     version 14.1
     local caller_frame ""
     if c(stata_version) >= 16 local caller_frame "`c(frame)'"
-    preserve
-    capture noisily _cmerge_impl `0'
-    local rc = _rc
-    global CTOOLS_cmerge_caller
-    if "`caller_frame'" != "" frame change `caller_frame'
-    * Like merge, a failed assert() leaves the merged result in memory
-    if `rc' == 9 & "$CTOOLS_cmerge_assert_failed" == "1" {
+    * By default a failed or interrupted merge leaves the master as it was
+    * without a snapshot of the whole dataset: _cmerge_impl records what it is
+    * about to change (_cmerge_record), the plugin keeps a copy of every master
+    * observation before it overwrites one, and _cmerge_rollback undoes both.
+    * The few paths that need a snapshot keep it in memory, in this frame.
+    * Option snapshot preserves the whole dataset instead (on disk once it
+    * exceeds c(max_preservemem)); option fast keeps no copy at all.
+    _cmerge_mode `0'
+    tempname snapframe
+    * Break is recognized only inside _cmerge_impl.
+    nobreak {
+        macro drop CTOOLS_cmu_* CTOOLS_cmerge_plugin
+        global CTOOLS_cmerge_snapframe `snapframe'
+        if "`mode'" == "snapshot" preserve
+        capture noisily break _cmerge_impl `0'
+        local rc = _rc
+        global CTOOLS_cmerge_caller
+        if "`caller_frame'" != "" frame change `caller_frame'
+        * Like merge, a failed assert() leaves the merged result in memory
+        if `rc' == 9 & "$CTOOLS_cmerge_assert_failed" == "1" {
+            global CTOOLS_cmerge_assert_failed
+            _cmerge_commit
+            if "`mode'" == "snapshot" restore, not
+            exit 9
+        }
         global CTOOLS_cmerge_assert_failed
-        restore, not
-        exit 9
+        if `rc' {
+            _cmerge_rollback
+            if "`mode'" == "snapshot" restore
+            exit `rc'
+        }
+        return add
+        _cmerge_commit
+        if "`mode'" == "snapshot" restore, not
     }
-    global CTOOLS_cmerge_assert_failed
-    if `rc' {
-        restore
-        exit `rc'
+end
+
+* The undo mode requested in cmerge's options: local mode in the caller is
+* snapshot, fast or empty (the default).
+program define _cmerge_mode
+    gettoken lhs 0 : 0, parse(",")
+    syntax [, SNAPshot FAST *]
+    if "`snapshot'" != "" & "`fast'" != "" {
+        di as error "options snapshot and fast may not be combined"
+        exit 198
     }
-    return add
-    restore, not
+    c_local mode `snapshot'`fast'
+end
+
+* Record what _cmerge_impl is about to change in the master, for
+* _cmerge_rollback: the observation and variable counts (new variables and
+* observations are only ever added at the end), the sort marker, c(changed),
+* the value-label names, the storage types and formats of the variables to be
+* promoted, and the value labels and characteristics (notes included) of the
+* shared variables and of _dta (append copies the using file's).
+program define _cmerge_record
+    syntax [, Promote(string) Shared(string)]
+    macro drop CTOOLS_cmu_*
+    global CTOOLS_cmu_N = _N
+    global CTOOLS_cmu_k = c(k)
+    global CTOOLS_cmu_sortedby : sortedby
+    global CTOOLS_cmu_changed = c(changed)
+    quietly label dir
+    global CTOOLS_cmu_labels `r(names)'
+    local i = 0
+    foreach v of local promote {
+        local ++i
+        global CTOOLS_cmu_pv`i' `v'
+        global CTOOLS_cmu_pt`i' : type `v'
+        global CTOOLS_cmu_pf`i' : format `v'
+    }
+    global CTOOLS_cmu_np = `i'
+    local i = 0
+    foreach v of local shared {
+        local ++i
+        global CTOOLS_cmu_sv`i' `v'
+        global CTOOLS_cmu_sl`i' : value label `v'
+        mata: _cmerge_chars_record("`v'", "CTOOLS_cmu_c`i'_")
+    }
+    global CTOOLS_cmu_ns = `i'
+    mata: _cmerge_chars_record("_dta", "CTOOLS_cmu_d_")
+    global CTOOLS_cmu_active 1
+end
+
+* Undo a failed or interrupted merge (called by cmerge under nobreak). The
+* plugin first rewrites the original observations if it holds them; then the
+* added observations, variables and value labels go, and the recorded types,
+* formats, value labels, characteristics, sort marker and c(changed) return.
+* A path that kept an in-memory snapshot frame is restored from it instead.
+* Without either (failure before any change, or option fast) only the
+* plugin's state is freed.
+program define _cmerge_rollback
+    local active = "$CTOOLS_cmu_active" != ""
+    if `active' {
+        local N0 = $CTOOLS_cmu_N
+        local k0 = $CTOOLS_cmu_k
+    }
+    if "$CTOOLS_cmerge_plugin" != "" {
+        * Observations first, while the original variables still have their
+        * positions and the storage types the plugin copied them with
+        local vars ""
+        if `active' {
+            if _N < `N0' quietly set obs `N0'
+            if `k0' > 0 mata: st_local("vars", invtokens(st_varname(1..`k0')))
+        }
+        capture program ctools_plugin, plugin using("$CTOOLS_cmerge_plugin")
+        capture noisily plugin call ctools_plugin `vars', "cmerge rollback"
+        if _rc di as error "cmerge: the master observations could not be restored"
+    }
+    if c(stata_version) >= 16 {
+        capture confirm frame $CTOOLS_cmerge_snapframe
+        if !_rc {
+            frame copy $CTOOLS_cmerge_snapframe `c(frame)', replace
+            frame drop $CTOOLS_cmerge_snapframe
+        }
+    }
+    if `active' {
+        if _N > `N0' quietly drop in `=`N0'+1'/l
+        if c(k) > `k0' {
+            mata: st_local("added", invtokens(st_varname((`k0'+1)..st_nvar())))
+            drop `added'
+        }
+        forvalues i = 1/$CTOOLS_cmu_np {
+            local v ${CTOOLS_cmu_pv`i'}
+            capture noisily recast ${CTOOLS_cmu_pt`i'} `v'
+            format `v' ${CTOOLS_cmu_pf`i'}
+        }
+        quietly label dir
+        local now `r(names)'
+        local before $CTOOLS_cmu_labels
+        local added : list now - before
+        if "`added'" != "" label drop `added'
+        forvalues i = 1/$CTOOLS_cmu_ns {
+            local v ${CTOOLS_cmu_sv`i'}
+            if "`: value label `v''" != "${CTOOLS_cmu_sl`i'}" {
+                label values `v' ${CTOOLS_cmu_sl`i'}
+            }
+            mata: _cmerge_chars_restore("`v'", "CTOOLS_cmu_c`i'_")
+        }
+        mata: _cmerge_chars_restore("_dta", "CTOOLS_cmu_d_")
+        local sortedby $CTOOLS_cmu_sortedby
+        if "`: sortedby'" != "`sortedby'" {
+            if "`sortedby'" != "" sort `sortedby', stable
+            else _cmerge_clear_sortedby
+        }
+        mata: st_updata($CTOOLS_cmu_changed)
+    }
+    macro drop CTOOLS_cmu_* CTOOLS_cmerge_plugin CTOOLS_cmerge_snapframe
+end
+
+* Release what the plugin and any snapshot frame hold for a merge that stands
+* (success, or a failed assert(), whose merged result stays in memory).
+program define _cmerge_commit
+    if "$CTOOLS_cmerge_plugin" != "" {
+        capture program ctools_plugin, plugin using("$CTOOLS_cmerge_plugin")
+        capture plugin call ctools_plugin, "cmerge commit"
+    }
+    if c(stata_version) >= 16 & "$CTOOLS_cmerge_snapframe" != "" {
+        capture frame drop $CTOOLS_cmerge_snapframe
+    }
+    macro drop CTOOLS_cmu_* CTOOLS_cmerge_plugin CTOOLS_cmerge_snapframe
 end
 
 program define _cmerge_impl, rclass
@@ -123,6 +304,8 @@ program define _cmerge_impl, rclass
             REPLACE ///
             PRESERVE_order(integer 0) ///
             THReads(integer 0) ///
+            SNAPshot ///
+            FAST ///
             ]
 
         * No key variables for _n merge
@@ -147,6 +330,8 @@ program define _cmerge_impl, rclass
             REPLACE ///
             PRESERVE_order(integer 0) ///
             THReads(integer 0) ///
+            SNAPshot ///
+            FAST ///
             ]
 
         * Validate key variables exist in master
@@ -174,9 +359,10 @@ program define _cmerge_impl, rclass
         local generate "_merge"
     }
 
-    * Check _merge variable doesn't already exist
+    * Check _merge variable doesn't already exist (exact name: _merge_prev
+    * must not count as an abbreviation of _merge)
     if "`nogenerate'" == "" {
-        capture confirm variable `generate'
+        capture confirm variable `generate', exact
         if !_rc {
             di as error "variable `generate' already exists"
             di as error "use generate() option or drop `generate' first"
@@ -323,14 +509,16 @@ program define _cmerge_impl, rclass
     * Initialize timing (like csort)
     local __do_timing = ("`verbose'" != "")
     if `__do_timing' {
-        timer clear 90
-        timer clear 91
-        timer clear 92
-        timer clear 93
-        timer clear 94
-        timer clear 95
-        timer on 90   /* Total wall clock */
-        timer on 91   /* Pre-plugin1 */
+        local __ct_elapsed90 = 0
+        local __ct_elapsed91 = 0
+        local __ct_elapsed92 = 0
+        local __ct_elapsed93 = 0
+        local __ct_elapsed94 = 0
+        local __ct_elapsed95 = 0
+        if "`__ct_elapsed90'" == "" local __ct_elapsed90 = 0
+        quietly _ctools_clock __ct_start90
+        if "`__ct_elapsed91'" == "" local __ct_elapsed91 = 0
+        quietly _ctools_clock __ct_start91
     }
 
     * Load the platform-appropriate ctools plugin (cached after first load)
@@ -339,6 +527,8 @@ program define _cmerge_impl, rclass
     capture program ctools_plugin, plugin using("`__ctools_plugin'")
     if _rc != 0 & _rc != 110 exit 601
     capture confirm number 0
+    * Lets cmerge free or roll back what the plugin holds for this merge
+    global CTOOLS_cmerge_plugin "`__ctools_plugin'"
 
     * =========================================================================
     * Phase 1: Load using dataset - ONLY key + keepusing vars
@@ -663,6 +853,39 @@ program define _cmerge_impl, rclass
             }
         }
 
+        * By default this path is undone from a record, unless it drops master
+        * observations (keep()) or may reorder them (1:1 sort): then it keeps
+        * an in-memory snapshot frame (preserve before Stata 16)
+        local __preserved = 0
+        if "`snapshot'`fast'" == "" {
+            local __rows_lost = 0
+            if `master_nobs' > 0 & "`keep'" != "" {
+                local __rows_lost = !`: list posof "1" in keep_codes'
+            }
+            if `master_nobs' > 1 & `merge_code' == 0 & !`merge_by_n' & ///
+                !`preserve_order' & !`master_sorted' {
+                local __rows_lost = 1
+            }
+            if `__rows_lost' & c(stata_version) >= 16 {
+                frame copy `c(frame)' $CTOOLS_cmerge_snapframe
+            }
+            else if `__rows_lost' {
+                preserve
+                local __preserved = 1
+            }
+            else {
+                local __common `keyvars' `promote_names'
+                local __i = 0
+                foreach v of local keepusing_names {
+                    local ++__i
+                    if `: word `__i' of `shared_var_flags'' local __common `__common' `v'
+                }
+                local __common : list uniq __common
+                _cmerge_record, promote(`__common') shared(`__common')
+            }
+        }
+        if "$CTOOLS_cmerge_fault" == "record" exit 1
+
         local p = 0
         foreach var of local promote_names {
             local ++p
@@ -711,9 +934,14 @@ program define _cmerge_impl, rclass
             if !`: list empty_result in keep_codes' quietly keep if 0
         }
 
-        * Handle assert() option for empty datasets
+        * Handle assert() option for empty datasets (a failure keeps the result)
         if "`assert'" != "" {
-            _cmerge_assert "`assert_codes'" `merge_master' `merge_using' 0 0 0
+            capture noisily _cmerge_assert "`assert_codes'" `merge_master' `merge_using' 0 0 0
+            if _rc {
+                local rc = _rc
+                if `__preserved' restore, not
+                exit `rc'
+            }
         }
 
         * Like merge, a 1:1 result without using-only rows is sorted by keys
@@ -727,6 +955,8 @@ program define _cmerge_impl, rclass
         if "`noreport'" == "" {
             _cmerge_table "`update'" `merge_master' `merge_using' `merge_matched' 0 0 "`generate'"
         }
+        * Validation hook: fail as Break would once the result is in place
+        if "$CTOOLS_cmerge_fault" == "post" exit 1
 
         * Return results for empty datasets
         return scalar N = _N
@@ -741,6 +971,7 @@ program define _cmerge_impl, rclass
         else {
             return local keyvars "`keyvars'"
         }
+        if `__preserved' restore, not
         exit 0
     }
 
@@ -786,8 +1017,10 @@ program define _cmerge_impl, rclass
 
     * End pre-plugin1 timer, start plugin1 timer
     if `__do_timing' {
-        timer off 91
-        timer on 92   /* Plugin Phase 1 */
+        quietly _ctools_clock __ct_now
+        local __ct_elapsed91 = `__ct_elapsed91' + (`__ct_now' - `__ct_start91')
+        if "`__ct_elapsed92'" == "" local __ct_elapsed92 = 0
+        quietly _ctools_clock __ct_start92
     }
 
     * Set string width metadata for flat buffer optimization
@@ -799,7 +1032,8 @@ program define _cmerge_impl, rclass
 
     * End plugin1 timer
     if `__do_timing' {
-        timer off 92
+        quietly _ctools_clock __ct_now
+        local __ct_elapsed92 = `__ct_elapsed92' + (`__ct_now' - `__ct_start92')
     }
 
     if `plugin_rc' {
@@ -816,7 +1050,8 @@ program define _cmerge_impl, rclass
 
     * Start inter-plugin timer
     if `__do_timing' {
-        timer on 93   /* Inter-plugin (restore, create vars) */
+        if "`__ct_elapsed93'" == "" local __ct_elapsed93 = 0
+        quietly _ctools_clock __ct_start93
     }
 
     * =========================================================================
@@ -830,10 +1065,11 @@ program define _cmerge_impl, rclass
 
     * Sub-timers for inter-plugin breakdown
     if `__do_timing' {
-        timer clear 96
-        timer clear 97
-        timer clear 98
-        timer on 97   /* create vars template */
+        local __ct_elapsed96 = 0
+        local __ct_elapsed97 = 0
+        local __ct_elapsed98 = 0
+        if "`__ct_elapsed97'" == "" local __ct_elapsed97 = 0
+        quietly _ctools_clock __ct_start97
     }
 
     * Build lists of new variables to create (excluding existing shared vars)
@@ -861,9 +1097,10 @@ program define _cmerge_impl, rclass
         local new_var_types "`new_var_types' byte"
     }
     else if "`keep'" != "" {
-        * Need temporary merge variable for keep() filtering
+        * Need temporary merge variable for keep() filtering; a tempvar
+        * cannot be the name of a master variable
         local need_merge_var = 1
-        local temp_merge_var "_merge_temp_filter"
+        tempvar temp_merge_var
         local new_var_names "`new_var_names' `temp_merge_var'"
         local new_var_types "`new_var_types' byte"
     }
@@ -886,11 +1123,13 @@ program define _cmerge_impl, rclass
         }
     }
     local __shared_i = 0
+    local __shared_vars ""
     local __ki = 0
     foreach v of local keepusing_names {
         local ++__ki
         if !`: word `__ki' of `shared_var_flags'' continue
         local ++__shared_i
+        local __shared_vars `__shared_vars' `v'
         local __sv_`__shared_i' `v'
         local __sv_lbl_`__shared_i' : value label `v'
         local __sv_nn_`__shared_i' = 0
@@ -917,8 +1156,10 @@ program define _cmerge_impl, rclass
     }
 
     if `__do_timing' {
-        timer off 97
-        timer on 96   /* frame switch / restore */
+        quietly _ctools_clock __ct_now
+        local __ct_elapsed97 = `__ct_elapsed97' + (`__ct_now' - `__ct_start97')
+        if "`__ct_elapsed96'" == "" local __ct_elapsed96 = 0
+        quietly _ctools_clock __ct_start96
     }
 
     if `__use_frames' {
@@ -930,16 +1171,54 @@ program define _cmerge_impl, rclass
     }
 
     if `__do_timing' {
-        timer off 96
-        timer on 97   /* append vars */
+        quietly _ctools_clock __ct_now
+        local __ct_elapsed96 = `__ct_elapsed96' + (`__ct_now' - `__ct_start96')
+        quietly _ctools_clock __ct_plan_start
     }
 
-        local p = 0
-        foreach var of local promote_names {
-            local ++p
-            local storage : word `p' of `promote_types'
-            quietly recast `storage' `var'
-        }
+    * Plan the join in the untouched master: key, sortedness and uniqueness
+    * errors stop here with nothing to undo.
+    local plan_args "plan `merge_code' `nkeys' `master_key_indices'"
+    local plan_args "`plan_args' master_nobs `master_nobs' preserve_order `preserve_order'"
+    if "`sorted'" != "" | (`master_sorted' & `merge_by_n') {
+        local plan_args "`plan_args' sorted"
+    }
+    else if `master_sorted' {
+        local plan_args "`plan_args' sorted_hint"
+    }
+    * keep() drops observations, which the plugin's copy must then cover;
+    * snapshot and fast need no copy at all
+    if "`keep'" != "" local plan_args "`plan_args' hold_undo"
+    if "`snapshot'`fast'" != "" local plan_args "`plan_args' nocopy"
+    if `merge_by_n' local plan_args "`plan_args' merge_by_n"
+    local __ctools_strw ""
+    if `master_nvars' > 0 _ctools_strw `master_varlist'
+    capture noisily plugin call ctools_plugin `master_varlist', "cmerge `threads_code' `plan_args'"
+    local plugin_rc = _rc
+    if `plugin_rc' {
+        di as error "cmerge: C plugin merge failed (error `plugin_rc')"
+        exit `plugin_rc'
+    }
+    local __plan_N = scalar(_cmerge_plan_N)
+    if `__do_timing' {
+        quietly _ctools_clock __ct_now
+        local __time_plan = `__ct_now' - `__ct_plan_start'
+        if "`__ct_elapsed97'" == "" local __ct_elapsed97 = 0
+        quietly _ctools_clock __ct_start97
+    }
+
+    if "`snapshot'`fast'" == "" {
+        _cmerge_record, promote(`promote_names') shared(`__shared_vars')
+    }
+    * Validation hooks: fail as Break would before or after the changes below
+    if "$CTOOLS_cmerge_fault" == "record" exit 1
+
+    local p = 0
+    foreach var of local promote_names {
+        local ++p
+        local storage : word `p' of `promote_types'
+        quietly recast `storage' `var'
+    }
 
     * Append empty template to add variable definitions (faster than st_addvar).
     * append carries the new variables' formats, labels, notes and
@@ -975,25 +1254,30 @@ program define _cmerge_impl, rclass
         mata: st_local("keepusing_placeholder_indices", invtokens(strofreal(st_varindex(tokens(st_local("keepusing_names"))))))
     }
 
-    * Get _merge variable index
+    * Get _merge variable index (the plugin writes the merge codes there)
     local merge_var_idx = 0
     if `need_merge_var' {
-        local merge_var_idx = c(k)
+        local __merge_var `generate'
+        if "`temp_merge_var'" != "" local __merge_var `temp_merge_var'
+        mata: st_local("merge_var_idx", strofreal(st_varindex("`__merge_var'")))
     }
 
     if `__do_timing' {
-        timer off 97
-        timer on 98   /* set obs */
+        quietly _ctools_clock __ct_now
+        local __ct_elapsed97 = `__ct_elapsed97' + (`__ct_now' - `__ct_start97')
+        if "`__ct_elapsed98'" == "" local __ct_elapsed98 = 0
+        quietly _ctools_clock __ct_start98
     }
 
-    * Expand dataset to maximum possible output size
-    local max_output = `master_nobs' + `using_nobs'
+    * Expand the dataset to the planned output size
+    local max_output = `__plan_N'
     if `max_output' > _N {
         qui set obs `max_output'
     }
 
     if `__do_timing' {
-        timer off 98
+        quietly _ctools_clock __ct_now
+        local __ct_elapsed98 = `__ct_elapsed98' + (`__ct_now' - `__ct_start98')
     }
 
     * Build plugin command for execute
@@ -1031,11 +1315,15 @@ program define _cmerge_impl, rclass
     if `merge_by_n' {
         local plugin_args "`plugin_args' merge_by_n"
     }
+    if "$CTOOLS_cmerge_fault" == "schema" exit 1
+    if "$CTOOLS_cmerge_fault" == "store" local plugin_args "`plugin_args' fault_store"
 
     * End inter-plugin timer, start plugin2 timer
     if `__do_timing' {
-        timer off 93
-        timer on 94   /* Plugin Phase 2 */
+        quietly _ctools_clock __ct_now
+        local __ct_elapsed93 = `__ct_elapsed93' + (`__ct_now' - `__ct_start93')
+        if "`__ct_elapsed94'" == "" local __ct_elapsed94 = 0
+        quietly _ctools_clock __ct_start94
     }
 
     * Set string width metadata for flat buffer optimization
@@ -1048,14 +1336,18 @@ program define _cmerge_impl, rclass
 
     * End plugin2 timer, start post-plugin timer
     if `__do_timing' {
-        timer off 94
-        timer on 95   /* Post-plugin */
+        quietly _ctools_clock __ct_now
+        local __ct_elapsed94 = `__ct_elapsed94' + (`__ct_now' - `__ct_start94')
+        if "`__ct_elapsed95'" == "" local __ct_elapsed95 = 0
+        quietly _ctools_clock __ct_start95
     }
 
     if `plugin_rc' {
         di as error "cmerge: C plugin merge failed (error `plugin_rc')"
         exit `plugin_rc'
     }
+    * Validation hook: a Break pressed during the plugin is acted on here
+    if "$CTOOLS_cmerge_fault" == "post" exit 1
 
     * Get merge results from scalars (with update, matched rows split into
     * 3 not updated, 4 missing updated, 5 nonmissing conflict)
@@ -1100,45 +1392,53 @@ program define _cmerge_impl, rclass
             qui drop `temp_merge_var'
         }
     }
+    if "$CTOOLS_cmerge_fault" == "keep" exit 1
 
     * Rows were reordered or appended, so Stata's previous sort marker may no
     * longer hold. Like merge, a 1:1 result without using-only rows is sorted
-    * by the keys; otherwise clear the marker.
+    * by the keys; otherwise clear the marker. When the output kept the master
+    * order the plugin may hold no copy of the master, so the sort (a check of
+    * data already in key order) and the marker reset must not be interrupted.
     local kept_using = `merge_using'
     if "`keep'" != "" & !`: list posof "2" in keep_codes' local kept_using = 0
     if `merge_code' == 0 & !`merge_by_n' & `kept_using' == 0 & !`preserve_order' {
-        sort `keyvars'
+        if `same_order' nobreak sort `keyvars'
+        else sort `keyvars'
     }
     else if !`same_order' {
-        _cmerge_clear_sortedby
+        nobreak _cmerge_clear_sortedby
     }
 
     * End all timers
     if `__do_timing' {
-        timer off 95   /* Post-plugin */
-        timer off 90   /* Total wall clock */
+        quietly _ctools_clock __ct_now
+        local __ct_elapsed95 = `__ct_elapsed95' + (`__ct_now' - `__ct_start95')
+        quietly _ctools_clock __ct_now
+        local __ct_elapsed90 = `__ct_elapsed90' + (`__ct_now' - `__ct_start90')
 
         * Extract ado-file timer values
-        quietly timer list 90
-        local __time_total = r(t90)
-        quietly timer list 91
-        local __time_preplugin1 = r(t91)
-        quietly timer list 92
-        local __time_plugin1 = r(t92)
-        quietly timer list 93
-        local __time_interplugin = r(t93)
-        quietly timer list 94
-        local __time_plugin2 = r(t94)
-        quietly timer list 95
-        local __time_postplugin = r(t95)
+        * Elapsed seconds are held in caller-local timing state.
+        local __time_total = `__ct_elapsed90'
+        * Elapsed seconds are held in caller-local timing state.
+        local __time_preplugin1 = `__ct_elapsed91'
+        * Elapsed seconds are held in caller-local timing state.
+        local __time_plugin1 = `__ct_elapsed92'
+        * Elapsed seconds are held in caller-local timing state.
+        * The plan call runs between the two timed plugin calls; count it
+        * as plugin time (the plugin's Phase 2 total includes it)
+        local __time_interplugin = `__ct_elapsed93' - `__time_plan'
+        * Elapsed seconds are held in caller-local timing state.
+        local __time_plugin2 = `__ct_elapsed94' + `__time_plan'
+        * Elapsed seconds are held in caller-local timing state.
+        local __time_postplugin = `__ct_elapsed95'
 
         * Extract inter-plugin sub-timers
-        quietly timer list 96
-        local __time_restore = r(t96)
-        quietly timer list 97
-        local __time_addvar = r(t97)
-        quietly timer list 98
-        local __time_setobs = r(t98)
+        * Elapsed seconds are held in caller-local timing state.
+        local __time_restore = `__ct_elapsed96'
+        * Elapsed seconds are held in caller-local timing state.
+        local __time_addvar = `__ct_elapsed97'
+        * Elapsed seconds are held in caller-local timing state.
+        local __time_setobs = `__ct_elapsed98'
 
         * Get C plugin timing from scalars (Phase 1)
         local __p1_load_keys = scalar(_cmerge_p1_load_keys)
@@ -1192,8 +1492,8 @@ program define _cmerge_impl, rclass
         di as text "  {hline 53}"
         di as text "    Phase 1 C total:        " as result %8.4f `__p1_total' " sec"
         di as text "  {hline 53}"
-        di as text "  C plugin internals (Phase 2: Execute merge):"
-        di as text "    Load master keys:       " as result %8.4f `__p2_load_master' " sec"
+        di as text "  C plugin internals (Phase 2: Plan and execute merge):"
+        di as text "    Load master:            " as result %8.4f `__p2_load_master' " sec"
         di as text "    Sort master:            " as result %8.4f `__p2_sort_master' " sec"
         di as text "    Merge join:             " as result %8.4f `__p2_merge_join' " sec"
         di as text "    Reorder output:         " as result %8.4f `__p2_reorder' " sec"
@@ -1231,15 +1531,15 @@ program define _cmerge_impl, rclass
         }
 
         * Clear timers
-        timer clear 90
-        timer clear 91
-        timer clear 92
-        timer clear 93
-        timer clear 94
-        timer clear 95
-        timer clear 96
-        timer clear 97
-        timer clear 98
+        local __ct_elapsed90 = 0
+        local __ct_elapsed91 = 0
+        local __ct_elapsed92 = 0
+        local __ct_elapsed93 = 0
+        local __ct_elapsed94 = 0
+        local __ct_elapsed95 = 0
+        local __ct_elapsed96 = 0
+        local __ct_elapsed97 = 0
+        local __ct_elapsed98 = 0
     }
 
     * Return results
@@ -1271,202 +1571,23 @@ end
 * Result codes for keep() and assert(): the numbers 1-5 or merge's words
 * (masters, usings, matches/matched, match_updates, match_conflicts and the
 * abbreviations merge accepts).
-program define _cmerge_results
-    gettoken macname 0 : 0
-    gettoken colon 0 : 0
-    local codes ""
-    foreach w of local 0 {
-        local l = strlen(`"`w'"')
-        local c ""
-        if inlist(`"`w'"', "1", "2", "3", "4", "5") local c `w'
-        else if substr("masters", 1, max(3, `l')) == `"`w'"' local c 1
-        else if substr("usings", 1, max(2, `l')) == `"`w'"' local c 2
-        else if substr("matches", 1, max(3, `l')) == `"`w'"' local c 3
-        else if substr("matched", 1, max(3, `l')) == `"`w'"' local c 3
-        else if substr("match_updates", 1, max(8, `l')) == `"`w'"' local c 4
-        else if substr("match_conflicts", 1, max(8, `l')) == `"`w'"' local c 5
-        else {
-            di as err `"`w':  invalid {it:resulttype}"'
-            di as err "{p 4 4 2}"
-            di as err "results, specified in options {bf:assert()} and {bf:keep()},"
-            di as err "are the integers 1 through 5, or"
-            di as err "{bf:master} (equivalent to 1),"
-            di as err "{bf:using} (2),"
-            di as err "{bf:match} (3),"
-            di as err "{bf:match_update} (4), or"
-            di as err "{bf:match_conflict} (5).  The last two arise only when"
-            di as err "option {cmd:update} is specified."
-            di as err "{p_end}"
-            exit 198
-        }
-        local codes `codes' `c'
-    }
-    local codes : list uniq codes
-    local codes : list sort codes
-    c_local `macname' "`codes'"
-end
 
 * merge's message when assert() fails (r(9)); counts are _merge 1..5.
-program define _cmerge_assert
-    args codes n1 n2 n3 n4 n5
-    local failed = 0
-    forvalues c = 1/5 {
-        if !`: list c in codes' & `n`c'' > 0 local failed = 1
-    }
-    if !`failed' exit
-    local n : word count `codes'
-    local comma = cond(`n' > 2, ",", "")
-    di as err "{p 0 4 2}"
-    di as err "after {bf:merge}, not all observations"
-    local i = 0
-    foreach c of local codes {
-        local ++i
-        if `c' == 1 local text "from master"
-        else if `c' == 2 local text "from using"
-        else if `c' == 3 local text "matched"
-        else if `c' == 4 local text "matched and updated"
-        else local text "matched and conflicting"
-        if `i' == 1 di as err "`text'`comma'"
-        else if `i' < `n' di as err "`text'`comma'"
-        else di as err "or `text'"
-    }
-    di as err "{p_end}"
-    di as err "(merged result left in memory)"
-    global CTOOLS_cmerge_assert_failed 1
-    exit 9
-end
 
 * merge's result table; with update, matched rows are split by _merge 3/4/5.
-program define _cmerge_table
-    args isupdate m1 m2 m3 m4 m5 mergevar
-    if "`mergevar'" != "" {
-        forvalues c = 1/5 {
-            local v`c' "(`mergevar'==`c')"
-        }
-    }
-    di
-    di as txt _col(5) "Result" _col(33) "Number of obs"
-    di as txt _col(5) "{hline 41}"
-    di as txt _col(5) "Not matched" _col(30) as res %16.0fc (`m1'+`m2')
-    if (`m1' | `m2') {
-        di as txt _col(9) "from master" _col(30) as res %16.0fc `m1' as txt "  `v1'"
-        di as txt _col(9) "from using" _col(30) as res %16.0fc `m2' as txt "  `v2'"
-        di
-    }
-    if "`isupdate'" == "" {
-        di as txt _col(5) "Matched" _col(30) as res %16.0fc `m3' as txt "  `v3'"
-    }
-    else {
-        if (`m1' == 0 & `m2' == 0) di
-        di as txt _col(5) "Matched" _col(30) as res %16.0fc (`m3'+`m4'+`m5')
-        di as txt _col(9) "not updated" _col(30) as res %16.0fc `m3' as txt "  `v3'"
-        di as txt _col(9) "missing updated" _col(30) as res %16.0fc `m4' as txt "  `v4'"
-        di as txt _col(9) "nonmissing conflict" _col(30) as res %16.0fc `m5' as txt "  `v5'"
-    }
-    di as txt _col(5) "{hline 41}"
-end
 
 * Clear Stata's sort marker after the plugin reordered or added rows: a real
 * change to a marked variable drops the marker, so change observation 1 of the
 * first marked variable and restore it.
-program define _cmerge_clear_sortedby
-    local marked : sortedby
-    if "`marked'" == "" | _N == 0 exit
-    local v : word 1 of `marked'
-    * Stata drops the sort marker when a sort variable changes: change one
-    * value with replace, then put the original back through Mata (no copy
-    * of the variable is needed)
-    capture confirm string variable `v'
-    if _rc {
-        mata: __ctools_sb_hold = st_data(1, "`v'")
-        quietly replace `v' = cond(`v' == 0, 1, 0) in 1
-        mata: st_store(1, "`v'", __ctools_sb_hold)
-    }
-    else {
-        mata: __ctools_sb_hold = st_sdata(1, "`v'")
-        quietly replace `v' = cond(`v' == "", "x", "") in 1
-        mata: st_sstore(1, "`v'", __ctools_sb_hold)
-    }
-    mata: mata drop __ctools_sb_hold
-end
 
 * Save the using data's new variables with no rows (plus the byte merge
 * variables) as the template the master appends. Run in the using data.
-program define _cmerge_template
-    args file newvars mergevars
-    local keepvars : list newvars - mergevars
-    if "`keepvars'" != "" {
-        keep `keepvars'
-        if _N > 0 {
-            quietly keep in 1
-            quietly drop in 1
-        }
-    }
-    else drop _all
-    foreach v of local mergevars {
-        quietly generate byte `v' = .
-    }
-    quietly save `"`file'"', emptyok replace
-end
 
 * merge's value and variable labels for the generated _merge variable
-program define _cmerge_label_mergevar
-    args mergevar
-    capture label list _merge
-    if _rc {
-        label define _merge 1 "Master only (1)" 2 "Using only (2)" ///
-            3 "Matched (3)" 4 "Missing updated (4)" 5 "Nonmissing conflict (5)"
-    }
-    label values `mergevar' _merge
-    label variable `mergevar' "Matching result from merge"
-end
 
 * Run the merge with merge itself (strL variables are involved), passing the
 * options merge accepts; cmerge-only options (threads, verbose,
 * preserve_order) do not apply.
-program define _cmerge_native, rclass
-    args cmdline
-    local 0 `"`cmdline'"'
-    gettoken mtype 0 : 0, parse(" ")
-    syntax [anything] using/ [, Keep(string) ASSert(string) GENerate(name) ///
-        NOGENerate KEEPUSing(string) SORTED FORCE NOREPort Verbose NOLabel ///
-        NONotes UPDATE REPLACE PRESERVE_order(integer 0) THReads(integer 0)]
-    local opts `nogenerate' `sorted' `force' `noreport' `nolabel' `nonotes' `update' `replace'
-    if "`keep'" != "" local opts `opts' keep(`keep')
-    if "`assert'" != "" local opts `opts' assert(`assert')
-    if "`generate'" != "" local opts `opts' generate(`generate')
-    if "`keepusing'" != "" local opts `opts' keepusing(`keepusing')
-    di as txt "(note: strL variables are involved; cmerge runs {bf:merge})"
-    local caller = cond("$CTOOLS_cmerge_caller" != "", "$CTOOLS_cmerge_caller", "`c(stata_version)'")
-    capture noisily version `caller': merge `mtype' `anything' using `"`using'"', `opts'
-    if _rc {
-        * merge exits 9 only when assert() fails; its result stays in memory
-        if _rc == 9 global CTOOLS_cmerge_assert_failed 1
-        exit _rc
-    }
-    local mvar = cond("`generate'" != "", "`generate'", "_merge")
-    return scalar N = _N
-    if "`nogenerate'" == "" {
-        forvalues c = 1/5 {
-            quietly count if `mvar' == `c'
-            return scalar N_`c' = r(N)
-        }
-    }
-    return local using `"`using'"'
-    return local keyvars "`anything'"
-end
 
 * r(sorted) = 1 when the observations are in ascending order of varlist
 * (Stata's sort order: strings bytewise, missing values above numbers)
-program define _cmerge_keys_sorted, rclass
-    syntax varlist
-    local n : word count `varlist'
-    local v : word `n' of `varlist'
-    local cond "(`v'[_n-1] <= `v')"
-    forvalues j = `=`n'-1'(-1)1 {
-        local v : word `j' of `varlist'
-        local cond "(`v'[_n-1] < `v' | (`v'[_n-1] == `v' & `cond'))"
-    }
-    capture assert `cond' in 2/l
-    return scalar sorted = (_rc == 0)
-end

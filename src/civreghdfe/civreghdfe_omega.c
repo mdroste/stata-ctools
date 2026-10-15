@@ -35,6 +35,7 @@
 #include "civreghdfe_vce.h"
 #include "../ctools_config.h"
 #include "../ctools_ols.h"
+#include "../ctools_hdfe_utils.h"
 
 /* Lags summed by a kernel: bw for lag windows; every lag up to
    T/tdelta - 1 for the spectral Quadratic Spectral window (m_omega's TAU) */
@@ -44,7 +45,8 @@ static ST_int omega_max_lag(ST_int kernel, ST_int bw, ST_int tmax_idx, ST_double
     if (kernel == CIVREGHDFE_KERNEL_QS) {
         if (tdelta <= 0.0) tdelta = 1.0;
         ST_double tau = floor((ST_double)tmax_idx - 1.0 + 1.0 / tdelta + 1e-9);
-        return tau > 0.0 ? (ST_int)tau : 0;
+        /* clamped in double: 1/tdelta can push it past INT_MAX */
+        return tau > 0.0 ? (tau < 2147483646.0 ? (ST_int)tau : 2147483646) : 0;
     }
     return bw > 0 ? bw : 0;
 }
@@ -88,18 +90,15 @@ ST_retcode civ_omega_init(civ_omega *om, ST_int kind, ST_int kernel, ST_int bw,
     /* Two-way: intersection clusters by sorting the (c1, c2) pairs (with a
        kernel the HAC S takes their place) */
     if (kind == CIV_OMEGA_TWOWAY && om->kernel <= 0) {
-        omega_key *key = (omega_key *)ctools_safe_malloc2((size_t)N, sizeof(omega_key));
-        om->cl12 = (ST_int *)ctools_safe_malloc2((size_t)N, sizeof(ST_int));
-        if (!key || !om->cl12) { free(key); civ_omega_free(om); return 920; }
-        for (ST_int i = 0; i < N; i++) { key[i].a = cl1[i]; key[i].b = cl2[i]; key[i].i = i; }
-        qsort(key, (size_t)N, sizeof(omega_key), cmp_key);
         ST_int g = 0;
-        for (ST_int j = 0; j < N; j++) {
-            if (j == 0 || key[j].a != key[j - 1].a || key[j].b != key[j - 1].b) g++;
-            om->cl12[key[j].i] = g;
+        om->cl12 = (ST_int *)ctools_safe_malloc2((size_t)N, sizeof(ST_int));
+        /* 1-based ids in ascending (c1, c2) order */
+        if (!om->cl12 || ctools_intersect_cluster_ids_sorted(cl1, cl2, N, om->cl12, &g) != 0) {
+            civ_omega_free(om);
+            return 920;
         }
+        for (ST_int i = 0; i < N; i++) om->cl12[i] += 1;
         om->ncl12 = g;
-        free(key);
     }
 
     /* Kernel lags within panels: observations sorted by (panel, time) */
@@ -221,19 +220,25 @@ static ST_retcode omega_groups(const civ_omega *om, const ST_double *E, ST_int K
                                ST_int use_kernel, ST_double sign, ST_double *S)
 {
     ST_int D = K * L, N = om->N;
+    /* h is stored by moment: h[d * G + g] is component d of group g's sum */
     ST_double *h = (ST_double *)ctools_safe_calloc3((size_t)G, (size_t)D, sizeof(ST_double));
-    ST_double *u = (ST_double *)malloc((size_t)D * sizeof(ST_double));
-    if (!h || !u) { free(h); free(u); return 920; }
+    if (!h) return 920;
 
-    for (ST_int i = 0; i < N; i++) {
-        ST_int g = gid ? gid[i] - 1 : om->tidx[i];
-        if (g < 0 || g >= G) continue;
-        ST_double wi = om->w ? om->w[i] : 1.0;
-        moment_row(E, K, Z, L, N, i, u);
-        ST_double *hg = h + (size_t)g * D;
-        for (ST_int d = 0; d < D; d++) hg[d] += wi * u[d];
+    /* Every component accumulates over the observations in order, so the
+       components are independent passes (one moment per thread) */
+    ST_int d;
+    #pragma omp parallel for schedule(static) if (D > 1 && (size_t)N * (size_t)D > 200000)
+    for (d = 0; d < D; d++) {
+        const ST_double *e = E + (size_t)(d / L) * N;
+        const ST_double *z = Z + (size_t)(d % L) * N;
+        ST_double *hd = h + (size_t)d * G;
+        for (ST_int i = 0; i < N; i++) {
+            ST_int g = gid ? gid[i] - 1 : om->tidx[i];
+            if (g < 0 || g >= G) continue;
+            ST_double wi = om->w ? om->w[i] : 1.0;
+            hd[g] += wi * (e[i] * z[i]);
+        }
     }
-    free(u);
 
     ST_int maxlag = use_kernel ? om->max_lag : 0;
     if (maxlag >= G) maxlag = G - 1;
@@ -241,16 +246,23 @@ static ST_retcode omega_groups(const civ_omega *om, const ST_double *E, ST_int K
         ST_double kw = civreghdfe_kernel_weight(om->kernel, tau, om->bw);
         if (kw == 0.0) continue;
         ST_double f = sign * kw;
-        for (ST_int g = tau; g < G; g++) {
-            const ST_double *a = h + (size_t)g * D;
-            const ST_double *b = h + (size_t)(g - tau) * D;
-            for (ST_int c = 0; c < D; c++) {
-                ST_double *Sc = S + (size_t)c * D;
+        /* S[r, c] adds the groups' products in group order; the columns of S
+           are independent */
+        ST_int c;
+        #pragma omp parallel for schedule(static) if (D > 1 && (size_t)G * (size_t)D * (size_t)D > 200000)
+        for (c = 0; c < D; c++) {
+            ST_double *Sc = S + (size_t)c * D;
+            const ST_double *hc = h + (size_t)c * G;
+            for (ST_int r = 0; r < D; r++) {
+                const ST_double *hr = h + (size_t)r * G;
+                ST_double acc = Sc[r];
                 if (tau == 0) {
-                    for (ST_int r = 0; r < D; r++) Sc[r] += f * a[r] * a[c];
+                    for (ST_int g = 0; g < G; g++) acc += f * hr[g] * hc[g];
                 } else {
-                    for (ST_int r = 0; r < D; r++) Sc[r] += f * (a[r] * b[c] + b[r] * a[c]);
+                    for (ST_int g = tau; g < G; g++)
+                        acc += f * (hr[g] * hc[g - tau] + hr[g - tau] * hc[g]);
                 }
+                Sc[r] = acc;
             }
         }
     }
@@ -294,9 +306,11 @@ static ST_retcode omega_hetero(const civ_omega *om, const ST_double *E, ST_int K
         }
     }
 
-    /* HAC lags: kw(tau) * sum w_t w_s (u_t u_s' + u_s u_t') */
+    /* HAC lags: kw(tau) * sum w_t w_s (u_t u_s' + u_s u_t'). Lags go to the
+       threads round-robin: a static assignment keeps each thread's partial
+       sum, and so the result, the same from run to run. */
     if (maxlag > 0) {
-        #pragma omp parallel for schedule(dynamic) num_threads(nt) if (maxlag > 1 && nt > 1)
+        #pragma omp parallel for schedule(static, 1) num_threads(nt) if (maxlag > 1 && nt > 1)
         for (ST_int tau = 1; tau <= maxlag; tau++) {
             int t = 0;
 #ifdef _OPENMP
@@ -368,7 +382,7 @@ ST_retcode civ_omega_build(const civ_omega *om, const ST_double *E, ST_int K,
             ctools_matmul_atdb(Z, Z, w, N, L, L, ZZ);
         } else {
             ctools_matmul_atb(E, E, N, K, K, sig);
-            ctools_matmul_atb(Z, Z, N, L, L, ZZ);
+            ctools_matmul_ata(Z, N, L, ZZ);
         }
         for (ST_int j = 0; j < K * K; j++) sig[j] /= om->N_eff;
         add_kron(S, sig, K, ZZ, L, 1.0, 0);
@@ -379,7 +393,7 @@ ST_retcode civ_omega_build(const civ_omega *om, const ST_double *E, ST_int K,
         size_t per = DD + (size_t)K * K + (size_t)L * L;
         ST_double *buf = (ST_double *)ctools_safe_calloc3((size_t)nt, per, sizeof(ST_double));
         if (!buf) return 920;
-        #pragma omp parallel for schedule(dynamic) num_threads(nt) if (maxlag > 1 && nt > 1)
+        #pragma omp parallel for schedule(static, 1) num_threads(nt) if (maxlag > 1 && nt > 1)
         for (ST_int tau = 1; tau <= maxlag; tau++) {
             int t = 0;
 #ifdef _OPENMP
@@ -425,7 +439,11 @@ ST_int civ_sym_inverse(const ST_double *A, ST_int n, ST_double *inv)
     ST_double *L = (ST_double *)ctools_safe_malloc3((size_t)n, (size_t)n, sizeof(ST_double));
     if (!L) return -1;
     memcpy(L, A, (size_t)n * n * sizeof(ST_double));
-    ST_int ok = (ctools_cholesky(L, n) == 0) && ctools_invert_from_cholesky(L, n, inv) == 0;
+    ST_int ok = (ctools_cholesky(L, n) == 0);
+    ST_int inv_rc = ok ? ctools_invert_from_cholesky(L, n, inv) : 0;
+    /* out of memory is a failure, not a reason to switch to the sweep */
+    if (inv_rc == STATA_ERR_MEMORY) { free(L); return -1; }
+    ok = ok && inv_rc == 0;
     /* The Cholesky inverse is Stata's invsym result when no column is
        nearly dependent on the others: its variance conditional on all of
        them, 1/inv[j,j], at least 1e-9 of its diagonal and at least 1e-19

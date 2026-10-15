@@ -1,0 +1,7 @@
+[tool.ruff]
+line-length = 100
+extend-exclude = ["temp", "src/vendor", "tools/generation/inputs"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

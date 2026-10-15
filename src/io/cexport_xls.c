@@ -270,7 +270,7 @@ ST_retcode cexport_xls_main(const char *args) {
     unsigned stringindex = 0;
     size_t n = 0;
     FILE *biff = NULL, *out = NULL;
-    cexport_output output;
+    ctools_output output;
     memset(&output, 0, sizeof(output));
     if ((rc = cexport_read_local("filename", &filename)))
         goto done;
@@ -501,7 +501,7 @@ ST_retcode cexport_xls_main(const char *args) {
             goto done;
         }
     }
-    if ((rc = cexport_output_prepare(&output, filename, replace || existing)))
+    if ((rc = ctools_output_prepare(&output, filename, replace || existing)))
         goto done;
     out = fopen(output.temporary, "wb");
     if (!out) {
@@ -517,7 +517,7 @@ ST_retcode cexport_xls_main(const char *args) {
         goto done;
     }
     out = NULL;
-    rc = cexport_output_commit(&output);
+    rc = ctools_output_commit(&output);
 done:
     if (oldbook)
         xls_close_WB(oldbook);
@@ -525,7 +525,7 @@ done:
         fclose(biff);
     if (out)
         fclose(out);
-    cexport_output_cleanup(&output);
+    ctools_output_cleanup(&output);
     if (names)
         for (int j = 0; j < k; j++)
             free(names[j]);

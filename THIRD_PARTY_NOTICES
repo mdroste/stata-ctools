@@ -6,7 +6,7 @@ Project code is covered by LICENSE. Third-party code retains its own terms.
 libdeflate (vendored source notices)
 
 
-src/cimport/libdeflate/common_defs.h
+src/vendor/libdeflate/common_defs.h
 /*
  * common_defs.h
  *
@@ -35,7 +35,7 @@ src/cimport/libdeflate/common_defs.h
  */
 
 
-src/cimport/libdeflate/lib/arm/cpu_features.c
+src/vendor/libdeflate/lib/arm/cpu_features.c
 /*
  * arm/cpu_features.c - feature detection for ARM CPUs
  *
@@ -64,7 +64,7 @@ src/cimport/libdeflate/lib/arm/cpu_features.c
  */
 
 
-src/cimport/libdeflate/lib/arm/cpu_features.h
+src/vendor/libdeflate/lib/arm/cpu_features.h
 /*
  * arm/cpu_features.h - feature detection for ARM CPUs
  *
@@ -93,7 +93,7 @@ src/cimport/libdeflate/lib/arm/cpu_features.h
  */
 
 
-src/cimport/libdeflate/lib/cpu_features_common.h
+src/vendor/libdeflate/lib/cpu_features_common.h
 /*
  * cpu_features_common.h - code shared by all lib/$arch/cpu_features.c
  *
@@ -122,7 +122,7 @@ src/cimport/libdeflate/lib/cpu_features_common.h
  */
 
 
-src/cimport/libdeflate/lib/decompress_template.h
+src/vendor/libdeflate/lib/decompress_template.h
 /*
  * decompress_template.h
  *
@@ -151,7 +151,7 @@ src/cimport/libdeflate/lib/decompress_template.h
  */
 
 
-src/cimport/libdeflate/lib/deflate_decompress.c
+src/vendor/libdeflate/lib/deflate_decompress.c
 /*
  * deflate_decompress.c - a decompressor for DEFLATE
  *
@@ -197,7 +197,7 @@ src/cimport/libdeflate/lib/deflate_decompress.c
  */
 
 
-src/cimport/libdeflate/lib/utils.c
+src/vendor/libdeflate/lib/utils.c
 /*
  * utils.c - utility functions for libdeflate
  *
@@ -226,7 +226,7 @@ src/cimport/libdeflate/lib/utils.c
  */
 
 
-src/cimport/libdeflate/lib/x86/cpu_features.c
+src/vendor/libdeflate/lib/x86/cpu_features.c
 /*
  * x86/cpu_features.c - feature detection for x86 CPUs
  *
@@ -255,7 +255,7 @@ src/cimport/libdeflate/lib/x86/cpu_features.c
  */
 
 
-src/cimport/libdeflate/lib/x86/cpu_features.h
+src/vendor/libdeflate/lib/x86/cpu_features.h
 /*
  * x86/cpu_features.h - feature detection for x86 CPUs
  *
@@ -287,7 +287,7 @@ src/cimport/libdeflate/lib/x86/cpu_features.h
 miniz (vendored source notices)
 
 
-src/cimport/miniz/miniz.c, src/cimport/miniz/miniz_tdef.c, src/cimport/miniz/miniz_tinfl.c
+src/vendor/miniz/miniz.c, src/vendor/miniz/miniz_tdef.c, src/vendor/miniz/miniz_tinfl.c
 /**************************************************************************
  *
  * Copyright 2013-2014 RAD Game Tools and Valve Software
@@ -315,7 +315,7 @@ src/cimport/miniz/miniz.c, src/cimport/miniz/miniz_tdef.c, src/cimport/miniz/min
  **************************************************************************/
 
 
-src/cimport/miniz/miniz_zip.c
+src/vendor/miniz/miniz_zip.c
 /**************************************************************************
  *
  * Copyright 2013-2014 RAD Game Tools and Valve Software
@@ -1529,4 +1529,174 @@ DEALINGS IN THE SOFTWARE.
  * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
  * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
  * OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+libdeflate CRC-32 additions (v1.25, unmodified upstream sources)
+
+src/vendor/libdeflate/lib/arm/crc32_impl.h
+/*
+ * arm/crc32_impl.h - ARM implementations of the gzip CRC-32 algorithm
+ *
+ * Copyright 2022 Eric Biggers
+ *
+ * Permission is hereby granted, free of charge, to any person
+ * obtaining a copy of this software and associated documentation
+ * files (the "Software"), to deal in the Software without
+ * restriction, including without limitation the rights to use,
+ * copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following
+ * conditions:
+ *
+ * The above copyright notice and this permission notice shall be
+ * included in all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+ * OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+ * HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+ * WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+ * OTHER DEALINGS IN THE SOFTWARE.
+ */
+
+src/vendor/libdeflate/lib/arm/crc32_pmull_helpers.h
+/*
+ * arm/crc32_pmull_helpers.h - helper functions for CRC-32 folding with PMULL
+ *
+ * Copyright 2022 Eric Biggers
+ *
+ * Permission is hereby granted, free of charge, to any person
+ * obtaining a copy of this software and associated documentation
+ * files (the "Software"), to deal in the Software without
+ * restriction, including without limitation the rights to use,
+ * copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following
+ * conditions:
+ *
+ * The above copyright notice and this permission notice shall be
+ * included in all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+ * OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+ * HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+ * WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+ * OTHER DEALINGS IN THE SOFTWARE.
+ */
+
+src/vendor/libdeflate/lib/arm/crc32_pmull_wide.h
+/*
+ * arm/crc32_pmull_wide.h - gzip CRC-32 with PMULL (extra-wide version)
+ *
+ * Copyright 2022 Eric Biggers
+ *
+ * Permission is hereby granted, free of charge, to any person
+ * obtaining a copy of this software and associated documentation
+ * files (the "Software"), to deal in the Software without
+ * restriction, including without limitation the rights to use,
+ * copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following
+ * conditions:
+ *
+ * The above copyright notice and this permission notice shall be
+ * included in all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+ * OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+ * HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+ * WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+ * OTHER DEALINGS IN THE SOFTWARE.
+ */
+
+src/vendor/libdeflate/lib/crc32.c
+/*
+ * crc32.c - CRC-32 checksum algorithm for the gzip format
+ *
+ * Copyright 2016 Eric Biggers
+ *
+ * Permission is hereby granted, free of charge, to any person
+ * obtaining a copy of this software and associated documentation
+ * files (the "Software"), to deal in the Software without
+ * restriction, including without limitation the rights to use,
+ * copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following
+ * conditions:
+ *
+ * The above copyright notice and this permission notice shall be
+ * included in all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+ * OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+ * HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+ * WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+ * OTHER DEALINGS IN THE SOFTWARE.
+ */
+
+src/vendor/libdeflate/lib/x86/crc32_impl.h
+/*
+ * x86/crc32_impl.h - x86 implementations of the gzip CRC-32 algorithm
+ *
+ * Copyright 2016 Eric Biggers
+ *
+ * Permission is hereby granted, free of charge, to any person
+ * obtaining a copy of this software and associated documentation
+ * files (the "Software"), to deal in the Software without
+ * restriction, including without limitation the rights to use,
+ * copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following
+ * conditions:
+ *
+ * The above copyright notice and this permission notice shall be
+ * included in all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+ * OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+ * HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+ * WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+ * OTHER DEALINGS IN THE SOFTWARE.
+ */
+
+src/vendor/libdeflate/lib/x86/crc32_pclmul_template.h
+/*
+ * x86/crc32_pclmul_template.h - gzip CRC-32 with PCLMULQDQ instructions
+ *
+ * Copyright 2016 Eric Biggers
+ *
+ * Permission is hereby granted, free of charge, to any person
+ * obtaining a copy of this software and associated documentation
+ * files (the "Software"), to deal in the Software without
+ * restriction, including without limitation the rights to use,
+ * copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following
+ * conditions:
+ *
+ * The above copyright notice and this permission notice shall be
+ * included in all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+ * OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+ * HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+ * WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+ * OTHER DEALINGS IN THE SOFTWARE.
  */

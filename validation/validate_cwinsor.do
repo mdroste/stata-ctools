@@ -1,11 +1,12 @@
 /*******************************************************************************
  * validate_cwinsor.do
  *
- * Comprehensive validation tests for cwinsor vs gstats winsor
+ * Comprehensive validation tests for cwinsor vs winsor2 (documented replacement)
  * Tests all options: cuts, p/q, trim, by, suffix/prefix, replace
  *
  * VERIFICATION: All tests compare winsorized/trimmed values between
- * gstats winsor and cwinsor using significant figures comparison
+ * winsor2 and cwinsor using significant figures comparison. Direct gstats
+ * checks below are supplementary checks on fixtures where the references agree.
  ******************************************************************************/
 
 * Load setup (works from project root or validation dir)
@@ -50,20 +51,20 @@ else {
     test_fail "basic winsorization" "variable not created"
 }
 
-* Test 2.2: Compare with gstats winsor (default 1/99)
+* Test 2.2: Compare with winsor2 (default 1/99)
 sysuse auto, clear
-benchmark_winsor price, testname("vs gstats: price default cuts")
+benchmark_winsor price, testname("vs winsor2: price default cuts")
 
 * Test 2.3: Multiple variables
 sysuse auto, clear
-benchmark_winsor price mpg weight, testname("vs gstats: multiple variables")
+benchmark_winsor price mpg weight, testname("vs winsor2: multiple variables")
 
 * Test 2.4: Variable with missing values
 clear
 set obs 100
 gen x = rnormal()
 replace x = . in 1/10
-benchmark_winsor x, testname("vs gstats: variable with missings")
+benchmark_winsor x, testname("vs winsor2: variable with missings")
 
 * Test 2.5: All missing values
 clear
@@ -505,6 +506,108 @@ benchmark_winsor price, testname("string by-variable") by(grp) cuts(10 90)
 sysuse auto, clear
 gen double g = cond(mod(_n, 3) == 0, ., cond(mod(_n, 3) == 1, .a, 1))
 benchmark_winsor price, testname("by-groups . and .a kept distinct") by(g) cuts(10 90)
+
+* winsor2's macro-rounded bounds can trim an observation at a percentile.
+* Compare exact missingness and metadata, with no boundary tolerance.
+quietly do validation/coverage_helpers.do
+foreach scale in 1 1e-6 {
+    clear
+    set obs 8
+    gen double x=.
+    local i=0
+    foreach value in -4 -1.8189731519126051 -1 0 1 4.387736506821946 9 .a {
+        local ++i
+        replace x=`value' in `i'
+    }
+    replace x=x*`scale' if !missing(x)
+    label variable x "Boundary fixture"
+    foreach output in "suffix(_w)" "replace" {
+        coverage_data, reference(winsor2 x, cuts(20 80) trim `output') ///
+            candidate(cwinsor x, cuts(20 80) trim `output') ///
+            name("winsor2 rounded trim boundary scale `scale' `output'")
+    }
+    gen byte g=mod(_n,2)
+    coverage_data, reference(winsor2 x, cuts(20 80) by(g) suffix(_w)) ///
+        candidate(cwinsor x, cuts(20 80) by(g) suffix(_w)) ///
+        name("winsor2 grouped output format scale `scale'")
+}
+
+/*******************************************************************************
+ * Rollback of failed calls
+ *
+ * A failed or interrupted cwinsor leaves the data as they were without a
+ * snapshot of the dataset; option snapshot preserves it instead and option
+ * fast undoes nothing (see validation/rollback_helpers.do). In place, the
+ * plugin keeps the original values of the observations it rewrites. The
+ * hook $CTOOLS_cwinsor_fault fails the call:
+ *   outputs  with r(1) after suffix()/prefix() variables were created
+ *   store    inside the plugin after half the observations were written,
+ *            with the memory error it simulates, r(920)
+ *   post     with r(1) after the targets were written, relabeled and recast
+ ******************************************************************************/
+print_section "Rollback of Failed Calls"
+capture confirm file "validation/rollback_helpers.do"
+if !_rc do "validation/rollback_helpers.do"
+else do "rollback_helpers.do"
+
+clear
+set seed 1732
+set obs 3000
+gen long id = _n
+gen int f2 = mod(_n * 7, 23) + 1
+gen double y = rnormal() * 10
+gen float x1 = rnormal()
+gen int x2 = round(rnormal() * 100)
+replace y = .a in 5
+replace x1 = . in 7
+gen byte keep = mod(_n, 9) != 0
+gen byte cat = mod(_n, 3)
+label define rb_cat 0 "zero" 1 "one" 2 "two"
+label values cat rb_cat
+label variable y "outcome"
+label data "cwinsor rollback data"
+note: dataset note
+note y: note on y
+char _dta[rb_char] dataset characteristic
+char x1[rb_char] x1 characteristic
+sort x2 id
+tempfile rb_copy rb_out
+save `rb_copy'
+
+_ctools_rb_case, cmd(cwinsor y x1, cuts(5 95)) ///
+    global(CTOOLS_cwinsor_fault) fault(post) testname("[rollback] in place after plugin")
+_ctools_rb_case, cmd(cwinsor y x2 if keep, cuts(10 90) by(f2)) ///
+    global(CTOOLS_cwinsor_fault) fault(post) testname("[rollback] in place by() if, sort variable")
+_ctools_rb_case, cmd(cwinsor y x1 if keep, cuts(10 90) by(f2) replace) ///
+    global(CTOOLS_cwinsor_fault) fault(store) rc(920) testname("[rollback] in place, store fails")
+_ctools_rb_case, cmd(cwinsor x2, cuts(10 90)) ///
+    global(CTOOLS_cwinsor_fault) fault(store) rc(920) testname("[rollback] one variable, store fails")
+_ctools_rb_case, cmd(cwinsor y x2, cuts(5 95) trim) ///
+    global(CTOOLS_cwinsor_fault) fault(post) testname("[rollback] in place trim after replace")
+_ctools_rb_case, cmd(cwinsor y x2, cuts(5 95) suffix(_w)) ///
+    global(CTOOLS_cwinsor_fault) fault(outputs) testname("[rollback] suffix outputs created")
+_ctools_rb_case, cmd(cwinsor y x1 x2, cuts(5 95) by(f2) trim prefix(w_)) ///
+    global(CTOOLS_cwinsor_fault) fault(post) testname("[rollback] prefix after recast")
+
+* Options snapshot and fast give the default's results; together they are refused
+foreach spec in "cuts(5 95) by(f2)" "cuts(5 95) trim" "cuts(5 95) suffix(_w)" {
+    use `rb_copy', clear
+    cwinsor y x1 x2, `spec'
+    save `rb_out', replace
+    foreach mode in snapshot fast {
+        use `rb_copy', clear
+        cwinsor y x1 x2, `spec' `mode'
+        capture cf _all using `rb_out', all
+        if !_rc test_pass "[rollback] option `mode' gives the default results (`spec')"
+        else test_fail "[rollback] option `mode' gives the default results (`spec')" "results differ"
+    }
+}
+use `rb_copy', clear
+capture cwinsor y, cuts(5 95) snapshot fast
+local rc = _rc
+capture cf _all using `rb_copy', all
+if `rc' == 198 & !_rc test_pass "[rollback] snapshot and fast together refused"
+else test_fail "[rollback] snapshot and fast together refused" "rc=`rc', data changed=`=_rc!=0'"
 
 } /* end quietly */
 

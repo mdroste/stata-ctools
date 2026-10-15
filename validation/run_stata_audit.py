@@ -22,8 +22,8 @@ def validate_log(text, nonce):
     if not result:
         raise ValueError('missing full-suite summary')
     passed, failed, skipped, expected = map(int, result.groups())
-    if passed == 0 or failed or skipped != expected:
-        raise ValueError('failed checks, unexpected skips, or empty suite')
+    if passed == 0 or failed or skipped or expected:
+        raise ValueError('failed checks, skipped checks, or empty suite')
     return passed, skipped
 
 
@@ -72,6 +72,6 @@ exit, clear
         errors.append(str(error))
     if errors:
         raise SystemExit('Validation failed: ' + '; '.join(errors))
-    print(f'Complete Stata suite: {passed} passed; {skipped} explicitly documented method comparisons excluded. Log: {LOG}')
+    print(f'Complete Stata suite: {passed} passed; {skipped} skipped. Log: {LOG}')
 
 if __name__ == '__main__': main()

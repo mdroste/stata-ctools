@@ -2,15 +2,28 @@
 
 program define creghdfe, eclass
     version 14.1
-    preserve
-    capture noisily _creghdfe_impl `0'
-    local rc = _rc
-    if `rc' {
-        restore
-        ereturn clear
-        exit `rc'
+    * A failed or interrupted regression leaves the data as they were without
+    * a snapshot of the dataset: creghdfe only adds variables at the end
+    * (residuals, groupvar(), savefe and temporary variables) and writes into
+    * nothing else, so _ctools_undo drops them and resets c(changed). Option
+    * snapshot preserves the whole dataset instead (on disk above
+    * c(max_preservemem)); option fast undoes nothing.
+    _ctools_mode `0'
+    * Break is recognized only inside _creghdfe_impl.
+    nobreak {
+        if "`mode'" == "snapshot" preserve
+        else if "`mode'" == "" _ctools_undo record CTOOLS_u_creghdfe_
+        capture noisily break _creghdfe_impl `0'
+        local rc = _rc
+        if `rc' {
+            if "`mode'" == "snapshot" restore
+            else if "`mode'" == "" _ctools_undo rollback CTOOLS_u_creghdfe_
+            ereturn clear
+            exit `rc'
+        }
+        if "`mode'" == "snapshot" restore, not
+        else if "`mode'" == "" _ctools_undo clear CTOOLS_u_creghdfe_
     }
-    restore, not
 end
 
 program define _creghdfe_impl, eclass
@@ -25,12 +38,14 @@ program define _creghdfe_impl, eclass
 
     * Start wall clock timer immediately
     local __do_timing = 0
-    timer clear 98
-    timer on 98
+    quietly _ctools_clock __ct_lap98
+
+    * Drop whatever an interrupted run left behind
+    _ctools_cleanup creghdfe
 
     syntax varlist(min=2 fv ts) [aw fw pw] [if] [in] [, Absorb(string) VCE(string) Verbose ///
         TOLerance(real 1e-8) ITERATE(integer 10000) NOSTANDardize RESID RESID2(name) RESIDuals(name) ///
-        DOFadjustments(string) GROUPvar(name) THReads(integer 0) QUAD]
+        DOFadjustments(string) GROUPvar(name) THReads(integer 0) QUAD SNAPshot FAST]
 
     if `iterate' < 1 | missing(`tolerance') | `tolerance' <= 0 {
         di as error "creghdfe: iterate() and tolerance() must be positive"
@@ -72,21 +87,12 @@ program define _creghdfe_impl, eclass
     * are computed from this list, while markout and plugin call expand it.
     unab absorb : `absorb_vars'
 
-    * Parse dofadjustments option
-    * 0=all (default), 1=none, 2=firstpair, 3=pairwise
-    local dof_adjust_type = 0
-    if "`dofadjustments'" != "" {
-        local dof_lower = lower("`dofadjustments'")
-        if "`dof_lower'" == "none" {
-            local dof_adjust_type = 1
-        }
-        else if strpos("`dof_lower'", "first") > 0 {
-            local dof_adjust_type = 2
-        }
-        else if strpos("`dof_lower'", "pair") > 0 {
-            local dof_adjust_type = 3
-        }
-    }
+    * Parse dofadjustments option as reghdfe does
+    * 0=all (default), 1=none, 2=firstpair, 3=pairwise; all implies clusters
+    local dof_lower = lower(`"`dofadjustments'"')
+    _creghdfe_parse_dof, `dof_lower'
+    local dof_adjust_type = `s(type)'
+    local dof_clusters = `s(clusters)'
 
     * Mark sample - include absorb and cluster variables
     marksample touse
@@ -96,36 +102,11 @@ program define _creghdfe_impl, eclass
     local weight_var ""
     local weight_type = 0   // 0=none, 1=aweight, 2=fweight, 3=pweight
     if "`weight'" != "" {
-        * Extract weight variable from expression (remove leading =)
+        * Evaluate the weight expression; marks out and validates the weights
         tempvar evaluated_weight
         _ctools_weight, generate(`evaluated_weight') touse(`touse') type(`weight') expression(`"`exp'"')
         local weight_var "`evaluated_weight'"
-
-        if "`weight'" == "aweight" {
-            local weight_type = 1
-        }
-        else if "`weight'" == "fweight" {
-            local weight_type = 2
-            * fweight must be positive integer
-            capture confirm numeric variable `weight_var'
-            if _rc != 0 {
-                di as error "creghdfe: fweight variable must be numeric"
-                exit 198
-            }
-        }
-        else if "`weight'" == "pweight" {
-            local weight_type = 3
-        }
-
-        * Mark out missing weights
-        markout `touse' `weight_var'
-
-        * Check for non-positive weights
-        qui count if `weight_var' <= 0 & `touse'
-        if r(N) > 0 {
-            di as error "creghdfe: weights must be positive"
-            exit 198
-        }
+        local weight_type = cond("`weight'" == "aweight", 1, cond("`weight'" == "fweight", 2, 3))
     }
 
     * Parse variable list
@@ -148,32 +129,12 @@ program define _creghdfe_impl, eclass
         fvexpand `indepvars' if `touse'
         local coef_names_all "`r(varlist)'"
 
-        * Pre-filter base/omitted levels in sync
-        * Drop only if ALL #-components are base/omitted (keep if ANY is non-base)
-        * This matches Stata convention: for i.var1#i.var2, only the fully-base
-        * term (e.g., 1b.race#0b.married) is dropped; mixed terms are estimable.
-        * For c.var#i.var, all terms are kept since continuous parts are non-base.
-        local __vars_nobase ""
-        local __names_nobase ""
-        local __n_all : word count `coef_names_all'
-        forval __k = 1/`__n_all' {
-            local __vname : word `__k' of `coef_names_all'
-            local __keep = 0
-            local __parts : subinstr local __vname "#" " ", all
-            foreach __p of local __parts {
-                if !regexm("`__p'", "b\.") & !regexm("`__p'", "o\.") {
-                    local __keep = 1
-                }
-            }
-            if `__keep' {
-                local __vars_nobase `__vars_nobase' `: word `__k' of `__indepvars_all''
-                local __names_nobase `__names_nobase' `__vname'
-            }
-        }
-
-        * Collinearity detection is handled by the C plugin (detect_collinearity)
-        local indepvars_expanded "`__vars_nobase'"
-        local coef_names "`__names_nobase'"
+        * Base/omitted placeholders are not sent to the plugin, which also
+        * detects collinearity (detect_collinearity)
+        _ctools_fvsplit, names(`coef_names_all') vars(`__indepvars_all')
+        local indepvars_expanded "`r(vars)'"
+        local coef_names "`r(names)'"
+        local coef_is_base "`r(base)'"
 
         * Build expanded varlist for plugin
         local varlist_expanded "`depvar' `indepvars_expanded'"
@@ -182,6 +143,8 @@ program define _creghdfe_impl, eclass
         local indepvars_expanded ""
         local varlist_expanded "`depvar'"
         local coef_names ""
+        local coef_names_all ""
+        local coef_is_base ""
     }
 
     local nvars : word count `varlist_expanded'
@@ -199,13 +162,9 @@ program define _creghdfe_impl, eclass
     }
 
     if `"`vce'"' != "" {
-        local vce_lower = lower(trim(`"`vce'"'))
-        if substr("`vce_lower'", 1, 2) == "cl" {
-            * cluster option - extract variable name
+        _ctools_vce vce_kind clustervar : `vce'
+        if "`vce_kind'" == "cluster" {
             local vcetype = 2
-            * Parse "cluster varname" or "cl varname"
-            gettoken vce_type clustervar : vce
-            local clustervar = trim("`clustervar'")
             if "`clustervar'" == "" {
                 di as error "creghdfe: cluster variable required with vce(cluster)"
                 exit 198
@@ -220,16 +179,9 @@ program define _creghdfe_impl, eclass
             * Check if cluster variable is string - if so, convert to numeric
             capture confirm numeric variable `clustervar'
             if _rc != 0 {
-                * String variable - create temporary numeric grouping
-                * Use gegen if gtools is available (faster), otherwise fall back to egen
+                * String variable - number its values in C, as egen group() would
                 tempvar clustervar_numeric
-                capture which gegen
-                if _rc == 0 {
-                    quietly gegen `clustervar_numeric' = group(`clustervar')
-                }
-                else {
-                    quietly egen `clustervar_numeric' = group(`clustervar')
-                }
+                quietly _ctools_group `clustervar', generate(`clustervar_numeric')
                 local clustervar "`clustervar_numeric'"
                 local clustervar_is_temp = 1
             }
@@ -244,10 +196,10 @@ program define _creghdfe_impl, eclass
                 quietly replace `touse' = 0 if `clustervar_orig' == "" & `touse' == 1
             }
         }
-        else if "`vce_lower'" == "robust" | "`vce_lower'" == "r" {
+        else if "`vce_kind'" == "robust" {
             local vcetype = 1
         }
-        else if "`vce_lower'" == "unadjusted" | "`vce_lower'" == "ols" {
+        else if inlist("`vce_kind'", "unadjusted", "ols") {
             local vcetype = 0
         }
         else {
@@ -310,6 +262,7 @@ program define _creghdfe_impl, eclass
     scalar __creghdfe_has_weights = (`weight_type' > 0)
     scalar __creghdfe_weight_type = `weight_type'
     scalar __creghdfe_dof_adjust_type = `dof_adjust_type'
+    scalar __creghdfe_dof_clusters = `dof_clusters'
     scalar __creghdfe_savefe = `savefe'
     scalar __creghdfe_compute_groupvar = ("`groupvar'" != "")
     scalar __creghdfe_use_quad = ("`quad'" != "")
@@ -321,11 +274,7 @@ program define _creghdfe_impl, eclass
     }
 
     * Record setup time
-    timer off 98
-    quietly timer list 98
-    local __time_setup = r(t98)
-    timer clear 98
-    timer on 98
+    _ctools_lap __time_setup __ct_lap98 `__ct_lap98'
 
     * Build varlist for plugin: depvar indepvars fe_vars [cluster_var] [weight_var] [resid_var]
     * Use expanded varlist (factor variables converted to temp numeric vars)
@@ -385,33 +334,22 @@ program define _creghdfe_impl, eclass
     local K_x = `nvars' - 1  // number of indepvars (excluding depvar)
     matrix __creghdfe_V = J(`K_x' + 1, `K_x' + 1, 0)
 
+    * Validation hook: fail as Break would once the outputs exist
+    if "$CTOOLS_creghdfe_fault" == "outputs" error 1
+
     * Call the C plugin with full_regression subcommand
     capture noisily plugin call ctools_plugin `plugin_varlist' if `touse', ///
         "creghdfe `threads_code' full_regression"
 
     local reg_rc = _rc
     if `reg_rc' {
-        * Clean up scalars on error
-        capture scalar drop __creghdfe_sample_idx __creghdfe_K __creghdfe_G __creghdfe_drop_singletons
-        capture scalar drop __creghdfe_verbose __creghdfe_maxiter __creghdfe_tolerance
-        capture scalar drop __creghdfe_standardize __creghdfe_vce_type __creghdfe_compute_dof
-        capture scalar drop __creghdfe_df_a_nested __creghdfe_compute_resid __creghdfe_use_quad
-        capture scalar drop __creghdfe_resid_var_idx
-        capture scalar drop __creghdfe_has_weights __creghdfe_weight_type
-        capture scalar drop __creghdfe_dof_adjust_type __creghdfe_savefe
-        capture scalar drop __creghdfe_compute_groupvar __creghdfe_groupvar_idx __creghdfe_savefe_idx
-        capture scalar drop __creghdfe_touse_idx
-        capture matrix drop __creghdfe_V
+        _ctools_cleanup creghdfe
         di as error "Error in regression (rc=`reg_rc')"
         exit `reg_rc'
     }
 
     * Record plugin call time
-    timer off 98
-    quietly timer list 98
-    local __time_plugin_call = r(t98)
-    timer clear 98
-    timer on 98
+    _ctools_lap __time_plugin_call __ct_lap98 `__ct_lap98'
 
     * Retrieve results from scalars set by C plugin
     local N_final = __creghdfe_N
@@ -419,9 +357,6 @@ program define _creghdfe_impl, eclass
     local K_keep = __creghdfe_K_keep
     local df_a = __creghdfe_df_a
     local mobility_groups = __creghdfe_mobility_groups
-    * Use scalars (not locals) throughout to avoid precision loss in string conversion.
-    local has_cons = __creghdfe_has_cons
-    local cons = __creghdfe_cons
     capture local num_iters = __creghdfe_iterations
     if _rc != 0 local num_iters = 1
 
@@ -442,11 +377,7 @@ program define _creghdfe_impl, eclass
     }
 
     * Record post-processing time (nested FE now computed in C plugin)
-    timer off 98
-    quietly timer list 98
-    local __time_postproc = r(t98)
-    timer clear 98
-    timer on 98
+    _ctools_lap __time_postproc __ct_lap98 `__ct_lap98'
 
     * Adjust df_a for nested FEs
     local df_a_adjusted = `df_a' - `df_a_nested'
@@ -456,11 +387,12 @@ program define _creghdfe_impl, eclass
 
     * Calculate R-squared and adjusted R-squared
     * Use scalars for precision-critical computations to avoid local precision loss
-    scalar __cr_rss = scalar(__creghdfe_rss)
-    scalar __cr_tss = scalar(__creghdfe_tss)
-    scalar __cr_tss_w = scalar(__creghdfe_tss_within)
-    local r2 = 1 - scalar(__cr_rss) / scalar(__cr_tss)
-    local r2_within = 1 - scalar(__cr_rss) / scalar(__cr_tss_w)
+    tempname cr_rss cr_tss cr_tss_w cr_mss cr_mss_w
+    scalar `cr_rss' = scalar(__creghdfe_rss)
+    scalar `cr_tss' = scalar(__creghdfe_tss)
+    scalar `cr_tss_w' = scalar(__creghdfe_tss_within)
+    local r2 = 1 - scalar(`cr_rss') / scalar(`cr_tss')
+    local r2_within = 1 - scalar(`cr_rss') / scalar(`cr_tss_w')
     local df_m = `K_keep'
 
     * df_r depends on VCE type:
@@ -493,76 +425,43 @@ program define _creghdfe_impl, eclass
     if `df_r_ols' < 1 {
         local df_r_ols = 1
     }
-    local r2_a = 1 - (scalar(__cr_rss)/`df_r_ols') / (scalar(__cr_tss)/(`N_final'-1))
-    local rmse = sqrt(scalar(__cr_rss) / `df_r_ols')
+    local r2_a = 1 - (scalar(`cr_rss')/`df_r_ols') / (scalar(`cr_tss')/(`N_final'-1))
+    local rmse = sqrt(scalar(`cr_rss') / `df_r_ols')
 
     * Calculate F-statistic
     * For unadjusted VCE: use traditional MSS/MSE formula with within-group variation
     * For robust/cluster VCE: use Wald test F = b'*V^-1*b / k
     * e(mss) = TSS - RSS (total model sum of squares for reporting)
     * But F uses within-group MSS = tss_within - rss
-    scalar __cr_mss = scalar(__cr_tss) - scalar(__cr_rss)
-    scalar __cr_mss_w = scalar(__cr_tss_w) - scalar(__cr_rss)
+    scalar `cr_mss' = scalar(`cr_tss') - scalar(`cr_rss')
+    scalar `cr_mss_w' = scalar(`cr_tss_w') - scalar(`cr_rss')
     if `vcetype' == 0 {
         * Traditional F-statistic using within-group variation
-        local F = (scalar(__cr_mss_w) / `df_m') / (scalar(__cr_rss) / `df_r')
+        local F = (scalar(`cr_mss_w') / `df_m') / (scalar(`cr_rss') / `df_r')
     }
     else {
         * Wald F-statistic for robust/cluster VCE - computed after V matrix is built
         local F = .
     }
 
-    * Build coefficient vector and names
-    tempname b V
-
-    * Always build full matrix with all X vars (including omitted) to match reghdfe
-    local K_full = `K_x' + 1  /* All X vars + constant */
-    matrix `b' = J(1, `K_full', 0)
-    matrix `V' = J(`K_full', `K_full', 0)
-
-    * Fill in coefficients and VCE for non-collinear variables
-    if `K_keep' > 0 {
-        * Build mapping from kept index to full index
-        local kept_idx = 1
-        forval k = 1/`K_x' {
-            local is_collin = __creghdfe_collinear_`k'
-            if `is_collin' == 0 {
-                * Fill coefficient
-                matrix `b'[1, `k'] = __creghdfe_beta_`kept_idx'
-                * Fill VCE row/column
-                local kept_idx2 = 1
-                forval j = 1/`K_x' {
-                    local is_collin_j = __creghdfe_collinear_`j'
-                    if `is_collin_j' == 0 {
-                        matrix `V'[`k', `j'] = __creghdfe_V[`kept_idx', `kept_idx2']
-                        local ++kept_idx2
-                    }
-                }
-                * Cross terms with constant
-                matrix `V'[`k', `K_full'] = __creghdfe_V[`kept_idx', `K_keep'+1]
-                matrix `V'[`K_full', `k'] = __creghdfe_V[`K_keep'+1, `kept_idx']
-                local ++kept_idx
-            }
-        }
-        * Constant variance
-        matrix `V'[`K_full', `K_full'] = __creghdfe_V[`K_keep'+1, `K_keep'+1]
-    }
-    else {
-        * K_keep == 0: set variance for constant only
-        local var_cons = `rss' / (`N_final' * `df_r')
-        matrix `V'[`K_full', `K_full'] = `var_cons'
-    }
-    * Constant coefficient
-    matrix `b'[1, `K_full'] = `cons'
+    * e(b) and e(V) as reghdfe posts them: every term in order, with zeros for
+    * omitted regressors (o. prefix) and for factor-variable base levels
+    tempname b V b_kept
+    _ctools_ebv `b' `V', names(`coef_names_all') base(`coef_is_base') ///
+        stub(__creghdfe) kkeep(`K_keep') vmatrix(__creghdfe_V) cons(__creghdfe_cons) kept(`b_kept')
 
     * Label the residual variable (already filled by C plugin)
     if "`resid_varname'" != "" {
         label var `resid_varname' "Residuals"
     }
 
-    * Label the groupvar variable (mobility group identifier)
+    * Label the groupvar variable (mobility group identifier), as reghdfe
+    * labels the groups of its first pair of absorbed effects
     if "`groupvar'" != "" {
-        label var `groupvar' "Mobility group"
+        local __fe1 : word 1 of `absorb'
+        local __fe2 : word 2 of `absorb'
+        if "`__fe2'" != "" label var `groupvar' "Mobility group between `__fe1' and `__fe2'"
+        else label var `groupvar' "Mobility group"
     }
 
     * Label the savefe variables (fixed effect estimates)
@@ -573,40 +472,12 @@ program define _creghdfe_impl, eclass
         }
     }
 
-    * Build column names - include omitted vars with o. prefix
-    * Use coef_names which has proper factor variable notation
-    local colnames ""
-    forval k = 1/`K_x' {
-        local vname : word `k' of `coef_names'
-        if `K_keep' == 0 {
-            local colnames `colnames' o.`vname'
-        }
-        else {
-            local is_collin = __creghdfe_collinear_`k'
-            if `is_collin' == 1 {
-                local colnames `colnames' o.`vname'
-            }
-            else {
-                local colnames `colnames' `vname'
-            }
-        }
-    }
-    local colnames `colnames' _cons
-
-    matrix colnames `b' = `colnames'
-    matrix rownames `V' = `colnames'
-    matrix colnames `V' = `colnames'
-
     * Compute Wald F-statistic for robust/cluster VCE
     * Test all kept regressors jointly, as reghdfe does. Omitted regressors may
     * precede kept ones in b/V, so use the plugin's compact results: the kept
     * coefficients in order and the top-left K_keep x K_keep block of its V.
     if `vcetype' != 0 & `K_keep' > 0 {
-        tempname b_noconstant V_noconstant Vinv
-        matrix `b_noconstant' = J(1, `K_keep', 0)
-        forval k = 1/`K_keep' {
-            matrix `b_noconstant'[1, `k'] = scalar(__creghdfe_beta_`k')
-        }
+        tempname V_noconstant Vinv
         matrix `V_noconstant' = __creghdfe_V[1..`K_keep', 1..`K_keep']
         matrix `Vinv' = syminv(`V_noconstant')
         * A rank-deficient V (e.g. too few clusters) gives a missing F, as in reghdfe
@@ -616,98 +487,13 @@ program define _creghdfe_impl, eclass
         else {
             * Wald statistic = b' * V^-1 * b
             tempname Wald
-            matrix `Wald' = `b_noconstant' * `Vinv' * `b_noconstant''
+            matrix `Wald' = `b_kept' * `Vinv' * `b_kept''
             local F = `Wald'[1,1] / `df_m'
         }
     }
 
-    * Expand b and V to include base levels for factor variables
-    * This matches reghdfe behavior: base levels appear in e(b) with coefficient=0
-    if "`coef_names_all'" != "" {
-        local K_all : word count `coef_names_all'
-        if `K_all' > `K_x' {
-            local K_full_new = `K_all' + 1
-            tempname b_exp V_exp
-            matrix `b_exp' = J(1, `K_full_new', 0)
-            matrix `V_exp' = J(`K_full_new', `K_full_new', 0)
-
-            * Copy constant (last element)
-            matrix `b_exp'[1, `K_full_new'] = `b'[1, `K_full']
-            matrix `V_exp'[`K_full_new', `K_full_new'] = `V'[`K_full', `K_full']
-
-            * Build position mapping: for each entry in coef_names_all,
-            * find its position in coef_names (0 if base level)
-            local __aidx = 1
-            forvalues __j = 1/`K_all' {
-                local __vn_all : word `__j' of `coef_names_all'
-                local __vn_act : word `__aidx' of `coef_names'
-                if "`__vn_all'" == "`__vn_act'" {
-                    local __bmap_`__j' = `__aidx'
-                    local __aidx = `__aidx' + 1
-                }
-                else {
-                    local __bmap_`__j' = 0
-                }
-            }
-
-            * Fill expanded matrices from active positions
-            forvalues __j = 1/`K_all' {
-                if `__bmap_`__j'' > 0 {
-                    local __aj = `__bmap_`__j''
-                    matrix `b_exp'[1, `__j'] = `b'[1, `__aj']
-                    forvalues __jj = 1/`K_all' {
-                        if `__bmap_`__jj'' > 0 {
-                            local __ajj = `__bmap_`__jj''
-                            matrix `V_exp'[`__j', `__jj'] = `V'[`__aj', `__ajj']
-                        }
-                    }
-                    matrix `V_exp'[`__j', `K_full_new'] = `V'[`__aj', `K_full']
-                    matrix `V_exp'[`K_full_new', `__j'] = `V'[`K_full', `__aj']
-                }
-            }
-
-            matrix `b' = `b_exp'
-            matrix `V' = `V_exp'
-            local K_full = `K_full_new'
-
-            * Rebuild column names with base levels
-            local colnames ""
-            forvalues __j = 1/`K_all' {
-                local __vn : word `__j' of `coef_names_all'
-                if `__bmap_`__j'' == 0 {
-                    * Base level - keep original name (e.g., 1b.rep78)
-                    local colnames `colnames' `__vn'
-                }
-                else {
-                    local __aj = `__bmap_`__j''
-                    if `K_keep' == 0 {
-                        local colnames `colnames' o.`__vn'
-                    }
-                    else {
-                        local is_collin = __creghdfe_collinear_`__aj'
-                        if `is_collin' == 1 {
-                            local colnames `colnames' o.`__vn'
-                        }
-                        else {
-                            local colnames `colnames' `__vn'
-                        }
-                    }
-                }
-            }
-            local colnames `colnames' _cons
-
-            matrix colnames `b' = `colnames'
-            matrix rownames `V' = `colnames'
-            matrix colnames `V' = `colnames'
-        }
-    }
-
     * Record results building time
-    timer off 98
-    quietly timer list 98
-    local __time_build = r(t98)
-    timer clear 98
-    timer on 98
+    _ctools_lap __time_build __ct_lap98 `__ct_lap98'
 
     * Post results
     ereturn post `b' `V', esample(`final_sample') depname(`depvar_orig') obs(`N_final')
@@ -720,10 +506,10 @@ program define _creghdfe_impl, eclass
     ereturn scalar r2_within = `r2_within'
     ereturn scalar r2_a = `r2_a'
     ereturn scalar rmse = `rmse'
-    ereturn scalar rss = scalar(__cr_rss)
-    ereturn scalar mss = scalar(__cr_mss)
-    ereturn scalar tss = scalar(__cr_tss)
-    ereturn scalar tss_within = scalar(__cr_tss_w)
+    ereturn scalar rss = scalar(`cr_rss')
+    ereturn scalar mss = scalar(`cr_mss')
+    ereturn scalar tss = scalar(`cr_tss')
+    ereturn scalar tss_within = scalar(`cr_tss_w')
     ereturn scalar df_a = `df_a_adjusted'
     ereturn scalar df_a_initial = `df_a'
     ereturn scalar df_a_nested = `df_a_nested'
@@ -755,11 +541,7 @@ program define _creghdfe_impl, eclass
     ereturn local cmdline "creghdfe `0'"
 
     * Record ereturn posting time
-    timer off 98
-    quietly timer list 98
-    local __time_ereturn = r(t98)
-    timer clear 98
-    timer on 98
+    _ctools_lap __time_ereturn __ct_lap98 `__ct_lap98'
 
     * Display singleton and convergence messages (before header, like reghdfe)
     if `num_singletons' > 0 {
@@ -793,34 +575,13 @@ program define _creghdfe_impl, eclass
     forval g = 1/`nfe' {
         local fevar : word `g' of `absorb'
         local cats = `fe_levels_`g''
-        * For nested FEs: all levels are redundant
-        * For first non-nested FE: no redundant
-        * For subsequent non-nested FEs: 1 redundant (identification)
+        * Redundant coefficients as counted by the plugin: every level of an
+        * FE nested within the clusters, otherwise reghdfe's mobility-group count
+        local redundant = __creghdfe_fe_redundant_`g'
+        local nested_marker " "
         if `fe_nested_`g'' == 1 {
-            local redundant = `cats'
             local has_nested = 1
             local nested_marker "*"
-        }
-        else {
-            if `g' == 1 | (`has_nested' == 0 & `g' == 1) {
-                * First non-nested FE: check if any prior FE was nested
-                local first_nonnested = 1
-                forval prev = 1/`=`g'-1' {
-                    if `fe_nested_`prev'' == 0 {
-                        local first_nonnested = 0
-                    }
-                }
-                if `first_nonnested' {
-                    local redundant = 0
-                }
-                else {
-                    local redundant = 1
-                }
-            }
-            else {
-                local redundant = 1
-            }
-            local nested_marker " "
         }
         local coefs = `cats' - `redundant'
         local total_coefs = `total_coefs' + `coefs'
@@ -832,39 +593,8 @@ program define _creghdfe_impl, eclass
     }
     } /* end if !__noabsorb */
 
-    * Clean up scalars
-    capture scalar drop __creghdfe_sample_idx __creghdfe_K __creghdfe_G __creghdfe_drop_singletons
-    capture scalar drop __creghdfe_verbose __creghdfe_maxiter __creghdfe_tolerance
-    capture scalar drop __creghdfe_standardize __creghdfe_vce_type __creghdfe_compute_dof
-    capture scalar drop __creghdfe_df_a_nested __creghdfe_compute_resid __creghdfe_use_quad
-    capture scalar drop __creghdfe_resid_var_idx
-    capture scalar drop __creghdfe_has_weights __creghdfe_weight_type
-    capture scalar drop __creghdfe_dof_adjust_type __creghdfe_savefe
-    capture scalar drop __creghdfe_compute_groupvar __creghdfe_groupvar_idx __creghdfe_savefe_idx
-    capture scalar drop __creghdfe_N __creghdfe_num_singletons __creghdfe_K_keep
-    capture scalar drop __creghdfe_df_a __creghdfe_mobility_groups
-    capture scalar drop __creghdfe_rss __creghdfe_tss __creghdfe_tss_within __creghdfe_touse_idx
-    capture scalar drop __cr_rss __cr_tss __cr_tss_w __cr_mss __cr_mss_w
-    capture scalar drop __creghdfe_has_cons __creghdfe_cons
-    capture scalar drop __creghdfe_ols_N __creghdfe_df_a_nested_computed
-    capture scalar drop __creghdfe_num_collinear __creghdfe_N_clust __creghdfe_iterations
-    forval k = 1/20 {
-        capture scalar drop __creghdfe_beta_`k'
-        capture scalar drop __creghdfe_collinear_`k'
-        capture scalar drop __creghdfe_num_levels_`k'
-        capture scalar drop __creghdfe_collinear_varnum_`k'
-    }
-    capture matrix drop __creghdfe_V
-
-    * Clean up nested FE scalars
-    forval k = 1/20 {
-        capture scalar drop __creghdfe_fe_nested_`k'
-    }
-
     * Record display time and compute total
-    timer off 98
-    quietly timer list 98
-    local __time_display = r(t98)
+    _ctools_lap __time_display __ct_lap98 `__ct_lap98'
     local __time_total = `__time_setup' + `__time_plugin_call' + `__time_postproc' + `__time_build' + `__time_ereturn' + `__time_display'
 
     * Display timing if requested
@@ -910,14 +640,24 @@ program define _creghdfe_impl, eclass
             di as text "    Max threads available:  " as result %8.0f `__threads_max'
             di as text "{hline 55}"
         }
-
-        * Clean up timing scalars
-        capture scalar drop _creghdfe_time_load _creghdfe_time_copy _creghdfe_time_remap _creghdfe_time_singleton
-        capture scalar drop _creghdfe_time_dof _creghdfe_time_partial
-        capture scalar drop _creghdfe_time_ols _creghdfe_time_vce _creghdfe_time_total
-        capture scalar drop _creghdfe_threads_max _creghdfe_openmp_enabled
     }
 
-    timer clear 98
+    _ctools_cleanup creghdfe
+    * Validation hook: fail after the plugin filled the outputs and e() was posted
+    if "$CTOOLS_creghdfe_fault" == "post" error 1
+end
 
+* dofadjustments(): all (the default), none, or any of firstpair|pairwise,
+* clusters and continuous, with reghdfe's abbreviations and exclusions.
+* Returns s(type): 0=all, 1=none, 2=firstpair, 3=pairwise, and s(clusters).
+* continuous concerns slope coefficients, which creghdfe does not absorb.
+program define _creghdfe_parse_dof, sclass
+    version 14.1
+    syntax [, ALL NONE FIRSTpair PAIRwise CLusters CONTinuous]
+    if "`none'`firstpair'`pairwise'`clusters'`continuous'" == "" local all all
+    opts_exclusive "`all' `none' `firstpair' `pairwise'" dofadjustments
+    opts_exclusive "`all' `none' `clusters'" dofadjustments
+    opts_exclusive "`all' `none' `continuous'" dofadjustments
+    sreturn local type = cond("`all'" != "", 0, cond("`firstpair'" != "", 2, cond("`pairwise'" != "", 3, 1)))
+    sreturn local clusters = "`all'`clusters'" != ""
 end

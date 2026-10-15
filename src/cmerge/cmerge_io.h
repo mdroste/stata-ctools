@@ -36,7 +36,8 @@ typedef struct {
     int update_mode;                /* Update missing master values */
     int replace_mode;               /* Replace all master values */
     cmerge_output_spec_t *specs;    /* Output specifications */
-    size_t output_nobs;             /* Number of output observations */
+    size_t row_start;               /* First zero-based output row to write */
+    size_t output_nobs;             /* One past the last output row to write */
     uint8_t *row_flags;             /* update: per output row, OR of CMERGE_ROW_* (NULL if unused) */
     int success;                    /* Thread result */
 } cmerge_keepusing_write_args_t;

@@ -11,21 +11,23 @@ ctools implements selected interfaces of the listed commands. Similar syntax doe
 | `csample` | `sample` | — | Percentage or `count(#)` sampling without replacement; both commands support `by()`. Random selections need not coincide under a common seed. Native count syntax differs. |
 | `cbsample` | `bsample` | `weight()` output | Bootstrap observations/clusters, optionally within strata. The positional count specifies draws per stratum, in observations or clusters. `weight()` overwrites an existing numeric variable with frequencies. |
 | `cencode` | `encode` | — | Literal value labels; existing label sets use native `encode` to preserve its extension/noextend semantics. Fixed strings and text strL up to 2045 bytes are readable. |
-| `cdecode` | `decode` | — | Native Stata decoding engine, including literal/multiline/long labels and labeled missing codes; multiple-variable and transactional replace extensions. `threads()` is a compatibility no-op. |
+| `cdecode` | `decode` | — | Same values and storage types as `decode`, including literal/multiline labels and labeled missing codes; multiple-variable and transactional replace extensions. The plugin writes fixed-width results; strL results (labels over 2,045 bytes) and `maxlength()` cuts in multibyte text are decoded by `decode` itself, so `threads()` does not apply to them. |
 | `cdestring` | `destring` | — | Numeric conversion of fixed strings and bounded text strL; use the documented `ignore()`, `force`, and output options. |
 | `cipolate` | `ipolate` | — | Linear interpolation, duplicate-x averaging, by()/by-prefix, epolate, if/in. Preserves input row order. ctools cipolate is distinct from the SSC cubic interpolator of the same name. |
 | `csplit` | `split` | — | Fixed strings use C; strL input uses native split. Supports parse(), notrim, limit(), if/in, and native destring conversion options. Outputs are staged until success. |
-| `crangejoin` | `rangejoin` 1.1.3 | — | Inclusive interval joins, by(), keepusing(), prefix()/suffix()/all. Preserves unmatched master rows and stable using-key order; restores data on error. Numeric/fixed string data only; output limited to 2^31−1 observations. |
-| `cwinsor` | `winsor2`, `gstats winsor` | — | Winsorization/trimming, groups, and named outputs. Generated values are missing outside if/in; replace leaves those rows unchanged. Failed operations roll back. |
-| `cbinscatter` | `binscatter`, selected `binsreg` behavior | aw/fw/pw/iw | Numeric plotted variables; factor controls and expression weights. Redundant controls are omitted; iterative projection sweeps absorb effects. No claim of identical `binsreg` inference. |
+| `crangejoin` | `rangejoin` 1.1.3 | — | Inclusive interval joins, by(), keepusing(), prefix()/suffix()/all. Preserves unmatched master rows and stable using-key order; restores data on error without a snapshot on disk from Stata 16 (`snapshot` and `fast` options). Numeric/fixed string data only; output limited to 2^31−1 observations. |
+| `cwinsor` | `winsor2`, `gstats winsor` | — | Winsorization/trimming, groups, and named outputs. Generated values are missing outside if/in; replace leaves those rows unchanged. Failed operations roll back without a snapshot on disk (`snapshot` and `fast` options). |
+| `cbinscatter` | `binscatter`, selected `binsreg` behavior | aw/fw/pw/iw | Numeric plotted variables; factor controls and expression weights. Redundant controls are omitted; iterative projection sweeps absorb effects. `method(binsreg)` retains FE singletons when centering adjusted means; reference comparisons require the same bins and `reghdfeopt(keepsingletons)`. No claim of identical `binsreg` inference. |
 | `crangestat` | `rangestat` | — | Implemented range statistics with interval/by/excludeself; not arbitrary user Mata functions. |
 | `creghdfe` | `reghdfe` | aw/fw/pw | Linear regression with absorbed effects. Residual/FE predictions require residuals saved at estimation; `xb` excludes absorbed effects. Solver and degrees-of-freedom options are not a complete `reghdfe` interface. |
 | `civreghdfe` | `ivreghdfe` | aw/fw/pw | Implemented IV estimators and VCE options. `center` is rejected. Residual predictions require saved estimation residuals; see help for unsupported estimator/VCE combinations. |
 | `cqreg` | `qreg` | — | Conditional quantiles with IID, robust, or clustered VCE; no weights or `absorb()`. Explicit factor indicators are allowed. `predict` supports xb/residuals/stdp. The IPM solver and density estimates can differ from native `qreg`; nonconvergence returns an error. |
-| `cpsmatch` | `psmatch2` | — | ATT from one outcome; no ATE/ATU or observation-weight syntax. No-replacement matching requires nearest neighbor with one neighbor. `r(att_se)` is an approximate matched-sample SE, not the `psmatch2` estimator. |
+| `cpsmatch` | `psmatch2` | — | ATT from one outcome; no ATE/ATU or observation-weight syntax. No-replacement matching requires nearest neighbor with one neighbor. `r(att_se)` and `r(seatt)` use the default `psmatch2` ATT SE formula; optional `ai()` inference is not supported. |
 | `cpplmhdfe` | `ppmlhdfe` | aw/fw/pw | Native C PPML with optional FE, categorical interactions, heterogeneous slopes, native simplex/ReLU/mu separation, saved individual FE, solver/initialization controls, exposure/offset, and robust or multiway clustered VCE. Reports the constant, z/Wald inference, absorbed DF, and final sample. `d()` enables fitted means and residual predictions. Hidden reference debugging options and every numerical iteration path are not identical; see [PPML details](README_cpplmhdfe.md). The public command is spelled `cpplmhdfe`. |
 
-For `cpsmatch`, the reported SE is `sqrt(s1²/n1 + s0²/n0)`, using matching-weighted sample variances and observation counts in the matched treated and control groups. It does not account for estimated propensity scores or repeated use of a control in the same way as matching-specific variance estimators. Treat comparisons of ATT and comparisons of its SE as separate validation questions.
+For `cpsmatch`, the reported SE is `sqrt(s1²/n1 + s0²*sum(w0²)/n1²)`, matching the default `psmatch2` formula. Here `n1` is the matched treated count, `s1²` and `s0²` are unweighted sample variances among matched treated and used controls, and `w0` contains the control matching weights. Squared weights account for control reuse and fractional matches. This formula does not account for uncertainty from estimating propensity scores. Validation compares both ATT and its SE directly with `psmatch2`.
+
+The displayed Unmatched row also follows `psmatch2`, using the pooled-variance SE from an ordinary least-squares regression of the outcome on treatment.
 
 Shared plugin data transfer supports numeric and fixed-width string variables up to `str2045`. It also reads textual `strL` values up to 2045 bytes through Stata's length-aware API; its general binary/oversized strL reads and strL writes are rejected. The dedicated Excel/statistical/SHP engines have separate length-aware transfer for longer text and binary headers. Delimited import reports failed writes as incomplete data, and shared write failures report that data may be partially modified. Do not continue analysis after such an error without restoring or reloading the data.
 
@@ -47,7 +49,9 @@ advanced controls, and remaining hidden-option limits.
 
 Output names for `creghdfe` (residuals, group IDs, and saved effects), `crangestat`,
 and generated `cencode` variables must be distinct new names. These commands
-restore the dataset on failure. Empty-data encoding follows the same validation
+restore the dataset on failure without writing a snapshot to disk; `creghdfe`,
+`crangestat`, `cwinsor`, `crangejoin`, `cimport` and `cmerge` take `snapshot`
+(a whole-dataset `preserve`) and `fast` (no undo) as options. Empty-data encoding follows the same validation
 contract. OLS/IV/PPML projection failures and exhausted PPML IRLS fits return 430.
 
 Excel daily dates use their workbook's 1900 or 1904 epoch; serial 60 in the 1900

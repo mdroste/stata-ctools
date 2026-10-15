@@ -1,0 +1,5 @@
+src/vendor/**
+src/stplugin.c
+src/stplugin.h
+src/cimport/generated/**
+tools/generation/inputs/**

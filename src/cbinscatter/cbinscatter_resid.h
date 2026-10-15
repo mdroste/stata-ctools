@@ -69,7 +69,8 @@ ST_retcode ols_residualize(
  *   dropped     - output: number of singleton observations dropped
  *
  * Returns:
- *   0 on success, error code on failure
+ *   0 on success, CBINSCATTER_ERR_HDFE when the projections have not
+ *   converged after maxiter iterations, another error code on failure
  */
 ST_retcode hdfe_residualize(
     ST_double *y,
@@ -110,7 +111,8 @@ ST_retcode hdfe_residualize(
  *   dropped     - output: number of singleton observations dropped
  *
  * Returns:
- *   0 on success, error code on failure
+ *   0 on success, CBINSCATTER_ERR_HDFE when the projections have not
+ *   converged after maxiter iterations, another error code on failure
  */
 ST_retcode combined_residualize(
     ST_double *y,
@@ -136,6 +138,10 @@ ST_retcode combined_residualize(
  * Residualize multiple variables simultaneously using HDFE.
  * FE level arrays are traversed once per sweep for all variables rather
  * than once per variable.
+ * Success requires a bound on every column's weighted change norm to be below
+ * tolerance times its original weighted norm. Returns CBINSCATTER_ERR_HDFE if
+ * maxiter is exhausted. Failure leaves working columns modified; callers must
+ * not publish them. Convergence workspace uses O(K_vars) additional doubles.
  *
  * Parameters:
  *   vars        - K_vars pointers to N-length arrays, each modified in-place
@@ -162,6 +168,26 @@ ST_retcode hdfe_residualize_batch(
     ST_double tolerance,
     ST_int verbose,
     ST_int *dropped
+);
+
+/*
+ * Weighted normal equations for R regressors given as column pointers:
+ * XtX[j * R + k] (k >= j, upper triangle only) = sum_i (w_i x_ij) x_ik and
+ * Xty[j] = sum_i (w_i x_ij) y_i, each summed over the observations in order
+ * (weights NULL = 1). When bin_ids is not NULL, rows whose bin id is outside
+ * 1..num_bins are skipped. The rows of the triangle are independent sums and
+ * are computed in parallel. XtX and Xty are overwritten.
+ */
+void cbinscatter_normal_equations(
+    const ST_double *const *cols,
+    ST_int R,
+    const ST_double *y,
+    const ST_double *weights,
+    const ST_int *bin_ids,
+    ST_int num_bins,
+    ST_int N,
+    ST_double *XtX,
+    ST_double *Xty
 );
 
 #endif /* CBINSCATTER_RESID_H */

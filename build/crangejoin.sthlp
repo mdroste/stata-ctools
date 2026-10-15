@@ -5,7 +5,8 @@
 {title:Syntax}
 {p 8 12 2}{cmd:crangejoin} {it:keyvar low high} {cmd:using} {it:filename}
 [{cmd:,} {opt by(varlist)} {opt k:eepusing(varlist)} {opt p:refix(string)}
-{opt s:uffix(string)} {opt a:ll} {opt threads(#)} {opt verbose}]
+{opt s:uffix(string)} {opt a:ll} {opt threads(#)} {opt verbose}
+{opt snap:shot} {opt fast}]
 
 {title:Description}
 {pstd}Implements the matching interface of Robert Picard's {cmd:rangejoin} 1.1.3.
@@ -39,6 +40,25 @@ variable except the by() variables. Name conflicts return an error.
 reports loading, index sorting, group/key indexing, matching/counting, and
 output writing times.
 
+{pstd}By default a failed or interrupted join leaves the master as it was
+without writing a snapshot of the dataset (Stata 16 or later). The using data
+are read into a {help frame} of their own, the master only gains variables,
+value labels, notes and characteristics of the using data and observations at
+the end, and the plugin keeps the master observations it loaded (the copy the
+join is written from) until the join is complete, writing them back after a
+failure or Break; {cmd:crangejoin} then drops what it added and restores the
+characteristics, the sort order and {cmd:c(changed)}. Before Stata 16 the using
+data can only be read in place of the master, so every join keeps a
+{help preserve} snapshot.
+{pstd}{opt snapshot} restores the master after a failed or interrupted join from
+a {help preserve} snapshot of the whole dataset instead, as earlier versions of
+{cmd:crangejoin} did. Stata keeps the snapshot in memory up to
+{cmd:c(max_preservemem)} (1 GB by default) and writes it to disk above that, so
+large joins take longer and write the whole dataset once.
+{pstd}{opt fast} undoes nothing: if the join fails after it started changing the
+master, or Break is pressed, the error is reported but the data are left partly
+joined. {opt fast} may not be combined with {opt snapshot}.
+
 {title:Examples}
 {phang2}{cmd:. crangejoin date -5 5 using events.dta, by(firm)}
 {phang2}{cmd:. crangejoin price lower upper using houses.dta, keepusing(address)}
@@ -50,7 +70,7 @@ output size, and writes matched columns directly. A group index and contiguous
 key array avoid repeated multi-column comparisons during interval searches.
 Output writes are divided into row tiles so even narrow or highly expanded
 joins can use multiple workers. The wrapper preserves variable
-metadata and restores the master dataset on failure. Runtime and memory depend
+metadata and restores the master dataset on failure (see {opt snapshot}). Runtime and memory depend
 on output size; all combinations may be much larger than either input. The
 plugin limits inputs and output to 2^31-1 observations. Numeric and fixed-width
 strings are supported. Master variables and selected using variables cannot be

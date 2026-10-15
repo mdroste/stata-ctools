@@ -51,8 +51,11 @@
     - num_clusters2: Number of second-dimension clusters
     - df_a: Absorbed degrees of freedom
     - V: Output VCE matrix (K_total x K_total)
+
+    Returns 0 on success or 920 on allocation failure. Callers must not
+    publish V when the return is nonzero.
 */
-void ivvce_compute_twoway(
+ST_retcode ivvce_compute_twoway(
     const ST_double *Z,
     const ST_double *resid,
     const ST_double *temp_kiv_ktotal,
@@ -60,7 +63,7 @@ void ivvce_compute_twoway(
     const ST_double *weights,
     ST_int weight_type,
     ST_int N,
-    ST_int N_eff,  /* Effective sample size: sum(fw) for fweights, N otherwise */
+    ST_double N_eff,  /* Effective sample size: sum(fw) for fweights (may exceed INT_MAX), N otherwise */
     ST_int K_total,
     ST_int K_iv,
     const ST_int *cluster1_ids,
@@ -112,7 +115,8 @@ ST_retcode ivvce_compute_sandwich(
     - N, K_total, K_iv: Dimensions
     - vce_type: CIVREGHDFE_VCE_* constant
     - cluster_ids, num_clusters: Clustering info
-    - df_a, nested_adj: DOF adjustments
+    - df_a, nested_adj: DOF adjustments (df_a includes ivreg2's sdofminus)
+    - dofminus: ivreg2's large-sample dofminus (not used with clusters)
     - V: Output VCE matrix (K_total x K_total)
 */
 ST_retcode ivvce_compute_full(
@@ -123,7 +127,7 @@ ST_retcode ivvce_compute_full(
     const ST_double *weights,
     ST_int weight_type,
     ST_int N,
-    ST_int N_eff,  /* Effective sample size: sum(fw) for fweights, N otherwise */
+    ST_double N_eff,  /* Effective sample size: sum(fw) for fweights (may exceed INT_MAX), N otherwise */
     ST_int K_total,
     ST_int K_iv,
     ST_int vce_type,
@@ -131,6 +135,7 @@ ST_retcode ivvce_compute_full(
     ST_int num_clusters,
     ST_int df_a,
     ST_int nested_adj,
+    ST_int dofminus,
     ST_double *V
 );
 

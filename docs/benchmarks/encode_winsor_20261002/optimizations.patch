@@ -1,0 +1,485 @@
+--- a/src/ctools_hash.c
++++ b/src/ctools_hash.c
+@@ -225,31 +225,29 @@
+  * Value Label Output (cencode)
+  * ============================================================================ */
+ 
+-/* Emit only ASCII numeric byte literals as Mata source. User text never becomes
+- * Stata macro syntax, quoting delimiters, or executable Mata code. */
+-int ctools_label_write_stata_file(const char **strings, const int *codes,
+-                                   size_t n_labels, const char *label_name,
+-                                   const char *filepath)
+-{
+-    FILE *fp = fopen(filepath, "w");
+-    if (!fp) return -1;
+-    fprintf(fp, "tempname __ctools_label_text\n");
+-    for (size_t i = 0; i < n_labels; i++) {
+-        const unsigned char *p = (const unsigned char *)(strings[i] ? strings[i] : "");
+-        size_t length = strlen((const char *)p);
+-        /* Bound each expression below Mata's token limit, including str2045. */
+-        fprintf(fp, "mata: `__ctools_label_text' = \"\"\n");
+-        for (size_t offset = 0; offset < length; offset += 128) {
+-            size_t end = offset + 128 < length ? offset + 128 : length;
+-            fprintf(fp, "mata: `__ctools_label_text' = `__ctools_label_text' + invtokens(char((");
+-            for (size_t j = offset; j < end; j++)
+-                fprintf(fp, "%s%u", j == offset ? "" : ",", (unsigned)p[j]);
+-            fprintf(fp, ")), \"\")\n");
+-        }
+-        fprintf(fp, "mata: st_vlmodify(\"%s\", %d, `__ctools_label_text')\n", label_name, codes[i]);
+-    }
+-    if (n_labels) fprintf(fp, "mata: mata drop `__ctools_label_text'\n");
++/* Transfer data, never Stata/Mata source. Each ASCII code/byte-count header is
++ * followed by exactly that many raw bytes, so quotes, macros and newlines need
++ * no escaping. Binary mode keeps this framing identical on every platform. */
++int ctools_label_write_file(const char **strings, const int *codes, size_t n_labels,
++                            const char *filepath)
++{
++    FILE *fp = fopen(filepath, "wb");
++    if (!fp)
++        return -1;
++    fprintf(fp, "CTOOLS_LABELS_1\n");
++    for (size_t i = 0; i < n_labels; i++)
++    {
++        const char *text = strings[i] ? strings[i] : "";
++        size_t length = strlen(text);
++        fprintf(fp, "%d %zu\n", codes[i], length);
++        if (fwrite(text, 1, length, fp) != length)
++        {
++            fclose(fp);
++            return -1;
++        }
++    }
+     int failed = ferror(fp);
+-    if (fclose(fp) != 0) failed = 1;
++    if (fclose(fp) != 0)
++        failed = 1;
+     return failed ? -1 : 0;
+ }
+--- a/src/ctools_hash.h
++++ b/src/ctools_hash.h
+@@ -98,13 +98,12 @@
+ #define CTOOLS_MAX_LABELS       65536
+ 
+ /*
+- * Write label entries as a .do file that rebuilds each label with Mata
+- * st_vlmodify() from byte literals. Used by cencode to pass new labels back
+- * to the .ado file.
++ * Write CTOOLS_LABELS_1 data for cencode's Mata label reader: an ASCII magic
++ * line, then "code byte_count\n" followed by exactly byte_count raw bytes for
++ * each entry. The strings are borrowed; the file contains no executable code.
+  * Returns 0 on success, -1 on error.
+  */
+-int ctools_label_write_stata_file(const char **strings, const int *codes,
+-                                   size_t n_labels, const char *label_name,
+-                                   const char *filepath);
++int ctools_label_write_file(const char **strings, const int *codes, size_t n_labels,
++                            const char *filepath);
+ 
+ #endif /* CTOOLS_HASH_H */
+--- a/src/cencode/cencode_impl.c
++++ b/src/cencode/cencode_impl.c
+@@ -54,7 +54,6 @@
+ {
+     double t_start, t_parse, t_collect, t_sort, t_encode, t_labels, t_total;
+     int var_idx = 0, gen_idx = 0;
+-    char label_name[256] = "";
+     size_t nobs;
+ 
+     /*
+@@ -86,8 +85,6 @@
+     }
+ 
+     /* Named options */
+-    if (ctools_parse_string_option(args, "label", label_name, sizeof(label_name)) < 0) return 198;
+-
+     char labelfile[1024] = "";
+     if (ctools_parse_string_option(args, "labelfile", labelfile, sizeof(labelfile)) < 0) return 198;
+ 
+@@ -332,7 +329,7 @@
+     double time_encode = t_encode - t_sort;
+ 
+     /* ========================================================================
+-     * Write label definitions to .do file for the .ado to run
++     * Write label data for the .ado to install in one Mata call
+      * ======================================================================== */
+ 
+     SF_scal_save("_cencode_n_unique", (double)n_unique);
+@@ -357,9 +354,7 @@
+             label_codes[i] = sorted_strings[i].final_code;
+         }
+ 
+-        if (ctools_label_write_stata_file(label_strings, label_codes,
+-                                           n_unique, label_name,
+-                                           labelfile) != 0) {
++        if (ctools_label_write_file(label_strings, label_codes, n_unique, labelfile) != 0) {
+             free(label_strings);
+             free(label_codes);
+             free(code_map);
+--- a/src/cwinsor/cwinsor_impl.c
++++ b/src/cwinsor/cwinsor_impl.c
+@@ -39,7 +39,7 @@
+ /* Note: By-variable sorting now uses ctools_sort_dispatch() instead of qsort */
+ 
+ /* Apply permutation to reorder an array */
+-static void apply_permutation(double *data, const size_t *perm, size_t n, double *temp)
++static void apply_permutation(double *data, const perm_idx_t *perm, size_t n, double *temp)
+ {
+     /* Copy to temp in new order */
+     for (size_t i = 0; i < n; i++) {
+@@ -215,11 +215,10 @@
+     double t_start, t_load, t_sort, t_groups, t_winsor, t_store;
+     int *store_indices = NULL;   /* Plugin-local positions for checked stores */
+     int *load_indices = NULL;    /* Sequential plugin-local indices for SF_vdata */
+-    int *by_load_indices = NULL; /* Sequential plugin-local indices for by-vars */
+     double **var_data = NULL;
+     double **work_arrays = NULL;
+     group_info *groups = NULL;
+-    size_t *sort_indices = NULL;
++    const perm_idx_t *sort_indices = NULL; /* Borrowed from loaded data */
+     double *temp_buffer = NULL;
+     perm_idx_t *obs_map = NULL;  /* Maps filtered index to 1-based Stata obs */
+     int num_threads = 1;
+@@ -265,11 +264,12 @@
+     while (*p == ' ' || *p == '\t') p++;
+     int nby_value;
+     if (ctools_parse_next_int(&p, &nby_value) || nby_value < 0 ||
+-        nby_value > SF_nvars()) {
++        nby_value > SF_nvars() - nvars_value) {
+         ctools_error(CWINSOR_MODULE, "invalid nby");
+         return 198;
+     }
+     size_t nby = (size_t)nby_value;
++    size_t nload = nvars + nby;
+ 
+     /* Parse plugin-local store indices. */
+     store_indices = (int *)malloc(nvars * sizeof(int));
+@@ -283,31 +283,16 @@
+         return 198;
+     }
+ 
+-    /* Generate sequential plugin-local load indices (stack-allocated).
+-     * Plugin call receives: target_var1 target_var2 ... by_var1 by_var2 ...
+-     * So plugin-local positions are: targets = 1..nvars, by-vars = nvars+1..nvars+nby */
+-    /* Heap-allocate index arrays (avoids VLA stack overflow for large nvars/nby) */
+-    load_indices = (int *)malloc(nvars * sizeof(int));
++    /* Load targets and by-variables together, sharing one if/in selection and
++     * observation map. Plugin-local columns are targets, then by-variables. */
++    load_indices = (int *)malloc(nload * sizeof(int));
+     if (!load_indices) {
+         free(store_indices);
+         ctools_error_alloc(CWINSOR_MODULE);
+         return 920;
+     }
+-    for (size_t i = 0; i < nvars; i++) {
++    for (size_t i = 0; i < nload; i++) {
+         load_indices[i] = (int)(i + 1);
+-    }
+-
+-    if (nby > 0) {
+-        by_load_indices = (int *)malloc(nby * sizeof(int));
+-        if (!by_load_indices) {
+-            free(load_indices);
+-            free(store_indices);
+-            ctools_error_alloc(CWINSOR_MODULE);
+-            return 920;
+-        }
+-        for (size_t i = 0; i < nby; i++) {
+-            by_load_indices[i] = (int)(nvars + i + 1);
+-        }
+     }
+ 
+     #ifdef _OPENMP
+@@ -317,17 +302,14 @@
+     /* === Load Phase === */
+     double load_start = ctools_timer_seconds();
+ 
+-    /* Load target variables using plugin-local indices (handles if/in at load time).
+-     * Single-variable: row-parallel load (parallelizes across observations).
+-     * Multi-variable: column-parallel load (one thread per variable). */
++    /* The loaded dataset owns all columns, the sort order, and the row map. */
+     ctools_filtered_data target_filtered;
+     ctools_filtered_data_init(&target_filtered);
+     stata_retcode load_rc = ctools_data_load(&target_filtered, load_indices,
+-                                              nvars, 0, 0, 0);
++                                              nload, 0, 0, nby ? 0 : CTOOLS_LOAD_NO_SORT_ORDER);
+     if (load_rc != STATA_OK) {
+         free(store_indices);
+         free(load_indices);
+-        free(by_load_indices);
+         ctools_error_alloc(CWINSOR_MODULE);
+         return ctools_stata_rc(load_rc);
+     }
+@@ -340,7 +322,6 @@
+         ctools_filtered_data_free(&target_filtered);
+         free(store_indices);
+         free(load_indices);
+-        free(by_load_indices);
+         ctools_error(CWINSOR_MODULE, "no observations");
+         return 2000;
+     }
+@@ -351,31 +332,11 @@
+         ctools_filtered_data_free(&target_filtered);
+         free(store_indices);
+         free(load_indices);
+-        free(by_load_indices);
+         ctools_error_alloc(CWINSOR_MODULE);
+         return 920;
+     }
+     for (size_t v = 0; v < nvars; v++) {
+         var_data[v] = target_filtered.data.vars[v].data.dbl;
+-    }
+-
+-    /* Load by-variables if specified */
+-    ctools_filtered_data by_filtered;
+-    ctools_filtered_data_init(&by_filtered);
+-
+-    if (nby > 0) {
+-        load_rc = ctools_data_load(&by_filtered, by_load_indices,
+-                                             nby, 0, 0, 0);
+-        if (load_rc != STATA_OK) {
+-            ctools_filtered_data_free(&target_filtered);
+-            free(var_data);
+-            free(store_indices);
+-            free(load_indices);
+-        free(by_load_indices);
+-            ctools_error_alloc(CWINSOR_MODULE);
+-            return ctools_stata_rc(load_rc);
+-        }
+-
+     }
+ 
+     t_load = ctools_timer_seconds() - load_start;
+@@ -387,55 +348,41 @@
+         /* Build 1-based sort key indices for by-variables (heap-allocated to avoid VLA) */
+         int *sort_keys = (int *)malloc(nby * sizeof(int));
+         if (!sort_keys) {
+-            ctools_filtered_data_free(&by_filtered);
+             free(var_data);
+             ctools_filtered_data_free(&target_filtered);
+             free(store_indices);
+             free(load_indices);
+-            free(by_load_indices);
+             ctools_error_alloc(CWINSOR_MODULE);
+             return 920;
+         }
+         for (size_t b = 0; b < nby; b++) {
+-            sort_keys[b] = (int)(b + 1);  /* 1-based indices into by_filtered.data */
++            sort_keys[b] = (int)(nvars + b + 1);  /* 1-based loaded column */
+         }
+ 
+         /* Sort by-variables using ctools infrastructure (order only) */
+-        stata_retcode sort_rc = ctools_sort_dispatch(&by_filtered.data, sort_keys, nby, SORT_ALG_AUTO);
++        stata_retcode sort_rc = ctools_sort_dispatch(&target_filtered.data, sort_keys, nby, SORT_ALG_AUTO);
+ 
+         free(sort_keys);
+ 
+         if (sort_rc != STATA_OK) {
+-            ctools_filtered_data_free(&by_filtered);
+             free(var_data);
+             ctools_filtered_data_free(&target_filtered);
+             free(store_indices);
+             free(load_indices);
+-            free(by_load_indices);
+             ctools_error(CWINSOR_MODULE, "sort failed");
+             return 920;
+         }
+ 
+-        /* Allocate sort_indices for sorting and later un-sorting during store */
+-        sort_indices = (size_t *)malloc(nobs * sizeof(size_t));
++        /* Reuse the shared permutation for gather and write-back. */
++        sort_indices = target_filtered.data.sort_order;
+         temp_buffer = (double *)malloc(nobs * sizeof(double));
+-
+-        if (!sort_indices || !temp_buffer) {
+-            if (sort_indices) free(sort_indices);
+-            if (temp_buffer) free(temp_buffer);
+-            ctools_filtered_data_free(&by_filtered);
++        if (!temp_buffer) {
+             free(var_data);
+             ctools_filtered_data_free(&target_filtered);
+             free(store_indices);
+             free(load_indices);
+-        free(by_load_indices);
+             ctools_error_alloc(CWINSOR_MODULE);
+             return 920;
+-        }
+-
+-        /* Copy sort_order from by_filtered.data (converting perm_idx_t to size_t) */
+-        for (size_t i = 0; i < nobs; i++) {
+-            sort_indices[i] = (size_t)by_filtered.data.sort_order[i];
+         }
+ 
+         /* Apply permutation to target variable arrays. The by-variables stay
+@@ -460,21 +407,18 @@
+         free(groups);
+         free(group_starts);
+         free(group_keys);
+-        if (sort_indices) free(sort_indices);
+         if (temp_buffer) free(temp_buffer);
+         free(var_data);
+-        ctools_filtered_data_free(&by_filtered);
+         ctools_filtered_data_free(&target_filtered);
+         free(store_indices);
+         free(load_indices);
+-        free(by_load_indices);
+         ctools_error_alloc(CWINSOR_MODULE);
+         return 920;
+     }
+ 
+     if (nby > 0) {
+-        for (size_t b = 0; b < nby; b++) group_keys[b] = (int)b;
+-        ngroups = ctools_group_starts(&by_filtered.data, by_filtered.data.sort_order,
++        for (size_t b = 0; b < nby; b++) group_keys[b] = (int)(nvars + b);
++        ngroups = ctools_group_starts(&target_filtered.data, target_filtered.data.sort_order,
+                                       group_keys, nby, group_starts);
+         for (size_t g = 0; g < ngroups; g++) {
+             groups[g].start = group_starts[g];
+@@ -507,14 +451,11 @@
+     work_arrays = (double **)malloc(num_threads * sizeof(double *));
+     if (!work_arrays) {
+         free(groups);
+-        if (sort_indices) free(sort_indices);
+         if (temp_buffer) free(temp_buffer);
+         free(var_data);
+-        ctools_filtered_data_free(&by_filtered);
+         ctools_filtered_data_free(&target_filtered);
+         free(store_indices);
+         free(load_indices);
+-        free(by_load_indices);
+         ctools_error_alloc(CWINSOR_MODULE);
+         return 920;
+     }
+@@ -525,14 +466,11 @@
+             for (int j = 0; j < t; j++) free(work_arrays[j]);
+             free(work_arrays);
+             free(groups);
+-            if (sort_indices) free(sort_indices);
+             if (temp_buffer) free(temp_buffer);
+             free(var_data);
+-            ctools_filtered_data_free(&by_filtered);
+             ctools_filtered_data_free(&target_filtered);
+             free(store_indices);
+             free(load_indices);
+-        free(by_load_indices);
+             ctools_error_alloc(CWINSOR_MODULE);
+             return 920;
+         }
+@@ -655,16 +593,13 @@
+     }
+     free(work_arrays);
+     free(groups);
+-    if (sort_indices) free(sort_indices);
+     if (temp_buffer) free(temp_buffer);
+     /* Free pointer arrays (not the data - owned by stata_data structs) */
+     free(var_data);
+     /* Free stata_data structures (which own the actual data arrays) */
+-    ctools_filtered_data_free(&by_filtered);
+     ctools_filtered_data_free(&target_filtered);
+     free(store_indices);
+     free(load_indices);
+-    free(by_load_indices);
+ 
+     if (store_rc) return ctools_stata_rc(store_rc);
+ 
+--- a/package/ado/cencode.ado
++++ b/package/ado/cencode.ado
+@@ -180,10 +180,7 @@
+             exit 111
+         }
+ 
+-        * Build label option
+-        local label_code "label=`this_label'"
+-
+-        * Temp file for C plugin to write label definitions
++        * Temp data file for C plugin to write length-prefixed label bytes
+         tempfile __labelfile
+         local labelfile_code "labelfile=`__labelfile'"
+ 
+@@ -197,7 +194,7 @@
+             if "`__ct_elapsed92'" == "" local __ct_elapsed92 = 0
+             quietly _ctools_clock __ct_start92
+         }
+-        plugin call ctools_plugin `allvars' `if' `in', "cencode `threads_code' `var_idx' `gen_idx' `label_code' `labelfile_code'"
++        plugin call ctools_plugin `allvars' `if' `in', "cencode `threads_code' `var_idx' `gen_idx' `labelfile_code'"
+         if `__do_timing' {
+             quietly _ctools_clock __ct_now
+             local __ct_elapsed92 = `__ct_elapsed92' + (`__ct_now' - `__ct_start92')
+@@ -206,7 +203,7 @@
+         }
+ 
+         * =====================================================================
+-        * Create value labels from .do file written by C plugin
++        * Install the label vector without interpreting user text as source
+         * =====================================================================
+ 
+         local n_unique = _cencode_n_unique
+@@ -214,8 +211,7 @@
+         if `n_unique' > 0 {
+             * Drop any pre-existing label with this name for a clean slate
+             capture label drop `this_label'
+-            * Run the .do file written by C plugin (label define commands)
+-            run `__labelfile'
++            mata: _cencode_apply_labels(st_local("__labelfile"), st_local("this_label"), strtoreal(st_local("n_unique")))
+         }
+ 
+         * Apply label to variable if it exists
+@@ -318,3 +314,59 @@
+     * Clean up any remaining scalars
+     capture scalar drop _cencode_n_unique
+ end
++
++mata:
++void _cencode_apply_labels(string scalar path, string scalar name, real scalar n)
++{
++    real scalar fh, i, valid
++    real rowvector header
++    real colvector codes
++    string colvector texts
++    string matrix part
++
++    codes = J(n, 1, .)
++    texts = J(n, 1, "")
++    fh = fopen(path, "r")
++    part = _fget(fh)
++    valid = 0
++    if (rows(part) == 1 & cols(part) == 1) valid = (part == "CTOOLS_LABELS_1")
++    for (i = 1; i <= n & valid; i++) {
++        part = _fget(fh)
++        if (rows(part) != 1 | cols(part) != 1) {
++            valid = 0
++            break
++        }
++        header = strtoreal(tokens(part))
++        if (cols(header) != 2) {
++            valid = 0
++            break
++        }
++        if (any(missing(header)) | any(header :!= floor(header))) {
++            valid = 0
++            break
++        }
++        if (abs(header[1]) > 2147483647 | header[2] < 0 | header[2] > 2045) {
++            valid = 0
++            break
++        }
++        part = (header[2] == 0 ? "" : _fread(fh, header[2]))
++        if (rows(part) != 1 | cols(part) != 1) {
++            valid = 0
++            break
++        }
++        if (strlen(part) != header[2]) {
++            valid = 0
++            break
++        }
++        codes[i] = header[1]
++        texts[i] = part
++    }
++    if (valid) {
++        part = _fread(fh, 1)
++        valid = (rows(part) == 0 & fstatus(fh) == -1)
++    }
++    fclose(fh)
++    if (!valid) _error(610)
++    st_vlmodify(name, codes, texts)
++}
++end

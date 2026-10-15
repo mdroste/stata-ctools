@@ -25,139 +25,141 @@ quietly {
 noi di as text "Running validation tests for cqreg..."
 
 /*******************************************************************************
- * benchmark_qreg_altopt - Compare cqreg vs qreg, handling alternate optima
+ * benchmark_qreg_altopt - Compare cqreg vs qreg where the LP optimum is a set
  *
- * Quantile regression (LP) can have non-unique solutions, especially with
- * factor variables or small datasets. When coefficients differ but all scalars
- * (including the objective value sum_adev) match, it's an alternate optimum.
- *
- * This program checks ALL e() values:
- *   - N, df_r, convcode (exact match)
- *   - q, sum_adev, sum_rdev, q_v, f_r (sigfigs)
- *   - b, V (sigfigs - may legitimately differ for alternate optima)
- *
- * If b/V differ but all scalars match (including sum_adev), reports PASS.
+ * With sparse dummy regressors the quantile-regression LP can have a whole
+ * face of optimal vertices. qreg's simplex reports whichever vertex its path
+ * reaches, and that choice is not a property of the data: on these models
+ * qreg's own e(b) changes with wlsiter() and with the row order while
+ * e(sum_adev) stays identical. For those models only, e(b) is checked by
+ * optimality instead of by value:
+ *   - N, df_r, convcode exact; q, sum_adev, sum_rdev, q_v, f_r and every
+ *     element of e(V) to minsf significant figures, exactly as benchmark_qreg;
+ *   - e(b) must have qreg's column names; if it also matches qreg's values to
+ *     minsf the test passes outright;
+ *   - otherwise the check-function objective is recomputed from the data and
+ *     each command's posted e(b) (independently of either command's own
+ *     e(sum_adev)); cqreg's coefficients must reach qreg's converged minimum
+ *     to minsf significant figures, and cqreg's posted e(sum_adev) must be the
+ *     objective of its posted e(b). A non-optimal or inconsistent cqreg e(b)
+ *     fails.
  ******************************************************************************/
+capture program drop _qreg_altopt_objective
+program define _qreg_altopt_objective, rclass
+    args bmat depvar touse tau
+    tempvar xb loss
+    matrix score double `xb' = `bmat' if `touse'
+    quietly gen double `loss' = cond(`depvar' - `xb' >= 0, `tau', `tau' - 1) ///
+        * (`depvar' - `xb') if `touse'
+    quietly summarize `loss' if `touse', meanonly
+    return scalar objective = r(sum)
+end
+
 capture program drop benchmark_qreg_altopt
 program define benchmark_qreg_altopt
-    syntax varlist(min=2 fv) [if] [in], [Quantile(real 0.5) vce(string) testname(string)]
+    syntax varlist(min=2 fv) [if] [in], [Quantile(real 0.5) testname(string) minsf(real 7)]
 
     gettoken depvar indepvars : varlist
     if "`testname'" == "" local testname "qreg `depvar' `indepvars', q(`quantile')"
 
-    local vceopt ""
-    if "`vce'" != "" local vceopt "vce(`vce')"
-
     preserve
 
-    * Run qreg
-    capture quietly qreg `depvar' `indepvars' `if' `in', quantile(`quantile') `vceopt'
+    capture quietly qreg `depvar' `indepvars' `if' `in', quantile(`quantile')
     if _rc != 0 {
+        local rc = _rc
         restore
-        test_fail "`testname'" "qreg returned error `=_rc'"
+        test_fail "`testname'" "qreg returned error `rc'"
         exit
     }
-
     matrix qreg_b = e(b)
     matrix qreg_V = e(V)
-    local qreg_N = e(N)
-    local qreg_df_r = e(df_r)
-    local qreg_q = e(q)
-    local qreg_sum_adev = e(sum_adev)
-    local qreg_sum_rdev = e(sum_rdev)
-    local qreg_q_v = e(q_v)
-    local qreg_f_r = e(f_r)
-    local qreg_convcode = e(convcode)
+    foreach s in N df_r convcode q sum_adev sum_rdev q_v f_r {
+        local qreg_`s' = e(`s')
+    }
+    tempvar touse
+    quietly gen byte `touse' = e(sample)
 
-    * Run cqreg
-    capture quietly cqreg `depvar' `indepvars' `if' `in', quantile(`quantile') `vceopt'
+    capture quietly cqreg `depvar' `indepvars' `if' `in', quantile(`quantile')
     if _rc != 0 {
+        local rc = _rc
         restore
-        test_fail "`testname'" "cqreg returned error `=_rc'"
+        test_fail "`testname'" "cqreg returned error `rc'"
         exit
     }
-
     matrix cqreg_b = e(b)
     matrix cqreg_V = e(V)
-    local cqreg_N = e(N)
-    local cqreg_df_r = e(df_r)
-    local cqreg_q = e(q)
-    local cqreg_sum_adev = e(sum_adev)
-    local cqreg_sum_rdev = e(sum_rdev)
-    local cqreg_q_v = e(q_v)
-    local cqreg_f_r = e(f_r)
-    local cqreg_convcode = e(convcode)
+    foreach s in N df_r convcode q sum_adev sum_rdev q_v f_r {
+        local cqreg_`s' = e(`s')
+    }
+
+    local all_diffs ""
+    if `qreg_N' != `cqreg_N' local all_diffs "`all_diffs' e(N):`qreg_N'!=`cqreg_N'"
+    foreach s in df_r convcode {
+        if !missing(`qreg_`s'') & `qreg_`s'' != `cqreg_`s'' {
+            local all_diffs "`all_diffs' e(`s'):`qreg_`s''!=`cqreg_`s''"
+        }
+    }
+    foreach s in q sum_adev sum_rdev q_v f_r {
+        if !missing(`qreg_`s'') {
+            sigfigs `qreg_`s'' `cqreg_`s''
+            if r(sigfigs) < `minsf' {
+                local sf_fmt : display %4.1f r(sigfigs)
+                local all_diffs "`all_diffs' e(`s'):sigfigs=`sf_fmt'"
+            }
+        }
+    }
+
+    local qnames : colfullnames qreg_b
+    local cnames : colfullnames cqreg_b
+    if `"`qnames'"' != `"`cnames'"' {
+        local all_diffs "`all_diffs' e(b):colnames_differ"
+    }
+    else {
+        local rows = rowsof(qreg_V)
+        local min_sf_V = 15
+        forvalues i = 1/`rows' {
+            forvalues j = 1/`rows' {
+                local covscale = sqrt(qreg_V[`i',`i'])*sqrt(qreg_V[`j',`j'])
+                if `i' != `j' sigfigs_cancellation `=qreg_V[`i',`j']' `=cqreg_V[`i',`j']' `covscale'
+                else sigfigs `=qreg_V[`i',`j']' `=cqreg_V[`i',`j']'
+                if r(sigfigs) < `min_sf_V' {
+                    local min_sf_V = r(sigfigs)
+                    local min_sf_V_i = `i'
+                    local min_sf_V_j = `j'
+                }
+            }
+        }
+        if `min_sf_V' < `minsf' {
+            local sf_fmt : display %4.1f `min_sf_V'
+            local all_diffs "`all_diffs' e(V)[`min_sf_V_i',`min_sf_V_j']:sigfigs=`sf_fmt'"
+        }
+
+        matrix_min_sigfigs qreg_b cqreg_b
+        if r(min_sigfigs) < `minsf' {
+            * e(b) differs: cqreg's vertex must be an optimum of qreg's LP.
+            local b_sf : display %4.1f r(min_sigfigs)
+            _qreg_altopt_objective qreg_b `depvar' `touse' `quantile'
+            local obj_q = r(objective)
+            _qreg_altopt_objective cqreg_b `depvar' `touse' `quantile'
+            local obj_c = r(objective)
+            sigfigs `obj_q' `obj_c'
+            if r(sigfigs) < `minsf' {
+                local sf_fmt : display %4.1f r(sigfigs)
+                local all_diffs "`all_diffs' e(b):sigfigs=`b_sf'_and_objective_at_e(b):sigfigs=`sf_fmt'"
+            }
+            sigfigs `obj_c' `cqreg_sum_adev'
+            if r(sigfigs) < `minsf' {
+                local sf_fmt : display %4.1f r(sigfigs)
+                local all_diffs "`all_diffs' e(sum_adev)_vs_objective_at_e(b):sigfigs=`sf_fmt'"
+            }
+        }
+    }
 
     restore
 
-    * Check all scalars
-    local scalar_diffs ""
-    local scalar_fail = 0
-
-    if `qreg_N' != `cqreg_N' {
-        local scalar_fail = 1
-        local scalar_diffs "`scalar_diffs' e(N):`qreg_N'!=`cqreg_N'"
-    }
-    foreach scalar in df_r convcode {
-        local val1 = `qreg_`scalar''
-        local val2 = `cqreg_`scalar''
-        if !missing(`val1') & `val1' != `val2' {
-            local scalar_fail = 1
-            local scalar_diffs "`scalar_diffs' e(`scalar'):`val1'!=`val2'"
-        }
-    }
-    foreach scalar in q sum_adev sum_rdev q_v f_r {
-        local val1 = `qreg_`scalar''
-        local val2 = `cqreg_`scalar''
-        if !missing(`val1') & !missing(`val2') {
-            sigfigs `val1' `val2'
-            if r(sigfigs) < $DEFAULT_SIGFIGS {
-                local scalar_fail = 1
-                local sf_fmt : display %4.1f r(sigfigs)
-                local scalar_diffs "`scalar_diffs' e(`scalar'):sigfigs=`sf_fmt'"
-            }
-        }
-        else if !missing(`val1') & missing(`val2') {
-            local scalar_fail = 1
-            local scalar_diffs "`scalar_diffs' e(`scalar'):missing_in_cqreg"
-        }
-    }
-
-    * Check b and V
-    local coef_fail = 0
-    local qreg_cols = colsof(qreg_b)
-    local cqreg_cols = colsof(cqreg_b)
-
-    if `qreg_cols' != `cqreg_cols' {
-        local coef_fail = 1
-    }
-    else {
-        matrix_min_sigfigs qreg_b cqreg_b
-        if r(min_sigfigs) < $DEFAULT_SIGFIGS {
-            local coef_fail = 1
-        }
-        local qreg_Vrows = rowsof(qreg_V)
-        local cqreg_Vrows = rowsof(cqreg_V)
-        if `qreg_Vrows' == `cqreg_Vrows' {
-            matrix_min_sigfigs qreg_V cqreg_V
-            if r(min_sigfigs) < $DEFAULT_SIGFIGS {
-                local coef_fail = 1
-            }
-        }
-    }
-
-    * Determine result
-    if `scalar_fail' {
-        local scalar_diffs = trim("`scalar_diffs'")
-        test_fail "`testname'" "`scalar_diffs'"
-    }
-    else if !`coef_fail' {
-        test_pass "`testname'"
-    }
-    else {
-        * b/V differ but all scalars match - alternate optimum
-        test_pass "`testname' (alternate optimum)"
-    }
+    local all_diffs = trim("`all_diffs'")
+    if "`all_diffs'" == "" test_pass "`testname'"
+    else test_fail "`testname'" "`all_diffs'"
 end
 
 * Plugin check
@@ -816,226 +818,15 @@ gen x = runiform()
 gen y = cond(_n <= 100, 1e6 * x, 1e-6 * x) + rnormal()
 benchmark_qreg y x, testname("extreme range in y")
 
-/*******************************************************************************
- * SECTION 21: denmethod Option
- *
- * denmethod affects VCE computation only. Coefficients and scalars (N, df_r,
- * q, sum_adev, sum_rdev, convcode) are independent of denmethod.
- * For non-default denmethod, we compare all e() except V and q_v/f_r.
- ******************************************************************************/
-print_section "denmethod Option"
-
-* denmethod(fitted) is the default for both qreg and cqreg - full comparison
-sysuse auto, clear
-benchmark_qreg price mpg weight, testname("denmethod(fitted) default")
-
-* denmethod(residual) - qreg does not expose this; compare all non-VCE values
-sysuse auto, clear
-quietly qreg price mpg weight
-matrix qreg_b = e(b)
-local qreg_N = e(N)
-local qreg_df_r = e(df_r)
-local qreg_q = e(q)
-local qreg_sum_adev = e(sum_adev)
-local qreg_sum_rdev = e(sum_rdev)
-local qreg_convcode = e(convcode)
-
-quietly cqreg price mpg weight, denmethod(residual)
-matrix cqreg_b = e(b)
-
-local all_diffs ""
-local has_failure = 0
-if `qreg_N' != e(N) {
-    local has_failure = 1
-    local all_diffs "`all_diffs' e(N):`qreg_N'!=`=e(N)'"
-}
-if `qreg_df_r' != e(df_r) {
-    local has_failure = 1
-    local all_diffs "`all_diffs' e(df_r):`qreg_df_r'!=`=e(df_r)'"
-}
-if `qreg_convcode' != e(convcode) {
-    local has_failure = 1
-    local all_diffs "`all_diffs' e(convcode):`qreg_convcode'!=`=e(convcode)'"
-}
-foreach scalar in q sum_adev sum_rdev {
-    sigfigs `qreg_`scalar'' `=e(`scalar')'
-    if r(sigfigs) < $DEFAULT_SIGFIGS {
-        local has_failure = 1
-        local sf_fmt : display %4.1f r(sigfigs)
-        local all_diffs "`all_diffs' e(`scalar'):sigfigs=`sf_fmt'"
+/* Density and bandwidth methods have native qreg equivalents inside vce().
+   Compare the full covariance and density scalars, not just coefficients. */
+foreach density in fitted residual kernel "kernel(epan2)" "kernel(biweight)" ///
+    "kernel(cosine)" "kernel(gaussian)" "kernel(parzen)" "kernel(rectangle)" "kernel(triangle)" {
+    foreach bandwidth in hsheather bofinger chamberlain {
+        sysuse auto, clear
+        benchmark_qreg price mpg weight, denmethod(`density') bwmethod(`bandwidth') ///
+            testname("density `density' bandwidth `bandwidth'")
     }
-}
-matrix_min_sigfigs qreg_b cqreg_b
-if r(min_sigfigs) < $DEFAULT_SIGFIGS {
-    local has_failure = 1
-    local sf_fmt : display %4.1f r(min_sigfigs)
-    local all_diffs "`all_diffs' e(b):sigfigs=`sf_fmt'"
-}
-if `has_failure' {
-    test_fail "denmethod(residual)" "`all_diffs'"
-}
-else {
-    test_pass "denmethod(residual) - all non-VCE e() match"
-}
-
-* denmethod(kernel) - qreg does not expose this; compare all non-VCE values
-sysuse auto, clear
-quietly qreg price mpg weight
-matrix qreg_b = e(b)
-local qreg_N = e(N)
-local qreg_df_r = e(df_r)
-local qreg_q = e(q)
-local qreg_sum_adev = e(sum_adev)
-local qreg_sum_rdev = e(sum_rdev)
-local qreg_convcode = e(convcode)
-
-quietly cqreg price mpg weight, denmethod(kernel)
-matrix cqreg_b = e(b)
-
-local all_diffs ""
-local has_failure = 0
-if `qreg_N' != e(N) {
-    local has_failure = 1
-    local all_diffs "`all_diffs' e(N):`qreg_N'!=`=e(N)'"
-}
-if `qreg_df_r' != e(df_r) {
-    local has_failure = 1
-    local all_diffs "`all_diffs' e(df_r):`qreg_df_r'!=`=e(df_r)'"
-}
-if `qreg_convcode' != e(convcode) {
-    local has_failure = 1
-    local all_diffs "`all_diffs' e(convcode):`qreg_convcode'!=`=e(convcode)'"
-}
-foreach scalar in q sum_adev sum_rdev {
-    sigfigs `qreg_`scalar'' `=e(`scalar')'
-    if r(sigfigs) < $DEFAULT_SIGFIGS {
-        local has_failure = 1
-        local sf_fmt : display %4.1f r(sigfigs)
-        local all_diffs "`all_diffs' e(`scalar'):sigfigs=`sf_fmt'"
-    }
-}
-matrix_min_sigfigs qreg_b cqreg_b
-if r(min_sigfigs) < $DEFAULT_SIGFIGS {
-    local has_failure = 1
-    local sf_fmt : display %4.1f r(min_sigfigs)
-    local all_diffs "`all_diffs' e(b):sigfigs=`sf_fmt'"
-}
-if `has_failure' {
-    test_fail "denmethod(kernel)" "`all_diffs'"
-}
-else {
-    test_pass "denmethod(kernel) - all non-VCE e() match"
-}
-
-/*******************************************************************************
- * SECTION 22: bwmethod Option
- *
- * bwmethod affects bandwidth for density estimation (VCE only). Coefficients
- * and scalars are independent of bwmethod. For non-default bwmethod, we
- * compare all e() except V and q_v/f_r.
- ******************************************************************************/
-print_section "bwmethod Option"
-
-* bwmethod(hsheather) is the default for both qreg and cqreg - full comparison
-sysuse auto, clear
-benchmark_qreg price mpg weight, testname("bwmethod(hsheather) default")
-
-* bwmethod(bofinger) - qreg does not expose this; compare all non-VCE values
-sysuse auto, clear
-quietly qreg price mpg weight
-matrix qreg_b = e(b)
-local qreg_N = e(N)
-local qreg_df_r = e(df_r)
-local qreg_q = e(q)
-local qreg_sum_adev = e(sum_adev)
-local qreg_sum_rdev = e(sum_rdev)
-local qreg_convcode = e(convcode)
-
-quietly cqreg price mpg weight, bwmethod(bofinger)
-matrix cqreg_b = e(b)
-
-local all_diffs ""
-local has_failure = 0
-if `qreg_N' != e(N) {
-    local has_failure = 1
-    local all_diffs "`all_diffs' e(N):`qreg_N'!=`=e(N)'"
-}
-if `qreg_df_r' != e(df_r) {
-    local has_failure = 1
-    local all_diffs "`all_diffs' e(df_r):`qreg_df_r'!=`=e(df_r)'"
-}
-if `qreg_convcode' != e(convcode) {
-    local has_failure = 1
-    local all_diffs "`all_diffs' e(convcode):`qreg_convcode'!=`=e(convcode)'"
-}
-foreach scalar in q sum_adev sum_rdev {
-    sigfigs `qreg_`scalar'' `=e(`scalar')'
-    if r(sigfigs) < $DEFAULT_SIGFIGS {
-        local has_failure = 1
-        local sf_fmt : display %4.1f r(sigfigs)
-        local all_diffs "`all_diffs' e(`scalar'):sigfigs=`sf_fmt'"
-    }
-}
-matrix_min_sigfigs qreg_b cqreg_b
-if r(min_sigfigs) < $DEFAULT_SIGFIGS {
-    local has_failure = 1
-    local sf_fmt : display %4.1f r(min_sigfigs)
-    local all_diffs "`all_diffs' e(b):sigfigs=`sf_fmt'"
-}
-if `has_failure' {
-    test_fail "bwmethod(bofinger)" "`all_diffs'"
-}
-else {
-    test_pass "bwmethod(bofinger) - all non-VCE e() match"
-}
-
-* bwmethod(chamberlain) - qreg does not expose this; compare all non-VCE values
-sysuse auto, clear
-quietly qreg price mpg weight
-matrix qreg_b = e(b)
-local qreg_N = e(N)
-local qreg_df_r = e(df_r)
-local qreg_q = e(q)
-local qreg_sum_adev = e(sum_adev)
-local qreg_sum_rdev = e(sum_rdev)
-local qreg_convcode = e(convcode)
-
-quietly cqreg price mpg weight, bwmethod(chamberlain)
-matrix cqreg_b = e(b)
-
-local all_diffs ""
-local has_failure = 0
-if `qreg_N' != e(N) {
-    local has_failure = 1
-    local all_diffs "`all_diffs' e(N):`qreg_N'!=`=e(N)'"
-}
-if `qreg_df_r' != e(df_r) {
-    local has_failure = 1
-    local all_diffs "`all_diffs' e(df_r):`qreg_df_r'!=`=e(df_r)'"
-}
-if `qreg_convcode' != e(convcode) {
-    local has_failure = 1
-    local all_diffs "`all_diffs' e(convcode):`qreg_convcode'!=`=e(convcode)'"
-}
-foreach scalar in q sum_adev sum_rdev {
-    sigfigs `qreg_`scalar'' `=e(`scalar')'
-    if r(sigfigs) < $DEFAULT_SIGFIGS {
-        local has_failure = 1
-        local sf_fmt : display %4.1f r(sigfigs)
-        local all_diffs "`all_diffs' e(`scalar'):sigfigs=`sf_fmt'"
-    }
-}
-matrix_min_sigfigs qreg_b cqreg_b
-if r(min_sigfigs) < $DEFAULT_SIGFIGS {
-    local has_failure = 1
-    local sf_fmt : display %4.1f r(min_sigfigs)
-    local all_diffs "`all_diffs' e(b):sigfigs=`sf_fmt'"
-}
-if `has_failure' {
-    test_fail "bwmethod(chamberlain)" "`all_diffs'"
-}
-else {
-    test_pass "bwmethod(chamberlain) - all non-VCE e() match"
 }
 
 /*******************************************************************************
@@ -1104,7 +895,7 @@ benchmark_qreg price mpg weight if price > 5000, testname("if condition")
 
 * in condition (may have alternate optima with small subsets)
 sysuse auto, clear
-benchmark_qreg_altopt price mpg weight in 1/50, testname("in condition")
+benchmark_qreg price mpg weight in 1/50, testname("in condition")
 
 * Combined if and in
 sysuse auto, clear
@@ -1390,31 +1181,34 @@ benchmark_qreg price mpg weight i.foreign, testname("i.foreign: median")
 * Factor variable with multiple levels (i.rep78)
 * Note: factor variables can produce alternate optima in LP
 sysuse auto, clear
-benchmark_qreg_altopt price mpg weight i.rep78, testname("i.rep78: median")
+benchmark_qreg price mpg weight i.rep78, testname("i.rep78: median")
 
 * i.rep78 at q=0.25
 sysuse auto, clear
-benchmark_qreg_altopt price mpg weight i.rep78, quantile(0.25) testname("i.rep78: q=0.25")
+benchmark_qreg price mpg weight i.rep78, quantile(0.25) testname("i.rep78: q=0.25")
 
 * i.rep78 at q=0.75
 sysuse auto, clear
-benchmark_qreg_altopt price mpg weight i.rep78, quantile(0.75) testname("i.rep78: q=0.75")
+benchmark_qreg price mpg weight i.rep78, quantile(0.75) testname("i.rep78: q=0.75")
 
-* Multiple factor variables
+* Multiple factor variables. This model and nlsw88 i.occupation and
+* ib3.rep78 (q=0.5, 0.75) below have non-unique LP optima: qreg itself reports
+* different e(b) under wlsiter(1/2/3/5/20) or a row shuffle with identical
+* e(sum_adev), so e(b) is verified by optimality (see benchmark_qreg_altopt).
 sysuse auto, clear
 benchmark_qreg_altopt price mpg i.foreign i.rep78, testname("i.foreign i.rep78: median")
 
 * Factor variable with nlsw88 dataset (i.race)
 sysuse nlsw88, clear
-benchmark_qreg_altopt wage age tenure i.race, testname("nlsw88 i.race: median")
+benchmark_qreg wage age tenure i.race, testname("nlsw88 i.race: median")
 
 * nlsw88 i.race at q=0.10
 sysuse nlsw88, clear
-benchmark_qreg_altopt wage age tenure i.race, quantile(0.10) testname("nlsw88 i.race: q=0.10")
+benchmark_qreg wage age tenure i.race, quantile(0.10) testname("nlsw88 i.race: q=0.10")
 
 * nlsw88 i.race at q=0.90
 sysuse nlsw88, clear
-benchmark_qreg_altopt wage age tenure i.race, quantile(0.90) testname("nlsw88 i.race: q=0.90")
+benchmark_qreg wage age tenure i.race, quantile(0.90) testname("nlsw88 i.race: q=0.90")
 
 * Factor variable with occupation (many levels)
 sysuse nlsw88, clear
@@ -1422,18 +1216,18 @@ benchmark_qreg_altopt wage age tenure i.occupation, testname("nlsw88 i.occupatio
 
 * Factor variable with industry
 sysuse nlsw88, clear
-benchmark_qreg_altopt wage age tenure i.industry, testname("nlsw88 i.industry: median")
+benchmark_qreg wage age tenure i.industry, testname("nlsw88 i.industry: median")
 
 * Continuous-by-factor interaction (c.var#i.var)
 sysuse auto, clear
-benchmark_qreg_altopt price c.mpg#i.foreign weight, testname("c.mpg#i.foreign: median")
+benchmark_qreg price c.mpg#i.foreign weight, testname("c.mpg#i.foreign: median")
 
 sysuse auto, clear
-benchmark_qreg_altopt price c.mpg#i.foreign weight, quantile(0.25) testname("c.mpg#i.foreign: q=0.25")
+benchmark_qreg price c.mpg#i.foreign weight, quantile(0.25) testname("c.mpg#i.foreign: q=0.25")
 
 * Factor-by-factor interaction (i.var#i.var)
 sysuse nlsw88, clear
-benchmark_qreg_altopt wage i.race#i.married age, testname("i.race#i.married: median")
+benchmark_qreg wage i.race#i.married age, testname("i.race#i.married: median")
 
 * Base level specification (ib#.var)
 sysuse auto, clear
@@ -1444,7 +1238,7 @@ benchmark_qreg_altopt price mpg ib3.rep78, quantile(0.75) testname("ib3.rep78: q
 
 * Full factorial interaction (i.var##c.var)
 sysuse auto, clear
-benchmark_qreg_altopt price i.foreign##c.mpg weight, testname("i.foreign##c.mpg: median")
+benchmark_qreg price i.foreign##c.mpg weight, testname("i.foreign##c.mpg: median")
 
 * Factor variables at extreme quantiles
 * Note: qreg fails with error 498 at extreme quantiles (insufficient obs per cell)

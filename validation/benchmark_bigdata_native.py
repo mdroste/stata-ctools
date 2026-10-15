@@ -23,7 +23,7 @@ def main():
     args = parser.parse_args()
     if not 0 < args.rows <= 2147483647 or args.threads < 1 or args.repetitions < 1:
         parser.error('positive rows, threads, and repetitions are required; rows must fit SPI')
-    modules = ['ctools_types.c', 'ctools_threads.c', 'ctools_arena.c']
+    modules = ['ctools_types.c', 'ctools_platform.c', 'ctools_threads.c', 'ctools_arena.c']
     modules += [p.name for p in sorted((ROOT / 'src').glob('ctools_sort_*.c'))]
     modules += ['cmerge/cmerge_join.c', 'cmerge/cmerge_keys.c', 'cmerge/cmerge_group_search.c']
     flags = ['-O3', '-fno-fast-math', '-ffp-contract=off', '-flto', '-DSD_FASTMODE', '-pthread', '-I'+str(ROOT/'src')]

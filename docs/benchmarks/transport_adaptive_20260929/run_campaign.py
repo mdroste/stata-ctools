@@ -1,4 +1,4 @@
-"""Sequential runner. Every Stata invocation uses the user's oldstata wrapper."""
+"""Sequential runner. Every Stata invocation uses the user's stata wrapper."""
 from pathlib import Path
 import json,subprocess,sys,time,shlex,os
 for directory in sys.argv[1:]:
@@ -9,7 +9,7 @@ for directory in sys.argv[1:]:
    print('ALREADY_COMPLETE',run['name'],flush=True);continue
   print('START',run['name'],flush=True)
   started=time.monotonic()
-  shell='oldstata -q -b do '+shlex.quote(run['driver'])
+  shell='stata -q -b do '+shlex.quote(run['driver'])
   with Path(run['resources']).open('w') as f:
    r=subprocess.run(['/usr/bin/time','-l','/bin/zsh','-lic',shell],cwd=Path(run['driver']).parent,stdout=f,stderr=subprocess.STDOUT,env=dict(os.environ,**m.get('requested_runtime_environment',{})))
   text=log.read_text() if log.exists() else ''

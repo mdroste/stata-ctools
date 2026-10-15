@@ -15,8 +15,9 @@ program define csort, rclass
     * Start wall-clock timer as early as possible to match rmsg
     local __do_timing = ("`verbose'" != "")
     if `__do_timing' {
-        timer clear 90
-        timer on 90
+        local __ct_elapsed90 = 0
+        if "`__ct_elapsed90'" == "" local __ct_elapsed90 = 0
+        quietly _ctools_clock __ct_start90
     }
 
     * =========================================================================
@@ -93,10 +94,11 @@ program define csort, rclass
 
     * Start pre-plugin timer
     if `__do_timing' {
-        timer clear 91
-        timer clear 92
-        timer clear 93
-        timer on 91
+        local __ct_elapsed91 = 0
+        local __ct_elapsed92 = 0
+        local __ct_elapsed93 = 0
+        if "`__ct_elapsed91'" == "" local __ct_elapsed91 = 0
+        quietly _ctools_clock __ct_start91
     }
 
     * Load the platform-appropriate ctools plugin if not already loaded
@@ -110,9 +112,12 @@ program define csort, rclass
     * No temporary variables exist at this point, so * lists only user data.
     unab allvars : *
 
-    * Find indices of sort variables within all variables (1-based)
+    * Find indices of sort variables within all variables (1-based). A
+    * repeated key adds nothing to the order (sorting by x x is sorting by x),
+    * so the plugin gets each key once; the final sort keeps varlist as typed.
+    local sortkeys : list uniq varlist
     local var_indices ""
-    foreach sortvar of local varlist {
+    foreach sortvar of local sortkeys {
         local idx = 1
         foreach v of local allvars {
             if ("`v'" == "`sortvar'") {
@@ -154,8 +159,10 @@ program define csort, rclass
 
     * End pre-plugin timer, start plugin timer
     if `__do_timing' {
-        timer off 91
-        timer on 92
+        quietly _ctools_clock __ct_now
+        local __ct_elapsed91 = `__ct_elapsed91' + (`__ct_now' - `__ct_start91')
+        if "`__ct_elapsed92'" == "" local __ct_elapsed92 = 0
+        quietly _ctools_clock __ct_start92
     }
 
     * Call the C plugin with ALL variables (so it can sort the entire dataset)
@@ -163,8 +170,10 @@ program define csort, rclass
 
     * End plugin timer, start post-plugin timer
     if `__do_timing' {
-        timer off 92
-        timer on 93
+        quietly _ctools_clock __ct_now
+        local __ct_elapsed92 = `__ct_elapsed92' + (`__ct_now' - `__ct_start92')
+        if "`__ct_elapsed93'" == "" local __ct_elapsed93 = 0
+        quietly _ctools_clock __ct_start93
     }
 
     * Set sort order in Stata (use stable to match csort's stable radix sort)
@@ -180,15 +189,16 @@ program define csort, rclass
 
     * End post-plugin timer (wall-clock timer 90 stays running)
     if `__do_timing' {
-        timer off 93
+        quietly _ctools_clock __ct_now
+        local __ct_elapsed93 = `__ct_elapsed93' + (`__ct_now' - `__ct_start93')
 
         * Extract timer values (timer 90 still running — captures up to this point)
-        quietly timer list 91
-        local __time_preplugin = r(t91)
-        quietly timer list 92
-        local __time_plugin = r(t92)
-        quietly timer list 93
-        local __time_postplugin = r(t93)
+        * Elapsed seconds are held in caller-local timing state.
+        local __time_preplugin = `__ct_elapsed91'
+        * Elapsed seconds are held in caller-local timing state.
+        local __time_plugin = `__ct_elapsed92'
+        * Elapsed seconds are held in caller-local timing state.
+        local __time_postplugin = `__ct_elapsed93'
 
         * Calculate plugin call overhead (time in plugin call but outside C code)
         local __plugin_call_overhead = `__time_plugin' - _csort_time_total
@@ -270,9 +280,10 @@ program define csort, rclass
         di as text "    Stata overhead total:   " as result %8.4f `__ado_total' " sec"
         di as text "{hline 55}"
         * Stop wall-clock timer right before reading
-        timer off 90
-        quietly timer list 90
-        local __time_total = r(t90)
+        quietly _ctools_clock __ct_now
+        local __ct_elapsed90 = `__ct_elapsed90' + (`__ct_now' - `__ct_start90')
+        * Elapsed seconds are held in caller-local timing state.
+        local __time_total = `__ct_elapsed90'
         di as text "    Wall clock total:       " as result %8.4f `__time_total' " sec"
         di as text "{hline 55}"
 

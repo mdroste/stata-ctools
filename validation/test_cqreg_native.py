@@ -11,6 +11,7 @@ The baseline directory must contain a saved copy of src/cqreg from before edits.
 Set CTOOLS_TEST_OPENMP_PREFIX to test with OpenMP. Set CTOOLS_SANITIZERS to
 address,undefined to check memory access as well as numerical results.
 """
+from native.support.compiler import compile_native
 import argparse
 import os
 from pathlib import Path
@@ -56,7 +57,7 @@ def build(directory, output, *, baseline=False, fallback=False):
     sources += [counted_types]
     sources += [directory / ("cqreg_" + s + ".c")
                 for s in ("linalg", "blas", "sparsity")]
-    subprocess.run([os.environ.get("CC", "cc"), *flags, *map(str, sources),
+    compile_native([os.environ.get("CC", "cc"), *flags, *map(str, sources),
                     *link, "-o", str(output)], check=True, timeout=60)
 
 

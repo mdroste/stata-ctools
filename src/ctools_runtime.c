@@ -8,6 +8,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#include <stdatomic.h>
 
 #include "stplugin.h"
 #include "ctools_runtime.h"
@@ -16,104 +17,57 @@
  * Error Reporting
  * ============================================================================ */
 
-/* Maximum message buffer size */
+/* Bounded formatter shared by all diagnostics. snprintf returns the requested
+ * length, so never use it as a buffer offset without clamping it first. */
 #define CTOOLS_MSG_BUFSIZE 1024
+static void ctools_vmessage(int error, const char *module, const char *fmt, va_list args)
+{
+    char buf[CTOOLS_MSG_BUFSIZE];
+    size_t used = 0;
+    buf[0] = 0;
+    if (module && *module) {
+        int n = snprintf(buf, sizeof(buf), "%s: ", module);
+        if (n > 0) used = (size_t)n < sizeof(buf) ? (size_t)n : sizeof(buf) - 1;
+    }
+    if (used < sizeof(buf) - 1) vsnprintf(buf + used, sizeof(buf) - used, fmt, args);
+    used = strlen(buf);
+    if (used && buf[used - 1] != '\n') {
+        if (used > sizeof(buf) - 2) used = sizeof(buf) - 2;
+        buf[used++] = '\n';
+        buf[used] = 0;
+    }
+    if (error) SF_error(buf);
+    else SF_display(buf);
+}
 
-/*
- * Display an informational message to Stata.
- */
 void ctools_msg(const char *module, const char *fmt, ...)
 {
-    char buf[CTOOLS_MSG_BUFSIZE];
     va_list args;
-    int len;
-
-    /* Format: "module: message\n" */
-    if (module && module[0]) {
-        len = snprintf(buf, sizeof(buf), "%s: ", module);
-    } else {
-        len = 0;
-    }
-
     va_start(args, fmt);
-    len += vsnprintf(buf + len, sizeof(buf) - len, fmt, args);
+    ctools_vmessage(0, module, fmt, args);
     va_end(args);
-
-    /* Add newline if not present */
-    if (len > 0 && len < (int)sizeof(buf) - 1 && buf[len - 1] != '\n') {
-        buf[len] = '\n';
-        buf[len + 1] = '\0';
-    }
-
-    SF_display(buf);
 }
 
-/*
- * Display an error message to Stata.
- */
 void ctools_error(const char *module, const char *fmt, ...)
 {
-    char buf[CTOOLS_MSG_BUFSIZE];
     va_list args;
-    int len;
-
-    /* Format: "module: message\n" */
-    if (module && module[0]) {
-        len = snprintf(buf, sizeof(buf), "%s: ", module);
-    } else {
-        len = 0;
-    }
-
     va_start(args, fmt);
-    len += vsnprintf(buf + len, sizeof(buf) - len, fmt, args);
+    ctools_vmessage(1, module, fmt, args);
     va_end(args);
-
-    /* Add newline if not present */
-    if (len > 0 && len < (int)sizeof(buf) - 1 && buf[len - 1] != '\n') {
-        buf[len] = '\n';
-        buf[len + 1] = '\0';
-    }
-
-    SF_error(buf);
 }
 
-/*
- * Display a standard "memory allocation failed" error.
- */
 void ctools_error_alloc(const char *module)
 {
     ctools_error(module, "memory allocation failed");
 }
 
-/*
- * Display a verbose/debug message (only if verbose flag is set).
- */
 void ctools_verbose(const char *module, int verbose, const char *fmt, ...)
 {
-    char buf[CTOOLS_MSG_BUFSIZE];
-    va_list args;
-    int len;
-
     if (!verbose) return;
-
-    /* Format: "module: message\n" or just "message\n" for indented output */
-    if (module && module[0]) {
-        len = snprintf(buf, sizeof(buf), "%s: ", module);
-    } else {
-        len = 0;
-    }
-
+    va_list args;
     va_start(args, fmt);
-    len += vsnprintf(buf + len, sizeof(buf) - len, fmt, args);
+    ctools_vmessage(0, module, fmt, args);
     va_end(args);
-
-    /* Add newline if not present */
-    if (len > 0 && len < (int)sizeof(buf) - 1 && buf[len - 1] != '\n') {
-        buf[len] = '\n';
-        buf[len + 1] = '\0';
-    }
-
-    SF_display(buf);
 }
 
 /* ============================================================================
@@ -138,42 +92,34 @@ void ctools_verbose(const char *module, int verbose, const char *fmt, ...)
     #include <sys/time.h>
 #endif
 
-/* Platform-specific state - use simple volatile flags, no fancy initializers */
+/* Publish timer calibration once before any worker observes it. */
 #if defined(CTOOLS_TIMER_MACH)
     static mach_timebase_info_data_t g_timebase_info;
-    static volatile int g_timer_initialized = 0;
+    static atomic_int g_timer_initialized = 0;
 
 #elif defined(CTOOLS_TIMER_WINDOWS)
     static LARGE_INTEGER g_frequency;
-    static volatile int g_timer_initialized = 0;
+    static atomic_int g_timer_initialized = 0;
 
 #else
     /* POSIX and fallback don't need initialization */
-    static volatile int g_timer_initialized = 1;
+    static atomic_int g_timer_initialized = 2;
 #endif
 
-/*
- * Initialize the timer subsystem.
- * Simple double-checked pattern - safe enough for our use case since
- * worst case is redundant initialization, not corruption.
- */
-void ctools_timer_init(void) {
-    if (g_timer_initialized) {
-        return;
-    }
-
+void ctools_timer_init(void)
+{
+    int expected = 0;
+    if (atomic_compare_exchange_strong_explicit(&g_timer_initialized, &expected, 1,
+            memory_order_acq_rel, memory_order_acquire)) {
 #if defined(CTOOLS_TIMER_MACH)
-    mach_timebase_info(&g_timebase_info);
-    g_timer_initialized = 1;
-
+        mach_timebase_info(&g_timebase_info);
 #elif defined(CTOOLS_TIMER_WINDOWS)
-    QueryPerformanceFrequency(&g_frequency);
-    g_timer_initialized = 1;
-
-#else
-    /* Nothing to initialize */
-    g_timer_initialized = 1;
+        QueryPerformanceFrequency(&g_frequency);
 #endif
+        atomic_store_explicit(&g_timer_initialized, 2, memory_order_release);
+    } else {
+        while (atomic_load_explicit(&g_timer_initialized, memory_order_acquire) != 2) {}
+    }
 }
 
 /*
@@ -181,7 +127,7 @@ void ctools_timer_init(void) {
  */
 double ctools_timer_seconds(void) {
     /* Auto-initialize on first call */
-    if (!g_timer_initialized) {
+    if (atomic_load_explicit(&g_timer_initialized, memory_order_acquire) != 2) {
         ctools_timer_init();
     }
 
@@ -239,7 +185,10 @@ int ctools_command_begin(const ctools_command_descriptor *cmd, const char *args)
     switch (cmd->owner) {
     case CTOOLS_CMD_CMERGE:
         if (!strcmp(op, "load_using")) next_phase = 1;
-        else if (!strcmp(op, "execute")) required = 1;
+        else if (!strcmp(op, "plan")) { required = 1; next_phase = 2; }
+        /* execute keeps the undo copy until rollback or commit ends the merge */
+        else if (!strcmp(op, "execute")) { required = 2; next_phase = 3; }
+        else if (!strcmp(op, "rollback") || !strcmp(op, "commit")) preserve = 1;
         break;
     case CTOOLS_CMD_CSPLIT:
         if (!strcmp(op, "scan")) next_phase = 1;
@@ -248,7 +197,14 @@ int ctools_command_begin(const ctools_command_descriptor *cmd, const char *args)
     case CTOOLS_CMD_CRANGEJOIN:
         if (!strcmp(op, "using")) next_phase = 1;
         else if (!strcmp(op, "prepare")) { required = 1; next_phase = 2; }
-        else if (!strcmp(op, "write")) required = 2;
+        /* write keeps the master copy until rollback or clear ends the join */
+        else if (!strcmp(op, "write")) { required = 2; next_phase = 3; }
+        else if (!strcmp(op, "rollback")) preserve = 1;
+        break;
+    case CTOOLS_CMD_CWINSOR:
+        /* an in-place call keeps its undo copy until rollback or commit */
+        if (!strcmp(op, "rollback") || !strcmp(op, "commit")) preserve = 1;
+        else next_phase = 1;
         break;
     case CTOOLS_CMD_CIMPORT:
         if (!strcmp(op, "scan")) next_phase = 1;

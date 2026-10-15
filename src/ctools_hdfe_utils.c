@@ -250,6 +250,213 @@ ST_int ctools_strings_to_cluster_ids(
     return 0;
 }
 
+/* (a, b) packed into one key, with the row it came from */
+typedef struct { unsigned long long key; ST_int index; } ctools_pair_key;
+
+static int ctools_compare_pair_key(const void *x, const void *y)
+{
+    const ctools_pair_key *p = (const ctools_pair_key *)x;
+    const ctools_pair_key *q = (const ctools_pair_key *)y;
+    if (p->key != q->key) return (p->key > q->key) - (p->key < q->key);
+    return (p->index > q->index) - (p->index < q->index);
+}
+
+/* Dense 0-based IDs, numbered in order of first appearance, for N rows whose
+   keys are in pairs (index = row). Sorts pairs. Returns 0, or -1 on
+   allocation failure. */
+static ST_int ctools_ids_from_pair_keys(ctools_pair_key *pairs, ST_int N,
+                                        ST_int *ids, ST_int *num_groups)
+{
+    qsort(pairs, (size_t)N, sizeof(*pairs), ctools_compare_pair_key);
+
+    /* Sorted-order group of every row */
+    ST_int groups = 0;
+    for (ST_int i = 0; i < N; i++) {
+        if (i == 0 || pairs[i].key != pairs[i - 1].key) groups++;
+        ids[pairs[i].index] = groups - 1;
+    }
+
+    /* Renumber in order of first appearance */
+    ST_int *first_seen = (ST_int *)malloc((size_t)groups * sizeof(ST_int));
+    if (!first_seen) return -1;
+    for (ST_int grp = 0; grp < groups; grp++) first_seen[grp] = -1;
+    ST_int next = 0;
+    for (ST_int i = 0; i < N; i++) {
+        if (first_seen[ids[i]] < 0) first_seen[ids[i]] = next++;
+        ids[i] = first_seen[ids[i]];
+    }
+    free(first_seen);
+    *num_groups = groups;
+    return 0;
+}
+
+/* Pair IDs through a dense (a, b) table, when that table is small relative
+   to N: sorted != 0 numbers the pairs in ascending (a, b) order, otherwise in
+   order of first appearance, exactly as the sort-based route does. Returns 1
+   if done, 0 if the table would be too large or cannot be allocated. */
+static int ctools_pair_ids_by_table(const ST_int *a, const ST_int *b, ST_int N,
+                                    ST_int max_a, ST_int max_b, int sorted,
+                                    ST_int *ids, ST_int *num_groups)
+{
+    const size_t width = (size_t)max_b + 1;
+    const size_t cells = ((size_t)max_a + 1) * width;
+    if (cells / width != (size_t)max_a + 1 || cells > 8 * (size_t)N + 65536) return 0;
+    ST_int *table = (ST_int *)calloc(cells, sizeof(ST_int));
+    if (!table) return 0;
+
+    ST_int groups = 0;
+    if (sorted) {
+        for (ST_int i = 0; i < N; i++) table[(size_t)a[i] * width + (size_t)b[i]] = 1;
+        for (size_t c = 0; c < cells; c++) {
+            if (table[c]) table[c] = ++groups;
+        }
+        for (ST_int i = 0; i < N; i++) ids[i] = table[(size_t)a[i] * width + (size_t)b[i]] - 1;
+    } else {
+        for (ST_int i = 0; i < N; i++) {
+            ST_int *cell = &table[(size_t)a[i] * width + (size_t)b[i]];
+            if (*cell == 0) *cell = ++groups;
+            ids[i] = *cell - 1;
+        }
+    }
+    free(table);
+    *num_groups = groups;
+    return 1;
+}
+
+static ST_int ctools_pair_ids(const ST_int *a, const ST_int *b, ST_int N, int sorted,
+                              ST_int *ids, ST_int *num_groups)
+{
+    if (N < 0 || !a || !b || !ids || !num_groups) return -1;
+    *num_groups = 0;
+    if (N == 0) return 0;
+
+    ST_int max_a = 0, max_b = 0;
+    for (ST_int i = 0; i < N; i++) {
+        if (a[i] < 0 || b[i] < 0) return -1;
+        if (a[i] > max_a) max_a = a[i];
+        if (b[i] > max_b) max_b = b[i];
+    }
+    if (ctools_pair_ids_by_table(a, b, N, max_a, max_b, sorted, ids, num_groups)) return 0;
+
+    ctools_pair_key *pairs = (ctools_pair_key *)malloc((size_t)N * sizeof(*pairs));
+    if (!pairs) return -1;
+    for (ST_int i = 0; i < N; i++) {
+        pairs[i].key = ((unsigned long long)(unsigned int)a[i] << 32) | (unsigned int)b[i];
+        pairs[i].index = i;
+    }
+    ST_int result = 0;
+    if (sorted) {
+        qsort(pairs, (size_t)N, sizeof(*pairs), ctools_compare_pair_key);
+        ST_int groups = 0;
+        for (ST_int i = 0; i < N; i++) {
+            if (i == 0 || pairs[i].key != pairs[i - 1].key) groups++;
+            ids[pairs[i].index] = groups - 1;
+        }
+        *num_groups = groups;
+    } else {
+        result = ctools_ids_from_pair_keys(pairs, N, ids, num_groups);
+    }
+    free(pairs);
+    return result;
+}
+
+/*
+    Group IDs of the pairs (a[i], b[i]), numbered in order of first appearance.
+*/
+ST_int ctools_intersect_cluster_ids(const ST_int *a, const ST_int *b, ST_int N,
+                                    ST_int *ids, ST_int *num_groups)
+{
+    return ctools_pair_ids(a, b, N, 0, ids, num_groups);
+}
+
+/*
+    Group IDs of the pairs (a[i], b[i]), numbered in ascending (a, b) order.
+*/
+ST_int ctools_intersect_cluster_ids_sorted(const ST_int *a, const ST_int *b, ST_int N,
+                                           ST_int *ids, ST_int *num_groups)
+{
+    return ctools_pair_ids(a, b, N, 1, ids, num_groups);
+}
+
+/* Dense IDs of integer codes; sorted != 0 numbers them in ascending code
+   order, otherwise in order of first appearance. A presence table over
+   [min, max] is used while it is small relative to N, a sort otherwise;
+   both give the same IDs. */
+static ST_int ctools_code_ids(const ST_int *codes, ST_int N, int sorted,
+                              ST_int *ids, ST_int *num_groups)
+{
+    if (N < 0 || !codes || !ids || !num_groups) return -1;
+    *num_groups = 0;
+    if (N == 0) return 0;
+
+    ST_int lo = codes[0], hi = codes[0];
+    for (ST_int i = 1; i < N; i++) {
+        if (codes[i] < lo) lo = codes[i];
+        if (codes[i] > hi) hi = codes[i];
+    }
+    const unsigned long long span = (unsigned long long)((long long)hi - (long long)lo) + 1ULL;
+    if (span <= 8ULL * (unsigned long long)N + 65536ULL) {
+        ST_int *table = (ST_int *)calloc((size_t)span, sizeof(ST_int));
+        if (table) {
+            ST_int groups = 0;
+            if (sorted) {
+                for (ST_int i = 0; i < N; i++) table[(size_t)((long long)codes[i] - lo)] = 1;
+                for (size_t c = 0; c < (size_t)span; c++) {
+                    if (table[c]) table[c] = ++groups;
+                }
+                for (ST_int i = 0; i < N; i++) ids[i] = table[(size_t)((long long)codes[i] - lo)] - 1;
+            } else {
+                for (ST_int i = 0; i < N; i++) {
+                    ST_int *cell = &table[(size_t)((long long)codes[i] - lo)];
+                    if (*cell == 0) *cell = ++groups;
+                    ids[i] = *cell - 1;
+                }
+            }
+            free(table);
+            *num_groups = groups;
+            return 0;
+        }
+    }
+
+    ctools_pair_key *pairs = (ctools_pair_key *)malloc((size_t)N * sizeof(*pairs));
+    if (!pairs) return -1;
+    for (ST_int i = 0; i < N; i++) {
+        /* offset by the minimum so that keys order like the signed codes */
+        pairs[i].key = (unsigned long long)((long long)codes[i] - (long long)lo);
+        pairs[i].index = i;
+    }
+    ST_int result = 0;
+    if (sorted) {
+        qsort(pairs, (size_t)N, sizeof(*pairs), ctools_compare_pair_key);
+        ST_int groups = 0;
+        for (ST_int i = 0; i < N; i++) {
+            if (i == 0 || pairs[i].key != pairs[i - 1].key) groups++;
+            ids[pairs[i].index] = groups - 1;
+        }
+        *num_groups = groups;
+    } else {
+        result = ctools_ids_from_pair_keys(pairs, N, ids, num_groups);
+    }
+    free(pairs);
+    return result;
+}
+
+/*
+    Group IDs of integer codes, numbered in order of first appearance.
+*/
+ST_int ctools_dense_cluster_ids(const ST_int *codes, ST_int N, ST_int *ids, ST_int *num_groups)
+{
+    return ctools_code_ids(codes, N, 0, ids, num_groups);
+}
+
+/*
+    Group IDs of integer codes, numbered in ascending code order.
+*/
+ST_int ctools_dense_cluster_ids_sorted(const ST_int *codes, ST_int N, ST_int *ids, ST_int *num_groups)
+{
+    return ctools_code_ids(codes, N, 1, ids, num_groups);
+}
+
 /*
     Compact an int array by removing flagged observations.
 */
@@ -416,6 +623,7 @@ ST_int ctools_compute_hdfe_dof(
     const FE_Factor *factors,
     ST_int G,
     ST_int N,
+    ST_int dof_adjust_type,
     ST_int *df_a,
     ST_int *mobility_groups)
 {
@@ -425,7 +633,12 @@ ST_int ctools_compute_hdfe_dof(
     for (ST_int g = 0; g < G; g++)
         dfa += factors[g].num_levels;
 
-    if (G >= 2) {
+    if (dof_adjust_type == 1) {
+        /* none: no mobility calculation; one coefficient is still redundant
+           once two effects are absorbed */
+        mg = 1;
+        if (G >= 2) dfa -= 1;
+    } else if (G >= 2) {
         mg = ctools_count_connected_components(
             factors[0].levels, factors[1].levels,
             N, factors[0].num_levels, factors[1].num_levels);
@@ -433,7 +646,7 @@ ST_int ctools_compute_hdfe_dof(
         if (mg < 0) mg = 1;  /* Fallback on error */
         dfa -= mg;
 
-        if (G > 2) {
+        if (G > 2 && (dof_adjust_type == 0 || dof_adjust_type == 3)) {
             ST_int extra = G - 2;
             dfa -= extra;
             mg += extra;
@@ -442,6 +655,45 @@ ST_int ctools_compute_hdfe_dof(
 
     *df_a = dfa;
     *mobility_groups = mg;
+    return 0;
+}
+
+/*
+    Redundant intercept coefficients of each absorbed effect (reghdfe's rule).
+*/
+ST_int ctools_hdfe_redundant_intercepts(
+    const FE_Factor *factors,
+    ST_int G,
+    ST_int N,
+    const ST_int *nested,
+    ST_int flags,
+    ST_int *redundant)
+{
+    ST_int any_nested = 0, first = -1, pairs = 0;
+
+    for (ST_int g = 0; g < G; g++)
+        if (nested && nested[g]) any_nested = 1;
+
+    for (ST_int g = 0; g < G; g++) {
+        if (nested && nested[g]) {
+            redundant[g] = factors[g].num_levels;
+            continue;
+        }
+        redundant[g] = (first >= 0 || any_nested) ? 1 : 0;
+        if (first < 0) first = g;
+        if (!(flags & (CTOOLS_DOF_PAIRWISE | CTOOLS_DOF_FIRSTPAIR))) continue;
+
+        for (ST_int h = 0; h < g; h++) {
+            if (nested && nested[h]) continue;
+            if ((flags & CTOOLS_DOF_FIRSTPAIR) && pairs) break;
+            ST_int groups = ctools_count_connected_components(
+                factors[h].levels, factors[g].levels,
+                N, factors[h].num_levels, factors[g].num_levels);
+            if (groups < 0) return -1;
+            pairs++;
+            if (groups > redundant[g]) redundant[g] = groups;
+        }
+    }
     return 0;
 }
 
@@ -602,6 +854,47 @@ ST_int ctools_numeric_to_cluster_ids(const ST_double *values, ST_int N,
     if (N < 0 || !values || !ids || !num_groups) return -1;
     *num_groups = 0;
     if (N == 0) return 0;
+
+    /* Integer codes in a compact range (the usual cluster variable) are
+     * ranked by counting: same dense IDs in ascending value order as the
+     * sort below, in O(N + range). */
+    {
+        ST_double lo = 0.0, hi = 0.0;
+        int compact = 1, any = 0;
+        for (ST_int i = 0; i < N && compact; i++) {
+            ST_double v = values[i];
+            if (SF_is_missing(v) || !isfinite(v)) continue;
+            if (v != floor(v) || fabs(v) > 4.0e15) compact = 0;
+            else if (!any) { lo = hi = v; any = 1; }
+            else { if (v < lo) lo = v; if (v > hi) hi = v; }
+        }
+        if (compact && any && hi - lo < 4.0 * (ST_double)N + 1024.0) {
+            size_t range = (size_t)(hi - lo) + 1;
+            ST_int *rank = (ST_int *)calloc(range, sizeof(ST_int));
+            if (rank) {
+                for (ST_int i = 0; i < N; i++) {
+                    ST_double v = values[i];
+                    if (!SF_is_missing(v) && isfinite(v)) rank[(size_t)(v - lo)] = 1;
+                }
+                ST_int groups = 0;
+                for (size_t r = 0; r < range; r++) {
+                    if (rank[r]) rank[r] = ++groups;
+                }
+                for (ST_int i = 0; i < N; i++) {
+                    ST_double v = values[i];
+                    ids[i] = (!SF_is_missing(v) && isfinite(v)) ? rank[(size_t)(v - lo)] - 1 : -1;
+                }
+                free(rank);
+                *num_groups = groups;
+                return 0;
+            }
+        }
+        if (compact && !any) {
+            for (ST_int i = 0; i < N; i++) ids[i] = -1;
+            return 0;
+        }
+    }
+
     ctools_numeric_cluster_pair *pairs = malloc((size_t)N * sizeof(*pairs));
     if (!pairs) return -1;
     ST_int count = 0;

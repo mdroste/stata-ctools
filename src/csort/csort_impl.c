@@ -4,9 +4,11 @@
 
     High-performance parallel sort for Stata datasets.
     Orchestrates the sorting process:
-    1. Load data from Stata to C
-    2. Sort the data using IPS4O (default) or other algorithms
-    3. Transfer sorted data back to Stata
+    1. Load data from Stata to C: whole observations, row by row, when every
+       variable can be staged that way; otherwise column by column (or keys
+       only in streaming mode)
+    2. Sort the keys with the selected algorithm
+    3. Transfer the data back to Stata in sorted order
 */
 
 #include <stdlib.h>
@@ -17,6 +19,7 @@
 #include "ctools_types.h"
 #include "ctools_config.h"
 #include "ctools_runtime.h"
+#include "ctools_rowstage.h"
 #include "csort_impl.h"
 #include "csort_stream.h"
 
@@ -232,6 +235,76 @@ static int *parse_string_widths(const char *args, size_t nvars)
 }
 
 /*
+    Sort through row-major staging: read every observation once, sort copies
+    of the key columns, then write every observation once in sorted order.
+    sort_vars holds one-based plugin variable indices and widths is indexed by
+    plugin variable index minus one.
+
+    *modified is set once Stata may have been written. A failure before that
+    (a variable that cannot be staged, or no memory for the staged rows) leaves
+    the dataset untouched, so the caller can use the column transport instead.
+*/
+static stata_retcode csort_rowstaged(const int *widths, const int *sort_vars, size_t nsort,
+                                     sort_algorithm_t algorithm, size_t obs1, size_t nobs,
+                                     size_t nvars, stata_timer *timer, int *modified)
+{
+    ctools_rowstage staged;
+    stata_data keys;
+    stata_retcode rc = STATA_OK;
+    int *all_vars = (int *)ctools_safe_malloc2(nvars, sizeof(int));
+    int *key_vars = (int *)ctools_safe_malloc2(nsort, sizeof(int));
+
+    *modified = 0;
+    ctools_rowstage_init(&staged);
+    stata_data_init(&keys);
+    if (!all_vars || !key_vars) rc = STATA_ERR_MEMORY;
+
+    if (rc == STATA_OK) {
+        for (size_t j = 0; j < nvars; j++) all_vars[j] = (int)j + 1;
+        timer->load_time = ctools_timer_seconds();
+        rc = ctools_rowstage_load(&staged, all_vars, nvars, widths, obs1, nobs);
+    }
+
+    /* Keys are sorted as contiguous columns, exactly as the loader lays them out. */
+    if (rc == STATA_OK) {
+        keys.vars = (stata_variable *)ctools_safe_cacheline_alloc2(nsort, sizeof(stata_variable));
+        keys.sort_order = (perm_idx_t *)ctools_safe_cacheline_alloc2(nobs, sizeof(perm_idx_t));
+        if (!keys.vars || !keys.sort_order) {
+            rc = STATA_ERR_MEMORY;
+        } else {
+            memset(keys.vars, 0, nsort * sizeof(stata_variable));
+            keys.nvars = nsort;
+            keys.nobs = nobs;
+            for (size_t i = 0; i < nobs; i++) keys.sort_order[i] = (perm_idx_t)i;
+            for (size_t k = 0; k < nsort && rc == STATA_OK; k++) {
+                key_vars[k] = (int)k + 1;
+                rc = ctools_rowstage_column(&staged, (size_t)sort_vars[k] - 1, &keys.vars[k]);
+            }
+        }
+    }
+    timer->load_time = ctools_timer_seconds() - timer->load_time;
+
+    if (rc == STATA_OK) {
+        timer->sort_time = ctools_timer_seconds();
+        rc = ctools_sort_dispatch(&keys, key_vars, nsort, algorithm);
+        timer->sort_time = ctools_timer_seconds() - timer->sort_time;
+    }
+
+    if (rc == STATA_OK) {
+        timer->store_time = ctools_timer_seconds();
+        *modified = 1;
+        rc = ctools_rowstage_store(&staged, keys.sort_order, nobs, obs1);
+        timer->store_time = ctools_timer_seconds() - timer->store_time;
+    }
+
+    stata_data_free(&keys);
+    ctools_rowstage_free(&staged);
+    free(key_vars);
+    free(all_vars);
+    return rc;
+}
+
+/*
     Main entry point for csort command.
 */
 ST_retcode csort_main(const char *args)
@@ -293,6 +366,22 @@ ST_retcode csort_main(const char *args)
         free(sort_vars);
         return 2000;
     }
+
+    /* Both paths need valid keys, each listed once: sorting by (x, x) is
+       sorting by x, and the streaming path counts every key as a separate
+       variable. Keep the first occurrence of each. */
+    size_t nunique = 0;
+    for (size_t k = 0; k < nsort; k++) {
+        if (sort_vars[k] < 1 || (size_t)sort_vars[k] > nvars) {
+            SF_error("csort: invalid sort variable index\n");
+            free(sort_vars);
+            return 198;
+        }
+        size_t prev = 0;
+        while (prev < nunique && sort_vars[prev] != sort_vars[k]) prev++;
+        if (prev == nunique) sort_vars[nunique++] = sort_vars[k];
+    }
+    nsort = nunique;
 
     /* Check for streaming mode option (returns -1 if nostream, 0 if auto, 1-16 for batch size) */
     int stream_batch_size = parse_stream_option(args);
@@ -369,6 +458,38 @@ ST_retcode csort_main(const char *args)
     /* ================================================================
        STANDARD MODE: Load all data, sort, store
        ================================================================ */
+
+    /* Whole observations move fastest row by row. Datasets that cannot be
+       staged that way (strL, strings without a usable width) and failures
+       before any write continue with the column transport below. */
+    {
+        int modified = 0;
+        int *strwidths = parse_string_widths(args, nvars);
+        rc = csort_rowstaged(strwidths, sort_vars, nsort, algorithm, obs1, obs2 - obs1 + 1,
+                             nvars, &timer, &modified);
+        free(strwidths);
+        if (rc == STATA_OK) {
+            free(sort_vars);
+            timer.total_time = ctools_timer_seconds() - t_start;
+            SF_scal_save("_csort_stream", 0.0);
+            SF_scal_save("_csort_time_load", timer.load_time);
+            SF_scal_save("_csort_time_sort", timer.sort_time);
+            SF_scal_save("_csort_time_permute", 0.0);
+            SF_scal_save("_csort_time_store", timer.store_time);
+            SF_scal_save("_csort_time_stream", 0.0);
+            SF_scal_save("_csort_time_cleanup", 0.0);
+            SF_scal_save("_csort_time_total", timer.total_time);
+            CTOOLS_SAVE_THREAD_INFO("_csort");
+            return 0;
+        }
+        if (modified || (rc != STATA_ERR_UNSUPPORTED_TYPE && rc != STATA_ERR_MEMORY)) {
+            snprintf(msg, sizeof(msg), "csort: sort failed (error %d)\n", rc);
+            SF_error(msg);
+            free(sort_vars);
+            return ctools_stata_rc(rc);
+        }
+        timer.load_time = timer.sort_time = timer.store_time = 0.0;
+    }
 
     /* ================================================================
        PHASE 1: Load data from Stata to C

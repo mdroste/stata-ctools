@@ -10,8 +10,9 @@ program define cbsample
         exit 920
     }
 
-    timer clear 90
-    timer on 90
+    local __ct_elapsed90 = 0
+    if "`__ct_elapsed90'" == "" local __ct_elapsed90 = 0
+    quietly _ctools_clock __ct_start90
 
     * Parse syntax to match bsample exactly:
     * bsample [n] [if] [in], [strata(varlist) cluster(varlist) weight(varname)]
@@ -154,20 +155,24 @@ program define cbsample
     }
 
     * Record pre-plugin time
-    timer off 90
-    quietly timer list 90
-    local __time_preplugin = r(t90)
-    timer on 90
+    quietly _ctools_clock __ct_now
+    local __ct_elapsed90 = `__ct_elapsed90' + (`__ct_now' - `__ct_start90')
+    * Elapsed seconds are held in caller-local timing state.
+    local __time_preplugin = `__ct_elapsed90'
+    if "`__ct_elapsed90'" == "" local __ct_elapsed90 = 0
+    quietly _ctools_clock __ct_start90
 
     * Call plugin with ALL variables
     plugin call ctools_plugin `allvars' if `touse', ///
         "cbsample `threads_opt' `freq_idx' `ncluster' `nstrata' `cluster_indices' `strata_indices' `opts'"
 
     * Record post-plugin time
-    timer off 90
-    quietly timer list 90
-    local __time_postplugin_start = r(t90)
-    timer on 90
+    quietly _ctools_clock __ct_now
+    local __ct_elapsed90 = `__ct_elapsed90' + (`__ct_now' - `__ct_start90')
+    * Elapsed seconds are held in caller-local timing state.
+    local __time_postplugin_start = `__ct_elapsed90'
+    if "`__ct_elapsed90'" == "" local __ct_elapsed90 = 0
+    quietly _ctools_clock __ct_start90
 
     * Handle output based on weight option (match bsample behavior exactly)
     if "`__wgtvar'" != "" {
@@ -183,11 +188,12 @@ program define cbsample
     }
 
     * Finish timing
-    timer off 90
+    quietly _ctools_clock __ct_now
+    local __ct_elapsed90 = `__ct_elapsed90' + (`__ct_now' - `__ct_start90')
 
     if `__do_timing' {
-        quietly timer list 90
-        local __time_total = r(t90)
+        * Elapsed seconds are held in caller-local timing state.
+        local __time_total = `__ct_elapsed90'
         local __time_postplugin = `__time_total' - `__time_postplugin_start'
 
         di as text ""

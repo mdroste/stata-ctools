@@ -7,8 +7,8 @@
  */
 
 #include "cimport_xlsx.h"
-#include "cimport_xlsx_zip.h"
-#include "cimport_xlsx_xml.h"
+#include "formats/xlsx_zip.h"
+#include "formats/xlsx_xml.h"
 #include "../ctools_runtime.h"
 #include "../ctools_arena.h"
 #include "../ctools_threads.h"
@@ -434,16 +434,24 @@ static bool shared_strings_callback(const xlsx_xml_event *event, void *user_data
 
     if (event->type == XLSX_XML_START_ELEMENT) {
         if (strcmp(event->tag_name, "sst") == 0) {
-            /* Pre-allocate from uniqueCount if available */
+            /* Pre-allocate from uniqueCount once, while the table is still
+             * empty: a repeated <sst> in a malformed file must never replace
+             * or shrink the live table. Both arrays or neither. */
             const char *unique_count = xlsx_xml_get_attr(event, "uniqueCount");
-            if (unique_count) {
-                uint32_t count = (uint32_t)strtoul(unique_count, NULL, 10);
+            if (unique_count && ctx->num_shared_strings == 0 && !ctx->shared_strings &&
+                !ctx->shared_string_lengths && !ctx->shared_strings_pool) {
+                unsigned long count = strtoul(unique_count, NULL, 10);
                 if (count > 0 && count <= XLSX_MAX_SHARED_STRINGS) {
-                    ctx->shared_strings = (char **)malloc(count * sizeof(char *));
-                    if (ctx->shared_strings) {
-                        ctx->shared_strings_capacity = count;
+                    char **strings = (char **)malloc(count * sizeof(char *));
+                    uint32_t *lengths = (uint32_t *)malloc(count * sizeof(uint32_t));
+                    if (strings && lengths) {
+                        ctx->shared_strings = strings;
+                        ctx->shared_string_lengths = lengths;
+                        ctx->shared_strings_capacity = (uint32_t)count;
+                    } else {
+                        free(strings);
+                        free(lengths);
                     }
-                    ctx->shared_string_lengths = (uint32_t *)malloc(count * sizeof(uint32_t));
                     /* Pre-allocate pool: estimate 32 bytes per string */
                     size_t pool_est = (size_t)count * 32;
                     ctx->shared_strings_pool = (char *)malloc(pool_est);
@@ -503,10 +511,14 @@ static bool shared_strings_callback(const xlsx_xml_event *event, void *user_data
             state->in_si = false;
             state->failed = true;  /* cleared once the string is stored */
 
-            /* Add string to shared strings table */
+            /* Add string to shared strings table; the capacity always exceeds
+             * the count it grows from, so every store below is in bounds. */
             if (ctx->num_shared_strings >= ctx->shared_strings_capacity) {
                 size_t new_cap = ctx->shared_strings_capacity == 0 ?
-                                 1024 : ctx->shared_strings_capacity * 2;
+                                 1024 : (size_t)ctx->shared_strings_capacity * 2;
+                if (new_cap <= ctx->num_shared_strings)
+                    new_cap = (size_t)ctx->num_shared_strings + 1024;
+                if (new_cap > UINT32_MAX) return false;
                 char **new_strings = (char **)realloc(ctx->shared_strings,
                                                        new_cap * sizeof(char *));
                 if (!new_strings) return false;
@@ -1116,6 +1128,27 @@ static const char *xlsx_scan_cell(const XLSXContext *ctx, xlsx_scan_local *loc,
 
     const char *v = NULL, *run = NULL, *p = gt + 1;
     size_t vlen = 0, run_len = 0;
+    /* Most writers emit these complete, unprefixed cell bodies. Recognize
+     * the whole envelope before bypassing the general XML walk: attributes,
+     * namespaces, rich text, formulas and extra elements still take that path.
+     * Text cannot contain a literal '<', so one bounded search suffices. */
+    if (end - p >= 3 && !memcmp(p, "<v>", 3)) {
+        const char *text_end = memchr(p + 3, '<', (size_t)(end - p - 3));
+        if (text_end && end - text_end >= 8 && !memcmp(text_end, "</v></c>", 8)) {
+            v = p + 3;
+            vlen = (size_t)(text_end - v);
+            p = text_end + 8;
+            goto cell_value;
+        }
+    } else if (end - p >= 7 && !memcmp(p, "<is><t>", 7)) {
+        const char *text_end = memchr(p + 7, '<', (size_t)(end - p - 7));
+        if (text_end && end - text_end >= 13 && !memcmp(text_end, "</t></is></c>", 13)) {
+            run = p + 7;
+            run_len = (size_t)(text_end - run);
+            p = text_end + 13;
+            goto cell_value;
+        }
+    }
     bool in_is = false;
     int phonetic = 0;
     for (;;) {
@@ -1153,6 +1186,7 @@ static const char *xlsx_scan_cell(const XLSXContext *ctx, xlsx_scan_local *loc,
             p = text_end;
         }
     }
+cell_value:
     if (skip || outside) return p;
 
     const char *t = a[1].value;

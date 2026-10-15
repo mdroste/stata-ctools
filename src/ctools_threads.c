@@ -228,10 +228,15 @@ int ctools_persistent_pool_init(ctools_persistent_pool *pool, size_t num_workers
     pool->shutdown = 0;
     pool->initialized = 1;
 
+    pthread_attr_t attr;
+    int have_attr = ctools_worker_attr_init(&attr) == 0;
+
     /* Create worker threads */
     for (i = 0; i < num_workers; i++) {
-        if (pthread_create(&pool->workers[i], NULL, persistent_worker_thread, pool) != 0) {
+        if (pthread_create(&pool->workers[i], have_attr ? &attr : NULL,
+                           persistent_worker_thread, pool) != 0) {
             /* Failed - shut down and clean up */
+            if (have_attr) pthread_attr_destroy(&attr);
             pthread_mutex_lock(&pool->queue_mutex);
             pool->shutdown = 1;
             pthread_cond_broadcast(&pool->work_available);
@@ -252,6 +257,17 @@ int ctools_persistent_pool_init(ctools_persistent_pool *pool, size_t num_workers
         }
     }
 
+    if (have_attr) pthread_attr_destroy(&attr);
+    return 0;
+}
+
+int ctools_worker_attr_init(pthread_attr_t *attr)
+{
+    size_t size = 0;
+    if (pthread_attr_init(attr) != 0) return -1;
+    /* Best effort: if the request is refused, the default size remains. */
+    if (pthread_attr_getstacksize(attr, &size) != 0 || size < CTOOLS_WORKER_STACK_SIZE)
+        (void)pthread_attr_setstacksize(attr, CTOOLS_WORKER_STACK_SIZE);
     return 0;
 }
 
@@ -295,7 +311,9 @@ int ctools_persistent_pool_submit(ctools_persistent_pool *pool,
 }
 
 /*
- * Submit multiple work items to the pool.
+ * Submit multiple work items to the pool, all or none: every item is
+ * allocated before any is queued, so on failure nothing has run and callers
+ * may run the whole batch themselves.
  */
 int ctools_persistent_pool_submit_batch(ctools_persistent_pool *pool,
                                          ctools_thread_func func,
@@ -303,20 +321,50 @@ int ctools_persistent_pool_submit_batch(ctools_persistent_pool *pool,
 {
     size_t i;
     char *arg_ptr = (char *)args;
+    ctools_work_item *head = NULL, *tail = NULL;
 
     if (pool == NULL || !pool->initialized || pool->shutdown) {
         return -1;
     }
+    if (count == 0) {
+        return 0;
+    }
 
     for (i = 0; i < count; i++) {
-        void *arg = (args != NULL) ? (void *)(arg_ptr + i * arg_size) : NULL;
-        if (ctools_persistent_pool_submit(pool, func, arg) != 0) {
-            /* Drain already-submitted items before returning to prevent
-             * use-after-free if the caller frees args on error. */
-            ctools_persistent_pool_wait(pool);
+        ctools_work_item *item = (ctools_work_item *)malloc(sizeof(ctools_work_item));
+        if (item == NULL) {
+            while (head != NULL) {
+                ctools_work_item *next = head->next;
+                free(head);
+                head = next;
+            }
             return -1;
         }
+        item->func = func;
+        item->arg = (args != NULL) ? (void *)(arg_ptr + i * arg_size) : NULL;
+        item->next = NULL;
+        if (tail != NULL) {
+            tail->next = item;
+        } else {
+            head = item;
+        }
+        tail = item;
     }
+
+    pthread_mutex_lock(&pool->queue_mutex);
+
+    /* Enqueue the whole list */
+    if (pool->queue_tail != NULL) {
+        pool->queue_tail->next = head;
+    } else {
+        pool->queue_head = head;
+    }
+    pool->queue_tail = tail;
+    pool->queue_size += count;
+    pool->pending_items += count;
+
+    pthread_cond_broadcast(&pool->work_available);
+    pthread_mutex_unlock(&pool->queue_mutex);
 
     return 0;
 }

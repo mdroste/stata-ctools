@@ -68,6 +68,8 @@ void assign_bins(
  *   weights     - weights for this group (NULL if unweighted)
  *   N           - number of observations in group
  *   config      - binscatter configuration
+ *   cutpoints_in - optional cutpoints (nq_in + 1 values) from
+ *                 compute_pooled_cutpoints(); NULL bins on this group's x
  *   result      - output: ByGroupResult to populate
  *   bin_ids_out - optional output (N): each observation's bin number
  *                 (0 = missing x); NULL if not needed
@@ -81,8 +83,24 @@ ST_retcode compute_bins_single_group(
     ST_double *weights,
     ST_int N,
     const BinscatterConfig *config,
+    const ST_double *cutpoints_in,
+    ST_int nq_in,
     ByGroupResult *result,
     ST_int *bin_ids_out
+);
+
+/*
+ * Quantile cutpoints of the whole sample, as binscatter's by() bins every
+ * group on the pooled x. On success *cutpoints_out (caller frees, NULL when x
+ * is all missing) holds *nq_out + 1 values.
+ */
+ST_retcode compute_pooled_cutpoints(
+    const ST_double *x,
+    const ST_double *weights,
+    ST_int N,
+    ST_int nquantiles,
+    ST_double **cutpoints_out,
+    ST_int *nq_out
 );
 
 /*

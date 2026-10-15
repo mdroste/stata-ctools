@@ -1,0 +1,140 @@
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+      name:  <unnamed>
+       log:  /Users/Mike/Documents/GitHub/stata-ctools/temp/command_performance_20261002/tests/stata.log
+  log type:  text
+ opened on:   2 Oct 2026, 10:43:13
+
+. local failed=0
+
+. foreach suite in crangestat cwinsor group_windows {
+  2.     capture noisily do "validation/validate_`suite'.do"
+  3.     local rc=_rc
+  4.     di "SUITE_RC,`suite',`rc'"
+  5.     if `rc' local failed=1
+  6. }
+
+. /*******************************************************************************
+>  * validate_crangestat.do
+>  *
+>  * Comprehensive validation tests for crangestat
+>  * Tests all statistics, options, and edge cases
+>  *
+>  * crangestat: C-accelerated range statistics
+>  * Syntax: crangestat (stat) [newvar=]varname [...], interval(keyvar low high) [by(varlist) excludeself verbose threads(#)]
+>  ******************************************************************************/
+. 
+. * Load setup (works from project root or validation dir)
+. capture do "validation/validate_setup.do"
+
+. if _rc != 0 {
+.     do "validate_setup.do"
+. }
+
+. 
+. quietly {
+Running validation tests for crangestat...
+(1 range statistics computed)
+
+---------------------------------------------
+  crangestat validation results
+---------------------------------------------
+  Passed: 177
+  Failed: 0
+  Skipped: 0
+  Total:  177
+---------------------------------------------
+  ALL TESTS PASSED
+---------------------------------------------
+
+
+. 
+. * Reached only after the complete component script.
+. global CTOOLS_COMPONENT_COMPLETE "crangestat"
+
+. 
+end of do-file
+SUITE_RC,crangestat,0
+
+. /*******************************************************************************
+>  * validate_cwinsor.do
+>  *
+>  * Comprehensive validation tests for cwinsor vs gstats winsor
+>  * Tests all options: cuts, p/q, trim, by, suffix/prefix, replace
+>  *
+>  * VERIFICATION: All tests compare winsorized/trimmed values between
+>  * gstats winsor and cwinsor using significant figures comparison
+>  ******************************************************************************/
+. 
+. * Load setup (works from project root or validation dir)
+. capture do "validation/validate_setup.do"
+
+. if _rc != 0 {
+.     do "validate_setup.do"
+. }
+
+. 
+. quietly {
+Running validation tests for cwinsor...
+(1 variables winsorized at [1, 99] percentiles)
+
+. 
+. print_summary "cwinsor"
+
+---------------------------------------------
+  cwinsor validation results
+---------------------------------------------
+  Passed: 57
+  Failed: 0
+  Skipped: 0
+  Total:  57
+---------------------------------------------
+  ALL TESTS PASSED
+---------------------------------------------
+
+
+. 
+. * Reached only after the complete component script.
+. global CTOOLS_COMPONENT_COMPLETE "cwinsor"
+
+. 
+end of do-file
+SUITE_RC,cwinsor,0
+
+. * Regression coverage for cross-group scheduling, tied windows, and sparse-key
+. * sliding scans. Reference comparisons retain the suite's seven-digit policy.
+. capture do "validation/validate_setup.do"
+
+. if _rc do "validate_setup.do"
+
+. quietly {
+
+. print_summary "group_windows"
+
+---------------------------------------------
+  group_windows validation results
+---------------------------------------------
+  Passed: 257
+  Failed: 0
+  Skipped: 0
+  Total:  257
+---------------------------------------------
+  ALL TESTS PASSED
+---------------------------------------------
+
+
+. 
+. global CTOOLS_COMPONENT_COMPLETE "group_windows"
+
+. 
+end of do-file
+SUITE_RC,group_windows,0
+
+. di "GROUP_TESTS_RC=`failed'"
+GROUP_TESTS_RC=0
+
+. log close
+      name:  <unnamed>
+       log:  /Users/Mike/Documents/GitHub/stata-ctools/temp/command_performance_20261002/tests/stata.log
+  log type:  text
+ closed on:   2 Oct 2026, 10:43:23
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------

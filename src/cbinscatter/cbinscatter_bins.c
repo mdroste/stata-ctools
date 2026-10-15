@@ -310,6 +310,8 @@ ST_retcode compute_bins_single_group(
     ST_double *weights,
     ST_int N,
     const BinscatterConfig *config,
+    const ST_double *cutpoints_in,
+    ST_int nq_in,
     ByGroupResult *result,
     ST_int *bin_ids_out
 ) {
@@ -320,6 +322,16 @@ ST_retcode compute_bins_single_group(
 
     nq = config->nquantiles;
     if (N < 2) return CBINSCATTER_ERR_FEW_OBS;
+
+    if (cutpoints_in) {
+        if (!bin_ids) bin_ids = (ST_int *)malloc(N * sizeof(ST_int));
+        if (!bin_ids) return CBINSCATTER_ERR_MEMORY;
+        assign_bins(x, N, cutpoints_in, nq_in, bin_ids);
+        rc = compute_bin_statistics(y, x, bin_ids, weights, N, nq_in,
+                                    config->compute_se, result);
+        if (bin_ids != bin_ids_out) free(bin_ids);
+        return rc;
+    }
 
     if (!bin_ids) bin_ids = (ST_int *)malloc(N * sizeof(ST_int));
     x_sorted = (ST_double *)malloc(N * sizeof(ST_double));
@@ -363,6 +375,42 @@ cleanup:
     free(w_sorted);
     free(cutpoints);
     if (bin_ids != bin_ids_out) free(bin_ids);
+    return rc;
+}
+
+ST_retcode compute_pooled_cutpoints(
+    const ST_double *x,
+    const ST_double *weights,
+    ST_int N,
+    ST_int nquantiles,
+    ST_double **cutpoints_out,
+    ST_int *nq_out
+) {
+    *cutpoints_out = NULL;
+    *nq_out = nquantiles;
+    ST_double *x_sorted = (ST_double *)malloc((size_t)(N > 0 ? N : 1) * sizeof(ST_double));
+    ST_double *w_sorted = weights ? (ST_double *)malloc((size_t)(N > 0 ? N : 1) * sizeof(ST_double)) : NULL;
+    if (!x_sorted || (weights && !w_sorted)) {
+        free(x_sorted); free(w_sorted);
+        return CBINSCATTER_ERR_MEMORY;
+    }
+    ST_retcode rc = CBINSCATTER_OK;
+    ST_int n_valid = sort_nonmissing_x(x, weights, N, x_sorted, w_sorted);
+    if (n_valid < 0) {
+        rc = CBINSCATTER_ERR_MEMORY;
+    } else if (n_valid > 0) {
+        ST_int nq = (n_valid < nquantiles) ? n_valid : nquantiles;
+        ST_double *cutpoints = (ST_double *)malloc((size_t)(nq + 1) * sizeof(ST_double));
+        if (!cutpoints) {
+            rc = CBINSCATTER_ERR_MEMORY;
+        } else {
+            compute_quantile_cutpoints(x_sorted, n_valid, nq, w_sorted, cutpoints);
+            *cutpoints_out = cutpoints;
+            *nq_out = nq;
+        }
+    }
+    free(x_sorted);
+    free(w_sorted);
     return rc;
 }
 

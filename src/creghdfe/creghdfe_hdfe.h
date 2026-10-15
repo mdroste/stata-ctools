@@ -10,6 +10,9 @@
 
 #include "creghdfe_types.h"
 
+/* Private to creghdfe; IV and PPML own independent state. */
+extern HDFE_State *g_state;
+
 /* Clean up global state */
 void cleanup_state(void);
 

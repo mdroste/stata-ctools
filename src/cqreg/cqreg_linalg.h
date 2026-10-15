@@ -1,8 +1,8 @@
 /*
  * cqreg_linalg.h
  *
- * Linear algebra operations for quantile regression IPM solver.
- * Includes optimized dot products, Cholesky decomposition, and matrix operations.
+ * Linear algebra operations for the quantile regression solver: dot products,
+ * Cholesky decomposition and selection.
  * Part of the ctools suite.
  */
 
@@ -31,52 +31,6 @@ ST_double cqreg_dot(const ST_double * CQREG_RESTRICT x,
 ST_double cqreg_dot_self(const ST_double * CQREG_RESTRICT x, ST_int N);
 
 /* ============================================================================
- * Vector Operations
- * ============================================================================ */
-
-/*
- * Vector copy: dst = src
- */
-void cqreg_vcopy(ST_double * CQREG_RESTRICT dst,
-                 const ST_double * CQREG_RESTRICT src,
-                 ST_int N);
-
-
-/* ============================================================================
- * Matrix Operations
- * ============================================================================ */
-
-
-/*
- * Column-major matrix-vector multiply: y = A * x
- * A is M x N (column-major: A[j*M + i] = A[i,j]), x is N, y is M
- */
-void cqreg_matvec_col(ST_double * CQREG_RESTRICT y,
-                      const ST_double * CQREG_RESTRICT A,
-                      const ST_double * CQREG_RESTRICT x,
-                      ST_int M, ST_int N);
-
-
-/*
- * Compute X' * D * X where D is diagonal.
- * X is N x K (column-major), D is N, result is K x K (symmetric, stored full).
- * Parallel implementation with OpenMP.
- */
-void cqreg_xtdx(ST_double * CQREG_RESTRICT XDX,
-                const ST_double * CQREG_RESTRICT X,
-                const ST_double * CQREG_RESTRICT D,
-                ST_int N, ST_int K);
-
-/*
- * Compute X' * v for column-major X.
- * X is N x K (column-major), v is N, result is K.
- */
-void cqreg_xtv(ST_double * CQREG_RESTRICT result,
-               const ST_double * CQREG_RESTRICT X,
-               const ST_double * CQREG_RESTRICT v,
-               ST_int N, ST_int K);
-
-/* ============================================================================
  * Cholesky Decomposition and Solve
  * ============================================================================ */
 
@@ -87,6 +41,11 @@ void cqreg_xtv(ST_double * CQREG_RESTRICT result,
  *
  * Returns: 0 on success, -1 if matrix is not positive definite (collinear)
  */
+/* Dense row-major K x K with leading dimension K. In-place ordinary-double
+ * lower factorization; upper triangle is retained. Returns 0 or -1 for a
+ * nonpositive pivot; on failure the lower factor can be partial. No allocation.
+ * The solve below consumes an existing factor, overwriting b in place without
+ * scratch or refactorization. Keep this distinct from ctools_solve_cholesky. */
 ST_int cqreg_cholesky(ST_double * CQREG_RESTRICT A, ST_int K);
 
 
@@ -133,7 +92,8 @@ ST_double cqreg_select(ST_double *values, ST_int N, ST_int k);
  * Compute sample quantile by selection (expected O(N)).
  * Creates a copy of y internally - does not modify input.
  * tau: quantile (0 < tau < 1), e.g., 0.5 for median
- * Returns: the tau-th sample quantile
+ * Returns: the tau-th sample quantile, or NaN when the working copy cannot
+ * be allocated (a quantile of finite values is never NaN)
  */
 ST_double cqreg_compute_quantile(const ST_double *y, ST_int N, ST_double tau);
 

@@ -34,12 +34,12 @@
 #define CWINSOR_MODULE "cwinsor"
 #define DEFAULT_LOWER_PCTL 1.0
 #define DEFAULT_UPPER_PCTL 99.0
-#define MIN_OBS_WINSOR 3
+#define MIN_OBS_WINSOR 1
 
 /* Note: By-variable sorting now uses ctools_sort_dispatch() instead of qsort */
 
 /* Apply permutation to reorder an array */
-static void apply_permutation(double *data, const size_t *perm, size_t n, double *temp)
+static void apply_permutation(double *data, const perm_idx_t *perm, size_t n, double *temp)
 {
     /* Copy to temp in new order */
     for (size_t i = 0; i < n; i++) {
@@ -167,8 +167,78 @@ typedef struct {
     double lower_pctl;
     double upper_pctl;
     int trim;
+    int return_bounds;
     int verbose;
+    int undo;          /* keep the loaded target values for cwinsor rollback */
+    int fault_store;   /* validation hook: fail after storing half the rows */
 } cwinsor_config;
+
+/* ===========================================================================
+   Undo copy for in-place calls
+   With option undo the main call keeps the target values it loaded, and
+   their observation numbers, until the ado ends the command with
+   "cwinsor commit" or "cwinsor rollback" (or the runtime resets it). A store
+   that fails part way is undone at once, before the call returns.
+   =========================================================================== */
+
+static struct {
+    double **values;   /* nvars columns of the loaded (original) values */
+    perm_idx_t *obs;   /* 1-based Stata observation of each loaded row */
+    size_t nvars, nobs;
+} undo;
+
+void cwinsor_cleanup_state(void)
+{
+    if (undo.values) {
+        for (size_t v = 0; v < undo.nvars; v++) free(undo.values[v]);
+        free(undo.values);
+    }
+    free(undo.obs);
+    memset(&undo, 0, sizeof(undo));
+}
+
+/* Copy the original values before anything changes them; 920 if there is no
+ * memory, which fails the call before any change. */
+static int cwinsor_undo_save(double **var_data, size_t nvars, const perm_idx_t *obs_map, size_t nobs)
+{
+    cwinsor_cleanup_state();
+    undo.values = (double **)calloc(nvars, sizeof(double *));
+    undo.obs = (perm_idx_t *)ctools_safe_malloc2(nobs, sizeof(perm_idx_t));
+    if (!undo.values || !undo.obs) {
+        cwinsor_cleanup_state();
+        return 920;
+    }
+    undo.nvars = nvars;
+    undo.nobs = nobs;
+    for (size_t v = 0; v < nvars; v++) {
+        undo.values[v] = (double *)ctools_safe_malloc2(nobs, sizeof(double));
+        if (!undo.values[v]) {
+            cwinsor_cleanup_state();
+            return 920;
+        }
+        memcpy(undo.values[v], var_data[v], nobs * sizeof(double));
+    }
+    memcpy(undo.obs, obs_map, nobs * sizeof(perm_idx_t));
+    return 0;
+}
+
+/* Write the original values back into the targets, which are the first
+ * nvars variables of the plugin varlist, then free the copy. */
+static int cwinsor_undo_restore(void)
+{
+    int rc = STATA_OK;
+    if (undo.nvars == 1) {
+        rc = ctools_store_filtered_rowpar(undo.values[0], undo.nobs, 1, undo.obs);
+    } else {
+        #pragma omp parallel for schedule(static) reduction(max:rc)
+        for (size_t v = 0; v < undo.nvars; v++) {
+            int vrc = ctools_store_filtered(undo.values[v], undo.nobs, (int)v + 1, undo.obs);
+            if (vrc > rc) rc = vrc;
+        }
+    }
+    cwinsor_cleanup_state();
+    return rc;
+}
 
 /* ===========================================================================
    Core Functions
@@ -215,11 +285,10 @@ ST_retcode cwinsor_main(const char *args)
     double t_start, t_load, t_sort, t_groups, t_winsor, t_store;
     int *store_indices = NULL;   /* Plugin-local positions for checked stores */
     int *load_indices = NULL;    /* Sequential plugin-local indices for SF_vdata */
-    int *by_load_indices = NULL; /* Sequential plugin-local indices for by-vars */
     double **var_data = NULL;
     double **work_arrays = NULL;
     group_info *groups = NULL;
-    size_t *sort_indices = NULL;
+    const perm_idx_t *sort_indices = NULL; /* Borrowed from loaded data */
     double *temp_buffer = NULL;
     perm_idx_t *obs_map = NULL;  /* Maps filtered index to 1-based Stata obs */
     int num_threads = 1;
@@ -232,12 +301,33 @@ ST_retcode cwinsor_main(const char *args)
         return 198;
     }
 
+    /* End an in-place call: put the original values back, or drop the copy. */
+    if (!strcmp(args, "commit")) {
+        cwinsor_cleanup_state();
+        return 0;
+    }
+    if (!strcmp(args, "rollback")) {
+        if (!undo.values) {
+            ctools_error(CWINSOR_MODULE, "no original values to restore");
+            return 459;
+        }
+        if (SF_nvars() < (int)undo.nvars) {
+            cwinsor_cleanup_state();
+            return 198;
+        }
+        return ctools_stata_rc(cwinsor_undo_restore());
+    }
+    cwinsor_cleanup_state();
+
     /* Parse options */
     cwinsor_config config;
     config.lower_pctl = ctools_parse_double_option(args, "p", DEFAULT_LOWER_PCTL);
     config.upper_pctl = ctools_parse_double_option(args, "q", DEFAULT_UPPER_PCTL);
     config.trim = ctools_parse_bool_option(args, "trim");
+    config.return_bounds = ctools_parse_bool_option(args, "returnbounds");
     config.verbose = ctools_parse_bool_option(args, "verbose");
+    config.undo = ctools_parse_bool_option(args, "undo");
+    config.fault_store = ctools_parse_bool_option(args, "fault_store");
 
     if (!isfinite(config.lower_pctl) || !isfinite(config.upper_pctl) ||
         config.lower_pctl < 0 || config.lower_pctl > 100 ||
@@ -265,11 +355,20 @@ ST_retcode cwinsor_main(const char *args)
     while (*p == ' ' || *p == '\t') p++;
     int nby_value;
     if (ctools_parse_next_int(&p, &nby_value) || nby_value < 0 ||
-        nby_value > SF_nvars()) {
+        nby_value > SF_nvars() - nvars_value) {
         ctools_error(CWINSOR_MODULE, "invalid nby");
         return 198;
     }
     size_t nby = (size_t)nby_value;
+    size_t nload = nvars + nby;
+    char bounds_name[256] = {0};
+    if (config.return_bounds) {
+        if (nby != 0) return 198;
+        ST_retcode rc = SF_macro_use("_cwinsor_bounds", bounds_name, sizeof(bounds_name));
+        if (rc) return rc;
+        if (!bounds_name[0]) return 198;
+    }
+
 
     /* Parse plugin-local store indices. */
     store_indices = (int *)malloc(nvars * sizeof(int));
@@ -283,31 +382,16 @@ ST_retcode cwinsor_main(const char *args)
         return 198;
     }
 
-    /* Generate sequential plugin-local load indices (stack-allocated).
-     * Plugin call receives: target_var1 target_var2 ... by_var1 by_var2 ...
-     * So plugin-local positions are: targets = 1..nvars, by-vars = nvars+1..nvars+nby */
-    /* Heap-allocate index arrays (avoids VLA stack overflow for large nvars/nby) */
-    load_indices = (int *)malloc(nvars * sizeof(int));
+    /* Load targets and by-variables together, sharing one if/in selection and
+     * observation map. Plugin-local columns are targets, then by-variables. */
+    load_indices = (int *)malloc(nload * sizeof(int));
     if (!load_indices) {
         free(store_indices);
         ctools_error_alloc(CWINSOR_MODULE);
         return 920;
     }
-    for (size_t i = 0; i < nvars; i++) {
+    for (size_t i = 0; i < nload; i++) {
         load_indices[i] = (int)(i + 1);
-    }
-
-    if (nby > 0) {
-        by_load_indices = (int *)malloc(nby * sizeof(int));
-        if (!by_load_indices) {
-            free(load_indices);
-            free(store_indices);
-            ctools_error_alloc(CWINSOR_MODULE);
-            return 920;
-        }
-        for (size_t i = 0; i < nby; i++) {
-            by_load_indices[i] = (int)(nvars + i + 1);
-        }
     }
 
     #ifdef _OPENMP
@@ -317,17 +401,14 @@ ST_retcode cwinsor_main(const char *args)
     /* === Load Phase === */
     double load_start = ctools_timer_seconds();
 
-    /* Load target variables using plugin-local indices (handles if/in at load time).
-     * Single-variable: row-parallel load (parallelizes across observations).
-     * Multi-variable: column-parallel load (one thread per variable). */
+    /* The loaded dataset owns all columns, the sort order, and the row map. */
     ctools_filtered_data target_filtered;
     ctools_filtered_data_init(&target_filtered);
     stata_retcode load_rc = ctools_data_load(&target_filtered, load_indices,
-                                              nvars, 0, 0, 0);
+                                              nload, 0, 0, nby ? 0 : CTOOLS_LOAD_NO_SORT_ORDER);
     if (load_rc != STATA_OK) {
         free(store_indices);
         free(load_indices);
-        free(by_load_indices);
         ctools_error_alloc(CWINSOR_MODULE);
         return ctools_stata_rc(load_rc);
     }
@@ -340,7 +421,6 @@ ST_retcode cwinsor_main(const char *args)
         ctools_filtered_data_free(&target_filtered);
         free(store_indices);
         free(load_indices);
-        free(by_load_indices);
         ctools_error(CWINSOR_MODULE, "no observations");
         return 2000;
     }
@@ -351,7 +431,6 @@ ST_retcode cwinsor_main(const char *args)
         ctools_filtered_data_free(&target_filtered);
         free(store_indices);
         free(load_indices);
-        free(by_load_indices);
         ctools_error_alloc(CWINSOR_MODULE);
         return 920;
     }
@@ -359,23 +438,14 @@ ST_retcode cwinsor_main(const char *args)
         var_data[v] = target_filtered.data.vars[v].data.dbl;
     }
 
-    /* Load by-variables if specified */
-    ctools_filtered_data by_filtered;
-    ctools_filtered_data_init(&by_filtered);
-
-    if (nby > 0) {
-        load_rc = ctools_data_load(&by_filtered, by_load_indices,
-                                             nby, 0, 0, 0);
-        if (load_rc != STATA_OK) {
-            ctools_filtered_data_free(&target_filtered);
-            free(var_data);
-            free(store_indices);
-            free(load_indices);
-        free(by_load_indices);
-            ctools_error_alloc(CWINSOR_MODULE);
-            return ctools_stata_rc(load_rc);
-        }
-
+    /* The undo copy is taken in load order, matching obs_map. */
+    if (config.undo && cwinsor_undo_save(var_data, nvars, obs_map, nobs)) {
+        free(var_data);
+        ctools_filtered_data_free(&target_filtered);
+        free(store_indices);
+        free(load_indices);
+        ctools_error_alloc(CWINSOR_MODULE);
+        return 920;
     }
 
     t_load = ctools_timer_seconds() - load_start;
@@ -387,55 +457,41 @@ ST_retcode cwinsor_main(const char *args)
         /* Build 1-based sort key indices for by-variables (heap-allocated to avoid VLA) */
         int *sort_keys = (int *)malloc(nby * sizeof(int));
         if (!sort_keys) {
-            ctools_filtered_data_free(&by_filtered);
             free(var_data);
             ctools_filtered_data_free(&target_filtered);
             free(store_indices);
             free(load_indices);
-            free(by_load_indices);
             ctools_error_alloc(CWINSOR_MODULE);
             return 920;
         }
         for (size_t b = 0; b < nby; b++) {
-            sort_keys[b] = (int)(b + 1);  /* 1-based indices into by_filtered.data */
+            sort_keys[b] = (int)(nvars + b + 1);  /* 1-based loaded column */
         }
 
         /* Sort by-variables using ctools infrastructure (order only) */
-        stata_retcode sort_rc = ctools_sort_dispatch(&by_filtered.data, sort_keys, nby, SORT_ALG_AUTO);
+        stata_retcode sort_rc = ctools_sort_dispatch(&target_filtered.data, sort_keys, nby, SORT_ALG_AUTO);
 
         free(sort_keys);
 
         if (sort_rc != STATA_OK) {
-            ctools_filtered_data_free(&by_filtered);
             free(var_data);
             ctools_filtered_data_free(&target_filtered);
             free(store_indices);
             free(load_indices);
-            free(by_load_indices);
             ctools_error(CWINSOR_MODULE, "sort failed");
             return 920;
         }
 
-        /* Allocate sort_indices for sorting and later un-sorting during store */
-        sort_indices = (size_t *)malloc(nobs * sizeof(size_t));
+        /* Reuse the shared permutation for gather and write-back. */
+        sort_indices = target_filtered.data.sort_order;
         temp_buffer = (double *)malloc(nobs * sizeof(double));
-
-        if (!sort_indices || !temp_buffer) {
-            if (sort_indices) free(sort_indices);
-            if (temp_buffer) free(temp_buffer);
-            ctools_filtered_data_free(&by_filtered);
+        if (!temp_buffer) {
             free(var_data);
             ctools_filtered_data_free(&target_filtered);
             free(store_indices);
             free(load_indices);
-        free(by_load_indices);
             ctools_error_alloc(CWINSOR_MODULE);
             return 920;
-        }
-
-        /* Copy sort_order from by_filtered.data (converting perm_idx_t to size_t) */
-        for (size_t i = 0; i < nobs; i++) {
-            sort_indices[i] = (size_t)by_filtered.data.sort_order[i];
         }
 
         /* Apply permutation to target variable arrays. The by-variables stay
@@ -460,21 +516,18 @@ ST_retcode cwinsor_main(const char *args)
         free(groups);
         free(group_starts);
         free(group_keys);
-        if (sort_indices) free(sort_indices);
         if (temp_buffer) free(temp_buffer);
         free(var_data);
-        ctools_filtered_data_free(&by_filtered);
         ctools_filtered_data_free(&target_filtered);
         free(store_indices);
         free(load_indices);
-        free(by_load_indices);
         ctools_error_alloc(CWINSOR_MODULE);
         return 920;
     }
 
     if (nby > 0) {
-        for (size_t b = 0; b < nby; b++) group_keys[b] = (int)b;
-        ngroups = ctools_group_starts(&by_filtered.data, by_filtered.data.sort_order,
+        for (size_t b = 0; b < nby; b++) group_keys[b] = (int)(nvars + b);
+        ngroups = ctools_group_starts(&target_filtered.data, target_filtered.data.sort_order,
                                       group_keys, nby, group_starts);
         for (size_t g = 0; g < ngroups; g++) {
             groups[g].start = group_starts[g];
@@ -504,43 +557,57 @@ ST_retcode cwinsor_main(const char *args)
             max_group_size = groups[g].count;
     }
 
-    work_arrays = (double **)malloc(num_threads * sizeof(double *));
+    /* One work buffer per thread that can get a task: without by() there is
+     * one task per variable, so few variables need few buffers. The parallel
+     * loops below run exactly nwork threads, which index these buffers. */
+    size_t total_tasks = ngroups == 1 ? nvars : nvars * ngroups;
+    int nwork = (int)(total_tasks < (size_t)num_threads ? total_tasks : (size_t)num_threads);
+    if (nwork < 1) nwork = 1;
+
+    work_arrays = (double **)malloc((size_t)nwork * sizeof(double *));
     if (!work_arrays) {
         free(groups);
-        if (sort_indices) free(sort_indices);
         if (temp_buffer) free(temp_buffer);
         free(var_data);
-        ctools_filtered_data_free(&by_filtered);
         ctools_filtered_data_free(&target_filtered);
         free(store_indices);
         free(load_indices);
-        free(by_load_indices);
         ctools_error_alloc(CWINSOR_MODULE);
         return 920;
     }
 
-    for (int t = 0; t < num_threads; t++) {
+    for (int t = 0; t < nwork; t++) {
         work_arrays[t] = (double *)malloc(max_group_size * sizeof(double));
         if (!work_arrays[t]) {
             for (int j = 0; j < t; j++) free(work_arrays[j]);
             free(work_arrays);
             free(groups);
-            if (sort_indices) free(sort_indices);
             if (temp_buffer) free(temp_buffer);
             free(var_data);
-            ctools_filtered_data_free(&by_filtered);
             ctools_filtered_data_free(&target_filtered);
             free(store_indices);
             free(load_indices);
-        free(by_load_indices);
             ctools_error_alloc(CWINSOR_MODULE);
             return 920;
         }
     }
 
+    /* Only the caller thread may use the host matrix API. Workers collect
+     * exact quantiles here for the ado's winsor2-compatible macro expansion. */
+    int store_rc = STATA_OK;
+    double *bounds = NULL;
+    if (config.return_bounds) {
+        bounds = ctools_safe_malloc2(nvars, 2 * sizeof(double));
+        if (!bounds) {
+            store_rc = STATA_ERR_MEMORY;
+            goto cleanup;
+        }
+        for (size_t v = 0; v < 2 * nvars; v++) bounds[v] = SV_missval;
+    }
+
     if (ngroups == 1) {
         #ifdef _OPENMP
-        #pragma omp parallel for schedule(static)
+        #pragma omp parallel for schedule(static) num_threads(nwork)
         #endif
         for (size_t v = 0; v < nvars; v++) {
             #ifdef _OPENMP
@@ -568,17 +635,18 @@ ST_retcode cwinsor_main(const char *args)
                 upper = tmp;
             }
 
-            if (config.trim) {
+            if (config.return_bounds) {
+                bounds[2 * v] = lower;
+                bounds[2 * v + 1] = upper;
+            } else if (config.trim) {
                 apply_trim_bounds(data, count, lower, upper);
             } else {
                 apply_winsor_bounds(data, count, lower, upper);
             }
         }
     } else {
-        size_t total_tasks = nvars * ngroups;
-
         #ifdef _OPENMP
-        #pragma omp parallel for schedule(dynamic, 1)
+        #pragma omp parallel for schedule(dynamic, 1) num_threads(nwork)
         #endif
         for (size_t task = 0; task < total_tasks; task++) {
             size_t v = task / ngroups;
@@ -623,7 +691,13 @@ ST_retcode cwinsor_main(const char *args)
     /* === Store Phase using obs_map === */
     double store_start = ctools_timer_seconds();
 
-    int store_rc = STATA_OK;
+    if (config.return_bounds) {
+        for (size_t v = 0; v < nvars && !store_rc; v++) {
+            store_rc = SF_mat_store(bounds_name, v + 1, 1, bounds[2 * v]);
+            if (!store_rc)
+                store_rc = SF_mat_store(bounds_name, v + 1, 2, bounds[2 * v + 1]);
+        }
+    }
     perm_idx_t *write_map = obs_map;
     perm_idx_t *composed_map = NULL;
     if (nby > 0 && sort_indices != NULL) {
@@ -634,15 +708,24 @@ ST_retcode cwinsor_main(const char *args)
             write_map = composed_map;
         }
     }
-    if (!store_rc) {
+    if (!store_rc && !config.return_bounds) {
+        /* fault_store writes half the rows and then fails as memory would */
+        size_t n_store = config.fault_store ? nobs / 2 : nobs;
         if (nvars == 1) {
-            store_rc = ctools_store_filtered_rowpar(var_data[0], nobs, store_indices[0], write_map);
+            store_rc = ctools_store_filtered_rowpar(var_data[0], n_store, store_indices[0], write_map);
         } else {
             #pragma omp parallel for schedule(static) reduction(max:store_rc)
             for (size_t v = 0; v < nvars; v++) {
-                int rc = ctools_store_filtered(var_data[v], nobs, store_indices[v], write_map);
+                int rc = ctools_store_filtered(var_data[v], n_store, store_indices[v], write_map);
                 if (rc > store_rc) store_rc = rc;
             }
+        }
+        if (!store_rc && config.fault_store) store_rc = STATA_ERR_MEMORY;
+        /* A store that failed part way is undone before returning: the
+         * runtime frees the copy after any failed call. */
+        if (store_rc && undo.values) {
+            int restore_rc = cwinsor_undo_restore();
+            if (restore_rc) ctools_error(CWINSOR_MODULE, "the original values could not be restored");
         }
     }
     free(composed_map);
@@ -650,23 +733,25 @@ ST_retcode cwinsor_main(const char *args)
     t_store = ctools_timer_seconds() - store_start;
 
     /* === Cleanup === */
-    for (int t = 0; t < num_threads; t++) {
+cleanup:
+    free(bounds);
+    for (int t = 0; t < nwork; t++) {
         free(work_arrays[t]);
     }
     free(work_arrays);
     free(groups);
-    if (sort_indices) free(sort_indices);
     if (temp_buffer) free(temp_buffer);
     /* Free pointer arrays (not the data - owned by stata_data structs) */
     free(var_data);
     /* Free stata_data structures (which own the actual data arrays) */
-    ctools_filtered_data_free(&by_filtered);
     ctools_filtered_data_free(&target_filtered);
     free(store_indices);
     free(load_indices);
-    free(by_load_indices);
 
-    if (store_rc) return ctools_stata_rc(store_rc);
+    if (store_rc) {
+        cwinsor_cleanup_state();
+        return ctools_stata_rc(store_rc);
+    }
 
     /* Store timing scalars */
     double total = ctools_timer_seconds() - t_start;

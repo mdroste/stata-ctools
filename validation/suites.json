@@ -898,6 +898,18 @@
       "env": {}
     },
     {
+      "name": "test_rowstage_native",
+      "path": "validation/test_rowstage_native.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [
+        "C compiler"
+      ],
+      "env": {}
+    },
+    {
       "name": "test_sep22_native",
       "path": "validation/test_sep22_native.py",
       "runner": "native",
@@ -912,6 +924,20 @@
     {
       "name": "test_sep24_native",
       "path": "validation/test_sep24_native.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [
+        "C compiler"
+      ],
+      "env": {
+        "CTOOLS_SANITIZERS": "address,undefined"
+      }
+    },
+    {
+      "name": "test_sort_keys_native",
+      "path": "validation/test_sort_keys_native.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -1190,6 +1216,246 @@
       "dependencies": [
         "Stata"
       ]
+    },
+    {
+      "name": "test_io_performance_native",
+      "path": "validation/test_io_performance_native.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [
+        "C compiler"
+      ]
+    },
+    {
+      "name": "benchmark_io_performance",
+      "path": "validation/benchmark_io_performance.do",
+      "runner": "manual",
+      "category": "performance",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [
+        "Stata",
+        "C compiler"
+      ],
+      "reason": "Controlled ABBA timing of frozen builds; run through prepare_io_performance.py."
+    },
+    {
+      "name": "refactor_boundaries_native",
+      "path": "validation/test_refactor_boundaries_native.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": null,
+      "fixtures": [],
+      "dependencies": [
+        "C compiler"
+      ]
+    },
+    {
+      "name": "refactor_timing",
+      "path": "validation/test_refactor_timing.do",
+      "runner": "do",
+      "category": "correctness",
+      "marker": "CTOOLS_REFACTOR_TIMING_COMPLETE",
+      "fixtures": [],
+      "dependencies": [
+        "Stata"
+      ]
+    },
+    {
+      "name": "group_windows",
+      "path": "validation/validate_group_windows.do",
+      "runner": "master",
+      "category": "correctness",
+      "marker": "group_windows",
+      "fixtures": [],
+      "dependencies": [
+        "rangestat"
+      ],
+      "public": true
+    },
+    {
+      "name": "benchmark_group_performance",
+      "path": "validation/benchmark_group_performance.do",
+      "runner": "manual",
+      "category": "performance",
+      "marker": "GROUP_BENCHMARK_COMPLETE",
+      "fixtures": [
+        "frozen-baseline-candidate-builds"
+      ],
+      "dependencies": [
+        "rangestat",
+        "gstats"
+      ],
+      "reason": "Use prepare_group_performance.py for sequential B-C-C-B runs of frozen builds."
+    },
+    {
+      "name": "group_windows_native",
+      "path": "validation/test_group_windows_native.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": []
+    },
+    {
+      "name": "hdfe_failures_native",
+      "path": "validation/test_hdfe_failures_native.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [
+        "C compiler"
+      ]
+    },
+    {
+      "name": "option_contracts",
+      "path": "validation/validate_option_contracts.do",
+      "runner": "master",
+      "marker": "option_contracts",
+      "dependencies": [
+        "binscatter",
+        "ivreghdfe",
+        "ppmlhdfe"
+      ],
+      "category": "correctness",
+      "fixtures": []
+    },
+    {
+      "name": "coverage_helpers",
+      "path": "validation/test_coverage_helpers.do",
+      "runner": "do",
+      "marker": "COVERAGE_HELPERS_MUTATIONS_PASS",
+      "dependencies": [
+        "Stata"
+      ],
+      "category": "correctness",
+      "fixtures": []
+    },
+    {
+      "name": "option_inventory",
+      "path": "validation/test_option_inventory.py",
+      "runner": "native",
+      "marker": "",
+      "dependencies": [],
+      "category": "correctness",
+      "fixtures": []
+    },
+    {
+      "name": "option_coverage",
+      "path": "validation/test_option_coverage.py",
+      "runner": "python",
+      "marker": "OPTION_COVERAGE_COMPLETE",
+      "dependencies": [
+        "Stata",
+        "reghdfe",
+        "ivreghdfe",
+        "ppmlhdfe",
+        "psmatch2",
+        "binscatter",
+        "rangestat",
+        "rangejoin",
+        "winsor2"
+      ],
+      "command": [
+        "python3",
+        "validation/test_option_coverage.py"
+      ],
+      "log": "temp/option_coverage/results.log",
+      "category": "correctness",
+      "fixtures": []
+    },
+    {
+      "name": "encode_labels",
+      "path": "validation/validate_encode_labels.do",
+      "runner": "master",
+      "category": "correctness",
+      "marker": "encode_labels",
+      "fixtures": [],
+      "dependencies": [],
+      "public": true
+    },
+    {
+      "name": "encode_labels_native",
+      "path": "validation/test_encode_labels_native.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [
+        "C compiler"
+      ]
+    },
+    {
+      "name": "winsor_transport",
+      "path": "validation/validate_winsor_transport.do",
+      "runner": "master",
+      "category": "correctness",
+      "marker": "winsor_transport",
+      "fixtures": [],
+      "dependencies": [
+        "gstats"
+      ],
+      "public": true
+    },
+    {
+      "name": "winsor_transport_native",
+      "path": "validation/test_winsor_transport_native.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [
+        "C compiler",
+        "OpenMP"
+      ]
+    },
+    {
+      "name": "benchmark_encode_performance",
+      "path": "validation/benchmark_encode_performance.do",
+      "runner": "manual",
+      "category": "performance",
+      "marker": "ENCODE_BENCHMARK_COMPLETE",
+      "fixtures": [
+        "frozen-baseline-candidate-builds"
+      ],
+      "dependencies": [
+        "Stata"
+      ],
+      "reason": "Use prepare_encode_performance.py for sequential B-C-C-B runs of frozen builds."
+    },
+    {
+      "name": "benchmark_winsor_references",
+      "path": "validation/benchmark_winsor_references.do",
+      "runner": "manual",
+      "category": "performance",
+      "marker": "WINSOR_REFERENCES_COMPLETE",
+      "fixtures": [
+        "frozen-plugin-build",
+        "monotonic-clock-plugin"
+      ],
+      "dependencies": [
+        "winsor2",
+        "gstats"
+      ],
+      "reason": "Pass frozen build, clock plugin, observation count and repetitions; compare full public commands."
+    },
+    {
+      "name": "hdfe_datasets",
+      "path": "validation/validate_hdfe_datasets.do",
+      "runner": "manual",
+      "category": "large",
+      "marker": "HDFE_DATASETS_COMPLETE",
+      "fixtures": [
+        "hdfe-benchmark-collection"
+      ],
+      "dependencies": [
+        "Stata",
+        "reghdfe"
+      ],
+      "reason": "Opt-in: needs the 227 MB HDFE benchmark collection (fetch_validation_data.py --collection hdfe); run through run_hdfe_datasets.py."
     }
   ]
 }

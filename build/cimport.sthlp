@@ -68,6 +68,10 @@ variables is an error.
 {synopt:{opt parsel:ocale(name)}}locale for numeric parsing{p_end}
 {synopt:{opt maxquoted:rows(#)}}limit on lines in a strict quoted field{p_end}
 
+{syntab:Failure handling}
+{synopt:{opt snap:shot}}{help preserve} the data in memory, as earlier versions did; written to disk above {cmd:c(max_preservemem)}{p_end}
+{synopt:{opt fast}}clear the data first and undo nothing; a failure or Break leaves an incomplete import{p_end}
+
 {syntab:Reporting}
 {synopt:{opt verbose}}display progress information{p_end}
 {synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
@@ -94,6 +98,8 @@ variables is an error.
 {synopt:{opt clear}}clear data in memory before loading{p_end}
 {synopt:{opt desc:ribe}}list worksheet names and ranges without loading data{p_end}
 {synopt:{opt v:erbose}}display progress information{p_end}
+{synopt:{opt snap:shot}}{help preserve} the data in memory, as earlier versions did{p_end}
+{synopt:{opt fast}}undo nothing after a failure{p_end}
 {synoptline}
 
 
@@ -238,6 +244,34 @@ Delimited import uses {opt parselocale(name)}; {opt locale(name)} is not a nativ
 {phang}
 {opt maxquotedrows(#)} limits physical rows within a strict quoted field and
 accepts an integer or {cmd:unlimited}; exceeding it returns 5101.
+
+{dlgtab:Failure handling}
+
+{pstd}
+By default a failed or interrupted import leaves the data in memory as they
+were without writing a snapshot of them to disk. From Stata 16 the data are
+first copied into a {help frame} in memory (if memory is short, the copy fails
+before anything changes) and are restored from it after a failure or Break;
+the copy and the imported data are in memory together until the import
+finishes. Before Stata 16, and when the data in memory are empty (their value
+labels and characteristics stay unless {opt clear} is specified),
+{cmd:cimport} uses {help preserve}. As the native commands do,
+{cmd:cimport sas}, {cmd:spss}, {cmd:sasxport5}, {cmd:sasxport8}, {cmd:dbase}
+and {cmd:shp} clear the data before reading the file, so a failure leaves an
+empty dataset.
+
+{phang}
+{opt snapshot} restores the data after a failed or interrupted import from a
+{help preserve} snapshot of the data in memory instead, as earlier versions of
+{cmd:cimport} did. Stata keeps the snapshot in memory up to
+{cmd:c(max_preservemem)} (1 GB by default) and writes it to disk above that.
+{p_end}
+
+{phang}
+{opt fast} clears the data before importing and undoes nothing: the old and the
+new data are never in memory together, but a failure or Break leaves an
+incomplete import. {opt fast} may not be combined with {opt snapshot}.
+{p_end}
 
 {dlgtab:Reporting}
 

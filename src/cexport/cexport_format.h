@@ -21,6 +21,10 @@
    Row Formatting
    ======================================================================== */
 
+/* Row formatters return the row length as int. A row longer than INT_MAX
+   bytes returns this code instead; a larger buffer cannot help. */
+#define CEXPORT_ROW_TOO_LONG (-3)
+
 /*
     Format a single row of ALL NUMERIC variables into the output buffer.
 
@@ -31,7 +35,8 @@
     @param row_idx   Row index (0-based)
     @param buf       Output buffer
     @param buf_size  Size of output buffer
-    @return          Number of bytes written, or -1 on buffer overflow
+    @return          Number of bytes written, -1 on buffer overflow, or
+                     CEXPORT_ROW_TOO_LONG
 */
 int cexport_format_row_numeric(const cexport_context *ctx, size_t row_idx,
                                char *buf, size_t buf_size);
@@ -45,7 +50,8 @@ int cexport_format_row_numeric(const cexport_context *ctx, size_t row_idx,
     @param row_idx   Row index (0-based)
     @param buf       Output buffer
     @param buf_size  Size of output buffer
-    @return          Number of bytes written, or -1 on buffer overflow
+    @return          Number of bytes written, -1 on buffer overflow, or
+                     CEXPORT_ROW_TOO_LONG
 */
 int cexport_format_row(const cexport_context *ctx, size_t row_idx,
                        char *buf, size_t buf_size);
@@ -59,7 +65,8 @@ int cexport_format_row(const cexport_context *ctx, size_t row_idx,
     @param buf       Output buffer
     @param buf_size  Size of output buffer
     @return          Bytes written, -1 when the buffer is too small (retry with
-                     a larger buffer), or -2 when Stata data cannot be read
+                     a larger buffer), -2 when Stata data cannot be read, or
+                     CEXPORT_ROW_TOO_LONG
 */
 int cexport_format_row_stream(const cexport_context *ctx, ST_int obs,
                               char *buf, size_t buf_size);

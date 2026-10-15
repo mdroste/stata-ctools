@@ -1,0 +1,60 @@
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+      name:  <unnamed>
+       log:  /Users/Mike/Documents/GitHub/stata-ctools/temp/command_performance_20261002/tests_baseline/stata.log
+  log type:  text
+ opened on:   2 Oct 2026, 10:41:39
+
+. capture noisily do validation/validate_group_windows.do
+
+. * Regression coverage for cross-group scheduling, tied windows, and sparse-key
+. * sliding scans. Reference comparisons retain the suite's seven-digit policy.
+. capture do "validation/validate_setup.do"
+
+. if _rc do "validate_setup.do"
+
+. quietly {
+
+. print_summary "group_windows"
+
+---------------------------------------------
+  group_windows validation results
+---------------------------------------------
+  Passed: 241
+  Failed: 16
+  Skipped: 0
+  Total:  257
+---------------------------------------------
+  SOME TESTS FAILED
+  group windows 63 0 skewness: reference values differ
+  group windows 63 0 kurtosis: reference values differ
+  group windows 63 1 skewness: reference values differ
+  group windows 63 1 kurtosis: reference values differ
+  group windows 499 0 skewness: reference values differ
+  group windows 499 0 kurtosis: reference values differ
+  group windows 499 1 skewness: reference values differ
+  group windows 499 1 kurtosis: reference values differ
+  group windows 999 0 skewness: reference values differ
+  group windows 999 0 kurtosis: reference values differ
+  group windows 999 1 skewness: reference values differ
+  group windows 999 1 kurtosis: reference values differ
+  group windows 9999 0 skewness: reference values differ
+  group windows 9999 0 kurtosis: reference values differ
+  group windows 9999 1 skewness: reference values differ
+  group windows 9999 1 kurtosis: reference values differ
+---------------------------------------------
+
+r(9);
+
+end of do-file
+
+. local rc=_rc
+
+. di "BASELINE_BOUNDARY_RC=`rc'"
+BASELINE_BOUNDARY_RC=9
+
+. log close
+      name:  <unnamed>
+       log:  /Users/Mike/Documents/GitHub/stata-ctools/temp/command_performance_20261002/tests_baseline/stata.log
+  log type:  text
+ closed on:   2 Oct 2026, 10:41:47
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------

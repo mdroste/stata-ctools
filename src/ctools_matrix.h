@@ -28,6 +28,32 @@ void ctools_matmul_atb(const ST_double * restrict A, const ST_double * restrict 
                        ST_double * restrict C);
 
 /*
+ * Gram matrix C = A' * A
+ * A is N x K, Result C is K x K (symmetric), column-major.
+ *
+ * Each element is the same unrolled dot product ctools_matmul_atb(A, A, ...)
+ * computes, so the two give identical results; only the upper triangle is
+ * computed (in parallel) and then mirrored.
+ */
+void ctools_matmul_ata(const ST_double *A, ST_int N, ST_int K, ST_double *C);
+
+/*
+ * y += X * b, with X an N x K column-major matrix and b its K coefficients.
+ * Every y[i] accumulates X[i,k] * b[k] in column order k = 0..K-1 with
+ * ordinary double arithmetic, exactly as a per-row loop over the columns
+ * would; rows are processed in cache-sized blocks, in parallel.
+ */
+void ctools_matvec_add(const ST_double *X, ST_int N, ST_int K, const ST_double *b, ST_double *y);
+
+/*
+ * C = X * B, with X N x K, B K x M and C N x M, all column-major.
+ * Each C[i,m] is 0 + X[i,0]*B[0,m] + ... + X[i,K-1]*B[K-1,m], summed in that
+ * order (the accumulation order of ctools_matvec_add()).
+ */
+void ctools_matmul_xb(const ST_double *X, ST_int N, ST_int K, const ST_double *B, ST_int M,
+                      ST_double *C);
+
+/*
  * Matrix multiply C = A * B
  * A is K1 x K2, B is K2 x K3, Result C is K1 x K3
  * All matrices stored in column-major order.

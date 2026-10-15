@@ -3,7 +3,7 @@
 #include <math.h>
 static ST_plugin mock;
 ST_plugin *_stata_ = &mock;
-#include "creghdfe/creghdfe_utils.c"
+#include "hdfe/hdfe_remap.c"
 int main(void) {
     double cases[][6] = {{1, 1, 2, 2, -1, -1},
                          {1.5, 1.5, 2.5, 2.5, -1, -1},

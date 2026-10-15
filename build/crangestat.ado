@@ -2,14 +2,26 @@
 
 program define crangestat
     version 14.1
-    preserve
-    capture noisily _crangestat_impl `0'
-    local rc = _rc
-    if `rc' {
-        restore
-        exit `rc'
+    * A failed or interrupted call leaves the data as they were without a
+    * snapshot of the dataset: crangestat only adds its result variables at
+    * the end, and the plugin writes into nothing else, so _ctools_undo drops
+    * them and resets c(changed). Option snapshot preserves the whole dataset
+    * instead (on disk above c(max_preservemem)); option fast undoes nothing.
+    _ctools_mode `0'
+    * Break is recognized only inside _crangestat_impl.
+    nobreak {
+        if "`mode'" == "snapshot" preserve
+        else if "`mode'" == "" _ctools_undo record CTOOLS_u_crangestat_
+        capture noisily break _crangestat_impl `0'
+        local rc = _rc
+        if `rc' {
+            if "`mode'" == "snapshot" restore
+            else if "`mode'" == "" _ctools_undo rollback CTOOLS_u_crangestat_
+            exit `rc'
+        }
+        if "`mode'" == "snapshot" restore, not
+        else if "`mode'" == "" _ctools_undo clear CTOOLS_u_crangestat_
     }
-    restore, not
 end
 
 program define _crangestat_impl
@@ -40,7 +52,7 @@ program define _crangestat_impl
 
     * Parse options
     local 0 ", `opt_part'"
-    syntax, INTerval(string) [BY(varlist) EXCLUDEself Verbose THReads(integer 0)]
+    syntax, INTerval(string) [BY(varlist) EXCLUDEself Verbose THReads(integer 0) SNAPshot FAST]
 
     * Parse interval specification: keyvar low high
     tokenize "`interval'"
@@ -98,11 +110,13 @@ program define _crangestat_impl
     * Start timing
     local __do_timing = ("`verbose'" != "")
     if `__do_timing' {
-        timer clear 90
-        timer clear 91
-        timer clear 92
-        timer on 90
-        timer on 91
+        local __ct_elapsed90 = 0
+        local __ct_elapsed91 = 0
+        local __ct_elapsed92 = 0
+        if "`__ct_elapsed90'" == "" local __ct_elapsed90 = 0
+        quietly _ctools_clock __ct_start90
+        if "`__ct_elapsed91'" == "" local __ct_elapsed91 = 0
+        quietly _ctools_clock __ct_start91
     }
 
     * Parse stat specifications
@@ -194,9 +208,9 @@ program define _crangestat_impl
             local source_var = strtrim(substr("`var_spec'", `eq_pos' + 1, .))
         }
         else {
-            * Default: result var is stat_name_varname
+            * Native rangestat names results source_stat.
             local source_var "`var_spec'"
-            local result_var "`stat_name'_`source_var'"
+            local result_var "`source_var'_`stat_name'"
         }
 
         * Validate source variable
@@ -209,6 +223,18 @@ program define _crangestat_impl
         if _rc != 0 {
             di as error "crangestat: source variable `source_var' must be numeric"
             exit 109
+        }
+        * One source and one result per statistic: the plugin arguments are
+        * positional, so an extra name would shift every later field.
+        unab __src_names : `source_var'
+        if `: word count `__src_names'' > 1 | `: word count `result_var'' > 1 {
+            di as error "crangestat: too many variables specified in (`stat_name') `var_spec'"
+            di as error "  each statistic takes one [newvar=]varname"
+            exit 103
+        }
+        if "`result_var'" == "" {
+            di as error "crangestat: missing new variable name in (`stat_name') `var_spec'"
+            exit 102
         }
 
         * Destination creation is deferred until the entire request is valid.
@@ -234,6 +260,7 @@ program define _crangestat_impl
 
         local stat_codes "`stat_codes' `stat_code'"
         local result_vars "`result_vars' `result_var'"
+        local result_label_`=`nstats'+1' "`stat_name' of `source_var'"
         local nstats = `nstats' + 1
     }
 
@@ -243,9 +270,14 @@ program define _crangestat_impl
     }
 
     _ctools_newvars `result_vars'
+    local result_index=0
     foreach output of local result_vars {
+        local ++result_index
         quietly generate double `output' = .
+        label variable `output' "`result_label_`result_index''"
     }
+    * Validation hook: fail as Break would once the result variables exist
+    if "$CTOOLS_crangestat_fault" == "outputs" error 1
 
     * Load plugin
     _ctools_load
@@ -293,25 +325,31 @@ program define _crangestat_impl
 
     * Call plugin
     if `__do_timing' {
-        timer off 91
-        timer on 92
+        quietly _ctools_clock __ct_now
+        local __ct_elapsed91 = `__ct_elapsed91' + (`__ct_now' - `__ct_start91')
+        if "`__ct_elapsed92'" == "" local __ct_elapsed92 = 0
+        quietly _ctools_clock __ct_start92
     }
     plugin call ctools_plugin `all_vars', "crangestat `threads_opt' `plugin_args'"
+    * Validation hook: fail after the plugin filled the result variables
+    if "$CTOOLS_crangestat_fault" == "post" error 1
     if `__do_timing' {
-        timer off 92
+        quietly _ctools_clock __ct_now
+        local __ct_elapsed92 = `__ct_elapsed92' + (`__ct_now' - `__ct_start92')
     }
 
     * Display summary or timing
     if `__do_timing' {
-        timer off 90
-        quietly timer list 90
-        local __time_total = r(t90)
+        quietly _ctools_clock __ct_now
+        local __ct_elapsed90 = `__ct_elapsed90' + (`__ct_now' - `__ct_start90')
+        * Elapsed seconds are held in caller-local timing state.
+        local __time_total = `__ct_elapsed90'
 
         * Extract sub-timer values
-        quietly timer list 91
-        local __time_preplugin = r(t91)
-        quietly timer list 92
-        local __time_plugin = r(t92)
+        * Elapsed seconds are held in caller-local timing state.
+        local __time_preplugin = `__ct_elapsed91'
+        * Elapsed seconds are held in caller-local timing state.
+        local __time_plugin = `__ct_elapsed92'
 
         * Calculate plugin call overhead
         capture local __plugin_time_total = _crangestat_time_total

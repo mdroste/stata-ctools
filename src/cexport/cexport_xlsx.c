@@ -1,3 +1,4 @@
+#include "formats/excel_address.h"
 /*
     cexport_xlsx.c
     Excel (.xlsx) export implementation
@@ -8,8 +9,9 @@
 
 #include "cexport_xlsx.h"
 #include "cexport_parse.h"
-#include "../cimport/miniz/miniz.h"
-#include "../cimport/cimport_xlsx_xml.h"
+#include "../vendor/miniz/miniz.h"
+#include "vendor/libdeflate/libdeflate.h"
+#include "formats/xlsx_xml.h"
 #include "../ctools_threads.h"
 #include "../ctools_runtime.h"
 #include "../ctools_arena.h"
@@ -349,17 +351,9 @@ static void xlsx_col_to_letters(int col, char *letters) {
 }
 
 /* Parse cell reference (e.g., "B5") into column and row numbers (1-based) */
-static int xlsx_parse_cell_ref(const char *p, int *col, int *row) {
-    *col=0; *row=0;
-    while (*p && isalpha((unsigned char)*p)) {
-        if (*col > 16384/26) return 198;
-        *col=*col*26+toupper((unsigned char)*p++)-'A'+1;
-    }
-    while (*p && isdigit((unsigned char)*p)) {
-        if (*row > 1048576/10) return 198;
-        *row=*row*10+*p++-'0';
-    }
-    return *p || *col<1 || *col>16384 || *row<1 || *row>1048576 ? 198 : 0;
+static int xlsx_parse_cell_ref(const char *p, int *col, int *row)
+{
+    return ctools_excel_address(p, 16384, 1048576, false, col, row, NULL) ? 0 : 198;
 }
 
 /* ============================================================================
@@ -689,12 +683,25 @@ static void *xlsx_comp_worker(void *arg) {
         return NULL;
     }
 
-    for (size_t i = 0; i < task->num_segs; i++) {
+    /* The closing flush goes on the last non-empty segment; skipping it would
+     * leave the buffered tail unwritten and the stream unaligned. */
+    size_t last = task->num_segs;
+    for (size_t i = task->num_segs; i-- > 0;) {
+        if (task->segments[task->first_seg + i].len > 0) { last = i; break; }
+    }
+    if (last == task->num_segs) {
+        if (task->is_last &&
+            tdefl_compress_buffer(task->comp, NULL, 0, TDEFL_FINISH) != TDEFL_STATUS_DONE)
+            task->failed = true;
+        return NULL;
+    }
+
+    for (size_t i = 0; i <= last; i++) {
         const xlsx_segment *seg = &task->segments[task->first_seg + i];
         if (seg->len == 0) continue;
 
         tdefl_flush flush;
-        if (i < task->num_segs - 1) {
+        if (i < last) {
             flush = TDEFL_NO_FLUSH;
         } else {
             flush = task->is_last ? TDEFL_FINISH : TDEFL_SYNC_FLUSH;
@@ -724,16 +731,17 @@ static bool xlsx_compress_parallel(const xlsx_worksheet_segments *segs,
     uint32_t crc = 0;
     for (size_t i = 0; i < segs->num_segments; i++) {
         if (segs->segments[i].len > 0) {
-            crc = (uint32_t)mz_crc32(crc, (const mz_uint8 *)segs->segments[i].data, segs->segments[i].len);
+            crc = libdeflate_crc32(crc, segs->segments[i].data, segs->segments[i].len);
         }
     }
     *out_uncomp_size = segs->total_size;
     *out_crc32 = crc;
 
-    /* Determine number of compression threads */
+    /* Preamble/footer segments contain almost no work. In particular, a
+     * single data chunk cannot benefit from three compression workers. */
     int num_threads = ctools_get_max_threads();
-    if (num_threads > (int)segs->num_segments)
-        num_threads = (int)segs->num_segments;
+    if ((size_t)num_threads > segs->num_chunks)
+        num_threads = (int)segs->num_chunks;
     if (num_threads < 1)
         num_threads = 1;
 
@@ -780,14 +788,17 @@ static bool xlsx_compress_parallel(const xlsx_worksheet_segments *segs,
     }
 
     /* Execute compression in parallel */
-    ctools_persistent_pool *pool = ctools_get_global_pool();
+    ctools_persistent_pool *pool = num_threads > 1 ? ctools_get_global_pool() : NULL;
     bool use_parallel = (pool != NULL && num_threads > 1);
 
+    bool pool_ok = true;
     if (use_parallel) {
         for (int t = 0; t < num_threads; t++) {
-            ctools_persistent_pool_submit(pool, xlsx_comp_worker, &tasks[t]);
+            /* Each task owns its compressor, so a rejected one runs here. */
+            if (ctools_persistent_pool_submit(pool, xlsx_comp_worker, &tasks[t]) != 0)
+                xlsx_comp_worker(&tasks[t]);
         }
-        ctools_persistent_pool_wait(pool);
+        if (ctools_persistent_pool_wait(pool) != 0) pool_ok = false;
     } else {
         for (int t = 0; t < num_threads; t++) {
             xlsx_comp_worker(&tasks[t]);
@@ -796,7 +807,7 @@ static bool xlsx_compress_parallel(const xlsx_worksheet_segments *segs,
 
     /* Check for failures */
     for (int t = 0; t < num_threads; t++) {
-        if (tasks[t].failed) {
+        if (!pool_ok || tasks[t].failed) {
             for (int u = 0; u < num_threads; u++) free(tasks[u].output.data);
             free(tasks);
             free(comps);
@@ -1041,6 +1052,7 @@ typedef struct {
     const char *escaped_missing;
     size_t escaped_missing_len;
     StringBuffer sb;            /* output buffer */
+    bool failed;                /* escape buffer or output growth failed */
 } xlsx_chunk_args_t;
 
 /* Format a chunk of data rows into XML (called per thread) */
@@ -1053,7 +1065,10 @@ static void *xlsx_format_chunk(void *arg) {
 
     /* Per-thread escape buffer for strings (heap-allocated for thread safety) */
     char *escaped = malloc(MAX_CELL_CONTENT * 6 + 1);
-    if (!escaped) return (void *)(intptr_t)-1;
+    if (!escaped) {
+        a->failed = true;
+        return (void *)(intptr_t)-1;
+    }
 
     /* Per-cell buffer for building cell XML before single append */
     char cell_buf[128];
@@ -1064,6 +1079,7 @@ static void *xlsx_format_chunk(void *arg) {
     for (size_t i = a->start_idx; i < a->end_idx; i++) {
         /* Pre-ensure for this row's content (avoids per-cell capacity checks) */
         strbuf_ensure(sb, row_budget);
+        if (!sb->data) break;
 
         /* Row open tag */
         int rlen = 0;
@@ -1154,6 +1170,11 @@ static void *xlsx_format_chunk(void *arg) {
     }
 
     free(escaped);
+    /* A failed grow frees the buffer, dropping the chunk's rows. */
+    if (!sb->data) {
+        a->failed = true;
+        return (void *)(intptr_t)-1;
+    }
     return NULL;
 }
 
@@ -1324,21 +1345,36 @@ static bool xlsx_gen_worksheet_segments(XLSXExportContext *ctx,
         if (!pool) use_parallel = false;
     }
 
+    bool format_ok = true;
     if (use_parallel) {
         for (size_t c = 0; c < num_chunks; c++) {
-            ctools_persistent_pool_submit(pool, xlsx_format_chunk, &chunks[c]);
+            /* A chunk the pool rejects is formatted on this thread. */
+            if (ctools_persistent_pool_submit(pool, xlsx_format_chunk, &chunks[c]) != 0)
+                xlsx_format_chunk(&chunks[c]);
         }
-        ctools_persistent_pool_wait(pool);
+        if (ctools_persistent_pool_wait(pool) != 0) format_ok = false;
     } else {
         for (size_t c = 0; c < num_chunks; c++) {
             xlsx_format_chunk(&chunks[c]);
         }
     }
 
+    /* A failed chunk or header would drop rows from the worksheet. */
+    if (!preamble.data) format_ok = false;
+    for (size_t c = 0; c < num_chunks; c++) {
+        if (chunks[c].failed || !chunks[c].sb.data) format_ok = false;
+    }
+
     /* Build segment array: preamble + num_chunks + footer */
     size_t total_segments = 1 + num_chunks + 1;
-    segs->segments = (xlsx_segment *)malloc(total_segments * sizeof(xlsx_segment));
-    if (!segs->segments) {
+    if (format_ok) {
+        segs->segments = (xlsx_segment *)malloc(total_segments * sizeof(xlsx_segment));
+        segs->chunk_bufs = (StringBuffer *)malloc(num_chunks * sizeof(StringBuffer));
+    }
+    if (!segs->segments || !segs->chunk_bufs) {
+        free(segs->segments);
+        free(segs->chunk_bufs);
+        memset(segs, 0, sizeof(*segs));
         for (size_t c = 0; c < num_chunks; c++) {
             free(chunks[c].sb.data);
         }
@@ -1356,16 +1392,13 @@ static bool xlsx_gen_worksheet_segments(XLSXExportContext *ctx,
     segs->segments[0].len = preamble.len;
 
     /* Transfer chunk StringBuffers to segments */
-    segs->chunk_bufs = (StringBuffer *)malloc(num_chunks * sizeof(StringBuffer));
     segs->num_chunks = num_chunks;
     size_t total_size = preamble.len + footer_len;
 
     for (size_t c = 0; c < num_chunks; c++) {
         segs->segments[1 + c].data = chunks[c].sb.data;
         segs->segments[1 + c].len = chunks[c].sb.len;
-        if (segs->chunk_bufs) {
-            segs->chunk_bufs[c] = chunks[c].sb;
-        }
+        segs->chunk_bufs[c] = chunks[c].sb;
         total_size += chunks[c].sb.len;
     }
 
@@ -1544,70 +1577,10 @@ static ST_retcode xlsx_write_file(XLSXExportContext *ctx, ctools_filtered_data *
 
 /* strL SPI calls stay on the calling thread. The shared loader deliberately
  * bounds strL to str2045; XLSX has a separate, larger cell limit. */
-ST_retcode cexport_load_text_data(ctools_filtered_data *fd, ST_int nvars, bool excel_limit) {
-    size_t range = SF_in2() >= SF_in1() ? (size_t)(SF_in2() - SF_in1()) + 1 : 0;
-    size_t n = 0;
-    for (int i = SF_in1(); i <= SF_in2(); i++)
-        if (SF_ifobs(i)) n++;
-    fd->data.nobs = n;
-    fd->data.nvars = (size_t)nvars;
-    fd->n_range = range;
-    fd->was_filtered = n != range;
-    fd->obs_map = ctools_safe_cacheline_alloc2(n ? n : 1, sizeof(perm_idx_t));
-    fd->data.vars = ctools_safe_cacheline_alloc2((size_t)nvars, sizeof(stata_variable));
-    if (fd->data.vars) memset(fd->data.vars, 0, (size_t)nvars * sizeof(stata_variable));
-    if (!fd->obs_map || !fd->data.vars) return 920;
-    size_t at = 0;
-    for (int i = SF_in1(); i <= SF_in2(); i++)
-        if (SF_ifobs(i)) fd->obs_map[at++] = (perm_idx_t)i;
-    for (int j = 0; j < nvars; j++) {
-        stata_variable *v = &fd->data.vars[j];
-        v->nobs = n;
-        v->type = SF_var_is_string(j + 1) ? STATA_TYPE_STRING : STATA_TYPE_DOUBLE;
-        if (v->type == STATA_TYPE_STRING) {
-            v->data.str = ctools_safe_cacheline_alloc2(n ? n : 1, sizeof(char *));
-            if (!v->data.str) return 920;
-            memset(v->data.str, 0, (n ? n : 1) * sizeof(char *));
-        } else {
-            v->data.dbl = ctools_safe_cacheline_alloc2(n ? n : 1, sizeof(double));
-            if (!v->data.dbl) return 920;
-        }
-        for (size_t i = 0; i < n; i++) {
-            int obs = (int)fd->obs_map[i];
-            if ((i & 4095) == 0 && SF_poll()) return 1;
-            if (v->type == STATA_TYPE_DOUBLE) {
-                int rc = (_stata_)->safevdata(j + 1, obs, &v->data.dbl[i]);
-                if (rc) return rc;
-                continue;
-            }
-            int islong = SF_var_is_strl(j + 1);
-            int length = islong ? SF_sdatalen(j + 1, obs) : 2045;
-            if (length < 0 || length == INT_MAX || (islong && SF_var_is_binary(j + 1, obs))) return 109;
-            v->data.str[i] = malloc((size_t)length + 1);
-            if (!v->data.str[i]) return 920;
-            if (islong) {
-                if (SF_strldata(j + 1, obs, v->data.str[i], length + 1) != length) return 609;
-                v->data.str[i][length] = 0;
-            } else {
-                int rc = SF_sdata(j + 1, obs, v->data.str[i]);
-                if (rc) return rc;
-            }
-            size_t bytes = strlen(v->data.str[i]), units = 0;
-            /* UTF-8 continuation bytes do not start characters; supplementary
-             * characters occupy two units in Excel's UTF-16 cell limit. */
-            for (size_t k = 0; k < bytes; k++) {
-                unsigned char ch = (unsigned char)v->data.str[i][k];
-                if ((ch & 0xc0) != 0x80) units += ch >= 0xf0 ? 2 : 1;
-            }
-            if (excel_limit && units > MAX_CELL_CONTENT) return 109;
-            if (bytes > v->str_maxlen) v->str_maxlen = bytes;
-        }
-    }
-    return 0;
-}
+
 
 static ST_retcode xlsx_load_long_text(XLSXExportContext *ctx, ctools_filtered_data *fd) {
-    return cexport_load_text_data(fd,ctx->nvars,true);
+    return ctools_load_text_data(fd,ctx->nvars,(ctools_text_policy){0, MAX_CELL_CONTENT});
 }
 
 ST_retcode cexport_xlsx_main(const char *args) {
@@ -1691,20 +1664,20 @@ ST_retcode cexport_xlsx_main(const char *args) {
 
     double t_load = ctools_timer_seconds();
 
-    cexport_output output;
-    rc = cexport_output_prepare(&output, ctx.filename, ctx.replace || ctx.input_filename[0]);
+    ctools_output output;
+    rc = ctools_output_prepare(&output, ctx.filename, ctx.replace || ctx.input_filename[0]);
     if (rc) {
         ctools_filtered_data_free(&filtered); xlsx_context_free(&ctx); return rc;
     }
     if (strlen(output.temporary) >= sizeof(ctx.filename)) {
-        cexport_output_cleanup(&output); ctools_filtered_data_free(&filtered);
+        ctools_output_cleanup(&output); ctools_filtered_data_free(&filtered);
         xlsx_context_free(&ctx); return 198;
     }
     strcpy(ctx.filename, output.temporary);
     /* Write XLSX file using in-memory data, then publish the complete archive. */
     rc = ctx.input_filename[0] ? xlsx_edit_file(&ctx, &filtered) : xlsx_write_file(&ctx, &filtered);
-    if (!rc) rc = cexport_output_commit(&output);
-    cexport_output_cleanup(&output);
+    if (!rc) rc = ctools_output_commit(&output);
+    ctools_output_cleanup(&output);
     ctools_filtered_data_free(&filtered);
     if (rc) {
         SF_error(ctx.error_message);

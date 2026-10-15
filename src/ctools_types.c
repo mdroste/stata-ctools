@@ -168,21 +168,6 @@ int ctools_int64_to_str(int64_t val, char *buf)
     - NEAR: prefetch into L1 cache
     - FAR: prefetch into L2/L3 cache
 */
-static int _perm_prefetch_near = 0;
-static int _perm_prefetch_far = 0;
-
-static inline void init_perm_prefetch_distances(void)
-{
-    if (_perm_prefetch_near == 0) {
-        ctools_prefetch_distances dist = ctools_get_prefetch_distances();
-        _perm_prefetch_near = dist.near_dist;
-        _perm_prefetch_far = dist.far_dist;
-    }
-}
-
-#define PERM_PREFETCH_NEAR  (_perm_prefetch_near ? _perm_prefetch_near : 8)
-#define PERM_PREFETCH_FAR   (_perm_prefetch_far ? _perm_prefetch_far : 32)
-
 /*
     Apply permutation using GATHER pattern with multi-level prefetching.
     new_data[i] = old_data[perm[i]] -- random read from old_data, sequential write
@@ -210,14 +195,15 @@ static inline void apply_perm_gather_double_simd(double * CTOOLS_RESTRICT new_da
                                                   const perm_idx_t * CTOOLS_RESTRICT perm,
                                                   size_t nobs)
 {
+    const ctools_prefetch_distances prefetch = ctools_get_prefetch_distances();
     size_t i;
     size_t nobs_vec4 = nobs & ~(size_t)3;  /* Round down to multiple of 4 */
 
     /* Main SIMD loop: gather 4 doubles at a time */
     for (i = 0; i < nobs_vec4; i += 4) {
         /* Prefetch ahead for next iterations */
-        if (i + PERM_PREFETCH_FAR < nobs) {
-            CTOOLS_PREFETCH(&perm[i + PERM_PREFETCH_FAR]);
+        if (i + prefetch.far_dist < nobs) {
+            CTOOLS_PREFETCH(&perm[i + prefetch.far_dist]);
         }
 
         /* Load 4 indices into 128-bit register */
@@ -248,16 +234,17 @@ static inline void apply_perm_gather_double_scalar(double * CTOOLS_RESTRICT new_
                                                     const perm_idx_t * CTOOLS_RESTRICT perm,
                                                     size_t nobs)
 {
+    const ctools_prefetch_distances prefetch = ctools_get_prefetch_distances();
     size_t i;
     /* Process with multi-level prefetching */
     for (i = 0; i < nobs; i++) {
         /* Far prefetch - into L2/L3 */
-        if (i + PERM_PREFETCH_FAR < nobs) {
-            CTOOLS_PREFETCH(&old_data[perm[i + PERM_PREFETCH_FAR]]);
+        if (i + prefetch.far_dist < nobs) {
+            CTOOLS_PREFETCH(&old_data[perm[i + prefetch.far_dist]]);
         }
         /* Near prefetch - into L1 */
-        if (i + PERM_PREFETCH_NEAR < nobs) {
-            CTOOLS_PREFETCH(&old_data[perm[i + PERM_PREFETCH_NEAR]]);
+        if (i + prefetch.near_dist < nobs) {
+            CTOOLS_PREFETCH(&old_data[perm[i + prefetch.near_dist]]);
         }
         new_data[i] = old_data[perm[i]];
     }
@@ -284,13 +271,14 @@ static inline void apply_perm_gather_ptr(char ** CTOOLS_RESTRICT new_data,
                                           const perm_idx_t * CTOOLS_RESTRICT perm,
                                           size_t nobs)
 {
+    const ctools_prefetch_distances prefetch = ctools_get_prefetch_distances();
     size_t i;
     for (i = 0; i < nobs; i++) {
-        if (i + PERM_PREFETCH_FAR < nobs) {
-            CTOOLS_PREFETCH(&old_data[perm[i + PERM_PREFETCH_FAR]]);
+        if (i + prefetch.far_dist < nobs) {
+            CTOOLS_PREFETCH(&old_data[perm[i + prefetch.far_dist]]);
         }
-        if (i + PERM_PREFETCH_NEAR < nobs) {
-            CTOOLS_PREFETCH(&old_data[perm[i + PERM_PREFETCH_NEAR]]);
+        if (i + prefetch.near_dist < nobs) {
+            CTOOLS_PREFETCH(&old_data[perm[i + prefetch.near_dist]]);
         }
         new_data[i] = old_data[perm[i]];
     }
@@ -326,7 +314,7 @@ stata_retcode ctools_apply_permutation(stata_data *data)
     if (nvars == 0 || nobs == 0) return STATA_OK;
 
     /* Initialize adaptive prefetch distances (once per process) */
-    init_perm_prefetch_distances();
+    (void)ctools_get_prefetch_distances();
 
     #ifdef _OPENMP
     /*
@@ -460,31 +448,35 @@ stata_retcode ctools_apply_permutation(stata_data *data)
     Auto-select the best sort algorithm based on data characteristics.
 
     Selection logic:
-    1. If any sort key is a string variable → MSD radix (optimized for strings)
-    2. For numeric-only data → Counting sort with LSD radix fallback
+    1. All keys numeric → counting sort with LSD radix fallback
        - Counting sort: O(n+k), optimal for small-range integers (dates, codes)
        - LSD radix fallback: O(n*d), still faster than comparison sorts
+    2. String keys no wider than CTOOLS_SORT_RECORD_STRING_MAX bytes, alone or
+       with numeric keys → LSD radix, which sorts every key as 64-bit words
+       (a short string as one or two) in one record sort
+    3. Any wider string key → MSD radix, which stops at the first byte that
+       distinguishes two strings instead of reading whole long values
 
     This provides massive speedups for common Stata workloads:
     - Panel data with date/time keys: counting sort is often 100x+ faster
     - ID variables with moderate range: counting sort or LSD radix
-    - String keys (names, codes): MSD radix handles variable-length efficiently
+    - Codes, names and other short string keys: LSD radix on 64-bit words
 */
 static sort_algorithm_t auto_select_algorithm(stata_data *data, int *sort_vars, size_t nsort)
 {
-    /* Check if any sort variable is a string */
+    int any_string = 0;
+
     for (size_t i = 0; i < nsort; i++) {
         int var_idx = sort_vars[i] - 1;  /* Convert to 0-based */
-        if (var_idx >= 0 && (size_t)var_idx < data->nvars) {
-            if (data->vars[var_idx].type == STATA_TYPE_STRING) {
-                /* String variable detected - use MSD radix */
+        if (var_idx >= 0 && (size_t)var_idx < data->nvars &&
+            data->vars[var_idx].type == STATA_TYPE_STRING) {
+            if (data->vars[var_idx].str_maxlen > CTOOLS_SORT_RECORD_STRING_MAX) {
                 return SORT_ALG_MSD;
             }
+            any_string = 1;
         }
     }
-
-    /* All numeric - use counting sort (with automatic LSD radix fallback) */
-    return SORT_ALG_COUNTING;
+    return any_string ? SORT_ALG_LSD : SORT_ALG_COUNTING;
 }
 
 stata_retcode ctools_sort_dispatch(stata_data *data, int *sort_vars, size_t nsort,

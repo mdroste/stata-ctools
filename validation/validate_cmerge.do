@@ -117,12 +117,66 @@ benchmark_merge 1:m region using `using_5', testname("1:m region to states")
 
 /*******************************************************************************
  * SECTION 4: m:m merge tests
- * Note: Stata's m:m merge behavior is documented as "unusual" and depends on
- * internal data ordering. cmerge implements sequential pairing (row i from
- * master pairs with row i from using within each group). We test that cmerge
- * runs without error and produces expected dimensions.
+ * An m:m merge pairs the j-th master row of a key group with the j-th using
+ * row (the shorter group's last row repeats), so its result depends on the
+ * order of rows within each key group. Stata's merge gives an unsorted master
+ * or using file a plain -sort- by the keys, which orders tied keys at random
+ * (it draws on the sortseed state, which every sort advances): two native
+ * m:m merges of the same unsorted files in one session pair different rows.
+ * The m:m benchmarks below therefore stably sort both files by the keys
+ * first, so that native merge pairs rows in file order and cmerge must match
+ * it exactly. benchmark_mm_unsorted covers unsorted files: cmerge must pair
+ * their rows in file order, i.e. match native merge of the stably sorted
+ * files.
  ******************************************************************************/
 print_section "m:m Merge Tests"
+
+capture program drop benchmark_mm_unsorted
+program define benchmark_mm_unsorted
+    syntax varlist using/, testname(string)
+
+    preserve
+    tempfile original sorted_using reference
+    quietly save `original'
+
+    quietly use `"`using'"', clear
+    sort `varlist', stable
+    quietly save `sorted_using'
+    quietly use `original', clear
+    sort `varlist', stable
+    quietly merge m:m `varlist' using `sorted_using'
+    quietly ds
+    local allvars `r(varlist)'
+    sort `allvars'
+    quietly save `reference'
+
+    quietly use `original', clear
+    local sorted_before : sortedby
+    capture quietly cmerge m:m `varlist' using `"`using'"', noreport
+    local rc = _rc
+    local cf_rc = 0
+    if `rc' == 0 {
+        quietly ds
+        local allvars `r(varlist)'
+        sort `allvars'
+        capture quietly cf _all using `reference'
+        local cf_rc = _rc
+    }
+    restore
+
+    if "`sorted_before'" != "" {
+        test_fail "`testname'" "master is already sorted by `sorted_before'; test needs unsorted files"
+    }
+    else if `rc' != 0 {
+        test_fail "`testname'" "cmerge returned error `rc'"
+    }
+    else if `cf_rc' != 0 {
+        test_fail "`testname'" "merged data differs from Stata merge of the stably sorted files"
+    }
+    else {
+        test_pass "`testname'"
+    }
+end
 
 clear
 set obs 100
@@ -139,6 +193,13 @@ tempfile using_mm
 save `using_mm'
 
 use `master_mm', clear
+benchmark_mm_unsorted group using `using_mm', testname("m:m basic: unsorted files pair in file order")
+
+use `using_mm', clear
+sort group, stable
+save `using_mm', replace
+use `master_mm', clear
+sort group, stable
 benchmark_merge m:m group using `using_mm', testname("m:m basic")
 
 /*******************************************************************************
@@ -1671,6 +1732,14 @@ tempfile large_mm_using
 save `large_mm_using'
 
 use `large_mm_master', clear
+benchmark_mm_unsorted group using `large_mm_using', testname("large m:m with expansion: unsorted files pair in file order")
+
+* Stable sorts make native merge pair in file order (see SECTION 4)
+use `large_mm_using', clear
+sort group, stable
+save `large_mm_using', replace
+use `large_mm_master', clear
+sort group, stable
 benchmark_merge m:m group using `large_mm_using', testname("large m:m with expansion")
 
 /*******************************************************************************
@@ -1730,6 +1799,14 @@ tempfile unbal_10x_using
 save `unbal_10x_using'
 
 use `unbal_10x_master', clear
+benchmark_mm_unsorted group using `unbal_10x_using', testname("unbalanced m:m: unsorted files pair in file order")
+
+* Stable sorts make native merge pair in file order (see SECTION 4)
+use `unbal_10x_using', clear
+sort group, stable
+save `unbal_10x_using', replace
+use `unbal_10x_master', clear
+sort group, stable
 benchmark_merge m:m group using `unbal_10x_using', testname("unbalanced m:m: 10K master, 1K using")
 
 /*******************************************************************************
@@ -2034,6 +2111,372 @@ input double id str1 m
 .  "w"
 end
 benchmark_merge m:1 id using `ext_using', testname("numeric key: extended missing out of order (m:1)")
+
+/*******************************************************************************
+ * SECTION 32: A failed or interrupted merge leaves the master as it was
+ *
+ * By default cmerge writes no snapshot of the master: it plans the join
+ * before changing anything, records the schema changes it makes, and the
+ * plugin keeps a copy of the master observations it overwrites (paths that
+ * cannot be undone that way keep an in-memory snapshot frame). Option
+ * snapshot preserves the whole dataset instead; option fast keeps nothing and
+ * only reports the failure. Each case runs in all three modes. The
+ * validation hook $CTOOLS_cmerge_fault fails a merge at one stage with r(1),
+ * as Break would:
+ *   record  after the record, before any change to the master
+ *   schema  after the recasts, new variables, labels, notes and new rows,
+ *           just before the plugin writes
+ *   store   inside the plugin, after half of the output rows were written
+ *           (reported as the memory error it simulates, r(920))
+ *   post    after the plugin wrote the whole merge (a Break pressed during
+ *           the plugin is acted on there)
+ *   keep    after keep() dropped observations
+ * Join errors (r(459), r(5)) fail in the plugin's plan, before any change.
+ * In the default and snapshot modes each case compares the data in memory
+ * afterwards with a copy saved before:
+ * values (datasignature and cf), variable order, storage types, formats,
+ * variable and value labels, value-label definitions, notes and other
+ * characteristics, the sort marker and c(changed). Characteristics are compared
+ * by name: Stata's own restore does not keep their internal order either.
+ ******************************************************************************/
+print_section "Rollback of Failed Merges"
+
+capture program drop _cmerge_state
+program define _cmerge_state, rclass
+    quietly datasignature
+    local s `"N=`=_N' k=`=c(k)' sig=`r(datasignature)' sortedby=`: sortedby' changed=`c(changed)'"'
+    local s `"`macval(s)' label=`: data label'"'
+    local chars : char _dta[]
+    local chars : list sort chars
+    foreach c of local chars {
+        local value : char _dta[`c']
+        local s `"`macval(s)' | _dta[`c']=`macval(value)'"'
+    }
+    if c(k) > 0 {
+        foreach v of varlist _all {
+            local s `"`macval(s)' || `v' `: type `v'' `: format `v'' [`: value label `v''] [`: variable label `v'']"'
+            local chars : char `v'[]
+            local chars : list sort chars
+            foreach c of local chars {
+                local value : char `v'[`c']
+                local s `"`macval(s)' | `v'[`c']=`macval(value)'"'
+            }
+        }
+    }
+    quietly label dir
+    local names `r(names)'
+    local s `"`macval(s)' || labels: `names'"'
+    if "`names'" != "" {
+        tempfile defs
+        tempname fh
+        quietly label save `names' using `"`defs'"', replace
+        file open `fh' using `"`defs'"', read text
+        file read `fh' line
+        while r(eof) == 0 {
+            local s `"`macval(s)' | `macval(line)'"'
+            file read `fh' line
+        }
+        file close `fh'
+    }
+    return local state `"`macval(s)'"'
+end
+
+* Run a cmerge command (whose options end the command) that must fail with
+* return code rc (by default the code of the injected fault), in the default,
+* snapshot and fast modes. Default and snapshot must leave the data saved in
+* copy, with no record or snapshot frame left behind; fast only reports.
+capture program drop _cmerge_rollback_case
+program define _cmerge_rollback_case
+    syntax , cmd(string asis) testname(string) [fault(string) rc(integer -1)]
+    if `rc' == -1 local rc = cond("`fault'" == "store", 920, 1)
+    tempfile copy
+    quietly save `copy'
+    _cmerge_state
+    local before `"`r(state)'"'
+    quietly frames dir
+    local frames `"`r(frames)'"'
+    foreach mode in default snapshot fast {
+        quietly use `copy', clear
+        local option = cond("`mode'" == "default", "", "`mode'")
+        global CTOOLS_cmerge_fault `fault'
+        capture `cmd' `option'
+        local got = _rc
+        global CTOOLS_cmerge_fault
+        local name "`testname' [`mode']"
+        if `got' != `rc' {
+            test_fail "`name'" "expected r(`rc'), got r(`got')"
+            continue
+        }
+        if "`mode'" == "fast" {
+            test_pass "`name'"
+            continue
+        }
+        _cmerge_state
+        local after `"`r(state)'"'
+        mata: st_local("same", strofreal(st_local("before") == st_local("after")))
+        capture cf _all using `copy', all
+        local cf_rc = _rc
+        quietly frames dir
+        if !`same' | `cf_rc' {
+            test_fail "`name'" "master changed (state same=`same', cf r(`cf_rc'))"
+        }
+        else if "$CTOOLS_cmu_active$CTOOLS_cmerge_plugin$CTOOLS_cmerge_snapframe" != "" | ///
+            `"`r(frames)'"' != `"`frames'"' {
+            test_fail "`name'" "rollback record or snapshot frame left behind"
+        }
+        else {
+            test_pass "`name'"
+        }
+    }
+    quietly use `copy', clear
+end
+
+* Master: an unsorted key with duplicates (grp), a unique key (id), shared
+* variables the merge promotes (grp byte->int, x float->double, s str3->str10
+* with a left-aligned format), a value-labeled variable, notes and
+* characteristics on variables and _dta, a data label and a sort marker.
+clear
+set seed 4711
+set obs 3000
+gen long id = 3001 - _n
+gen byte grp = mod(_n * 7, 23) + 1
+gen float x = cond(mod(_n, 5) == 0, ., _n / 3)
+gen str3 s = cond(mod(_n, 4) == 0, "", substr("abcdef", mod(_n, 4) + 1, 3))
+format s %-5s
+gen byte lab = mod(_n, 3)
+label define mlab 0 "zero" 1 "one" 2 "two"
+label values lab mlab
+gen double w = runiform()
+label variable w "master weight"
+label data "Master data"
+note: master dataset note
+note x: master note on x
+char _dta[mchar] master characteristic
+char w[wchar] w characteristic
+sort lab w
+tempfile rb_master
+save `rb_master'
+
+* Using: one row per grp 1..25 (two not in the master), the shared x and s at
+* wider types, a new labeled variable, notes on a shared and a new variable,
+* and _dta notes and characteristics.
+clear
+set obs 25
+gen int grp = _n
+gen double x = cond(mod(_n, 3) == 0, ., _n * 100 + .25)
+gen str10 s = "u" + string(_n)
+gen byte newv = mod(_n, 2)
+label define ulab 0 "even" 1 "odd"
+label values newv ulab
+gen str5 newstr = "n" + string(_n)
+label data "Using data"
+note: using dataset note
+note x: using note on x
+note newv: using note on newv
+char _dta[uchar] using characteristic
+tempfile rb_using
+save `rb_using'
+
+* 1:1 using on id and a using with duplicate grp values
+clear
+set obs 3100
+gen long id = _n
+gen double y = _n * 2
+tempfile rb_using_id
+save `rb_using_id'
+use `rb_using', clear
+expand 2 in 1/3
+tempfile rb_using_dup
+save `rb_using_dup'
+
+* Staged path (the master is not in key order): every stage
+foreach f in record schema store post keep {
+    use `rb_master', clear
+    _cmerge_rollback_case, fault(`f') ///
+        cmd(cmerge m:1 grp using `rb_using', keep(master match using) noreport) ///
+        testname("rollback m:1 staged: fault at `f'")
+}
+foreach f in schema store post {
+    use `rb_master', clear
+    _cmerge_rollback_case, fault(`f') ///
+        cmd(cmerge m:1 grp using `rb_using', update replace noreport) ///
+        testname("rollback m:1 update replace: fault at `f'")
+    use `rb_master', clear
+    _cmerge_rollback_case, fault(`f') ///
+        cmd(cmerge 1:1 id using `rb_using_id', generate(how) noreport) ///
+        testname("rollback 1:1 staged: fault at `f'")
+    use `rb_master', clear
+    _cmerge_rollback_case, fault(`f') ///
+        cmd(cmerge 1:1 _n using `rb_using_id', noreport) ///
+        testname("rollback 1:1 _n: fault at `f'")
+}
+
+* Join errors are found by the plugin's plan, before any change
+use `rb_master', clear
+expand 2 in 1/5
+sort lab w
+_cmerge_rollback_case, rc(459) cmd(cmerge 1:1 id using `rb_using_id', noreport) ///
+    testname("rollback: duplicate master keys r(459)")
+use `rb_master', clear
+_cmerge_rollback_case, rc(459) cmd(cmerge m:1 grp using `rb_using_dup', noreport) ///
+    testname("rollback: duplicate using keys r(459)")
+use `rb_master', clear
+_cmerge_rollback_case, rc(5) cmd(cmerge m:1 grp using `rb_using', sorted noreport) ///
+    testname("rollback: master not sorted r(5)")
+
+* Identity output (master in key order, every key matched): the plugin
+* rewrites no master observation unless keep() or update needs a copy
+use `rb_master', clear
+drop if grp > 20
+sort grp id
+tempfile rb_sorted
+save `rb_sorted'
+use `rb_using', clear
+keep if grp <= 20
+tempfile rb_using20
+save `rb_using20'
+foreach f in schema post {
+    use `rb_sorted', clear
+    _cmerge_rollback_case, fault(`f') ///
+        cmd(cmerge m:1 grp using `rb_using20', noreport) ///
+        testname("rollback m:1 identity: fault at `f'")
+}
+foreach f in post keep {
+    use `rb_sorted', clear
+    _cmerge_rollback_case, fault(`f') ///
+        cmd(cmerge m:1 grp using `rb_using20', keep(match) update noreport) ///
+        testname("rollback m:1 identity keep update: fault at `f'")
+}
+
+* Strings too wide to stage: the merge keeps a snapshot instead
+use `rb_master', clear
+gen str2045 wide = "w" + string(_n)
+sort lab w
+tempfile rb_wide
+save `rb_wide'
+foreach f in record schema store post {
+    use `rb_wide', clear
+    _cmerge_rollback_case, fault(`f') ///
+        cmd(cmerge m:1 grp using `rb_using', noreport) ///
+        testname("rollback m:1 unstaged strings: fault at `f'")
+}
+
+* Empty data (merged without the plugin's join): a 1:1 merge that sorts the
+* master keeps a snapshot frame; the others are undone from the record
+use `rb_using_id', clear
+drop if 1
+tempfile rb_empty
+save `rb_empty'
+use `rb_master', clear
+_cmerge_rollback_case, fault(post) ///
+    cmd(cmerge 1:1 id using `rb_empty', noreport) ///
+    testname("rollback: empty using 1:1, fault after the merge")
+use `rb_using', clear
+drop if 1
+tempfile rb_empty_grp
+save `rb_empty_grp'
+foreach f in record post {
+    use `rb_master', clear
+    _cmerge_rollback_case, fault(`f') ///
+        cmd(cmerge m:1 grp using `rb_empty_grp', noreport) ///
+        testname("rollback: empty using m:1, fault at `f'")
+    use `rb_master', clear
+    drop if 1
+    _cmerge_rollback_case, fault(`f') ///
+        cmd(cmerge m:1 grp using `rb_using', noreport) ///
+        testname("rollback: empty master m:1, fault at `f'")
+}
+
+* strL variables: merge itself runs the merge (it sorts the master before it
+* checks the keys), under an in-memory snapshot frame by default
+use `rb_master', clear
+gen strL memo = "memo " + string(_n)
+sort lab w
+tempfile rb_strl
+save `rb_strl'
+_cmerge_rollback_case, rc(459) cmd(cmerge m:1 grp using `rb_using_dup', noreport) ///
+    testname("rollback strL: duplicate using keys r(459)")
+use `rb_strl', clear
+_cmerge_rollback_case, fault(post) cmd(cmerge m:1 grp using `rb_using', noreport) ///
+    testname("rollback strL: fault after the merge")
+
+* Many observations: the plugin restores them with all threads
+clear
+set obs 400000
+gen long id = 400001 - _n
+gen int grp = mod(_n * 7919, 1000) + 1
+gen double x = _n / 7
+gen str12 s = "m" + string(mod(_n, 9973))
+gen float z = runiform()
+sort z
+tempfile rb_big
+save `rb_big'
+clear
+set obs 1200
+gen int grp = _n
+gen double x = _n * 3
+gen str12 s = "u" + string(_n)
+gen double gv = _n / 9
+tempfile rb_big_using
+save `rb_big_using'
+foreach f in store post keep {
+    use `rb_big', clear
+    _cmerge_rollback_case, fault(`f') ///
+        cmd(cmerge m:1 grp using `rb_big_using', keep(master match) update threads(4) noreport) ///
+        testname("rollback 400K m:1: fault at `f'")
+}
+
+* After failures, merges succeed and match merge; the record is released
+use `rb_master', clear
+benchmark_merge m:1 grp using `rb_using', update testname("merge after rollbacks matches merge")
+quietly frames dir
+local frames `"`r(frames)'"'
+foreach source in rb_master rb_strl {
+    foreach mode in "" snapshot fast {
+        use ``source'', clear
+        quietly cmerge m:1 grp using `rb_using', keep(match) update noreport `mode'
+        quietly datasignature
+        local sig `r(datasignature)'
+        if "`mode'" == "" local default_sig `sig'
+        quietly frames dir
+        if "$CTOOLS_cmu_active$CTOOLS_cmerge_plugin$CTOOLS_cmerge_snapframe" == "" & ///
+            `"`r(frames)'"' == `"`frames'"' & "`sig'" == "`default_sig'" {
+            test_pass "successful merge releases its record (`source' `mode')"
+        }
+        else {
+            test_fail "successful merge releases its record (`source' `mode')" ///
+                "globals or frames left behind, or result differs from the default"
+        }
+    }
+}
+use `rb_master', clear
+benchmark_merge m:1 grp using `rb_using', keep(match) testname("merge after rollbacks: keep(match)")
+use `rb_master', clear
+capture cmerge m:1 grp using `rb_using', snapshot fast
+if _rc == 198 test_pass "snapshot and fast together are rejected"
+else test_fail "snapshot and fast together are rejected" "r(`=_rc')"
+
+* A failed assert() leaves the merged result in memory, as merge does
+use `rb_master', clear
+capture merge m:1 grp using `rb_using', assert(match)
+local stata_rc = _rc
+local stata_N = _N
+quietly datasignature
+local stata_sig `r(datasignature)'
+use `rb_master', clear
+capture cmerge m:1 grp using `rb_using', assert(match) noreport
+local cmerge_rc = _rc
+local cmerge_N = _N
+capture confirm variable _merge
+local has_merge = !_rc
+if `stata_rc' == 9 & `cmerge_rc' == 9 & `cmerge_N' == `stata_N' & `has_merge' & ///
+    "$CTOOLS_cmu_active" == "" {
+    test_pass "assert() failure keeps the merged result"
+}
+else {
+    test_fail "assert() failure keeps the merged result" ///
+        "rc `stata_rc'/`cmerge_rc', N `stata_N'/`cmerge_N', _merge `has_merge'"
+}
 
 * End of cmerge validation
 noi print_summary "cmerge"

@@ -225,31 +225,29 @@ int ctools_str_hash_lookup(ctools_str_hash_table *ht, const char *key, int *valu
  * Value Label Output (cencode)
  * ============================================================================ */
 
-/* Emit only ASCII numeric byte literals as Mata source. User text never becomes
- * Stata macro syntax, quoting delimiters, or executable Mata code. */
-int ctools_label_write_stata_file(const char **strings, const int *codes,
-                                   size_t n_labels, const char *label_name,
-                                   const char *filepath)
+/* Transfer data, never Stata/Mata source. Each ASCII code/byte-count header is
+ * followed by exactly that many raw bytes, so quotes, macros and newlines need
+ * no escaping. Binary mode keeps this framing identical on every platform. */
+int ctools_label_write_file(const char **strings, const int *codes, size_t n_labels,
+                            const char *filepath)
 {
-    FILE *fp = fopen(filepath, "w");
-    if (!fp) return -1;
-    fprintf(fp, "tempname __ctools_label_text\n");
-    for (size_t i = 0; i < n_labels; i++) {
-        const unsigned char *p = (const unsigned char *)(strings[i] ? strings[i] : "");
-        size_t length = strlen((const char *)p);
-        /* Bound each expression below Mata's token limit, including str2045. */
-        fprintf(fp, "mata: `__ctools_label_text' = \"\"\n");
-        for (size_t offset = 0; offset < length; offset += 128) {
-            size_t end = offset + 128 < length ? offset + 128 : length;
-            fprintf(fp, "mata: `__ctools_label_text' = `__ctools_label_text' + invtokens(char((");
-            for (size_t j = offset; j < end; j++)
-                fprintf(fp, "%s%u", j == offset ? "" : ",", (unsigned)p[j]);
-            fprintf(fp, ")), \"\")\n");
+    FILE *fp = fopen(filepath, "wb");
+    if (!fp)
+        return -1;
+    fprintf(fp, "CTOOLS_LABELS_1\n");
+    for (size_t i = 0; i < n_labels; i++)
+    {
+        const char *text = strings[i] ? strings[i] : "";
+        size_t length = strlen(text);
+        fprintf(fp, "%d %zu\n", codes[i], length);
+        if (fwrite(text, 1, length, fp) != length)
+        {
+            fclose(fp);
+            return -1;
         }
-        fprintf(fp, "mata: st_vlmodify(\"%s\", %d, `__ctools_label_text')\n", label_name, codes[i]);
     }
-    if (n_labels) fprintf(fp, "mata: mata drop `__ctools_label_text'\n");
     int failed = ferror(fp);
-    if (fclose(fp) != 0) failed = 1;
+    if (fclose(fp) != 0)
+        failed = 1;
     return failed ? -1 : 0;
 }

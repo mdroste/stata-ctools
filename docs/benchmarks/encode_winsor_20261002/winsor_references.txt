@@ -1,0 +1,176 @@
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+      name:  <unnamed>
+       log:  /Users/Mike/Documents/GitHub/stata-ctools/temp/encode_performance_20261002/winsor_references.log
+  log type:  text
+ opened on:   2 Oct 2026, 11:59:46
+
+. capture noisily do `"/Users/Mike/Documents/GitHub/stata-ctools/validation/benchmark_winsor_references.do"' `"/Users/Mike/Documents/GitHub/stata-ctools/temp/encode_performance_20261002/combined"' `"/Users/Mike/Documents/GitHub/stata-ctools/temp/encode_pe
+> rformance_20261002/encode_1m/clock.plugin"' `"1000000"' `"4"'
+
+. * End-to-end comparisons with both winsor2 and gstats, one frozen ctools build.
+. args buildpath clockpath rows reps
+
+. clear all
+
+. set more off
+
+. set linesize 255
+
+. adopath ++ "`buildpath'"
+  [1]              "/Users/Mike/Documents/GitHub/stata-ctools/temp/encode_performance_20261002/combined"
+  [2]  (BASE)      "/Applications/StataNow/ado/base/"
+  [3]  (SITE)      "/Applications/StataNow/ado/site/"
+  [4]              "."
+  [5]  (PERSONAL)  "/Users/Mike/Documents/Stata/ado/personal/"
+  [6]  (PLUS)      "/Users/Mike/Library/Application Support/Stata/ado/plus/"
+  [7]  (OLDPLACE)  "~/ado/"
+
+. ctools, version
+ctools ado 1.0.2; plugin 1.0.2 (local)
+
+. which winsor2
+/Users/Mike/Library/Application Support/Stata/ado/plus/w/winsor2.ado
+*! Inspirit of -winsor-(NJ Cox) and -winsorizeJ-(J Caskey)
+*! Lian Yujun, arlionn@163.com, 2013-12-25
+*! 1.1 2014.12.16
+
+. which gstats
+/Users/Mike/Library/Application Support/Stata/ado/plus/g/gstats.ado
+*! version 0.5.0 11Jun2019 Mauricio Caceres Bravo, mauricio.caceres.bravo@gmail.com
+*! Implementation of several statistical functions and transformations
+
+. program perf_clock, plugin using("`clockpath'")
+
+. foreach case in grouped single wide noby {
+  2.     clear
+  3.     set seed 928143
+  4.     quietly set obs `rows'
+  5.     quietly gen long id=_n
+  6.     quietly gen long g=floor((_n-1)/200)
+  7.     if "`case'"=="single" quietly replace g=0
+  8.     quietly gen double x=100+5*rnormal()
+  9.     quietly replace x=. if mod(id,37)==0
+ 10.     quietly replace x=.a if mod(id,107)==0
+ 11.     local vars x
+ 12.     if "`case'"=="wide" {
+ 13.         forvalues k=2/8 {
+ 14.             quietly gen double x`k'=100+5*rnormal()
+ 15.             local vars `vars' x`k'
+ 16.         }
+ 17.     }
+ 18.     quietly gen double shuffle=runiform()
+ 19.     sort shuffle
+ 20.     drop shuffle
+ 21.     local byopt by(g)
+ 22.     if "`case'"=="noby" local byopt
+ 23.     tempfile base expected
+ 24.     quietly save `base'
+ 25.     foreach operation in ctools gstats winsor2 {
+ 26.         local command cwinsor `vars', `byopt' cuts(1 99) suffix(_w) threads(8)
+ 27.         if "`operation'"=="gstats" local command gstats winsor `vars', `byopt' cuts(1 99) suffix(_w)
+ 28.         if "`operation'"=="winsor2" local command winsor2 `vars', `byopt' cuts(1 99) suffix(_w)
+ 29.         forvalues rep=0/`reps' {
+ 30.             quietly use `base', clear
+ 31.             plugin call perf_clock, "start"
+ 32.             quietly `command'
+ 33.             plugin call perf_clock, "stop"
+ 34.             di "WINSOR_REF,`case',`operation',`rows',`rep'," %12.7f scalar(__ctools_perf_seconds)
+ 35.             if `rep'==0 {
+ 36.                 foreach v of local vars {
+ 37.                     * winsor2 suffix() turns extended missings into ordinary .;
+.                     * compare all missing locations and all finite values.
+.                     quietly replace `v'_w=. if missing(`v'_w)
+ 38.                 }
+ 39.                 if "`operation'"=="ctools" quietly save `expected'
+ 40.                 else {
+ 41.                     foreach v of local vars {
+ 42.                         rename `v'_w `v'_ref
+ 43.                     }
+ 44.                     quietly merge 1:1 id using `expected', assert(match) nogenerate
+ 45.                     foreach v of local vars {
+ 46.                         assert missing(`v'_w)==missing(`v'_ref)
+ 47.                         assert `v'_w==`v'_ref | abs(`v'_w-`v'_ref)/max(abs(`v'_w),abs(`v'_ref))<1e-7 if !missing(`v'_w)
+ 48.                     }
+ 49.                 }
+ 50.             }
+ 51.         }
+ 52.     }
+ 53. }
+WINSOR_REF,grouped,ctools,1000000,0,   0.0506570
+WINSOR_REF,grouped,ctools,1000000,1,   0.0328290
+WINSOR_REF,grouped,ctools,1000000,2,   0.0336280
+WINSOR_REF,grouped,ctools,1000000,3,   0.0324240
+WINSOR_REF,grouped,ctools,1000000,4,   0.0336370
+WINSOR_REF,grouped,gstats,1000000,0,   0.0731210
+WINSOR_REF,grouped,gstats,1000000,1,   0.0701260
+WINSOR_REF,grouped,gstats,1000000,2,   0.0698860
+WINSOR_REF,grouped,gstats,1000000,3,   0.0695100
+WINSOR_REF,grouped,gstats,1000000,4,   0.0672260
+WINSOR_REF,grouped,winsor2,1000000,0,   0.6001370
+WINSOR_REF,grouped,winsor2,1000000,1,   0.6082050
+WINSOR_REF,grouped,winsor2,1000000,2,   0.6165870
+WINSOR_REF,grouped,winsor2,1000000,3,   0.6133700
+WINSOR_REF,grouped,winsor2,1000000,4,   0.6052840
+WINSOR_REF,single,ctools,1000000,0,   0.0395350
+WINSOR_REF,single,ctools,1000000,1,   0.0398220
+WINSOR_REF,single,ctools,1000000,2,   0.0398230
+WINSOR_REF,single,ctools,1000000,3,   0.0393680
+WINSOR_REF,single,ctools,1000000,4,   0.0383140
+WINSOR_REF,single,gstats,1000000,0,   0.0326110
+WINSOR_REF,single,gstats,1000000,1,   0.0324190
+WINSOR_REF,single,gstats,1000000,2,   0.0322700
+WINSOR_REF,single,gstats,1000000,3,   0.0322030
+WINSOR_REF,single,gstats,1000000,4,   0.0322300
+WINSOR_REF,single,winsor2,1000000,0,   0.8010590
+WINSOR_REF,single,winsor2,1000000,1,   0.8067670
+WINSOR_REF,single,winsor2,1000000,2,   0.7999730
+WINSOR_REF,single,winsor2,1000000,3,   0.7987960
+WINSOR_REF,single,winsor2,1000000,4,   0.7966620
+WINSOR_REF,wide,ctools,1000000,0,   0.1616730
+WINSOR_REF,wide,ctools,1000000,1,   0.1549940
+WINSOR_REF,wide,ctools,1000000,2,   0.1519200
+WINSOR_REF,wide,ctools,1000000,3,   0.1560790
+WINSOR_REF,wide,ctools,1000000,4,   0.1547460
+WINSOR_REF,wide,gstats,1000000,0,   0.3873080
+WINSOR_REF,wide,gstats,1000000,1,   0.3939340
+WINSOR_REF,wide,gstats,1000000,2,   0.3842500
+WINSOR_REF,wide,gstats,1000000,3,   0.3848600
+WINSOR_REF,wide,gstats,1000000,4,   0.3831730
+WINSOR_REF,wide,winsor2,1000000,0,   7.5306470
+WINSOR_REF,wide,winsor2,1000000,1,   7.5303470
+WINSOR_REF,wide,winsor2,1000000,2,   7.5321810
+WINSOR_REF,wide,winsor2,1000000,3,   7.5614680
+WINSOR_REF,wide,winsor2,1000000,4,   7.5860210
+WINSOR_REF,noby,ctools,1000000,0,   0.0837110
+WINSOR_REF,noby,ctools,1000000,1,   0.0762620
+WINSOR_REF,noby,ctools,1000000,2,   0.0750960
+WINSOR_REF,noby,ctools,1000000,3,   0.0748030
+WINSOR_REF,noby,ctools,1000000,4,   0.0759710
+WINSOR_REF,noby,gstats,1000000,0,   0.0516750
+WINSOR_REF,noby,gstats,1000000,1,   0.0590860
+WINSOR_REF,noby,gstats,1000000,2,   0.0994970
+WINSOR_REF,noby,gstats,1000000,3,   0.0512810
+WINSOR_REF,noby,gstats,1000000,4,   0.0518650
+WINSOR_REF,noby,winsor2,1000000,0,   0.2327200
+WINSOR_REF,noby,winsor2,1000000,1,   0.2427240
+WINSOR_REF,noby,winsor2,1000000,2,   0.2381200
+WINSOR_REF,noby,winsor2,1000000,3,   0.2320690
+WINSOR_REF,noby,winsor2,1000000,4,   0.2343340
+
+. di "WINSOR_REFERENCES_COMPLETE"
+WINSOR_REFERENCES_COMPLETE
+
+. 
+end of do-file
+
+. local rc = _rc
+
+. di "CTOOLS_LAUNCH=209abdb0f859452fbdd69a3aa6af6ab5 RC=`rc'"
+CTOOLS_LAUNCH=209abdb0f859452fbdd69a3aa6af6ab5 RC=0
+
+. log close
+      name:  <unnamed>
+       log:  /Users/Mike/Documents/GitHub/stata-ctools/temp/encode_performance_20261002/winsor_references.log
+  log type:  text
+ closed on:   2 Oct 2026, 12:00:40
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------

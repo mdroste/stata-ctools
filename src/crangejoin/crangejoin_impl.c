@@ -1,9 +1,15 @@
 /* Inclusive interval join. Sort the using index once; two binary searches per
- * master row. Output size is checked before Stata's dataset is resized. */
+ * master row. Output size is checked before Stata's dataset is resized.
+ * write keeps the master copy prepare loaded until "clear" (or "rollback",
+ * which writes the master observations back) ends the join; a write that
+ * fails part way restores them at once unless told norestore. */
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include <limits.h>
+/* Checked SPI writes resolve positions in the plugin varlist, even after
+ * estimation has introduced internal Stata variables. */
+#define SD_SAFEMODE
 #include "crangejoin_impl.h"
 #include "ctools_types.h"
 #include "ctools_order.h"
@@ -60,10 +66,44 @@ static size_t find_group(size_t m)
     return state.ngroups;
 }
 
+/* Write the master observations back over the first rows of the master
+ * variables, which lead the plugin varlist. */
+static int restore_master(void)
+{
+    size_t n = state.master.data.nobs;
+    if ((size_t)SF_nobs() < n || SF_nvars() < state.nm) return 198;
+    int rc = 0;
+    const size_t tile = 4096;
+    #pragma omp parallel for schedule(static) num_threads(ctools_get_max_threads()) if(n > 10000) reduction(max:rc)
+    for (size_t begin = 0; begin < n; begin += tile) {
+        size_t end = begin + tile < n ? begin + tile : n;
+        for (int col = 0; col < state.nm; col++) {
+            const stata_variable *v = state.master.data.vars + col;
+            for (size_t i = begin; i < end; i++) {
+                int err = v->type == STATA_TYPE_STRING
+                    ? SF_sstore(col+1, (ST_int)(i+1), v->data.str[i])
+                    : SF_vstore(col+1, (ST_int)(i+1), v->data.dbl[i]);
+                if (err > rc) rc = err;
+            }
+        }
+    }
+    return rc;
+}
+
 ST_retcode crangejoin_main(const char *args)
 {
     int rc = 0;
     if (!strcmp(args, "clear")) { crangejoin_cleanup_cache(); return 0; }
+    if (!strcmp(args, "rollback")) {
+        /* Only a completed write (ready 3) changed master rows; a failed
+         * write restored them itself. */
+        if (state.ready == 3) {
+            rc = restore_master();
+            if (rc) ctools_error("crangejoin", "the master observations could not be restored");
+        }
+        crangejoin_cleanup_cache();
+        return rc;
+    }
     if (!strncmp(args, "using ", 6)) {
         crangejoin_cleanup_cache(); args += 6;
         if (ctools_parse_next_int(&args, &state.nby) || state.nby < 0 || state.nby >= SF_nvars() ||
@@ -169,7 +209,11 @@ ST_retcode crangejoin_main(const char *args)
             loaded-start, ctools_timer_seconds()-loaded, state.nout);
         return 0;
     }
-    if (!strcmp(args, "write")) {
+    if (!strncmp(args, "write", 5) && (!args[5] || args[5] == ' ')) {
+        /* fault_store (validation hook) writes half the output rows, then
+         * fails as memory would; norestore (option fast) skips the restore */
+        int fault_store = ctools_parse_bool_option(args + 5, "fault_store");
+        int norestore = ctools_parse_bool_option(args + 5, "norestore");
         int nu = (int)state.using.data.nvars - state.nby;
         if (state.ready != 2 || (size_t)SF_nobs() != state.nout || SF_nvars() != state.nm+2+nu) { rc = 198; goto fail; }
         for (int col = 0; col < state.nm+nu; col++) {
@@ -183,9 +227,10 @@ ST_retcode crangejoin_main(const char *args)
          * master row with millions of matches can both use every worker.
          * Workers own disjoint row ranges, avoiding cross-column false sharing. */
         const size_t tile = 4096, nm = state.master.data.nobs;
+        const size_t nwrite = fault_store ? state.nout / 2 : state.nout;
         #pragma omp parallel for schedule(static) num_threads(ctools_get_max_threads()) if(state.nout > 10000) reduction(max:rc)
-        for (size_t begin = 0; begin < state.nout; begin += tile) {
-            size_t end = begin + tile < state.nout ? begin + tile : state.nout;
+        for (size_t begin = 0; begin < nwrite; begin += tile) {
+            size_t end = begin + tile < nwrite ? begin + tile : nwrite;
             size_t l = 0, r = nm;
             while (l < r) {
                 size_t mid = l + (r-l)/2;
@@ -212,9 +257,15 @@ ST_retcode crangejoin_main(const char *args)
                 }
             }
         }
+        if (!rc && fault_store) rc = 920;
+        if (rc) {
+            if (!norestore && restore_master())
+                ctools_error("crangejoin", "the master observations could not be restored");
+            goto fail;
+        }
         ctools_verbose("crangejoin", state.verbose, "write %.4fs", ctools_timer_seconds()-start);
-        crangejoin_cleanup_cache();
-        return rc;
+        state.ready = 3;
+        return 0;
     }
     rc = 198;
 fail:

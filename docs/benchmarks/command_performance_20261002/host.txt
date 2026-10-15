@@ -1,0 +1,16 @@
+Hardware:
+
+    Hardware Overview:
+
+      Model Name: MacBook Pro
+      Model Identifier: Mac16,8
+      Model Number: Z1FB000NLLL/A
+      Chip: Apple M4 Pro
+      Total Number of Cores: 12 (8 Performance and 4 Efficiency)
+      Memory: 48 GB
+      System Firmware Version: 20457.1.29
+      OS Loader Version: 18000.161.10.701.1
+
+ProductName:		macOS
+ProductVersion:		26.7.1
+BuildVersion:		25G241

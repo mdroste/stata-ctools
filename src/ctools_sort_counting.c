@@ -545,6 +545,28 @@ stata_retcode ctools_sort_counting_order_only(stata_data *data, int *sort_vars, 
         return STATA_ERR_INVALID_INPUT;
     }
 
+    /* Keys are sorted last to first, so a leading key that cannot be counted
+       would only be discovered after the others were sorted for nothing.
+       A few spread-out values of each earlier key settle most such cases. */
+    for (k = 0; k + 1 < (int)nsort; k++) {
+        var_idx = sort_vars[k] - 1;
+        if (var_idx < 0 || var_idx >= (int)data->nvars) {
+            return STATA_ERR_INVALID_INPUT;
+        }
+        if (data->vars[var_idx].type != STATA_TYPE_DOUBLE) {
+            return STATA_ERR_UNSUPPORTED_TYPE;
+        }
+        const double *values = data->vars[var_idx].data.dbl;
+        size_t step = data->nobs / 64 + 1;
+        for (size_t i = 0; i < data->nobs; i += step) {
+            double v = values[i];
+            if (v != SV_missval && (v > COUNTING_SORT_MAX_ABS || v < -COUNTING_SORT_MAX_ABS ||
+                                    v != floor(v))) {
+                return STATA_ERR_UNSUPPORTED_TYPE;
+            }
+        }
+    }
+
     for (k = (int)nsort - 1; k >= 0; k--) {
         var_idx = sort_vars[k] - 1;
 

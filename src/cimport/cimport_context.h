@@ -123,6 +123,7 @@ typedef struct CImportContext {
     bool has_header;
     int header_row;         /* 1-based row number for header (1 = first row, 0 = no header) */
     int skip_rows;          /* Number of rows to skip at start of file */
+    size_t first_row_offset; /* File offset of the first row read: header or first data row */
     CImportBindQuotesMode bindquotes;
     bool retain_quotes;
     bool strip_quotes_all;

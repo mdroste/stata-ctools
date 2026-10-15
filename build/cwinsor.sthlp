@@ -40,6 +40,10 @@
 {synopt:{opt pre:fix(string)}}generate new variables with prefix{p_end}
 {synopt:{opt replace}}replace existing variables (default){p_end}
 
+{syntab:Failure handling}
+{synopt:{opt snap:shot}}{help preserve} the whole dataset, as earlier versions did; written to disk above {cmd:c(max_preservemem)}{p_end}
+{synopt:{opt fast}}keep no copy of the original values; a failure or Break can leave them changed{p_end}
+
 {syntab:Performance options}
 {synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
 {synopt:{opt v:erbose}}display timing breakdown{p_end}
@@ -53,6 +57,13 @@
 {cmd:cwinsor} is a high-performance C-accelerated replacement for {cmd:winsor2} (v1.1) by Yujun Lian, available from SSC.
 It winsorizes or trims numeric variables at specified percentiles using parallel
 processing and an efficient O(n) percentile algorithm.
+
+{pstd}
+Generated variables inherit the source variable label, or its name when unlabeled.
+As in {cmd:winsor2}, grouped winsorization creates results using Stata's default
+numeric storage type. Ungrouped trimming expands percentile bounds through Stata
+numeric local macros; this rounding can trim a value exactly at an unrounded
+percentile. It can therefore differ from {cmd:gstats winsor} at those boundaries.
 
 {pstd}
 {bf:Winsorization} limits extreme values by replacing observations below the lower
@@ -114,6 +125,33 @@ variables w_{it:varname} containing the winsorized values.
 {opt replace} replaces the original variables with winsorized values. This is the
 default behavior when neither {opt suffix()} nor {opt prefix()} is specified.
 Cannot be combined with {opt suffix()} or {opt prefix()}.
+
+{dlgtab:Failure handling}
+
+{pstd}
+By default a failed or interrupted {cmd:cwinsor} leaves the data as they were
+without writing a snapshot of the dataset. Variables created with
+{opt suffix()} or {opt prefix()} are dropped again. When {cmd:cwinsor} changes
+variables in place, the plugin keeps a copy of their original values for the
+observations it rewrites (8 bytes per observation and variable) until the
+command finishes, and writes them back after a failure or Break; the variable
+labels, the sort order and {cmd:c(changed)} are restored too.
+
+{phang}
+{opt snapshot} restores the data after a failed or interrupted call from a
+{help preserve} snapshot of the whole dataset instead, as earlier versions of
+{cmd:cwinsor} did. Stata keeps the snapshot in memory up to
+{cmd:c(max_preservemem)} (1 GB by default) and writes it to disk above that, so
+large datasets take longer and write the whole dataset once.
+{p_end}
+
+{phang}
+{opt fast} keeps no copy of the original values and undoes nothing: it saves
+the memory of the copy, but if the call fails after the plugin started writing,
+or Break is pressed, the error is reported and the variables are left partly or
+wholly winsorized (or the new variables stay in the data). {opt fast} may not
+be combined with {opt snapshot}.
+{p_end}
 
 {dlgtab:Performance options}
 

@@ -687,7 +687,8 @@ gen y = x_tiny * 1e9 + x_huge / 1e9 + rnormal()
 
 benchmark_reghdfe y x_tiny x_huge, absorb(id) testname("mixed scale (tiny and huge)")
 
-* All zeros in X
+* All zeros in X - compare against reghdfe, which omits the regressor and
+* reports the constant
 clear
 set seed 213
 set obs 1000
@@ -695,13 +696,7 @@ gen id = runiformint(1, 50)
 gen x = 0
 gen y = rnormal()
 
-capture creghdfe y x, absorb(id)
-if _rc != 0 {
-    test_pass "all zeros in X - fails gracefully (rc=`=_rc')"
-}
-else {
-    test_fail "all zeros in X" "should error on all-zero regressor (collinearity) but succeeded"
-}
+benchmark_reghdfe y x, absorb(id) testname("all zeros in X")
 
 * Constant Y - compare against reghdfe
 clear
@@ -3834,8 +3829,128 @@ else {
 }
 
 /*******************************************************************************
+ * SECTION: Absorbed degrees of freedom on disconnected graphs
+ *
+ * reghdfe sets effects nested within the clusters aside before it counts
+ * mobility groups, and counts the redundant coefficients of a third or later
+ * effect from its mobility groups with each earlier effect. Neither rule shows
+ * on a connected graph. Ten blocks give id1 and id2 ten mobility groups; id3
+ * links the blocks in pairs; coarse is nested within id2.
+ ******************************************************************************/
+print_section "Absorbed degrees of freedom on disconnected graphs"
+
+clear
+set seed 20261004
+set obs 3000
+gen block = ceil(_n / 300)
+gen id1 = 100 * block + ceil(12 * runiform())
+gen id2 = 100 * block + ceil(8 * runiform())
+gen id3 = 10 * ceil(block / 2) + ceil(3 * runiform())
+gen coarse = floor(id2 / 4)
+gen x1 = rnormal()
+gen x2 = rnormal() + 0.3 * x1
+gen y = x1 - x2 + id1 / 100 + id2 / 200 + rnormal()
+
+* Clustering on an absorbed effect, or on a variable an effect is nested in
+benchmark_reghdfe_dof y x1 x2, absorb(id1 id2)
+benchmark_reghdfe_dof y x1 x2, absorb(id1 id2) vce(cluster id1)
+benchmark_reghdfe_dof y x1 x2, absorb(id1 id2) vce(cluster id2)
+benchmark_reghdfe_dof y x1 x2, absorb(id1 id2) vce(cluster block)
+benchmark_reghdfe_dof y x1 x2, absorb(id1 id3) vce(cluster block)
+
+* Third and fourth effects
+benchmark_reghdfe_dof y x1 x2, absorb(id1 id2 id3)
+benchmark_reghdfe_dof y x1 x2, absorb(id1 id2 coarse)
+benchmark_reghdfe_dof y x1 x2, absorb(id1 coarse id2)
+benchmark_reghdfe_dof y x1 x2, absorb(id1 id2 id3 coarse)
+benchmark_reghdfe_dof y x1 x2, absorb(id1 id2 id3) vce(robust)
+benchmark_reghdfe_dof y x1 x2, absorb(id1 id2 id3) vce(cluster id1)
+benchmark_reghdfe_dof y x1 x2, absorb(id1 id2 id3) vce(cluster id3)
+benchmark_reghdfe_dof y x1 x2, absorb(id1 id2 coarse) vce(cluster coarse)
+
+* Each dofadjustments() setting, with and without nesting
+foreach dof in all none firstpair pairwise clusters "pairwise clusters" "firstpair clusters" {
+    benchmark_reghdfe_dof y x1 x2, absorb(id1 id2 id3) dofadjustments(`dof')
+    benchmark_reghdfe_dof y x1 x2, absorb(id1 id2 id3) vce(cluster id1) dofadjustments(`dof')
+}
+
+* Settings reghdfe rejects
+test_error_match, stata_cmd(reghdfe y x1 x2, absorb(id1 id2) dofadjustments(all none)) ctools_cmd(creghdfe y x1 x2, absorb(id1 id2) dofadjustments(all none)) testname("dofadjustments(all none)")
+test_error_match, stata_cmd(reghdfe y x1 x2, absorb(id1 id2) dofadjustments(firstpair pairwise)) ctools_cmd(creghdfe y x1 x2, absorb(id1 id2) dofadjustments(firstpair pairwise)) testname("dofadjustments(firstpair pairwise)")
+test_error_match, stata_cmd(reghdfe y x1 x2, absorb(id1 id2) dofadjustments(mobility)) ctools_cmd(creghdfe y x1 x2, absorb(id1 id2) dofadjustments(mobility)) testname("dofadjustments(mobility)")
+
+/*******************************************************************************
  * Summary
  ******************************************************************************/
+
+/*******************************************************************************
+ * Rollback of failed regressions
+ *
+ * A failed or interrupted creghdfe leaves the data as they were without a
+ * snapshot of the dataset; option snapshot preserves it instead and option
+ * fast undoes nothing (see validation/rollback_helpers.do). The hook
+ * $CTOOLS_creghdfe_fault fails the call with r(1), as Break would:
+ *   outputs  after resid(), groupvar() and the savefe variables were created
+ *   post     after the plugin filled them and e() was posted
+ ******************************************************************************/
+print_section "Rollback of Failed Regressions"
+capture confirm file "validation/rollback_helpers.do"
+if !_rc do "validation/rollback_helpers.do"
+else do "rollback_helpers.do"
+
+clear
+set seed 2718
+set obs 3000
+gen long id = _n
+gen int f1 = mod(_n, 61) + 1
+gen int f2 = mod(_n * 7, 23) + 1
+gen str6 scl = "c" + string(mod(_n, 40))
+gen byte cat = mod(_n, 4)
+label define rb_cat 0 "zero" 1 "one" 2 "two" 3 "three"
+label values cat rb_cat
+gen double x1 = rnormal()
+gen float x2 = rnormal()
+gen double y = x1 + .5 * x2 + .1 * f1 + rnormal()
+gen byte keep = mod(_n, 9) != 0
+label variable y "outcome"
+label data "creghdfe rollback data"
+note: dataset note
+note y: note on y
+char _dta[rb_char] dataset characteristic
+char x1[rb_char] x1 characteristic
+sort f1 id
+tempfile rb_copy rb_out
+save `rb_copy'
+
+_ctools_rb_case, cmd(creghdfe y x1 x2, absorb(f1 f2) resid(rb_resid) groupvar(rb_group)) ///
+    global(CTOOLS_creghdfe_fault) fault(outputs) testname("[rollback] outputs created")
+_ctools_rb_case, cmd(creghdfe y x1 x2, absorb(f1 f2, savefe) resid(rb_resid) groupvar(rb_group)) ///
+    global(CTOOLS_creghdfe_fault) fault(post) testname("[rollback] after plugin and e()")
+_ctools_rb_case, cmd(creghdfe y x1 i.cat if keep [aw=1+abs(x2)], absorb(f1) vce(cluster scl) resid) ///
+    global(CTOOLS_creghdfe_fault) fault(post) testname("[rollback] factors, weights, if, string cluster")
+
+* Options snapshot and fast give the default's results; together they are refused
+use `rb_copy', clear
+creghdfe y x1 x2, absorb(f1 f2) resid(rb_resid)
+matrix rb_b = e(b)
+matrix rb_V = e(V)
+save `rb_out', replace
+foreach mode in snapshot fast {
+    use `rb_copy', clear
+    creghdfe y x1 x2, absorb(f1 f2) resid(rb_resid) `mode'
+    capture cf _all using `rb_out', all
+    if !_rc & mreldif(e(b), rb_b) == 0 & mreldif(e(V), rb_V) == 0 {
+        test_pass "[rollback] option `mode' gives the default results"
+    }
+    else test_fail "[rollback] option `mode' gives the default results" "data or e(b)/e(V) differ"
+}
+use `rb_copy', clear
+capture creghdfe y x1 x2, absorb(f1) resid(rb_resid) snapshot fast
+local rc = _rc
+capture cf _all using `rb_copy', all
+if `rc' == 198 & !_rc test_pass "[rollback] snapshot and fast together refused"
+else test_fail "[rollback] snapshot and fast together refused" "rc=`rc', data changed=`=_rc!=0'"
+matrix drop rb_b rb_V
 
 * End of creghdfe validation
 noi print_summary "creghdfe"

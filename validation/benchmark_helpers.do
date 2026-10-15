@@ -174,11 +174,8 @@ program define benchmark_merge
 
     restore
 
-    * For m:m merges, only compare counts (Stata's m:m behavior is "unusual" and
-    * implementation-dependent per Stata documentation - we only verify dimensions)
-    local is_mm = ("`mergetype'" == "m:m")
-
-    if `counts_match' & (`cf_rc' == 0 | `is_mm') {
+    * Every merge type must preserve the reference values, including m:m.
+    if `counts_match' & `cf_rc' == 0 {
         test_pass "`testname'"
     }
     else if !`counts_match' {
@@ -432,7 +429,7 @@ end
  ******************************************************************************/
 capture program drop benchmark_qreg
 program define benchmark_qreg
-    syntax varlist(min=2 fv) [if] [in], [Quantile(real 0.5) vce(string) testname(string) minsf(real 7)]
+    syntax varlist(min=2 fv) [if] [in], [Quantile(real 0.5) vce(string) testname(string) minsf(real 7) DENmethod(string) BWmethod(string)]
 
     gettoken depvar indepvars : varlist
 
@@ -442,10 +439,20 @@ program define benchmark_qreg
     local vceopt ""
     if "`vce'" != "" local vceopt "vce(`vce')"
 
+    local densityopts "`denmethod' `bwmethod'"
+    local nativevce "`vceopt'"
+    local ctoolsopts ""
+    if "`denmethod'" != "" local ctoolsopts "denmethod(`denmethod')"
+    if "`bwmethod'" != "" local ctoolsopts "`ctoolsopts' bwmethod(`bwmethod')"
+    if strtrim("`densityopts'") != "" {
+        local basevce "`vce'"
+        if "`basevce'" == "" local basevce "iid"
+        local nativevce "vce(`basevce', `densityopts')"
+    }
     preserve
 
     * Run qreg (quietly)
-    capture quietly qreg `depvar' `indepvars' `if' `in', quantile(`quantile') `vceopt'
+    capture quietly qreg `depvar' `indepvars' `if' `in', quantile(`quantile') `nativevce'
     local qreg_rc = _rc
 
     if `qreg_rc' != 0 {
@@ -469,7 +476,7 @@ program define benchmark_qreg
     local qreg_convcode = e(convcode)
 
     * Run cqreg (quietly)
-    capture quietly cqreg `depvar' `indepvars' `if' `in', quantile(`quantile') `vceopt'
+    capture quietly cqreg `depvar' `indepvars' `if' `in', quantile(`quantile') `vceopt' `ctoolsopts'
     local cqreg_rc = _rc
 
     if `cqreg_rc' != 0 {
@@ -579,7 +586,11 @@ program define benchmark_qreg
     local qreg_Vrows = rowsof(qreg_V)
     local cqreg_Vrows = rowsof(cqreg_V)
 
-    if `qreg_Vrows' == `cqreg_Vrows' {
+    if `qreg_Vrows' != `cqreg_Vrows' | colsof(qreg_V) != colsof(cqreg_V) {
+        local has_failure = 1
+        local all_diffs "`all_diffs' e(V):dim_mismatch"
+    }
+    else {
         local rows = rowsof(qreg_V)
         local cols = colsof(qreg_V)
         local min_sf_V = 15
@@ -924,11 +935,36 @@ program define benchmark_export
     }
 end
 
+capture program drop assert_psmatch_inference
+program define assert_psmatch_inference
+    args actual_se actual_t reference_se reference_att minsf testname
+    local expected_t = .
+    if !missing(`reference_se') & `reference_se' > 0 {
+        local expected_t = `reference_att'/`reference_se'
+    }
+    local bad = 0
+    foreach result in se t {
+        local expected = cond("`result'" == "se", `reference_se', `expected_t')
+        local actual = `actual_`result''
+        if missing(`expected') {
+            if !missing(`actual') local bad = 1
+        }
+        else {
+            sigfigs `actual' `expected'
+            if r(sigfigs) < `minsf' local bad = 1
+        }
+    }
+    if `bad' test_fail "`testname' ATT inference" ///
+        "SE/t differ: SE=`actual_se' expected=`reference_se'; t=`actual_t' expected=`expected_t'"
+    else test_pass "`testname' ATT inference"
+end
+
 /*******************************************************************************
  * benchmark_psmatch2 - Compare cpsmatch vs psmatch2
  *
  * Comprehensively compares propensity score matching results:
- *   - r(att), r(seatt) - ATT and standard error from psmatch2
+ *   - r(att) - ATT from psmatch2
+ *   - r(att_se), r(att_t) - psmatch2 r(seatt) and its implied t-statistic
  *   - _pscore variable - propensity scores (must match)
  *   - Sample sizes computed from _treated/_support variables
  *
@@ -1017,6 +1053,7 @@ program define benchmark_psmatch2
     * Store cpsmatch results
     local cpsmatch_att = r(att)
     local cpsmatch_att_se = r(att_se)
+    local cpsmatch_att_t = r(att_t)
 
     * Compute comparable sample counts from cpsmatch's generated variables
     * (r(n_treated) counts ALL treated including off-support, so use _treated/_support)
@@ -1056,12 +1093,8 @@ program define benchmark_psmatch2
             local all_diffs "`all_diffs' att:missing_in_cpsmatch"
         }
 
-        * Note: We skip ATT SE comparison because:
-        * 1. psmatch2 explicitly notes: "S.E. does not take into account that the propensity score is estimated"
-        * 2. cpsmatch uses a different approximation for the SE
-        * 3. Both are known to be approximations that can differ significantly
-        * The ATT point estimate comparison is the meaningful validation
-        test_method_difference "`testname' ATT SE"
+        assert_psmatch_inference `cpsmatch_att_se' `cpsmatch_att_t' ///
+            `psmatch2_att_se' `psmatch2_att' `minsf' "`testname'"
     }
 
     * Compare propensity scores variable using significant figures
@@ -1752,7 +1785,7 @@ program define benchmark_winsor
         local q = 99
     }
 
-    * Build cuts string for gstats
+    * Build cuts string for winsor2
     if "`cuts'" != "" {
         local p : word 1 of `cuts'
         local q : word 2 of `cuts'
@@ -1785,12 +1818,13 @@ program define benchmark_winsor
     }
     if "`cwinsoropts'" != "" local copts "`copts' `cwinsoropts'"
 
-    * Build options for gstats winsor
+    * cwinsor replaces winsor2. gstats uses different trim-boundary rounding.
+    * Build options for winsor2
     local gopts "cuts(`p' `q')"
     if "`trim'" != "" local gopts "`gopts' trim"
     if "`by'" != "" local gopts "`gopts' by(`by')"
 
-    * For gstats, always use suffix to create new variable
+    * For winsor2, always use suffix to create new variable
     local gopts "`gopts' suffix(_gw)"
 
     * Run cwinsor
@@ -1803,21 +1837,21 @@ program define benchmark_winsor
     capture cwinsor `varlist', `copts'
     local rc_c = _rc
 
-    * Run gstats winsor
+    * Run winsor2
     foreach v of local varlist {
         capture drop `v'_gw
     }
-    capture gstats winsor `varlist', `gopts'
+    capture winsor2 `varlist', `gopts'
     local rc_g = _rc
 
-    * Check both succeeded or both failed
+    * These are valid-input cases: even matching errors must fail.
     if `rc_c' != `rc_g' {
-        test_fail "`testname'" "cwinsor rc=`rc_c', gstats rc=`rc_g'"
+        test_fail "`testname'" "cwinsor rc=`rc_c', winsor2 rc=`rc_g'"
         exit
     }
 
     if `rc_c' != 0 {
-        test_pass "`testname' (both error as expected)"
+        test_fail "`testname'" "both commands unexpectedly failed with rc=`rc_c'"
         exit
     }
 
@@ -1829,7 +1863,7 @@ program define benchmark_winsor
         local cvar "`v'`suf'"
         if "`prefix'" != "" local cvar "`prefix'`v'"
 
-        * gstats output variable name
+        * winsor2 output variable name
         local gvar "`v'_gw"
 
         * Compare using sigfigs
@@ -1859,7 +1893,7 @@ program define benchmark_winsor
         }
 
         * Also check missing value patterns match
-        quietly count if missing(`cvar') != missing(`gvar')
+        quietly count if (missing(`cvar') | missing(`gvar')) & `cvar' != `gvar'
         local nmiss_diff = r(N)
         if `nmiss_diff' > 0 {
             local all_pass = 0
@@ -2485,6 +2519,67 @@ program define benchmark_reghdfe_opts
 end
 
 /*******************************************************************************
+ * benchmark_reghdfe_dof - Compare absorbed degrees of freedom, creghdfe vs reghdfe
+ *
+ * Runs both commands with the same absorb(), vce() and dofadjustments() and
+ * requires e(N), e(df_a), e(df_a_nested) and e(df_r) to be equal, and
+ * e(rmse), e(r2_a), e(F), e(b) and e(V), which all carry the count, to agree
+ * to minsf significant figures.
+ *
+ * Syntax: benchmark_reghdfe_dof varlist, absorb(varlist) [vce(string)
+ *             dofadjustments(string) minsf(real)]
+ ******************************************************************************/
+capture program drop benchmark_reghdfe_dof
+program define benchmark_reghdfe_dof
+    syntax varlist(min=2), Absorb(varlist) [vce(string) DOFadjustments(string) minsf(real 7)]
+
+    local opts "absorb(`absorb')"
+    if "`vce'" != "" local opts "`opts' vce(`vce')"
+    if "`dofadjustments'" != "" local opts "`opts' dofadjustments(`dofadjustments')"
+    local testname "df_a: `opts'"
+
+    foreach cmd in reghdfe creghdfe {
+        capture quietly `cmd' `varlist', `opts'
+        if _rc {
+            test_fail "`testname'" "`cmd' returned error `=_rc'"
+            exit
+        }
+        matrix `cmd'_b = e(b)
+        matrix `cmd'_V = e(V)
+        foreach scalar in N df_a df_a_nested df_r rmse r2_a F {
+            local `cmd'_`scalar' = e(`scalar')
+        }
+    }
+
+    local all_diffs ""
+    foreach scalar in N df_a df_a_nested df_r {
+        if `reghdfe_`scalar'' != `creghdfe_`scalar'' {
+            local all_diffs "`all_diffs' e(`scalar'):`reghdfe_`scalar''!=`creghdfe_`scalar''"
+        }
+    }
+    foreach scalar in rmse r2_a F {
+        sigfigs `reghdfe_`scalar'' `creghdfe_`scalar''
+        if r(sigfigs) < `minsf' {
+            local sf_fmt : display %4.1f r(sigfigs)
+            local all_diffs "`all_diffs' e(`scalar'):sigfigs=`sf_fmt'"
+        }
+    }
+    foreach matrix in b V {
+        matrix_min_sigfigs reghdfe_`matrix' creghdfe_`matrix'
+        if r(min_sigfigs) < `minsf' {
+            local sf_fmt : display %4.1f r(min_sigfigs)
+            local all_diffs "`all_diffs' e(`matrix'):sigfigs=`sf_fmt'"
+        }
+    }
+    if "`all_diffs'" == "" {
+        test_pass "`testname'"
+    }
+    else {
+        test_fail "`testname'" "`=trim("`all_diffs'")'"
+    }
+end
+
+/*******************************************************************************
  * benchmark_ppmlhdfe - Compare cpplmhdfe vs ppmlhdfe
  *
  * Runs ppmlhdfe and cpplmhdfe with the same options and compares e() results.
@@ -2499,7 +2594,7 @@ capture program drop benchmark_ppmlhdfe
 program define benchmark_ppmlhdfe
     syntax varlist(min=2 fv) [aw fw pw] [if] [in], ///
         Absorb(varlist) [vce(string) EXPosure(varname) OFFset(varname) ///
-        testname(string) minsf(real 5) TOLerance(real 1e-8) REFerenceopts(string)]
+        testname(string) minsf(real $DEFAULT_SIGFIGS) TOLerance(real 1e-8) REFerenceopts(string)]
 
     gettoken depvar indepvars : varlist
 

@@ -141,6 +141,43 @@ ST_int ctools_strings_to_cluster_ids(
     ST_int *num_groups
 );
 
+/*
+    Group IDs of the pairs (a[i], b[i]): the intersection of two clusterings.
+
+    Memory is O(N) whatever the number of levels of a and b: a dense a-by-b
+    table is used only while it is small relative to N, and a sort otherwise;
+    both give the same IDs. IDs are dense, 0-based and numbered in order of
+    first appearance. a and b must be nonnegative.
+
+    Parameters:
+    - a, b: ID arrays (N x 1)
+    - N: Number of observations
+    - ids: Output array (pre-allocated to N); may not overlap a or b
+    - num_groups: Output - number of distinct pairs
+
+    Returns: 0 on success, -1 on memory allocation failure or a negative ID
+*/
+ST_int ctools_intersect_cluster_ids(const ST_int *a, const ST_int *b, ST_int N,
+                                    ST_int *ids, ST_int *num_groups);
+
+/* The same groups numbered in ascending (a, b) order instead. */
+ST_int ctools_intersect_cluster_ids_sorted(const ST_int *a, const ST_int *b, ST_int N,
+                                           ST_int *ids, ST_int *num_groups);
+
+/*
+    Dense 0-based group IDs of arbitrary integer codes, numbered in order of
+    first appearance. O(N) memory whatever the range or number of codes: a
+    table over the code range while that is small relative to N, a sort
+    otherwise. ids may not overlap codes.
+
+    Returns: 0 on success, -1 on memory allocation failure
+*/
+ST_int ctools_dense_cluster_ids(const ST_int *codes, ST_int N, ST_int *ids, ST_int *num_groups);
+
+/* The same groups numbered in ascending code order instead (what egen
+   group() gives, minus one). */
+ST_int ctools_dense_cluster_ids_sorted(const ST_int *codes, ST_int N, ST_int *ids, ST_int *num_groups);
+
 ST_int ctools_compact_array_int(
     const ST_int *src,
     ST_int *dest,
@@ -206,29 +243,73 @@ ST_int ctools_fe_nested_in_cluster(
 );
 
 /*
-    Compute degrees of freedom absorbed by fixed effects and mobility groups.
+    Compute degrees of freedom absorbed by fixed effects and mobility groups,
+    from the first pair of effects.
 
-    Algorithm:
-    1. Sum all FE levels → df_a
-    2. For G >= 2: count connected components between first two FEs
-       and subtract from df_a
-    3. For G > 2: subtract (G-2) additional, add to mobility_groups
+    dof_adjust_type selects reghdfe's dofadjustments():
+    - 0 (all) and 3 (pairwise): sum of levels, minus the connected components
+      of the first two effects, minus one more for each later effect; the
+      mobility groups are those components plus one per later effect
+    - 2 (firstpair): as above without the later effects
+    - 1 (none): one coefficient is redundant when G >= 2; mobility groups = 1
+    With a single effect (types other than none) nothing is redundant and
+    the mobility groups are 0.
 
     Parameters:
     - factors: Array of G FE_Factor structs (levels must be 1-based, contiguous)
     - G: Number of FE factors
     - N: Number of observations
+    - dof_adjust_type: 0=all, 1=none, 2=firstpair, 3=pairwise
     - df_a: Output - degrees of freedom absorbed
     - mobility_groups: Output - number of mobility groups
 
-    Returns: 0 on success, -1 on error
+    Returns: 0 (an allocation failure in the component count falls back to
+    one mobility group)
 */
 ST_int ctools_compute_hdfe_dof(
     const FE_Factor *factors,
     ST_int G,
     ST_int N,
+    ST_int dof_adjust_type,
     ST_int *df_a,
     ST_int *mobility_groups
+);
+
+/* Mobility-group adjustments of ctools_hdfe_redundant_intercepts(). */
+#define CTOOLS_DOF_PAIRWISE  1  /* every pair of effects */
+#define CTOOLS_DOF_FIRSTPAIR 2  /* the first pair only */
+
+/*
+    Redundant intercept coefficients of each absorbed effect, counted as
+    reghdfe's estimate_dof() counts them.
+
+    Effects flagged in nested (those nested within a cluster variable) are
+    wholly redundant and take no further part. Of the remaining effects, each
+    one after the first has at least one redundant coefficient, and so does
+    the first when any effect is nested. With CTOOLS_DOF_PAIRWISE an effect's
+    count is the largest number of connected components it forms with any
+    earlier remaining effect; with CTOOLS_DOF_FIRSTPAIR only the first such
+    pair is examined; with neither no pair is.
+
+    The absorbed degrees of freedom are the levels minus these counts.
+
+    Parameters:
+    - factors: Array of G FE_Factor structs (levels must be 1-based, contiguous)
+    - G: Number of FE factors
+    - N: Number of observations
+    - nested: G flags, or NULL when no effect is nested
+    - flags: CTOOLS_DOF_PAIRWISE, CTOOLS_DOF_FIRSTPAIR or 0
+    - redundant: Output - G counts
+
+    Returns: 0 on success, -1 on memory allocation error
+*/
+ST_int ctools_hdfe_redundant_intercepts(
+    const FE_Factor *factors,
+    ST_int G,
+    ST_int N,
+    const ST_int *nested,
+    ST_int flags,
+    ST_int *redundant
 );
 
 /*

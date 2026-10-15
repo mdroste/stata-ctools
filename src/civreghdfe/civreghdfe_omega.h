@@ -91,7 +91,7 @@ ST_retcode civ_omega_build(const civ_omega *om, const ST_double *E, ST_int K,
     Solve the symmetric system A x = b (A n x n) with Cholesky, falling back
     to Stata's invsym generalized inverse when A is singular or a column is
     nearly dependent on the others (invsym's 1e-9 tolerance); x may alias b.
-    Returns 0, or -1 if A is unusable.
+    Returns 0, or -1 when memory runs out (any symmetric A is usable).
 */
 ST_int civ_sym_solve(const ST_double *A, ST_int n, const ST_double *b, ST_int nrhs, ST_double *x);
 

@@ -95,7 +95,9 @@ int ctools_persistent_pool_submit(ctools_persistent_pool *pool,
 /*
  * Submit multiple work items to the pool.
  * Submits count items, where item i calls func with args + (i * arg_size).
- * Returns 0 on success, -1 on failure.
+ * Returns 0 on success, -1 on failure. Submission is all or nothing: -1 means
+ * no item was queued, so none ran or will run, and the caller may run the
+ * whole batch itself.
  */
 int ctools_persistent_pool_submit_batch(ctools_persistent_pool *pool,
                                          ctools_thread_func func,
@@ -125,5 +127,14 @@ ctools_persistent_pool *ctools_get_global_pool(void);
  * Call at plugin cleanup or program exit.
  */
 void ctools_destroy_global_pool(void);
+
+/*
+ * Initialize attributes for a ctools worker thread: at least
+ * CTOOLS_WORKER_STACK_SIZE of stack, since the platform default for
+ * secondary threads (512 KiB on macOS) is too small for some kernels.
+ * Returns 0 on success; the caller must pthread_attr_destroy() it.
+ */
+#define CTOOLS_WORKER_STACK_SIZE ((size_t)8 * 1024 * 1024)
+int ctools_worker_attr_init(pthread_attr_t *attr);
 
 #endif /* CTOOLS_THREADS_H */

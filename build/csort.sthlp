@@ -62,8 +62,10 @@ strings are supported; {cmd:strL} variables are rejected.
 {phang}
 {opt algorithm(name)} specifies which sorting algorithm to use. The default is
 {opt auto}, which intelligently selects the optimal algorithm based on your data:
-string variables use MSD radix sort, while numeric variables use counting sort
-(with automatic fallback to LSD radix for large ranges). This provides excellent
+numeric variables use counting sort (with automatic fallback to LSD radix for
+large ranges), string variables of up to 16 bytes, alone or with numeric
+variables, use LSD radix sort, and wider string variables use MSD radix sort.
+This provides excellent
 performance for common Stata workloads without manual tuning. See
 {help csort##algorithms:Algorithms} for details on manual algorithm selection.
 
@@ -117,12 +119,18 @@ manual tuning. You can override the default with the {opt algorithm()} option.
 {pstd}
 {opt algorithm(auto)} intelligently selects the best algorithm:
 
-{p 8 12 2}- {bf:String variables}: Uses MSD radix sort, which handles variable-length
-strings efficiently by processing from the most significant byte.{p_end}
-
 {p 8 12 2}- {bf:Numeric variables}: Uses counting sort for O(n+k) performance when
 the value range is small (common for dates, years, categories). Automatically
 falls back to LSD radix sort for larger ranges.{p_end}
+
+{p 8 12 2}- {bf:String variables of up to 16 bytes} ({cmd:str1}-{cmd:str16}), alone
+or with numeric variables: Uses LSD radix sort, which reads each string as one or
+two 8-byte words and sorts them together with the numeric keys, comparing later
+keys only for observations tied on the earlier ones.{p_end}
+
+{p 8 12 2}- {bf:Wider string variables}: Uses MSD radix sort, which handles long
+variable-length strings efficiently by processing from the most significant
+byte.{p_end}
 
 {pstd}
 The benefit depends on key ranges, dataset shape, and hardware.
@@ -135,8 +143,8 @@ For specialized use cases, you can manually select an algorithm:
 {p2colset 5 28 30 2}{...}
 {p2col :{opt counting}}Integer data with small range (dates, years, categories). O(n+k) performance.
 Falls back to LSD radix if range is too large.{p_end}
-{p2col :{opt lsd}}Numeric data. Processes bytes from least to most significant.{p_end}
-{p2col :{opt msd}}String data. Processes from most significant byte, can skip trailing bytes.{p_end}
+{p2col :{opt lsd}}Numeric data and strings of up to 16 bytes. Processes bytes from least to most significant.{p_end}
+{p2col :{opt msd}}Long string data. Processes from most significant byte, can skip trailing bytes.{p_end}
 {p2col :{opt ips4o}}General-purpose parallel samplesort. Good default for mixed workloads.{p_end}
 {p2col :{opt timsort}}Partially sorted data. O(n) for nearly sorted, O(n log n) worst case.{p_end}
 {p2col :{opt sample}}Very large datasets with many cores. Near-linear parallel scaling.{p_end}

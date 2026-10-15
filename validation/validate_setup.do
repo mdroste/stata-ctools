@@ -41,7 +41,6 @@ global TESTS_PASSED = 0
 global TESTS_FAILED = 0
 global TESTS_TOTAL = 0
 global TESTS_SKIPPED = 0
-global TESTS_EXPECTED_SKIPPED = 0
 
 * Default significant figures threshold - do NOT change this value except by human decision.
 * This ensures numerical precision of ctools implementations.
@@ -91,15 +90,6 @@ program define test_skip
     args testname reason
     global TESTS_SKIPPED = $TESTS_SKIPPED + 1
     di as text "SKIP: `testname': `reason'"
-end
-
-* Only explicitly documented reference-method differences use this counter.
-capture program drop test_method_difference
-program define test_method_difference
-    args testname
-    global TESTS_SKIPPED = $TESTS_SKIPPED + 1
-    global TESTS_EXPECTED_SKIPPED = $TESTS_EXPECTED_SKIPPED + 1
-    di as text "METHOD DIFFERENCE: `testname': cpsmatch ATT SE is not the psmatch2 estimator"
 end
 
 /*******************************************************************************

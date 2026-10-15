@@ -1,0 +1,744 @@
+-------------------------------------------------------------------------------
+      name:  <unnamed>
+       log:  /Users/Mike/Documents/GitHub/stata-ctools/temp/encode_performance_
+> 20261002/encode_1m/c1.log
+  log type:  text
+ opened on:   2 Oct 2026, 11:51:28
+
+. capture noisily do "/Users/Mike/Documents/GitHub/stata-ctools/temp/encode_per
+> formance_20261002/encode_1m/benchmark.do" "/Users/Mike/Documents/GitHub/stata
+> -ctools/temp/encode_performance_20261002/combined" c1 "/Users/Mike/Documents/
+> GitHub/stata-ctools/temp/encode_performance_20261002/encode_1m" "" 4 "1 8" 10
+> 00000 "2"
+
+. * Frozen public commands; setup, comparisons and disk reads are outside timer
+> s.
+. args buildpath label outdir cases reps threadlist rows refreps
+
+. clear all
+
+. set more off
+
+. set linesize 255
+
+. adopath ++ "`buildpath'"
+  [1]              "/Users/Mike/Documents/GitHub/stata-ctools/temp/encode_performance_20261002/combined"
+  [2]  (BASE)      "/Applications/StataNow/ado/base/"
+  [3]  (SITE)      "/Applications/StataNow/ado/site/"
+  [4]              "."
+  [5]  (PERSONAL)  "/Users/Mike/Documents/Stata/ado/personal/"
+  [6]  (PLUS)      "/Users/Mike/Library/Application Support/Stata/ado/plus/"
+  [7]  (OLDPLACE)  "~/ado/"
+
+. ctools, version
+ctools ado 1.0.2; plugin 1.0.2 (local)
+
+. about
+
+StataNow/MP 19.5 for Unix (Apple Silicon)
+Revision 12 Aug 2026
+Copyright 1985-2025 StataCorp LLC
+
+Total usable memory: 48.01 GB
+
+Stata license: Single-user 4-core , expiring  5 Oct 2027
+Serial number: [redacted]
+  Licensed to: [redacted]
+               
+
+. which encode
+built-in command:  encode
+
+. program perf_clock, plugin using("`outdir'/clock.plugin")
+
+. if "`cases'" == "" local cases e10 e1000 e10000 e50000 e_long e_unicode e_filtered e_existing
+
+. foreach case of local cases {
+  2.     clear
+  3.     set seed 928143
+  4.     local n = `rows'
+  5.     if "`case'" == "e_long" local n = min(`rows',100000)
+  6.     quietly set obs `n'
+  7.     local categories 1000
+  8.     if "`case'" == "e10" local categories 10
+  9.     if "`case'" == "e10000" local categories 10000
+ 10.     if "`case'" == "e50000" local categories 50000
+ 11.     quietly gen long id = _n
+ 12.     quietly gen str12 x = "value_" + string(mod(_n-1,`categories'), "%05.0f")
+ 13.     if "`case'" == "e_long" {
+ 14.         quietly recast str2045 x
+ 15.         mata: st_sstore(., "x", st_sdata(., "x") :+ invtokens(J(1,2034,"a"), ""))
+ 16.     }
+ 17.     if "`case'" == "e_unicode" {
+ 18.         quietly recast str40 x
+ 19.         quietly replace x = "é東京" + x
+ 20.     }
+ 21.     quietly replace x = "" if mod(id,37)==0
+ 22.     quietly gen double shuffle = runiform()
+ 23.     sort shuffle
+ 24.     drop shuffle
+ 25.     local subset
+ 26.     if "`case'" == "e_filtered" local subset if mod(id,3)==0 in 10/`n'
+ 27.     local labelopt
+ 28.     if "`case'" == "e_existing" {
+ 29.         quietly encode x, gen(seed) label(existing)
+ 30.         * Keep seed attached so save/use retains the existing label definition.
+.         local labelopt label(existing)
+ 31.     }
+ 32.     local command cencode x `subset', gen(y) `labelopt'
+ 33.     local reference encode x `subset', gen(y) `labelopt'
+ 34.     tempfile base expected
+ 35.     quietly save `base'
+ 36.     foreach threads of local threadlist {
+ 37.         forvalues rep=0/`reps' {
+ 38.             quietly use `base', clear
+ 39.             plugin call perf_clock, "start"
+ 40.             quietly `command' threads(`threads')
+ 41.             plugin call perf_clock, "stop"
+ 42.             di "PERF,`label',`case',ctools,`n',`threads',`rep'," %12.7f scalar(__ctools_perf_seconds)
+ 43.             foreach phase in load collect sort encode labels total {
+ 44.                 di "PHASE,`label',`case',`threads',`rep',`phase'," %12.7f scalar(_cencode_time_`phase')
+ 45.             }
+ 46.             if `rep' == 0 {
+ 47.                 quietly decode y, gen(text)
+ 48.                 quietly keep id y text
+ 49.                 if "`label'" == "b1" quietly save "`outdir'/expected_`case'_`threads'.dta", replace
+ 50.                 else cf _all using "`outdir'/expected_`case'_`threads'.dta"
+ 51.                 quietly save `expected', replace
+ 52.                 quietly use `base', clear
+ 53.                 quietly `reference'
+ 54.                 quietly decode y, gen(text)
+ 55.                 cf id y text using `expected'
+ 56.                 di "CORRECT,`label',`case',`threads',codes_and_label_bytes_all_rows"
+ 57.             }
+ 58.         }
+ 59.     }
+ 60.     forvalues rep=0/`refreps' {
+ 61.         quietly use `base', clear
+ 62.         plugin call perf_clock, "start"
+ 63.         quietly `reference'
+ 64.         plugin call perf_clock, "stop"
+ 65.         di "PERF,`label',`case',reference,`n',0,`rep'," %12.7f scalar(__ctools_perf_seconds)
+ 66.     }
+ 67. }
+PERF,c1,e10,ctools,1000000,1,0,   0.0526750
+PHASE,c1,e10,1,0,load,   0.0139385
+PHASE,c1,e10,1,0,collect,   0.0214217
+PHASE,c1,e10,1,0,sort,   0.0000028
+PHASE,c1,e10,1,0,encode,   0.0043903
+PHASE,c1,e10,1,0,labels,   0.0002368
+PHASE,c1,e10,1,0,total,   0.0399915
+CORRECT,c1,e10,1,codes_and_label_bytes_all_rows
+PERF,c1,e10,ctools,1000000,1,1,   0.0510090
+PHASE,c1,e10,1,1,load,   0.0137953
+PHASE,c1,e10,1,1,collect,   0.0213551
+PHASE,c1,e10,1,1,sort,   0.0000055
+PHASE,c1,e10,1,1,encode,   0.0041111
+PHASE,c1,e10,1,1,labels,   0.0002331
+PHASE,c1,e10,1,1,total,   0.0395012
+PERF,c1,e10,ctools,1000000,1,2,   0.0488180
+PHASE,c1,e10,1,2,load,   0.0129560
+PHASE,c1,e10,1,2,collect,   0.0213223
+PHASE,c1,e10,1,2,sort,   0.0000044
+PHASE,c1,e10,1,2,encode,   0.0040723
+PHASE,c1,e10,1,2,labels,   0.0001923
+PHASE,c1,e10,1,2,total,   0.0385483
+PERF,c1,e10,ctools,1000000,1,3,   0.0488870
+PHASE,c1,e10,1,3,load,   0.0126646
+PHASE,c1,e10,1,3,collect,   0.0213732
+PHASE,c1,e10,1,3,sort,   0.0000050
+PHASE,c1,e10,1,3,encode,   0.0042105
+PHASE,c1,e10,1,3,labels,   0.0002590
+PHASE,c1,e10,1,3,total,   0.0385132
+PERF,c1,e10,ctools,1000000,1,4,   0.0486230
+PHASE,c1,e10,1,4,load,   0.0126928
+PHASE,c1,e10,1,4,collect,   0.0211407
+PHASE,c1,e10,1,4,sort,   0.0000029
+PHASE,c1,e10,1,4,encode,   0.0040748
+PHASE,c1,e10,1,4,labels,   0.0002231
+PHASE,c1,e10,1,4,total,   0.0381353
+PERF,c1,e10,ctools,1000000,8,0,   0.0369190
+PHASE,c1,e10,8,0,load,   0.0036441
+PHASE,c1,e10,8,0,collect,   0.0213091
+PHASE,c1,e10,8,0,sort,   0.0000038
+PHASE,c1,e10,8,0,encode,   0.0013187
+PHASE,c1,e10,8,0,labels,   0.0002102
+PHASE,c1,e10,8,0,total,   0.0264870
+CORRECT,c1,e10,8,codes_and_label_bytes_all_rows
+PERF,c1,e10,ctools,1000000,8,1,   0.0359480
+PHASE,c1,e10,8,1,load,   0.0029167
+PHASE,c1,e10,8,1,collect,   0.0212400
+PHASE,c1,e10,8,1,sort,   0.0000032
+PHASE,c1,e10,8,1,encode,   0.0010481
+PHASE,c1,e10,8,1,labels,   0.0002252
+PHASE,c1,e10,8,1,total,   0.0254345
+PERF,c1,e10,ctools,1000000,8,2,   0.0366800
+PHASE,c1,e10,8,2,load,   0.0034063
+PHASE,c1,e10,8,2,collect,   0.0212768
+PHASE,c1,e10,8,2,sort,   0.0000035
+PHASE,c1,e10,8,2,encode,   0.0012993
+PHASE,c1,e10,8,2,labels,   0.0001842
+PHASE,c1,e10,8,2,total,   0.0261713
+PERF,c1,e10,ctools,1000000,8,3,   0.0363820
+PHASE,c1,e10,8,3,load,   0.0031889
+PHASE,c1,e10,8,3,collect,   0.0213694
+PHASE,c1,e10,8,3,sort,   0.0000066
+PHASE,c1,e10,8,3,encode,   0.0012251
+PHASE,c1,e10,8,3,labels,   0.0002167
+PHASE,c1,e10,8,3,total,   0.0260078
+PERF,c1,e10,ctools,1000000,8,4,   0.0356250
+PHASE,c1,e10,8,4,load,   0.0027560
+PHASE,c1,e10,8,4,collect,   0.0214402
+PHASE,c1,e10,8,4,sort,   0.0000063
+PHASE,c1,e10,8,4,encode,   0.0010598
+PHASE,c1,e10,8,4,labels,   0.0001835
+PHASE,c1,e10,8,4,total,   0.0254470
+PERF,c1,e10,reference,1000000,0,0,   0.1884060
+PERF,c1,e10,reference,1000000,0,1,   0.1911060
+PERF,c1,e10,reference,1000000,0,2,   0.1880360
+PERF,c1,e1000,ctools,1000000,1,0,   0.0553490
+PHASE,c1,e1000,1,0,load,   0.0128304
+PHASE,c1,e1000,1,0,collect,   0.0259106
+PHASE,c1,e1000,1,0,sort,   0.0001479
+PHASE,c1,e1000,1,0,encode,   0.0042006
+PHASE,c1,e1000,1,0,labels,   0.0003802
+PHASE,c1,e1000,1,0,total,   0.0434707
+CORRECT,c1,e1000,1,codes_and_label_bytes_all_rows
+PERF,c1,e1000,ctools,1000000,1,1,   0.0552970
+PHASE,c1,e1000,1,1,load,   0.0130508
+PHASE,c1,e1000,1,1,collect,   0.0258548
+PHASE,c1,e1000,1,1,sort,   0.0001462
+PHASE,c1,e1000,1,1,encode,   0.0041036
+PHASE,c1,e1000,1,1,labels,   0.0003777
+PHASE,c1,e1000,1,1,total,   0.0435344
+PERF,c1,e1000,ctools,1000000,1,2,   0.0556140
+PHASE,c1,e1000,1,2,load,   0.0136717
+PHASE,c1,e1000,1,2,collect,   0.0258738
+PHASE,c1,e1000,1,2,sort,   0.0001320
+PHASE,c1,e1000,1,2,encode,   0.0040940
+PHASE,c1,e1000,1,2,labels,   0.0003725
+PHASE,c1,e1000,1,2,total,   0.0441447
+PERF,c1,e1000,ctools,1000000,1,3,   0.0547210
+PHASE,c1,e1000,1,3,load,   0.0126358
+PHASE,c1,e1000,1,3,collect,   0.0259081
+PHASE,c1,e1000,1,3,sort,   0.0001365
+PHASE,c1,e1000,1,3,encode,   0.0040905
+PHASE,c1,e1000,1,3,labels,   0.0003795
+PHASE,c1,e1000,1,3,total,   0.0431511
+PERF,c1,e1000,ctools,1000000,1,4,   0.0552620
+PHASE,c1,e1000,1,4,load,   0.0130230
+PHASE,c1,e1000,1,4,collect,   0.0258414
+PHASE,c1,e1000,1,4,sort,   0.0001365
+PHASE,c1,e1000,1,4,encode,   0.0041108
+PHASE,c1,e1000,1,4,labels,   0.0003699
+PHASE,c1,e1000,1,4,total,   0.0434827
+PERF,c1,e1000,ctools,1000000,8,0,   0.0423130
+PHASE,c1,e1000,8,0,load,   0.0034508
+PHASE,c1,e1000,8,0,collect,   0.0258652
+PHASE,c1,e1000,8,0,sort,   0.0001325
+PHASE,c1,e1000,8,0,encode,   0.0011003
+PHASE,c1,e1000,8,0,labels,   0.0003177
+PHASE,c1,e1000,8,0,total,   0.0308677
+CORRECT,c1,e1000,8,codes_and_label_bytes_all_rows
+PERF,c1,e1000,ctools,1000000,8,1,   0.0425460
+PHASE,c1,e1000,8,1,load,   0.0027744
+PHASE,c1,e1000,8,1,collect,   0.0258565
+PHASE,c1,e1000,8,1,sort,   0.0001370
+PHASE,c1,e1000,8,1,encode,   0.0013160
+PHASE,c1,e1000,8,1,labels,   0.0003742
+PHASE,c1,e1000,8,1,total,   0.0304593
+PERF,c1,e1000,ctools,1000000,8,2,   0.0418730
+PHASE,c1,e1000,8,2,load,   0.0029476
+PHASE,c1,e1000,8,2,collect,   0.0258225
+PHASE,c1,e1000,8,2,sort,   0.0001398
+PHASE,c1,e1000,8,2,encode,   0.0011110
+PHASE,c1,e1000,8,2,labels,   0.0003728
+PHASE,c1,e1000,8,2,total,   0.0303945
+PERF,c1,e1000,ctools,1000000,8,3,   0.0426760
+PHASE,c1,e1000,8,3,load,   0.0033403
+PHASE,c1,e1000,8,3,collect,   0.0259045
+PHASE,c1,e1000,8,3,sort,   0.0001254
+PHASE,c1,e1000,8,3,encode,   0.0013108
+PHASE,c1,e1000,8,3,labels,   0.0003317
+PHASE,c1,e1000,8,3,total,   0.0310142
+PERF,c1,e1000,ctools,1000000,8,4,   0.0419310
+PHASE,c1,e1000,8,4,load,   0.0029515
+PHASE,c1,e1000,8,4,collect,   0.0258427
+PHASE,c1,e1000,8,4,sort,   0.0001367
+PHASE,c1,e1000,8,4,encode,   0.0011085
+PHASE,c1,e1000,8,4,labels,   0.0003538
+PHASE,c1,e1000,8,4,total,   0.0303938
+PERF,c1,e1000,reference,1000000,0,0,   0.2418820
+PERF,c1,e1000,reference,1000000,0,1,   0.2329300
+PERF,c1,e1000,reference,1000000,0,2,   0.2385250
+PERF,c1,e10000,ctools,1000000,1,0,   0.0872970
+PHASE,c1,e10000,1,0,load,   0.0129305
+PHASE,c1,e10000,1,0,collect,   0.0282821
+PHASE,c1,e10000,1,0,sort,   0.0016353
+PHASE,c1,e10000,1,0,encode,   0.0041518
+PHASE,c1,e10000,1,0,labels,   0.0011809
+PHASE,c1,e10000,1,0,total,   0.0481815
+CORRECT,c1,e10000,1,codes_and_label_bytes_all_rows
+PERF,c1,e10000,ctools,1000000,1,1,   0.0866120
+PHASE,c1,e10000,1,1,load,   0.0128579
+PHASE,c1,e10000,1,1,collect,   0.0282762
+PHASE,c1,e10000,1,1,sort,   0.0015105
+PHASE,c1,e10000,1,1,encode,   0.0039755
+PHASE,c1,e10000,1,1,labels,   0.0012078
+PHASE,c1,e10000,1,1,total,   0.0478292
+PERF,c1,e10000,ctools,1000000,1,2,   0.0886310
+PHASE,c1,e10000,1,2,load,   0.0129568
+PHASE,c1,e10000,1,2,collect,   0.0282912
+PHASE,c1,e10000,1,2,sort,   0.0016411
+PHASE,c1,e10000,1,2,encode,   0.0040744
+PHASE,c1,e10000,1,2,labels,   0.0012354
+PHASE,c1,e10000,1,2,total,   0.0481997
+PERF,c1,e10000,ctools,1000000,1,3,   0.0876540
+PHASE,c1,e10000,1,3,load,   0.0127782
+PHASE,c1,e10000,1,3,collect,   0.0282882
+PHASE,c1,e10000,1,3,sort,   0.0016356
+PHASE,c1,e10000,1,3,encode,   0.0039778
+PHASE,c1,e10000,1,3,labels,   0.0011658
+PHASE,c1,e10000,1,3,total,   0.0478466
+PERF,c1,e10000,ctools,1000000,1,4,   0.0888760
+PHASE,c1,e10000,1,4,load,   0.0136417
+PHASE,c1,e10000,1,4,collect,   0.0282838
+PHASE,c1,e10000,1,4,sort,   0.0016433
+PHASE,c1,e10000,1,4,encode,   0.0040635
+PHASE,c1,e10000,1,4,labels,   0.0012302
+PHASE,c1,e10000,1,4,total,   0.0488631
+PERF,c1,e10000,ctools,1000000,8,0,   0.0757520
+PHASE,c1,e10000,8,0,load,   0.0028719
+PHASE,c1,e10000,8,0,collect,   0.0282833
+PHASE,c1,e10000,8,0,sort,   0.0016351
+PHASE,c1,e10000,8,0,encode,   0.0012120
+PHASE,c1,e10000,8,0,labels,   0.0011959
+PHASE,c1,e10000,8,0,total,   0.0351991
+CORRECT,c1,e10000,8,codes_and_label_bytes_all_rows
+PERF,c1,e10000,ctools,1000000,8,1,   0.0751080
+PHASE,c1,e10000,8,1,load,   0.0027840
+PHASE,c1,e10000,8,1,collect,   0.0282473
+PHASE,c1,e10000,8,1,sort,   0.0016334
+PHASE,c1,e10000,8,1,encode,   0.0013120
+PHASE,c1,e10000,8,1,labels,   0.0012264
+PHASE,c1,e10000,8,1,total,   0.0352041
+PERF,c1,e10000,ctools,1000000,8,2,   0.0758310
+PHASE,c1,e10000,8,2,load,   0.0028677
+PHASE,c1,e10000,8,2,collect,   0.0283349
+PHASE,c1,e10000,8,2,sort,   0.0016482
+PHASE,c1,e10000,8,2,encode,   0.0014168
+PHASE,c1,e10000,8,2,labels,   0.0011984
+PHASE,c1,e10000,8,2,total,   0.0354669
+PERF,c1,e10000,ctools,1000000,8,3,   0.0753310
+PHASE,c1,e10000,8,3,load,   0.0029028
+PHASE,c1,e10000,8,3,collect,   0.0283909
+PHASE,c1,e10000,8,3,sort,   0.0015894
+PHASE,c1,e10000,8,3,encode,   0.0012897
+PHASE,c1,e10000,8,3,labels,   0.0011859
+PHASE,c1,e10000,8,3,total,   0.0353597
+PERF,c1,e10000,ctools,1000000,8,4,   0.0754510
+PHASE,c1,e10000,8,4,load,   0.0029525
+PHASE,c1,e10000,8,4,collect,   0.0282999
+PHASE,c1,e10000,8,4,sort,   0.0016445
+PHASE,c1,e10000,8,4,encode,   0.0013300
+PHASE,c1,e10000,8,4,labels,   0.0012414
+PHASE,c1,e10000,8,4,total,   0.0354701
+PERF,c1,e10000,reference,1000000,0,0,   0.4535210
+PERF,c1,e10000,reference,1000000,0,1,   0.4476630
+PERF,c1,e10000,reference,1000000,0,2,   0.4610700
+PERF,c1,e50000,ctools,1000000,1,0,   0.5135880
+PHASE,c1,e50000,1,0,load,   0.0124938
+PHASE,c1,e50000,1,0,collect,   0.0201315
+PHASE,c1,e50000,1,0,sort,   0.0073282
+PHASE,c1,e50000,1,0,encode,   0.0041438
+PHASE,c1,e50000,1,0,labels,   0.0050446
+PHASE,c1,e50000,1,0,total,   0.0491430
+CORRECT,c1,e50000,1,codes_and_label_bytes_all_rows
+PERF,c1,e50000,ctools,1000000,1,1,   0.5070400
+PHASE,c1,e50000,1,1,load,   0.0128214
+PHASE,c1,e50000,1,1,collect,   0.0199938
+PHASE,c1,e50000,1,1,sort,   0.0073102
+PHASE,c1,e50000,1,1,encode,   0.0040570
+PHASE,c1,e50000,1,1,labels,   0.0048270
+PHASE,c1,e50000,1,1,total,   0.0490108
+PERF,c1,e50000,ctools,1000000,1,2,   0.5106390
+PHASE,c1,e50000,1,2,load,   0.0134575
+PHASE,c1,e50000,1,2,collect,   0.0199555
+PHASE,c1,e50000,1,2,sort,   0.0073192
+PHASE,c1,e50000,1,2,encode,   0.0041527
+PHASE,c1,e50000,1,2,labels,   0.0049144
+PHASE,c1,e50000,1,2,total,   0.0498002
+PERF,c1,e50000,ctools,1000000,1,3,   0.5091250
+PHASE,c1,e50000,1,3,load,   0.0131233
+PHASE,c1,e50000,1,3,collect,   0.0200817
+PHASE,c1,e50000,1,3,sort,   0.0073111
+PHASE,c1,e50000,1,3,encode,   0.0041472
+PHASE,c1,e50000,1,3,labels,   0.0048959
+PHASE,c1,e50000,1,3,total,   0.0495603
+PERF,c1,e50000,ctools,1000000,1,4,   0.5098020
+PHASE,c1,e50000,1,4,load,   0.0128733
+PHASE,c1,e50000,1,4,collect,   0.0198808
+PHASE,c1,e50000,1,4,sort,   0.0072938
+PHASE,c1,e50000,1,4,encode,   0.0042056
+PHASE,c1,e50000,1,4,labels,   0.0048930
+PHASE,c1,e50000,1,4,total,   0.0491475
+PERF,c1,e50000,ctools,1000000,8,0,   0.4979160
+PHASE,c1,e50000,8,0,load,   0.0028349
+PHASE,c1,e50000,8,0,collect,   0.0199751
+PHASE,c1,e50000,8,0,sort,   0.0073565
+PHASE,c1,e50000,8,0,encode,   0.0010751
+PHASE,c1,e50000,8,0,labels,   0.0054425
+PHASE,c1,e50000,8,0,total,   0.0366856
+CORRECT,c1,e50000,8,codes_and_label_bytes_all_rows
+PERF,c1,e50000,ctools,1000000,8,1,   0.5017060
+PHASE,c1,e50000,8,1,load,   0.0037016
+PHASE,c1,e50000,8,1,collect,   0.0200944
+PHASE,c1,e50000,8,1,sort,   0.0072991
+PHASE,c1,e50000,8,1,encode,   0.0018530
+PHASE,c1,e50000,8,1,labels,   0.0048535
+PHASE,c1,e50000,8,1,total,   0.0378028
+PERF,c1,e50000,ctools,1000000,8,2,   0.4989140
+PHASE,c1,e50000,8,2,load,   0.0027861
+PHASE,c1,e50000,8,2,collect,   0.0199088
+PHASE,c1,e50000,8,2,sort,   0.0072970
+PHASE,c1,e50000,8,2,encode,   0.0010940
+PHASE,c1,e50000,8,2,labels,   0.0046675
+PHASE,c1,e50000,8,2,total,   0.0357545
+PERF,c1,e50000,ctools,1000000,8,3,   0.4994910
+PHASE,c1,e50000,8,3,load,   0.0028151
+PHASE,c1,e50000,8,3,collect,   0.0199504
+PHASE,c1,e50000,8,3,sort,   0.0073813
+PHASE,c1,e50000,8,3,encode,   0.0010798
+PHASE,c1,e50000,8,3,labels,   0.0048590
+PHASE,c1,e50000,8,3,total,   0.0360866
+PERF,c1,e50000,ctools,1000000,8,4,   0.4997650
+PHASE,c1,e50000,8,4,load,   0.0028434
+PHASE,c1,e50000,8,4,collect,   0.0199855
+PHASE,c1,e50000,8,4,sort,   0.0073184
+PHASE,c1,e50000,8,4,encode,   0.0010801
+PHASE,c1,e50000,8,4,labels,   0.0049373
+PHASE,c1,e50000,8,4,total,   0.0361658
+PERF,c1,e50000,reference,1000000,0,0,   4.2690400
+PERF,c1,e50000,reference,1000000,0,1,   4.3042060
+PERF,c1,e50000,reference,1000000,0,2,   4.3225440
+PERF,c1,e_long,ctools,100000,1,0,   0.2750980
+PHASE,c1,e_long,1,0,load,   0.0261660
+PHASE,c1,e_long,1,0,collect,   0.2109193
+PHASE,c1,e_long,1,0,sort,   0.0000988
+PHASE,c1,e_long,1,0,encode,   0.0005822
+PHASE,c1,e_long,1,0,labels,   0.0018813
+PHASE,c1,e_long,1,0,total,   0.2396488
+CORRECT,c1,e_long,1,codes_and_label_bytes_all_rows
+PERF,c1,e_long,ctools,100000,1,1,   0.2707140
+PHASE,c1,e_long,1,1,load,   0.0258719
+PHASE,c1,e_long,1,1,collect,   0.2085555
+PHASE,c1,e_long,1,1,sort,   0.0000946
+PHASE,c1,e_long,1,1,encode,   0.0006821
+PHASE,c1,e_long,1,1,labels,   0.0019047
+PHASE,c1,e_long,1,1,total,   0.2371098
+PERF,c1,e_long,ctools,100000,1,2,   0.2693230
+PHASE,c1,e_long,1,2,load,   0.0248423
+PHASE,c1,e_long,1,2,collect,   0.2088749
+PHASE,c1,e_long,1,2,sort,   0.0001000
+PHASE,c1,e_long,1,2,encode,   0.0007055
+PHASE,c1,e_long,1,2,labels,   0.0018480
+PHASE,c1,e_long,1,2,total,   0.2363718
+PERF,c1,e_long,ctools,100000,1,3,   0.2698600
+PHASE,c1,e_long,1,3,load,   0.0252537
+PHASE,c1,e_long,1,3,collect,   0.2091161
+PHASE,c1,e_long,1,3,sort,   0.0000963
+PHASE,c1,e_long,1,3,encode,   0.0006825
+PHASE,c1,e_long,1,3,labels,   0.0018902
+PHASE,c1,e_long,1,3,total,   0.2370398
+PERF,c1,e_long,ctools,100000,1,4,   0.2685610
+PHASE,c1,e_long,1,4,load,   0.0250106
+PHASE,c1,e_long,1,4,collect,   0.2078822
+PHASE,c1,e_long,1,4,sort,   0.0000998
+PHASE,c1,e_long,1,4,encode,   0.0006860
+PHASE,c1,e_long,1,4,labels,   0.0018790
+PHASE,c1,e_long,1,4,total,   0.2355582
+PERF,c1,e_long,ctools,100000,8,0,   0.2718240
+PHASE,c1,e_long,8,0,load,   0.0248605
+PHASE,c1,e_long,8,0,collect,   0.2116056
+PHASE,c1,e_long,8,0,sort,   0.0001010
+PHASE,c1,e_long,8,0,encode,   0.0007629
+PHASE,c1,e_long,8,0,labels,   0.0021405
+PHASE,c1,e_long,8,0,total,   0.2394715
+CORRECT,c1,e_long,8,codes_and_label_bytes_all_rows
+PERF,c1,e_long,ctools,100000,8,1,   0.2798940
+PHASE,c1,e_long,8,1,load,   0.0271415
+PHASE,c1,e_long,8,1,collect,   0.2146750
+PHASE,c1,e_long,8,1,sort,   0.0001008
+PHASE,c1,e_long,8,1,encode,   0.0007019
+PHASE,c1,e_long,8,1,labels,   0.0033539
+PHASE,c1,e_long,8,1,total,   0.2459741
+PERF,c1,e_long,ctools,100000,8,2,   0.2778020
+PHASE,c1,e_long,8,2,load,   0.0274620
+PHASE,c1,e_long,8,2,collect,   0.2144755
+PHASE,c1,e_long,8,2,sort,   0.0000948
+PHASE,c1,e_long,8,2,encode,   0.0006821
+PHASE,c1,e_long,8,2,labels,   0.0019569
+PHASE,c1,e_long,8,2,total,   0.2446726
+PERF,c1,e_long,ctools,100000,8,3,   0.2697380
+PHASE,c1,e_long,8,3,load,   0.0247032
+PHASE,c1,e_long,8,3,collect,   0.2093971
+PHASE,c1,e_long,8,3,sort,   0.0000795
+PHASE,c1,e_long,8,3,encode,   0.0006659
+PHASE,c1,e_long,8,3,labels,   0.0018660
+PHASE,c1,e_long,8,3,total,   0.2367130
+PERF,c1,e_long,ctools,100000,8,4,   0.2702650
+PHASE,c1,e_long,8,4,load,   0.0255720
+PHASE,c1,e_long,8,4,collect,   0.2087131
+PHASE,c1,e_long,8,4,sort,   0.0000946
+PHASE,c1,e_long,8,4,encode,   0.0006913
+PHASE,c1,e_long,8,4,labels,   0.0022463
+PHASE,c1,e_long,8,4,total,   0.2373184
+PERF,c1,e_long,reference,100000,0,0,   0.2220680
+PERF,c1,e_long,reference,100000,0,1,   0.2287020
+PERF,c1,e_long,reference,100000,0,2,   0.2303880
+PERF,c1,e_unicode,ctools,1000000,1,0,   0.1050450
+PHASE,c1,e_unicode,1,0,load,   0.0302703
+PHASE,c1,e_unicode,1,0,collect,   0.0332354
+PHASE,c1,e_unicode,1,0,sort,   0.0001525
+PHASE,c1,e_unicode,1,0,encode,   0.0057529
+PHASE,c1,e_unicode,1,0,labels,   0.0002740
+PHASE,c1,e_unicode,1,0,total,   0.0696863
+CORRECT,c1,e_unicode,1,codes_and_label_bytes_all_rows
+PERF,c1,e_unicode,ctools,1000000,1,1,   0.1014520
+PHASE,c1,e_unicode,1,1,load,   0.0274320
+PHASE,c1,e_unicode,1,1,collect,   0.0330328
+PHASE,c1,e_unicode,1,1,sort,   0.0001448
+PHASE,c1,e_unicode,1,1,encode,   0.0053511
+PHASE,c1,e_unicode,1,1,labels,   0.0005315
+PHASE,c1,e_unicode,1,1,total,   0.0664935
+PERF,c1,e_unicode,ctools,1000000,1,2,   0.1020910
+PHASE,c1,e_unicode,1,2,load,   0.0277214
+PHASE,c1,e_unicode,1,2,collect,   0.0331608
+PHASE,c1,e_unicode,1,2,sort,   0.0001470
+PHASE,c1,e_unicode,1,2,encode,   0.0053167
+PHASE,c1,e_unicode,1,2,labels,   0.0003403
+PHASE,c1,e_unicode,1,2,total,   0.0666870
+PERF,c1,e_unicode,ctools,1000000,1,3,   0.1015060
+PHASE,c1,e_unicode,1,3,load,   0.0273793
+PHASE,c1,e_unicode,1,3,collect,   0.0329295
+PHASE,c1,e_unicode,1,3,sort,   0.0001454
+PHASE,c1,e_unicode,1,3,encode,   0.0053916
+PHASE,c1,e_unicode,1,3,labels,   0.0005471
+PHASE,c1,e_unicode,1,3,total,   0.0663941
+PERF,c1,e_unicode,ctools,1000000,1,4,   0.1012580
+PHASE,c1,e_unicode,1,4,load,   0.0272803
+PHASE,c1,e_unicode,1,4,collect,   0.0330367
+PHASE,c1,e_unicode,1,4,sort,   0.0001451
+PHASE,c1,e_unicode,1,4,encode,   0.0052987
+PHASE,c1,e_unicode,1,4,labels,   0.0005232
+PHASE,c1,e_unicode,1,4,total,   0.0662850
+PERF,c1,e_unicode,ctools,1000000,8,0,   0.0782720
+PHASE,c1,e_unicode,8,0,load,   0.0075776
+PHASE,c1,e_unicode,8,0,collect,   0.0330532
+PHASE,c1,e_unicode,8,0,sort,   0.0001448
+PHASE,c1,e_unicode,8,0,encode,   0.0023824
+PHASE,c1,e_unicode,8,0,labels,   0.0003591
+PHASE,c1,e_unicode,8,0,total,   0.0435182
+CORRECT,c1,e_unicode,8,codes_and_label_bytes_all_rows
+PERF,c1,e_unicode,ctools,1000000,8,1,   0.0771980
+PHASE,c1,e_unicode,8,1,load,   0.0075090
+PHASE,c1,e_unicode,8,1,collect,   0.0330135
+PHASE,c1,e_unicode,8,1,sort,   0.0001445
+PHASE,c1,e_unicode,8,1,encode,   0.0022880
+PHASE,c1,e_unicode,8,1,labels,   0.0005067
+PHASE,c1,e_unicode,8,1,total,   0.0434627
+PERF,c1,e_unicode,ctools,1000000,8,2,   0.0771410
+PHASE,c1,e_unicode,8,2,load,   0.0066509
+PHASE,c1,e_unicode,8,2,collect,   0.0329358
+PHASE,c1,e_unicode,8,2,sort,   0.0001447
+PHASE,c1,e_unicode,8,2,encode,   0.0024511
+PHASE,c1,e_unicode,8,2,labels,   0.0004891
+PHASE,c1,e_unicode,8,2,total,   0.0426727
+PERF,c1,e_unicode,ctools,1000000,8,3,   0.0774340
+PHASE,c1,e_unicode,8,3,load,   0.0068843
+PHASE,c1,e_unicode,8,3,collect,   0.0329206
+PHASE,c1,e_unicode,8,3,sort,   0.0001445
+PHASE,c1,e_unicode,8,3,encode,   0.0023414
+PHASE,c1,e_unicode,8,3,labels,   0.0004871
+PHASE,c1,e_unicode,8,3,total,   0.0427790
+PERF,c1,e_unicode,ctools,1000000,8,4,   0.0835910
+PHASE,c1,e_unicode,8,4,load,   0.0074785
+PHASE,c1,e_unicode,8,4,collect,   0.0331312
+PHASE,c1,e_unicode,8,4,sort,   0.0001485
+PHASE,c1,e_unicode,8,4,encode,   0.0024449
+PHASE,c1,e_unicode,8,4,labels,   0.0007409
+PHASE,c1,e_unicode,8,4,total,   0.0439452
+PERF,c1,e_unicode,reference,1000000,0,0,   0.4325240
+PERF,c1,e_unicode,reference,1000000,0,1,   0.3515280
+PERF,c1,e_unicode,reference,1000000,0,2,   0.3573180
+PERF,c1,e_filtered,ctools,1000000,1,0,   0.1103500
+PHASE,c1,e_filtered,1,0,load,   0.0585159
+PHASE,c1,e_filtered,1,0,collect,   0.0086587
+PHASE,c1,e_filtered,1,0,sort,   0.0001353
+PHASE,c1,e_filtered,1,0,encode,   0.0019238
+PHASE,c1,e_filtered,1,0,labels,   0.0004455
+PHASE,c1,e_filtered,1,0,total,   0.0696805
+CORRECT,c1,e_filtered,1,codes_and_label_bytes_all_rows
+PERF,c1,e_filtered,ctools,1000000,1,1,   0.1102310
+PHASE,c1,e_filtered,1,1,load,   0.0591334
+PHASE,c1,e_filtered,1,1,collect,   0.0083431
+PHASE,c1,e_filtered,1,1,sort,   0.0001310
+PHASE,c1,e_filtered,1,1,encode,   0.0018516
+PHASE,c1,e_filtered,1,1,labels,   0.0004394
+PHASE,c1,e_filtered,1,1,total,   0.0698996
+PERF,c1,e_filtered,ctools,1000000,1,2,   0.1110660
+PHASE,c1,e_filtered,1,2,load,   0.0596448
+PHASE,c1,e_filtered,1,2,collect,   0.0084896
+PHASE,c1,e_filtered,1,2,sort,   0.0001326
+PHASE,c1,e_filtered,1,2,encode,   0.0017637
+PHASE,c1,e_filtered,1,2,labels,   0.0004542
+PHASE,c1,e_filtered,1,2,total,   0.0704860
+PERF,c1,e_filtered,ctools,1000000,1,3,   0.1117670
+PHASE,c1,e_filtered,1,3,load,   0.0598005
+PHASE,c1,e_filtered,1,3,collect,   0.0087747
+PHASE,c1,e_filtered,1,3,sort,   0.0001342
+PHASE,c1,e_filtered,1,3,encode,   0.0018072
+PHASE,c1,e_filtered,1,3,labels,   0.0002521
+PHASE,c1,e_filtered,1,3,total,   0.0707698
+PERF,c1,e_filtered,ctools,1000000,1,4,   0.1115010
+PHASE,c1,e_filtered,1,4,load,   0.0597311
+PHASE,c1,e_filtered,1,4,collect,   0.0085677
+PHASE,c1,e_filtered,1,4,sort,   0.0001386
+PHASE,c1,e_filtered,1,4,encode,   0.0017446
+PHASE,c1,e_filtered,1,4,labels,   0.0003485
+PHASE,c1,e_filtered,1,4,total,   0.0705317
+PERF,c1,e_filtered,ctools,1000000,8,0,   0.0970070
+PHASE,c1,e_filtered,8,0,load,   0.0466409
+PHASE,c1,e_filtered,8,0,collect,   0.0086630
+PHASE,c1,e_filtered,8,0,sort,   0.0001348
+PHASE,c1,e_filtered,8,0,encode,   0.0006555
+PHASE,c1,e_filtered,8,0,labels,   0.0003698
+PHASE,c1,e_filtered,8,0,total,   0.0564650
+CORRECT,c1,e_filtered,8,codes_and_label_bytes_all_rows
+PERF,c1,e_filtered,ctools,1000000,8,1,   0.1072470
+PHASE,c1,e_filtered,8,1,load,   0.0478250
+PHASE,c1,e_filtered,8,1,collect,   0.0086465
+PHASE,c1,e_filtered,8,1,sort,   0.0001344
+PHASE,c1,e_filtered,8,1,encode,   0.0006108
+PHASE,c1,e_filtered,8,1,labels,   0.0003567
+PHASE,c1,e_filtered,8,1,total,   0.0575746
+PERF,c1,e_filtered,ctools,1000000,8,2,   0.1003810
+PHASE,c1,e_filtered,8,2,load,   0.0501620
+PHASE,c1,e_filtered,8,2,collect,   0.0087857
+PHASE,c1,e_filtered,8,2,sort,   0.0001346
+PHASE,c1,e_filtered,8,2,encode,   0.0006388
+PHASE,c1,e_filtered,8,2,labels,   0.0002878
+PHASE,c1,e_filtered,8,2,total,   0.0600098
+PERF,c1,e_filtered,ctools,1000000,8,3,   0.0960220
+PHASE,c1,e_filtered,8,3,load,   0.0463719
+PHASE,c1,e_filtered,8,3,collect,   0.0085408
+PHASE,c1,e_filtered,8,3,sort,   0.0001333
+PHASE,c1,e_filtered,8,3,encode,   0.0006161
+PHASE,c1,e_filtered,8,3,labels,   0.0002866
+PHASE,c1,e_filtered,8,3,total,   0.0559498
+PERF,c1,e_filtered,ctools,1000000,8,4,   0.0961230
+PHASE,c1,e_filtered,8,4,load,   0.0460248
+PHASE,c1,e_filtered,8,4,collect,   0.0086590
+PHASE,c1,e_filtered,8,4,sort,   0.0001337
+PHASE,c1,e_filtered,8,4,encode,   0.0006493
+PHASE,c1,e_filtered,8,4,labels,   0.0003753
+PHASE,c1,e_filtered,8,4,total,   0.0558433
+PERF,c1,e_filtered,reference,1000000,0,0,   0.1254400
+PERF,c1,e_filtered,reference,1000000,0,1,   0.1259920
+PERF,c1,e_filtered,reference,1000000,0,2,   0.1261570
+PERF,c1,e_existing,ctools,1000000,1,0,   0.7507960
+PHASE,c1,e_existing,1,0,load,   0.0000000
+PHASE,c1,e_existing,1,0,collect,   0.0000000
+PHASE,c1,e_existing,1,0,sort,   0.0000000
+PHASE,c1,e_existing,1,0,encode,   0.0000000
+PHASE,c1,e_existing,1,0,labels,   0.0000000
+PHASE,c1,e_existing,1,0,total,   0.0000000
+CORRECT,c1,e_existing,1,codes_and_label_bytes_all_rows
+PERF,c1,e_existing,ctools,1000000,1,1,   0.7528990
+PHASE,c1,e_existing,1,1,load,   0.0000000
+PHASE,c1,e_existing,1,1,collect,   0.0000000
+PHASE,c1,e_existing,1,1,sort,   0.0000000
+PHASE,c1,e_existing,1,1,encode,   0.0000000
+PHASE,c1,e_existing,1,1,labels,   0.0000000
+PHASE,c1,e_existing,1,1,total,   0.0000000
+PERF,c1,e_existing,ctools,1000000,1,2,   0.7497760
+PHASE,c1,e_existing,1,2,load,   0.0000000
+PHASE,c1,e_existing,1,2,collect,   0.0000000
+PHASE,c1,e_existing,1,2,sort,   0.0000000
+PHASE,c1,e_existing,1,2,encode,   0.0000000
+PHASE,c1,e_existing,1,2,labels,   0.0000000
+PHASE,c1,e_existing,1,2,total,   0.0000000
+PERF,c1,e_existing,ctools,1000000,1,3,   0.7371400
+PHASE,c1,e_existing,1,3,load,   0.0000000
+PHASE,c1,e_existing,1,3,collect,   0.0000000
+PHASE,c1,e_existing,1,3,sort,   0.0000000
+PHASE,c1,e_existing,1,3,encode,   0.0000000
+PHASE,c1,e_existing,1,3,labels,   0.0000000
+PHASE,c1,e_existing,1,3,total,   0.0000000
+PERF,c1,e_existing,ctools,1000000,1,4,   0.7418690
+PHASE,c1,e_existing,1,4,load,   0.0000000
+PHASE,c1,e_existing,1,4,collect,   0.0000000
+PHASE,c1,e_existing,1,4,sort,   0.0000000
+PHASE,c1,e_existing,1,4,encode,   0.0000000
+PHASE,c1,e_existing,1,4,labels,   0.0000000
+PHASE,c1,e_existing,1,4,total,   0.0000000
+PERF,c1,e_existing,ctools,1000000,8,0,   0.7487960
+PHASE,c1,e_existing,8,0,load,   0.0000000
+PHASE,c1,e_existing,8,0,collect,   0.0000000
+PHASE,c1,e_existing,8,0,sort,   0.0000000
+PHASE,c1,e_existing,8,0,encode,   0.0000000
+PHASE,c1,e_existing,8,0,labels,   0.0000000
+PHASE,c1,e_existing,8,0,total,   0.0000000
+CORRECT,c1,e_existing,8,codes_and_label_bytes_all_rows
+PERF,c1,e_existing,ctools,1000000,8,1,   0.7557770
+PHASE,c1,e_existing,8,1,load,   0.0000000
+PHASE,c1,e_existing,8,1,collect,   0.0000000
+PHASE,c1,e_existing,8,1,sort,   0.0000000
+PHASE,c1,e_existing,8,1,encode,   0.0000000
+PHASE,c1,e_existing,8,1,labels,   0.0000000
+PHASE,c1,e_existing,8,1,total,   0.0000000
+PERF,c1,e_existing,ctools,1000000,8,2,   0.7425520
+PHASE,c1,e_existing,8,2,load,   0.0000000
+PHASE,c1,e_existing,8,2,collect,   0.0000000
+PHASE,c1,e_existing,8,2,sort,   0.0000000
+PHASE,c1,e_existing,8,2,encode,   0.0000000
+PHASE,c1,e_existing,8,2,labels,   0.0000000
+PHASE,c1,e_existing,8,2,total,   0.0000000
+PERF,c1,e_existing,ctools,1000000,8,3,   0.7587590
+PHASE,c1,e_existing,8,3,load,   0.0000000
+PHASE,c1,e_existing,8,3,collect,   0.0000000
+PHASE,c1,e_existing,8,3,sort,   0.0000000
+PHASE,c1,e_existing,8,3,encode,   0.0000000
+PHASE,c1,e_existing,8,3,labels,   0.0000000
+PHASE,c1,e_existing,8,3,total,   0.0000000
+PERF,c1,e_existing,ctools,1000000,8,4,   0.7470710
+PHASE,c1,e_existing,8,4,load,   0.0000000
+PHASE,c1,e_existing,8,4,collect,   0.0000000
+PHASE,c1,e_existing,8,4,sort,   0.0000000
+PHASE,c1,e_existing,8,4,encode,   0.0000000
+PHASE,c1,e_existing,8,4,labels,   0.0000000
+PHASE,c1,e_existing,8,4,total,   0.0000000
+PERF,c1,e_existing,reference,1000000,0,0,   0.3303580
+PERF,c1,e_existing,reference,1000000,0,1,   0.3108770
+PERF,c1,e_existing,reference,1000000,0,2,   0.3202710
+
+. di "ENCODE_BENCHMARK_COMPLETE"
+ENCODE_BENCHMARK_COMPLETE
+
+. 
+end of do-file
+
+. local rc=_rc
+
+. di "ENCODE_BENCHMARK_RC=`rc'"
+ENCODE_BENCHMARK_RC=0
+
+. di "CTOOLS_LAUNCH=550698cdcc064a48b43aa3878bddfc73 RC=`rc'"
+CTOOLS_LAUNCH=550698cdcc064a48b43aa3878bddfc73 RC=0
+
+. log close
+      name:  <unnamed>
+       log:  /Users/Mike/Documents/GitHub/stata-ctools/temp/encode_performance_20261002/encode_1m/c1.log
+  log type:  text
+ closed on:   2 Oct 2026, 11:52:28
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------

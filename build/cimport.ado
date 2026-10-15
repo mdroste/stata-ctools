@@ -46,7 +46,12 @@ program define cimport, rclass
         ASFloat ASDOUBle NUMERICcols(string) STRINGcols(string) ///
         DECIMALSEParator(string) GROUPSEParator(string) ///
         MAXQUOTEDrows(string) EMPTYlines(string) ///
-        PARSELocale(string) CHARSET(string) FAVORSTRFixed COLLAPSEDelimiters]
+        PARSELocale(string) CHARSET(string) FAVORSTRFixed COLLAPSEDelimiters ///
+        SNAPshot FAST]
+    if "`snapshot'" != "" & "`fast'" != "" {
+        di as error "options snapshot and fast may not be combined"
+        exit 198
+    }
 
     if inlist("`stripquotes'","y","ye") local stripquotes "yes"
     if "`stripquotes'"=="n" local stripquotes "no"
@@ -274,15 +279,12 @@ program define cimport, rclass
         exit 198
     }
 
-    * Convert numericcols/stringcols numlists to space-separated strings
-    local numcols_str ""
-    if "`numericcols'" != "" {
-        local numcols_str "`numericcols'"
-    }
-    local strcols_str ""
-    if "`stringcols'" != "" {
-        local strcols_str "`stringcols'"
-    }
+    * numericcols()/stringcols() reach C as space-separated column numbers
+    * (or _all) with their byte lengths, so a long list is never cut short
+    local __cimport_numcols "`numericcols'"
+    local __cimport_strcols "`stringcols'"
+    mata: st_local("__cimport_numcols_len", strofreal(strlen(st_local("numericcols"))))
+    mata: st_local("__cimport_strcols_len", strofreal(strlen(st_local("stringcols"))))
 
     * Load the platform-appropriate ctools plugin if not already loaded
     _ctools_load
@@ -312,14 +314,6 @@ program define cimport, rclass
     local opt_emptylines = cond("`emptylines'" != "skip", "emptylines=`emptylines'", "")
     local opt_maxquotedrows = cond(`maxquotedrows' != 20, "maxquotedrows=`maxquotedrows'", "")
 
-    * Pass numericcols/stringcols via global macros (space-separated column numbers)
-    if "`numcols_str'" != "" {
-        global CIMPORT_NUMCOLS "`numcols_str'"
-    }
-    if "`strcols_str'" != "" {
-        global CIMPORT_STRCOLS "`strcols_str'"
-    }
-
     * Build threads option string
     local threads_code ""
     if `threads' > 0 {
@@ -327,15 +321,18 @@ program define cimport, rclass
     }
 
     * Record start time
-    timer clear 99
-    timer on 99
+    local __ct_elapsed99 = 0
+    if "`__ct_elapsed99'" == "" local __ct_elapsed99 = 0
+    quietly _ctools_clock __ct_start99
 
 
     * =========================================================================
     * PHASE 1: Scan the CSV to get metadata
     * =========================================================================
 
-    timer on 11
+    if "`__ct_elapsed11'" == "" local __ct_elapsed11 = 0
+
+    quietly _ctools_clock __ct_start11
 
     local __cimport_filename `"`using'"'
     capture noisily plugin call ctools_plugin, ///
@@ -362,45 +359,86 @@ program define cimport, rclass
     macro drop _cimport_nobs _cimport_nvar _cimport_varnames ///
                _cimport_vartypes _cimport_numtypes _cimport_strlens _cimport_longtypes ///
                _cimport_encoding _cimport_delimiters
-    capture macro drop CIMPORT_NUMCOLS CIMPORT_STRCOLS
 
     * Like import delimited, name the charset only when it was detected.
     if `"`__cimport_encoding_name'"' == "" di as text `"(encoding automatically selected: `macval(returned_encoding)')"'
 
+    * From here every exit before the load releases the scanned file.
     * More explicit names than columns fails before loading (rechecked after colrange()).
     if `: word count `explicit_names'' > `nvar' {
         di as error "too many variables specified"
+        capture plugin call ctools_plugin, "cimport clear"
         exit 103
     }
-    preserve
+    * A failed or interrupted import leaves the data in memory as they were.
+    * The import replaces the whole dataset, so the old data are copied first:
+    * from Stata 16 into a frame of cimport's own, in memory (the copy fails
+    * before anything changes if memory is short), and restored from it with
+    * frame copy. The import is not built in a new frame that then takes the
+    * current frame's name: when a frame holding native import excel data is
+    * renamed or dropped and another frame takes its name, a later native
+    * import spss returns wrong strings (StataNow 19.5).
+    * Option snapshot preserves the data instead (on disk above
+    * c(max_preservemem)), as do imports before Stata 16 and imports into an
+    * empty dataset, whose value labels and characteristics stay without
+    * clear. Option fast keeps no copy and undoes nothing. preserve and the
+    * frame belong to this program, so these steps are inline.
+    local __cimport_frame ""
+    local __cimport_snap 0
+    if "`fast'" == "" {
+        if "`snapshot'" == "" & c(stata_version) >= 16 & (_N > 0 | c(k) > 0) {
+            tempname __cimport_frame
+            capture noisily frame copy `c(frame)' `__cimport_frame'
+        }
+        else {
+            capture noisily preserve
+            local __cimport_snap 1
+        }
+        if _rc {
+            local rc = _rc
+            capture plugin call ctools_plugin, "cimport clear"
+            exit `rc'
+        }
+    }
     if "`clear'" != "" clear
 
     * Handle empty file or file with header only - match Stata's behavior (rc=0, N=0, k=0)
     if `nvar' == 0 {
-        timer off 11
-        timer off 99
-        quietly timer list 99
-        local elapsed = r(t99)
+        capture plugin call ctools_plugin, "cimport clear"
+        quietly _ctools_clock __ct_now
+        local __ct_elapsed11 = `__ct_elapsed11' + (`__ct_now' - `__ct_start11')
+        quietly _ctools_clock __ct_now
+        local __ct_elapsed99 = `__ct_elapsed99' + (`__ct_now' - `__ct_start99')
+        * Elapsed seconds are held in caller-local timing state.
+        local elapsed = `__ct_elapsed99'
         di as text "(0 vars, 0 obs)"
-        timer clear 11
-        timer clear 99
+        local __ct_elapsed11 = 0
+        local __ct_elapsed99 = 0
         return scalar N = 0
         return scalar k = 0
         return scalar time = `elapsed'
         return local filename `"`using'"'
         return local encoding `"`macval(returned_encoding)'"'
         return local delimiters `"`macval(returned_delimiters)'"'
-        restore, not
+        if "`__cimport_frame'" != "" frame drop `__cimport_frame'
+        else if `__cimport_snap' restore, not
         exit 0
     }
-    timer off 11
+    quietly _ctools_clock __ct_now
+    local __ct_elapsed11 = `__ct_elapsed11' + (`__ct_now' - `__ct_start11')
+
+    * Phases 2 and 3 run as one block: a failure or Break in them restores
+    * the data in memory
+    capture noisily {
 
 
     * =========================================================================
     * PHASE 2: Create variables in Stata
     * =========================================================================
 
-    timer on 12
+    if "`__ct_elapsed12'" == "" local __ct_elapsed12 = 0
+
+    quietly _ctools_clock __ct_start12
 
     * Set number of observations as 1 to create empty variables, change after
     quietly set obs 1
@@ -482,13 +520,17 @@ program define cimport, rclass
     if `nobs' quietly set obs `nobs'
     else quietly drop in 1
 
-    timer off 12
+    quietly _ctools_clock __ct_now
+
+    local __ct_elapsed12 = `__ct_elapsed12' + (`__ct_now' - `__ct_start12')
 
     * =========================================================================
     * PHASE 3: Load data into variables
     * =========================================================================
 
-    timer on 13
+    if "`__ct_elapsed13'" == "" local __ct_elapsed13 = 0
+
+    quietly _ctools_clock __ct_start13
 
     * Get list of all variables we just created (in order)
     unab allvars : *
@@ -519,7 +561,9 @@ program define cimport, rclass
         exit `load_rc'
     }
 
-    timer off 13
+    quietly _ctools_clock __ct_now
+
+    local __ct_elapsed13 = `__ct_elapsed13' + (`__ct_now' - `__ct_start13')
 
     * Apply colrange filtering (post-import)
     if `startcol' > 0 | `endcol' > 0 {
@@ -564,10 +608,25 @@ program define cimport, rclass
             }
         }
     }
+    * Validation hook: fail as Break would once the import is complete
+    if "$CTOOLS_cimport_fault" == "load" error 1
+    }
+    local rc = _rc
+    if `rc' {
+        * Release the scanned file first; the restore may need the memory
+        capture plugin call ctools_plugin, "cimport clear"
+        nobreak {
+            if "`__cimport_frame'" != "" frame copy `__cimport_frame' `c(frame)', replace
+            else if `__cimport_snap' restore
+        }
+        exit `rc'
+    }
 
-    timer off 99
-    quietly timer list 99
-    local elapsed = r(t99)
+    quietly _ctools_clock __ct_now
+
+    local __ct_elapsed99 = `__ct_elapsed99' + (`__ct_now' - `__ct_start99')
+    * Elapsed seconds are held in caller-local timing state.
+    local elapsed = `__ct_elapsed99'
 
     * Display summary (matching import delimited output format)
     di as text "(" strtrim(string(c(k),"%20.0fc")) " var" cond(c(k)==1,"","s") ", " strtrim(string(_N,"%20.0fc")) " obs)"
@@ -585,6 +644,7 @@ program define cimport, rclass
         di as text "{hline 55}"
         di as text "  C plugin internals:"
         di as text "    Memory map file:        " as result %8.4f _cimport_time_mmap " sec"
+        di as text "    Encoding conversion:    " as result %8.4f _cimport_time_encoding " sec"
         di as text "    Parse CSV:              " as result %8.4f _cimport_time_parse " sec"
         di as text "    Type inference:         " as result %8.4f _cimport_time_infer " sec"
         di as text "    Cache conversion:       " as result %8.4f _cimport_time_cache " sec"
@@ -621,17 +681,18 @@ program define cimport, rclass
         }
 
         * Clean up timing scalars
-        capture scalar drop _cimport_time_mmap _cimport_time_parse _cimport_time_infer
+        capture scalar drop _cimport_time_mmap _cimport_time_encoding _cimport_time_parse _cimport_time_infer
         capture scalar drop _cimport_time_cache _cimport_time_store _cimport_time_total
         capture scalar drop _cimport_threads_max _cimport_openmp_enabled
     }
 
-    timer clear 11
-    timer clear 12
-    timer clear 13
-    timer clear 99
+    local __ct_elapsed11 = 0
+    local __ct_elapsed12 = 0
+    local __ct_elapsed13 = 0
+    local __ct_elapsed99 = 0
 
-    restore, not
+    if "`__cimport_frame'" != "" frame drop `__cimport_frame'
+    else if `__cimport_snap' restore, not
 
     * Return results
     return scalar N = _N
@@ -666,7 +727,8 @@ program define cimport_excel, rclass
     local allfmt `"`allstring'"'
     local 0 `"`macval(original0)'"'
     syntax [anything(equalok)] [using/] [, SHEET(string) CELLRange(string) FIRSTrow ///
-        ALLSTRING(string) ALLString CASE(string) CLEAR Verbose DEScribe LOCALE(string) DETAIL]
+        ALLSTRING(string) ALLString CASE(string) CLEAR Verbose DEScribe LOCALE(string) DETAIL ///
+        SNAPshot FAST]
 
     * Native describe is an exclusive workbook-inspection syntax.
     if "`describe'"!="" & (`"`sheet'`cellrange'`firstrow'`allstring'`case'`clear'`locale'`detail'"'!="") exit 198
@@ -713,7 +775,7 @@ program define cimport_excel, rclass
         if `"`sheet'"' != "" local opts `"`opts' sheet(`"`sheet'"')"'
         if "`cellrange'" != "" local opts "`opts' cellrange(`cellrange')"
         if "`case'" != "" local opts "`opts' case(`case')"
-        _cio_import xls `extvarlist' using `"`using'"', `firstrow' `allstring' `clear' `describe' `opts'
+        _cio_import xls `extvarlist' using `"`using'"', `firstrow' `allstring' `clear' `describe' `snapshot' `fast' `opts'
         return add
         exit
     }
@@ -730,7 +792,7 @@ program define cimport_excel, rclass
     if `"`sheet'"' != "" local opts `"`opts' sheet(`"`sheet'"')"'
     if "`cellrange'" != "" local opts "`opts' cellrange(`cellrange')"
     if "`case'" != "" local opts "`opts' case(`case')"
-    _cio_import xlsx `extvarlist' using `"`using'"', `firstrow' `allstring' `clear' `describe' `opts'
+    _cio_import xlsx `extvarlist' using `"`using'"', `firstrow' `allstring' `clear' `describe' `snapshot' `fast' `opts'
     return add
     exit
 
