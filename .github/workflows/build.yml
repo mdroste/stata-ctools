@@ -267,8 +267,11 @@ jobs:
   # ===========================================================================
   # Commit built plugins to repository
   # ===========================================================================
+  # always() keeps a skipped stata-validation from skipping this job transitively.
   commit-plugins:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: >-
+      always() && !cancelled() && needs.package.result == 'success' &&
+      github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [package]
     runs-on: ubuntu-22.04
     permissions:
@@ -310,7 +313,7 @@ jobs:
   # Create GitHub Release (only on release events)
   # ===========================================================================
   release:
-    if: github.event_name == 'release'
+    if: always() && !cancelled() && needs.package.result == 'success' && github.event_name == 'release'
     needs: [package]
     runs-on: ubuntu-22.04
     permissions:
