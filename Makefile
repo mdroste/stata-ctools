@@ -35,6 +35,9 @@
 SRC_DIR = src
 BUILD_DIR = build
 
+# Build scripts read UTF-8 sources; Windows Python otherwise defaults to cp1252.
+export PYTHONUTF8 := 1
+
 # ------------------------------------------------------------------------------
 # Platform Detection
 # ------------------------------------------------------------------------------
