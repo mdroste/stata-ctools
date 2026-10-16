@@ -5,6 +5,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+/* x86 intrinsic headers declare posix_memalign via mm_malloc.h; do so before the macro below. */
+#if (defined(__x86_64__) || defined(__i386__)) && !defined(_WIN32)
+#include <mm_malloc.h>
+#endif
 static size_t live_bytes, peak_bytes;
 typedef struct {
     void *p;

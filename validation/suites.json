@@ -1272,8 +1272,7 @@
       "fixtures": [],
       "dependencies": [
         "rangestat"
-      ],
-      "public": true
+      ]
     },
     {
       "name": "benchmark_group_performance",
@@ -1374,8 +1373,7 @@
       "category": "correctness",
       "marker": "encode_labels",
       "fixtures": [],
-      "dependencies": [],
-      "public": true
+      "dependencies": []
     },
     {
       "name": "encode_labels_native",
@@ -1397,8 +1395,7 @@
       "fixtures": [],
       "dependencies": [
         "gstats"
-      ],
-      "public": true
+      ]
     },
     {
       "name": "winsor_transport_native",

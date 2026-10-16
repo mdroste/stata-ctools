@@ -5,6 +5,7 @@
  * See ctools_arena.h for documentation.
  */
 
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include "ctools_arena.h"

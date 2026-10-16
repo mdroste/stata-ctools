@@ -183,7 +183,6 @@ jobs:
           install: >-
             make
             mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-openmp
             mingw-w64-x86_64-winpthreads-git
             mingw-w64-x86_64-python
 
@@ -202,8 +201,10 @@ jobs:
           path: build/ctools_windows.plugin
           if-no-files-found: error
 
-  # Licensed runner required for publication. Configure CTOOLS_STATA_RUNNER as a JSON label list,
-  # e.g. ["self-hosted", "macOS", "stata"], with the user's stata wrapper.
+  # Optional licensed runner. Configure CTOOLS_STATA_RUNNER as a JSON label list,
+  # e.g. ["self-hosted", "macOS", "stata"], with the user's stata wrapper. When it is
+  # unset this job is skipped and plugins publish without the Stata gate; when it runs,
+  # a failure blocks publication.
   # Never run untrusted pull-request code on a persistent licensed runner.
   stata-validation:
     if: github.event_name != 'pull_request' && vars.CTOOLS_STATA_RUNNER != ''
@@ -237,7 +238,7 @@ jobs:
       needs.build-macos-arm.result == 'success' &&
       needs.build-macos-intel.result == 'success' &&
       needs.build-windows.result == 'success' &&
-      (github.event_name == 'pull_request' || needs.stata-validation.result == 'success')
+      needs.stata-validation.result != 'failure'
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout code

@@ -171,8 +171,10 @@ def main():
         crc_sources = [vendor/'libdeflate/lib/crc32.c', vendor/'miniz/miniz.c',
                        vendor/'libdeflate/lib/arm/cpu_features.c',
                        vendor/'libdeflate/lib/x86/cpu_features.c']
-        xml_sources = [ROOT/'src'/p for p in ('ctools_types.c', 'ctools_arena.c',
-                       'ctools_threads.c', 'formats/xlsx_xml.c')]
+        xml_sources = [*(ROOT/'src'/p for p in ('ctools_types.c', 'ctools_arena.c',
+                       'ctools_threads.c', 'formats/xlsx_xml.c', 'formats/xlsx_zip.c')),
+                       *sorted((vendor/'miniz').glob('*.c')),
+                       *sorted((vendor/'libdeflate').rglob('*.c'))]
         csv_sources = [ROOT/'src'/p for p in ('ctools_types.c', 'ctools_arena.c',
                        'ctools_threads.c', 'cimport/cimport_parse.c',
                        'cimport/cimport_mmap.c', 'cimport/cimport_encoding.c')]
