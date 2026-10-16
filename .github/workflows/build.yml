@@ -183,6 +183,7 @@ jobs:
           install: >-
             make
             mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-libgomp
             mingw-w64-x86_64-winpthreads-git
             mingw-w64-x86_64-python
 
