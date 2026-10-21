@@ -8,31 +8,31 @@ This report contains **15 findings**: runtime defects, platform compatibility de
 
 ## Resolution status — implementation follow-up
 
-The P1 fixes were implemented first. The working tree now contains fixes for all 15 findings; **Windows/Linux runtime verification remains pending**. Original reproductions below describe the audited revision, not the corrected behavior. Original location line numbers refer to that revision.
+The P1 fixes were implemented first. Fixes for all 15 findings are committed to `main`. Windows native runtime checks and both Mac CI builds have passed; **licensed cross-platform Stata verification remains pending**. Original reproductions below describe the audited revision, not the corrected behavior. Original location line numbers refer to that revision.
 
 | ID | Status | Implemented fix and evidence |
 |---|---|---|
 | 1 | Resolved locally | Both libdeflate paths check CRC and exact inflated size. Native sanitizer tests cover both extraction paths, stored/deflated entries, and payload/CRC/length corruption. Fresh-plugin Stata rejects the corrupt workbook and retains the original data. |
 | 2 | Resolved locally | A complete structural XML pass precedes the range/parallel scanner. All premature EOF positions, mismatched tags, unclosed attributes/comments, prefixed tags, empty sheets, and a 4,000-row parallel/range scan are tested. Stata rejects truncated XML without replacing data. |
 | 3 | Resolved locally | SHP/SHX and XPORT companion outputs use a shared commit group with preflight, backups, and rollback. Native tests inject a second-publication error and verify both original files; licensed regressions verify an existing SHX leaves no SHP and a blocked SAS companion leaves neither XPORT nor XPF output. Destination aliases are rejected before publication. |
-| 4 | Implemented; Windows verification pending | A shared strict UTF-8-to-UTF-16 path layer handles long paths. CSV, binary codecs, XLS, miniz, ReadStat, staging, publication, and cleanup use wide Windows APIs. Unicode round trips pass on Mac; Windows legacy-code-page execution is still required. |
+| 4 | Windows native checks passed; licensed validation pending | A shared strict UTF-8-to-UTF-16 path layer handles long paths. CSV, binary codecs, XLS, miniz, ReadStat, staging, publication, and cleanup use wide Windows APIs. Native Windows CI passes Unicode and long-path reads, writes, replacement and cleanup in the C locale. Full codec round trips pass on Mac; licensed Windows codec validation is still required. |
 | 5 | Resolved locally | Explicit `snapshot` preserves before any destructive clear or scan. Licensed tests cover malformed files in all six binary readers, a post-load fault, retained data/labels/characteristics, and successful snapshot import. |
 | 6 | Resolved locally | Trim complete UTF-8 Unicode White_Space sequences at both boundaries. Licensed comparisons with native `destring` pass for ten ASCII/Unicode whitespace cases. |
 | 7 | Resolved locally | Predictions use one sample marker and a temporary result, renaming only after success. Licensed regressions cover `if` plus `in`, all twelve prediction options, and an error leaving no requested output variable. |
 | 8 | Resolved locally; target mounts pending | Prefer exclusive rename, retain the hard-link fallback, and use an exclusive private copy when both are unsupported. Fault-injected sanitizer tests verify successful publication and no overwrite. Real exFAT/Linux mounts still need execution. |
 | 9 | Resolved locally; Linux ACL execution pending | Capture ordinary creation mode without changing process umask; preserve replacement mode, group and POSIX ACLs. Native tests verify new mode 0640, replacement mode 0664, and retention of a Mac extended ACL. |
 | 10 | Resolved locally | Short random sibling names no longer extend the destination basename. A 250-character destination component passes the native test. |
-| 11 | Implemented; Windows large-file execution pending | SHP offsets and length arithmetic use explicit 64-bit types and seek/tell wrappers (`_ftelli64`/`_fseeki64` on Windows). The Windows CI harness probes a position beyond 2 GiB without allocating a huge file. |
+| 11 | Windows 64-bit offset check passed; large SHP export pending | SHP offsets and length arithmetic use explicit 64-bit types and seek/tell wrappers (`_ftelli64`/`_fseeki64` on Windows). The Windows CI harness successfully seeks and reports a position beyond 2 GiB without allocating a huge file. An actual multi-gigabyte SHP export still needs licensed validation. |
 | 12 | Resolved in workflow; runner setup/execution pending | Candidate packaging is separate from publication. Both publishers require successful licensed validation across a four-platform matrix. Launch supports an explicit executable; CI checks candidate revision/platform. Tests exercise successful, skipped, failed and cancelled gate decisions. |
 | 13 | Resolved locally | Both workflow path filters include `package/**`; regression checks cover canonical ado/help/metadata paths. |
 | 14 | Resolved locally | Staging and the documented `--integrity` check validate payload hashes, exact inventory and platform scope. Tests reject corrupt plugins/ado files, altered manifests, missing/wrong checksums and scope changes. |
-| 15 | Resolved locally; actual MSYS2 execution pending | A Python cleanup command replaces shell-specific `del`; it removes generic and platform plugins and propagates errors. The real Windows make branch passes under POSIX sh with stale artifacts. |
+| 15 | Resolved; Windows MSYS2 check passed | A Python cleanup command replaces shell-specific `del`; it removes generic and platform plugins and propagates errors. The real Windows MSYS2 CI job successfully removes stale generic/platform plugins and objects. Local tests also verify cleanup errors propagate. |
 
 Regression entry points: `validation/test_oct21_native.py`, `validation/test_oct21_release.py`, and `validation/test_oct21_stata.py` (all registered). `validation/test_windows_files.py` is registered for execution in the real Windows MSYS2 build job. The licensed tests accept `CTOOLS_STATA_EXECUTABLE` and `CTOOLS_TEST_PLUGIN_DIR` to select a fresh candidate without replacing shipped binaries.
 
 Publication requires repository variable `CTOOLS_STATA_RUNNERS` mapping `mac_arm`, `mac_x86`, `windows`, and `linux` to trusted runner label arrays. Each runner must set `CTOOLS_STATA_EXECUTABLE`, provide Python 3 and the required licensed reference commands. Without that configuration, publication stays blocked.
 
-**Remaining operational limits:** Multi-file rollback handles ordinary errors, not power loss or unsynchronized concurrent writers. If rollback itself fails, the original backup is retained and its path is reported. The last-resort no-hard-link copy preserves no-overwrite semantics but exposes a private destination name during copying; exclusive rename remains the normal path. XML validation bounds nesting at 256 elements. Actual Windows/Linux, minimum-OS, and Stata 14.1 runs remain release exit criteria.
+**Remaining operational limits:** Multi-file rollback handles ordinary errors, not power loss or unsynchronized concurrent writers. If rollback itself fails, the original backup is retained and its path is reported. The last-resort no-hard-link copy preserves no-overwrite semantics but exposes a private destination name during copying; exclusive rename remains the normal path. XML validation bounds nesting at 256 elements. Licensed Windows/Linux, minimum-OS, and Stata 14.1 runs remain release exit criteria.
 
 ### Validation of the fixes
 
@@ -41,7 +41,13 @@ Publication requires repository variable `CTOOLS_STATA_RUNNERS` mapping `mac_arm
 - Existing licensed component suites passed **740 checks, 0 failures, 0 skips**: import 360, export 213, destring 167. Checksum-pinned official fixtures were prepared for these runs.
 - New native sanitizer and release-contract regressions passed. Existing binary-codec, CSV-parity, XLS/XLSX-edit, I/O CRC/XML/CSV, September 24 atomic-output, release-gate, and build-contract suites passed.
 - Package/release synchronization, registry validation, Python compilation, workflow YAML parsing, and whitespace checks passed.
-- These are targeted validations, not a completed four-platform release gate. Windows/Linux execution, a multi-gigabyte Windows SHP export, actual exFAT mounts, the minimum supported OS/Stata versions, and OpenMP execution remain unverified locally. The stricter publication gate intentionally blocks release until configured trusted runners pass.
+- These are targeted validations, not a completed four-platform release gate. Licensed Windows/Linux execution, a multi-gigabyte Windows SHP export, actual exFAT mounts, the minimum supported OS/Stata versions, and OpenMP execution remain unverified locally. The stricter publication gate intentionally blocks release until configured trusted runners pass.
+
+### GitHub Actions follow-up
+
+- Source fixes were pushed as `e1d637ce368ae7a9f84939677a5b23d5099f0908`; [the first Actions run](https://github.com/mdroste/stata-ctools/actions/runs/39673901895) passed Mac ARM, Mac Intel and Windows plugin builds and dependency contracts. Windows native file API and MSYS2 cleanup regressions passed.
+- The initial Linux run failed only in `oct21_native`: its fault-injection wrapper used fixed arguments and conflicted with the included production source's variadic `syscall` declaration. Corrected the wrapper to match that interface. All other registered native suites passed in the first run; the local native sanitizer regression passes after the correction. Linux verification follows in CI.
+- Repository inspection confirmed no `CTOOLS_STATA_RUNNERS` variable and zero registered self-hosted runners. The licensed matrix and binary publication remain blocked until trusted licensed runners are configured.
 
 ## Scope and validation
 

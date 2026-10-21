@@ -15,8 +15,19 @@ static int test_rename_excl(const char *from, const char *to, unsigned flags)
 #define renamex_np test_rename_excl
 #elif defined(__linux__)
 #include <sys/syscall.h>
-static long test_syscall(long number, int dir1, const char *from, int dir2, const char *to, unsigned flags)
+#include <stdarg.h>
+/* Match syscall's variadic declaration when the implementation is included. */
+static long test_syscall(long number, ...)
 {
+    assert(number == SYS_renameat2);
+    va_list args;
+    va_start(args, number);
+    int dir1 = va_arg(args, int);
+    const char *from = va_arg(args, const char *);
+    int dir2 = va_arg(args, int);
+    const char *to = va_arg(args, const char *);
+    int flags = va_arg(args, int);
+    va_end(args);
     if (fail_destination && !strcmp(to, fail_destination)) {
         fail_destination = NULL; errno = EIO; return -1;
     }
