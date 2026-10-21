@@ -8,7 +8,7 @@ This report contains **15 findings**: runtime defects, platform compatibility de
 
 ## Resolution status — implementation follow-up
 
-The P1 fixes were implemented first. Fixes for all 15 findings are committed to `main`. Windows native runtime checks and both Mac CI builds have passed; **licensed cross-platform Stata verification remains pending**. Original reproductions below describe the audited revision, not the corrected behavior. Original location line numbers refer to that revision.
+The P1 fixes were implemented first. Fixes for all 15 findings are committed to `main`. All four platform builds, the Linux native suite, Windows file API regressions, and combined candidate packaging have passed in GitHub Actions; **licensed cross-platform Stata verification remains pending**. Original reproductions below describe the audited revision, not the corrected behavior. Original location line numbers refer to that revision.
 
 | ID | Status | Implemented fix and evidence |
 |---|---|---|
@@ -19,9 +19,9 @@ The P1 fixes were implemented first. Fixes for all 15 findings are committed to 
 | 5 | Resolved locally | Explicit `snapshot` preserves before any destructive clear or scan. Licensed tests cover malformed files in all six binary readers, a post-load fault, retained data/labels/characteristics, and successful snapshot import. |
 | 6 | Resolved locally | Trim complete UTF-8 Unicode White_Space sequences at both boundaries. Licensed comparisons with native `destring` pass for ten ASCII/Unicode whitespace cases. |
 | 7 | Resolved locally | Predictions use one sample marker and a temporary result, renaming only after success. Licensed regressions cover `if` plus `in`, all twelve prediction options, and an error leaving no requested output variable. |
-| 8 | Resolved locally; target mounts pending | Prefer exclusive rename, retain the hard-link fallback, and use an exclusive private copy when both are unsupported. Fault-injected sanitizer tests verify successful publication and no overwrite. Real exFAT/Linux mounts still need execution. |
-| 9 | Resolved locally; Linux ACL execution pending | Capture ordinary creation mode without changing process umask; preserve replacement mode, group and POSIX ACLs. Native tests verify new mode 0640, replacement mode 0664, and retention of a Mac extended ACL. |
-| 10 | Resolved locally | Short random sibling names no longer extend the destination basename. A 250-character destination component passes the native test. |
+| 8 | Mac/Linux native checks passed; special mounts pending | Prefer exclusive rename, retain the hard-link fallback, and use an exclusive private copy when both are unsupported. Fault-injected sanitizer tests pass on Mac and Linux, verifying successful publication and no overwrite. Real exFAT and other no-hard-link mounts still need execution. |
+| 9 | Mac/Linux mode checks passed; Linux ACL execution pending | Capture ordinary creation mode without changing process umask; preserve replacement mode, group and POSIX ACLs. Native tests on Mac and Linux verify new mode 0640 and replacement mode 0664; Mac tests also verify retention of an extended ACL. Linux ACL-specific execution remains pending. |
+| 10 | Mac/Linux native checks passed | Short random sibling names no longer extend the destination basename. A 250-character destination component passes the native test on both Mac and Linux. |
 | 11 | Windows 64-bit offset check passed; large SHP export pending | SHP offsets and length arithmetic use explicit 64-bit types and seek/tell wrappers (`_ftelli64`/`_fseeki64` on Windows). The Windows CI harness successfully seeks and reports a position beyond 2 GiB without allocating a huge file. An actual multi-gigabyte SHP export still needs licensed validation. |
 | 12 | Resolved in workflow; runner setup/execution pending | Candidate packaging is separate from publication. Both publishers require successful licensed validation across a four-platform matrix. Launch supports an explicit executable; CI checks candidate revision/platform. Tests exercise successful, skipped, failed and cancelled gate decisions. |
 | 13 | Resolved locally | Both workflow path filters include `package/**`; regression checks cover canonical ado/help/metadata paths. |
@@ -46,7 +46,9 @@ Publication requires repository variable `CTOOLS_STATA_RUNNERS` mapping `mac_arm
 ### GitHub Actions follow-up
 
 - Source fixes were pushed as `e1d637ce368ae7a9f84939677a5b23d5099f0908`; [the first Actions run](https://github.com/mdroste/stata-ctools/actions/runs/39673901895) passed Mac ARM, Mac Intel and Windows plugin builds and dependency contracts. Windows native file API and MSYS2 cleanup regressions passed.
-- The initial Linux run failed only in `oct21_native`: its fault-injection wrapper used fixed arguments and conflicted with the included production source's variadic `syscall` declaration. Corrected the wrapper to match that interface. All other registered native suites passed in the first run; the local native sanitizer regression passes after the correction. Linux verification follows in CI.
+- The initial Linux run failed only in `oct21_native`: its fault-injection wrapper used fixed arguments and conflicted with the included production source's variadic `syscall` declaration. Corrected the wrapper to match that interface in `632d9be03c9b9430bda4aa8f54b232ce8b76c81f`. All other registered native suites passed in the first run; the local native sanitizer regression also passes after the correction.
+- [The corrected Actions run](https://github.com/mdroste/stata-ctools/actions/runs/39674777575) completed successfully. All four platform builds and dependency contracts passed. Linux passed all **37 registered native suites**, including the corrected October 21 regression, plus the separate adaptive-transport, numeric-store and row-stage sanitizer checks. Serial and OpenMP native variants passed where exercised. Windows file API/MSYS2 regressions passed again. The combined candidate package, including integrity validation during staging, was produced as `ctools-all-platforms`.
+- The candidate artifacts correspond to source revision `632d9be03c9b9430bda4aa8f54b232ce8b76c81f`. This report's final CI-results update changes documentation only; it does not replace the tested source or publish binaries.
 - Repository inspection confirmed no `CTOOLS_STATA_RUNNERS` variable and zero registered self-hosted runners. The licensed matrix and binary publication remain blocked until trusted licensed runners are configured.
 
 ## Scope and validation
