@@ -1,3 +1,4 @@
+#include "ctools_file.h"
 /*
  * cexport_io.c - Cross-platform I/O implementation for parallel offset writes
  *
@@ -185,14 +186,12 @@ int cexport_io_open(cexport_io_file *file, const char *filename,
         dwFlags |= FILE_FLAG_NO_BUFFERING | FILE_FLAG_WRITE_THROUGH;
     }
 
-    file->handle = CreateFileA(
+    file->handle = ctools_create_file(
         filename,
         GENERIC_READ | GENERIC_WRITE,
         0,                              /* No sharing during write */
-        NULL,                           /* Default security */
         CREATE_ALWAYS,                  /* Create or truncate */
-        dwFlags,
-        NULL                            /* No template */
+        dwFlags
     );
 
     if (file->handle == INVALID_HANDLE_VALUE) {

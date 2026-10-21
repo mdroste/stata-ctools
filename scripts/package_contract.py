@@ -1,9 +1,12 @@
 """Shared package invariants for staging and validation."""
 
 from pathlib import Path
+import hashlib
+import json
+import re
 
 
-def check_package(directory, metadata_only=False):
+def check_package(directory, metadata_only=False, integrity=False):
     entries = [
         line.split(maxsplit=1)[1]
         for line in (directory / "ctools.pkg").read_text().splitlines()
@@ -40,4 +43,33 @@ def check_package(directory, metadata_only=False):
             continue
         if not (directory / name).is_file():
             errors.append(f"missing package file: {name}")
+    if integrity:
+        if metadata_only:
+            errors.append('integrity validation cannot skip binary payloads')
+        try:
+            info = json.loads((directory / 'BUILD_INFO.json').read_text())
+            hashes = info['sha256']
+            expected = set(entries) | {'ctools.pkg', 'stata.toc'}
+            if not isinstance(hashes, dict) or set(hashes) != expected:
+                errors.append('checksum inventory does not match package manifest')
+            if set(info['platforms']) != platforms or len(info['platforms']) != len(platforms):
+                errors.append('checksum platform scope does not match package manifest')
+            if not isinstance(info['revision'], str) or not info['revision']:
+                errors.append('missing build revision')
+            if isinstance(hashes, dict):
+                for name, digest in hashes.items():
+                    if Path(name).name != name or not isinstance(digest, str) or not re.fullmatch(r'[0-9a-f]{64}', digest):
+                        errors.append(f'invalid checksum entry: {name}')
+                    elif not (directory / name).is_file():
+                        errors.append(f'missing checksummed file: {name}')
+                    else:
+                        with (directory / name).open('rb') as payload:
+                            hasher = hashlib.sha256()
+                            for chunk in iter(lambda: payload.read(1024 * 1024), b''):
+                                hasher.update(chunk)
+                            actual = hasher.hexdigest()
+                        if actual != digest:
+                            errors.append(f'checksum mismatch: {name}')
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            errors.append(f'invalid or missing BUILD_INFO.json: {error}')
     return errors

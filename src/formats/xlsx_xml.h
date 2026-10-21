@@ -95,6 +95,10 @@ bool xlsx_xml_parse(xlsx_xml_parser *parser, const char *data, size_t len, bool 
  * Utility Functions
  * ============================================================================ */
 
+/* Check complete, balanced markup before a worksheet's range/parallel scan.
+ * No DTDs or external entities are permitted in an OOXML part. */
+bool xlsx_xml_validate_document(const char *data, size_t len, const char *root);
+
 /* Get attribute value by name from an event, returns NULL if not found */
 const char *xlsx_xml_get_attr(const xlsx_xml_event *event, const char *name);
 

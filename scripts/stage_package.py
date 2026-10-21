@@ -56,6 +56,8 @@ def stage(source, output, selected, revision, binaries=None):
         hashes = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(stage_dir.iterdir())}
         (stage_dir / 'BUILD_INFO.json').write_text(json.dumps({
             'revision': revision, 'platforms': selected, 'sha256': hashes}, indent=2) + '\n')
+        errors = check_package(stage_dir, integrity=True)
+        if errors: raise ValueError('\n'.join(errors))
         stage_dir.rename(output)
     return output
 

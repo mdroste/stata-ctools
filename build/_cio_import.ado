@@ -89,6 +89,14 @@ program define _cio_import, rclass
         if !strpos(`"`vlabbase'"',".") local vlabfile `"`vlabfile'.v8xpt"'
         confirm file `"`vlabfile'"'
     }
+    * Explicit snapshot protects the caller before any destructive operation.
+    * preserve is program-scoped: early scan/load errors and Break restore it.
+    local snap 0
+    local snapframe ""
+    if "`snapshot'" != "" & "`describe'" == "" {
+        preserve
+        local snap 1
+    }
     * Native statistical/DBF/SHP readers clear before parsing the file, even
     * when parsing fails. Excel validates its container before replacing data.
     if "`describe'"=="" & !inlist("`kind'","xls","xlsx") quietly clear
@@ -223,9 +231,7 @@ program define _cio_import, rclass
     * Stata 16 and loads into an empty dataset. Option fast keeps no copy and
     * undoes nothing. preserve and the frame belong to this program, so these
     * steps are inline.
-    local snapframe ""
-    local snap 0
-    if "`fast'" == "" {
+    if "`fast'" == "" & !`snap' {
         if "`snapshot'" == "" & c(stata_version) >= 16 & (_N > 0 | c(k) > 0) {
             tempname snapframe
             capture noisily frame copy `c(frame)' `snapframe'

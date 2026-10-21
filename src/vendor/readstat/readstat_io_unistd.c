@@ -1,3 +1,4 @@
+#include "../../ctools_file.h"
 
 #include <fcntl.h>
 #include <stdlib.h>
@@ -36,20 +37,8 @@
 int open_with_unicode(const char *path, int options)
 {
 #if defined _WIN32
-    const int buffer_size = MultiByteToWideChar(CP_UTF8, 0, path, -1, NULL, 0);
-
-    if(buffer_size <= 0)
-        return -1;
-
-    wchar_t* wpath = malloc((buffer_size + 1) * sizeof(wchar_t));
-    const int res = MultiByteToWideChar(CP_UTF8, 0, path, -1, wpath, buffer_size);
-    wpath[buffer_size] = 0;
-
-    if(res <= 0)
-    {
-        free(wpath);
-        return -1;
-    }
+    wchar_t *wpath = ctools_wpath(path);
+    if (!wpath) return -1;
 
     int fd = _wopen(wpath, options);
 

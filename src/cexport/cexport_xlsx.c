@@ -1,3 +1,4 @@
+#include "ctools_file.h"
 #include "formats/excel_address.h"
 /*
     cexport_xlsx.c
@@ -1599,7 +1600,7 @@ ST_retcode cexport_xlsx_main(const char *args) {
 
     /* An existing workbook is edited unless the whole-file replace was requested. */
     if (!ctx.replace) {
-        FILE *f = fopen(ctx.filename, "r");
+        FILE *f = ctools_fopen(ctx.filename, "r");
         if (f) {
             fclose(f);
             strcpy(ctx.input_filename, ctx.filename);

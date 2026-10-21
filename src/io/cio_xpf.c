@@ -1,7 +1,8 @@
+#include "ctools_file.h"
 #include "cio_internal.h"
 
 /* Value-label companion used by Stata's version-5 XPORT command. */
-int cio_export_xpf(int nvar, const char *path, int replace, char (*mapped)[301])
+int cio_export_xpf(int nvar, const char *path, int replace, char (*mapped)[301], ctools_output *pending)
 {
     int rc = 0, nsets = 0;
     long rows = 0;
@@ -67,7 +68,7 @@ int cio_export_xpf(int nvar, const char *path, int replace, char (*mapped)[301])
     }
     if ((rc = ctools_output_prepare(&output, path, replace)))
         goto done;
-    fp = fopen(output.temporary, "wb");
+    fp = ctools_fopen(output.temporary, "wb");
     if (!fp)
     {
         rc = 603;
@@ -126,7 +127,8 @@ int cio_export_xpf(int nvar, const char *path, int replace, char (*mapped)[301])
         goto done;
     }
     fp = NULL;
-    rc = ctools_output_commit(&output);
+    *pending = output;
+    memset(&output, 0, sizeof(output));
 done:
     if (fp)
         fclose(fp);
@@ -142,7 +144,7 @@ done:
 /* SAS PROC FORMAT text is serialized here, with the same naming and order as
    the transport dictionaries. The ado wrapper supplies label metadata only. */
 int cio_export_sascode(int nvar, char (*mapped)[301], const char *path, const char *kind,
-                       int replace)
+                       int replace, ctools_output *pending)
 {
     ctools_output output;
     memset(&output, 0, sizeof(output));
@@ -156,7 +158,7 @@ int cio_export_sascode(int nvar, char (*mapped)[301], const char *path, const ch
         return 0;
     if ((rc = ctools_output_prepare(&output, path, replace)))
         goto done;
-    fp = fopen(output.temporary, "wb");
+    fp = ctools_fopen(output.temporary, "wb");
     if (!fp)
     {
         rc = 603;
@@ -237,7 +239,8 @@ int cio_export_sascode(int nvar, char (*mapped)[301], const char *path, const ch
         goto done;
     }
     fp = NULL;
-    rc = ctools_output_commit(&output);
+    *pending = output;
+    memset(&output, 0, sizeof(output));
 done:
     if (fp)
         fclose(fp);

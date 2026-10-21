@@ -11,8 +11,9 @@ if __name__ == "__main__":
     parser.add_argument("directory", type=Path)
     parser.add_argument("--metadata-only", action="store_true",
                         help="check source metadata before platform builds")
+    parser.add_argument("--integrity", action="store_true", help="require and verify the staged release checksum manifest")
     args = parser.parse_args()
-    errors = check_package(args.directory, args.metadata_only)
+    errors = check_package(args.directory, args.metadata_only, args.integrity)
     if errors:
         raise SystemExit("\n".join(errors))
     print("Package metadata checked" if args.metadata_only else "Package complete")

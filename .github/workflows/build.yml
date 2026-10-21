@@ -5,6 +5,7 @@ on:
     branches: [ main, dev, develop ]
     paths:
       - 'src/**'
+      - 'package/**'
       - 'Makefile'
       - 'build/*.ado'
       - 'build/*.sthlp'
@@ -27,6 +28,7 @@ on:
     branches: [ main, dev, develop ]
     paths:
       - 'src/**'
+      - 'package/**'
       - 'Makefile'
       - 'build/*.ado'
       - 'build/*.sthlp'
@@ -191,6 +193,10 @@ jobs:
         shell: msys2 {0}
         run: make windows BUILD_REVISION=${{ github.sha }}
 
+      - name: Test Windows file APIs and MSYS2 cleanup
+        shell: msys2 {0}
+        run: python validation/test_windows_files.py
+
       - name: Check Windows dependency contract
         shell: msys2 {0}
         run: python validation/check_dependencies.py windows build/ctools_windows.plugin
@@ -202,22 +208,28 @@ jobs:
           path: build/ctools_windows.plugin
           if-no-files-found: error
 
-  # Optional licensed runner. Configure CTOOLS_STATA_RUNNER as a JSON label list,
-  # e.g. ["self-hosted", "macOS", "stata"], with the user's stata wrapper. When it is
-  # unset this job is skipped and plugins publish without the Stata gate; when it runs,
-  # a failure blocks publication.
-  # Never run untrusted pull-request code on a persistent licensed runner.
+  # All four fresh candidate plugins must pass licensed validation before
+  # publication. CTOOLS_STATA_RUNNERS maps platform names to runner labels.
+  # Missing configuration deliberately skips this matrix and blocks publishing.
+  # Never run untrusted PR code on persistent licensed runners.
   stata-validation:
-    if: github.event_name != 'pull_request' && vars.CTOOLS_STATA_RUNNER != ''
-    needs: [build-macos-arm, build-macos-intel]
-    runs-on: ${{ fromJSON(vars.CTOOLS_STATA_RUNNER || '["self-hosted","macOS","stata"]') }}
+    if: github.event_name != 'pull_request' && vars.CTOOLS_STATA_RUNNERS != ''
+    needs: [build-linux, build-macos-arm, build-macos-intel, build-windows]
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [mac_arm, mac_x86, windows, linux]
+    runs-on: ${{ fromJSON(vars.CTOOLS_STATA_RUNNERS || '{}')[matrix.platform] }}
+    env:
+      CTOOLS_EXPECTED_REVISION: ${{ github.sha }}
+      CTOOLS_EXPECTED_PLATFORM: ${{ matrix.platform }}
+      CTOOLS_TEST_PLUGIN_DIR: ""
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          pattern: ctools_mac_*
+          name: ctools_${{ matrix.platform }}
           path: build
-          merge-multiple: true
       - name: Prepare pinned offline examples
         run: python3 scripts/fetch_validation_data.py
       - name: Run complete Stata correctness gate
@@ -225,7 +237,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: stata-audit-log
+          name: stata-audit-log-${{ matrix.platform }}
           path: validation/audit_ci.log
 
   # ===========================================================================
@@ -267,12 +279,13 @@ jobs:
   # ===========================================================================
   # Commit built plugins to repository
   # ===========================================================================
-  # always() keeps a skipped stata-validation from skipping this job transitively.
+  # Candidate artifacts may exist without licensed validation; publication may not.
   commit-plugins:
     if: >-
       always() && !cancelled() && needs.package.result == 'success' &&
+      needs.stata-validation.result == 'success' &&
       github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [package]
+    needs: [package, stata-validation]
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -313,8 +326,9 @@ jobs:
   # Create GitHub Release (only on release events)
   # ===========================================================================
   release:
-    if: always() && !cancelled() && needs.package.result == 'success' && github.event_name == 'release'
-    needs: [package]
+    if: always() && !cancelled() && needs.package.result == 'success' &&
+      needs.stata-validation.result == 'success' && github.event_name == 'release'
+    needs: [package, stata-validation]
     runs-on: ubuntu-22.04
     permissions:
       contents: write

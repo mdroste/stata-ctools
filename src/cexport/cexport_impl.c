@@ -1,3 +1,4 @@
+#include "ctools_file.h"
 /*
     cexport_impl.c
     High-Performance Delimited Text Export for Stata
@@ -323,7 +324,7 @@ static ST_retcode export_single_threaded(size_t nobs, size_t avg_row_size,
 {
     char msg[512];
 
-    g_ctx.fp = fopen(g_ctx.filename, "wb");
+    g_ctx.fp = ctools_fopen(g_ctx.filename, "wb");
     if (g_ctx.fp == NULL) {
         snprintf(msg, sizeof(msg), "cexport: cannot open file '%s' for writing: %s\n",
                 g_ctx.filename, strerror(errno));

@@ -1,3 +1,4 @@
+#include "ctools_file.h"
 #include "cio_internal.h"
 
 /* View one XPORT5 member as a standalone library. XPORT is made of 80-byte
@@ -7,7 +8,7 @@ int cio_xport_view_open(const char *path, void *ctx)
 {
     cio_xport_view *v = ctx;
     v->pos = 0;
-    v->fp = fopen(path, "rb");
+    v->fp = ctools_fopen(path, "rb");
     return v->fp ? 0 : -1;
 }
 int cio_xport_view_close(void *ctx)
@@ -78,7 +79,7 @@ readstat_error_t cio_xport_view_update(long size, readstat_progress_handler prog
 }
 int cio_xport_select(const char *path, const char *member, readstat_parser_t *p, cio_xport_view *v)
 {
-    FILE *fp = fopen(path, "rb");
+    FILE *fp = ctools_fopen(path, "rb");
     if (!fp)
         return 601;
     unsigned char record[240];

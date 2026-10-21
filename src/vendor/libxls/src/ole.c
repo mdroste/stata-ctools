@@ -1,3 +1,4 @@
+#include "../../../ctools_file.h"
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
  *
  * Copyright 2004 Komarov Valery
@@ -622,7 +623,7 @@ OLE2* ole2_open_file(const char *file)
 	if(xls_debug) printf("ole2_open: %s\n", file);
     ole = calloc(1, sizeof(OLE2));
 
-    if (!(ole->file=fopen(file, "rb"))) {
+    if (!(ole->file=ctools_fopen(file, "rb"))) {
         if(xls_debug) fprintf(stderr, "File not found\n");
         free(ole);
         return NULL;

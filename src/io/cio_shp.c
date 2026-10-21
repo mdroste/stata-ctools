@@ -1,3 +1,4 @@
+#include "ctools_file.h"
 #include "cio_internal.h"
 
 /* ESRI shapefile geometry. rec_header matches Stata's binary strL layout:
@@ -66,7 +67,7 @@ int cio_shp_add_row(cio_dataset *dataset, int id, double x, double y, double z, 
 }
 int cio_scan_shp(cio_dataset *dataset, const char *path)
 {
-    FILE *fp = fopen(path, "rb");
+    FILE *fp = ctools_fopen(path, "rb");
     if (!fp)
         return 601;
     int rc = 610;
@@ -307,7 +308,7 @@ int cio_shp_export(void)
     }
     if ((rc = ctools_output_prepare(&output, filename, !strcmp(replace, "1"))))
         goto done;
-    fp = fopen(output.temporary, "wb");
+    fp = ctools_fopen(output.temporary, "wb");
     if (!fp)
     {
         rc = 603;
@@ -331,7 +332,7 @@ int cio_shp_export(void)
         memcpy(path + len - 4, ".shx", 5);
         if ((rc = ctools_output_prepare(&idx, path, !strcmp(replace, "1"))))
             goto done;
-        index = fopen(idx.temporary, "wb");
+        index = ctools_fopen(idx.temporary, "wb");
         if (!index)
         {
             rc = 603;
@@ -397,7 +398,7 @@ int cio_shp_export(void)
             free(blob);
             goto done;
         }
-        long offset = ftell(fp);
+        int64_t offset = ctools_ftell(fp);
         if (offset < 0 || offset / 2 > UINT32_MAX)
         {
             free(blob);
@@ -494,21 +495,21 @@ int cio_shp_export(void)
             }
         }
         free(blob);
-        long end = ftell(fp);
-        if (end - offset - 8 != (long)words * 2)
+        int64_t end = ctools_ftell(fp);
+        if (end < 0 || end - offset - 8 != (int64_t)words * 2)
         {
             rc = 198;
             goto done;
         }
     }
-    long bytes = ftell(fp);
+    int64_t bytes = ctools_ftell(fp);
     if (bytes < 0 || bytes / 2 > UINT32_MAX)
     {
         rc = 603;
         goto done;
     }
     cio_shp_putbe32(h + 24, (uint32_t)(bytes / 2));
-    if (fseek(fp, 0, SEEK_SET) || fwrite(h, 1, 100, fp) != 100)
+    if (ctools_fseek(fp, 0, SEEK_SET) || fwrite(h, 1, 100, fp) != 100)
     {
         rc = 603;
         goto done;
@@ -523,7 +524,7 @@ int cio_shp_export(void)
     if (index)
     {
         cio_shp_putbe32(h + 24, 50 + 4 * records);
-        if (fseek(index, 0, SEEK_SET) || fwrite(h, 1, 100, index) != 100)
+        if (ctools_fseek(index, 0, SEEK_SET) || fwrite(h, 1, 100, index) != 100)
         {
             rc = 603;
             goto done;
@@ -536,10 +537,8 @@ int cio_shp_export(void)
         }
         index = NULL;
     }
-    if ((rc = ctools_output_commit(&output)))
-        goto done;
-    if (idx.temporary)
-        rc = ctools_output_commit(&idx);
+    ctools_output *outputs[] = {&output, &idx};
+    rc = ctools_output_commit_group(outputs, idx.temporary ? 2 : 1);
 done:
     if (fp)
         fclose(fp);

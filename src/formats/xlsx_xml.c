@@ -685,3 +685,95 @@ bool xlsx_xml_parse_cell_ref(const char *ref, int *col, int *row)
     *row = r;
     return true;
 }
+
+/* A non-allocating structural pass over the complete part. Keep source spans
+ * rather than truncated tag-name buffers so mismatched long names also fail.
+ * XML depth is bounded independently of worksheet size. */
+bool xlsx_xml_validate_document(const char *data, size_t len, const char *root)
+{
+    if (!data || !root) return false;
+    struct { const char *name; size_t len; } stack[256];
+    size_t depth = 0;
+    bool seen_root = false;
+    const char *p = data, *end = data + len;
+    if (len >= 3 && !memcmp(p, "\xef\xbb\xbf", 3)) p += 3;
+    while (p < end) {
+        if (*p != '<') {
+            if (!depth && !isspace((unsigned char)*p)) return false;
+            if (!*p) return false;
+            p++;
+            continue;
+        }
+        const char *terminator = NULL;
+        size_t opener = 0, closer = 0;
+        if (end - p >= 4 && !memcmp(p, "<!--", 4)) {
+            terminator = "-->"; opener = 4; closer = 3;
+        } else if (end - p >= 9 && !memcmp(p, "<![CDATA[", 9)) {
+            if (!depth) return false;
+            terminator = "]]>"; opener = 9; closer = 3;
+        } else if (end - p >= 2 && !memcmp(p, "<?", 2)) {
+            terminator = "?>"; opener = 2; closer = 2;
+        }
+        if (terminator) {
+            p += opener;
+            while ((size_t)(end - p) >= closer && memcmp(p, terminator, closer)) p++;
+            if ((size_t)(end - p) < closer) return false;
+            p += closer;
+            continue;
+        }
+        p++;
+        bool closing = p < end && *p == '/';
+        if (closing) p++;
+        const char *name = p;
+        while (p < end && (isalnum((unsigned char)*p) || *p == '_' || *p == ':' ||
+                           *p == '-' || *p == '.' || (unsigned char)*p >= 128)) p++;
+        size_t n = (size_t)(p - name);
+        if (!n) return false;
+        bool self_closing = false;
+        for (;;) {
+            const char *space = p;
+            while (p < end && isspace((unsigned char)*p)) p++;
+            if (p == end) return false;
+            if (*p == '>') { p++; break; }
+            if (!closing && *p == '/' && end - p >= 2 && p[1] == '>') {
+                self_closing = true; p += 2; break;
+            }
+            if (closing || p == space) return false;
+            const char *attr = p;
+            while (p < end && (isalnum((unsigned char)*p) || *p == '_' || *p == ':' ||
+                               *p == '-' || *p == '.' || (unsigned char)*p >= 128)) p++;
+            if (p == attr) return false;
+            while (p < end && isspace((unsigned char)*p)) p++;
+            if (p == end || *p++ != '=') return false;
+            while (p < end && isspace((unsigned char)*p)) p++;
+            if (p == end || (*p != '\'' && *p != '"')) return false;
+            char quote = *p++;
+            while (p < end && *p != quote) {
+                if (*p == '<' || !*p) return false;
+                p++;
+            }
+            if (p == end) return false;
+            p++;
+        }
+        if (closing) {
+            if (!depth || stack[depth - 1].len != n ||
+                memcmp(stack[depth - 1].name, name, n)) return false;
+            depth--;
+        } else {
+            if (!depth) {
+                if (seen_root) return false;
+                const char *local = memchr(name, ':', n);
+                local = local ? local + 1 : name;
+                size_t local_len = (size_t)(name + n - local);
+                if (strlen(root) != local_len || memcmp(local, root, local_len)) return false;
+                seen_root = true;
+            }
+            if (!self_closing) {
+                if (depth == sizeof(stack) / sizeof(stack[0])) return false;
+                stack[depth].name = name;
+                stack[depth++].len = n;
+            }
+        }
+    }
+    return seen_root && depth == 0;
+}

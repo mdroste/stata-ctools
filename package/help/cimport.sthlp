@@ -258,12 +258,13 @@ labels and characteristics stay unless {opt clear} is specified),
 {cmd:cimport} uses {help preserve}. As the native commands do,
 {cmd:cimport sas}, {cmd:spss}, {cmd:sasxport5}, {cmd:sasxport8}, {cmd:dbase}
 and {cmd:shp} clear the data before reading the file, so a failure leaves an
-empty dataset.
+empty dataset unless {opt snapshot} was explicitly requested.
 
 {phang}
 {opt snapshot} restores the data after a failed or interrupted import from a
 {help preserve} snapshot of the data in memory instead, as earlier versions of
-{cmd:cimport} did. Stata keeps the snapshot in memory up to
+{cmd:cimport} did. For binary formats the snapshot is taken before clearing
+the original data or scanning the input file. Stata keeps the snapshot in memory up to
 {cmd:c(max_preservemem)} (1 GB by default) and writes it to disk above that.
 {p_end}
 

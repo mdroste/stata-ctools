@@ -72,10 +72,21 @@ static void build_ignore_table(const char *ignore_chars, int len)
     }
 }
 
-/* ASCII whitespace removed by ustrtrim() */
-static inline int is_trim_space(unsigned char c)
+/* Unicode White_Space, as accepted by ustrtrim(), encoded as whole UTF-8
+ * sequences. Invalid/truncated sequences are left for numeric rejection. */
+static int trim_space_len(const char *text, int len)
 {
-    return c == ' ' || (c >= '\t' && c <= '\r');
+    const unsigned char *s = (const unsigned char *)text;
+    if (!len) return 0;
+    if (s[0] == ' ' || (s[0] >= 9 && s[0] <= 13)) return 1;
+    if (len >= 2 && s[0] == 0xc2 && (s[1] == 0x85 || s[1] == 0xa0)) return 2;
+    if (len < 3) return 0;
+    if ((s[0] == 0xe1 && s[1] == 0x9a && s[2] == 0x80) ||
+        (s[0] == 0xe2 && s[1] == 0x80 &&
+         ((s[2] >= 0x80 && s[2] <= 0x8a) || s[2] == 0xa8 || s[2] == 0xa9 || s[2] == 0xaf)) ||
+        (s[0] == 0xe2 && s[1] == 0x81 && s[2] == 0x9f) ||
+        (s[0] == 0xe3 && s[1] == 0x80 && s[2] == 0x80)) return 3;
+    return 0;
 }
 
 /*
@@ -121,8 +132,14 @@ static int convert_value(const char *src, const cdestring_options *opts,
         s = buf;
         len = n;
     }
-    while (len > 0 && is_trim_space((unsigned char)s[0])) { s++; len--; }
-    while (len > 0 && is_trim_space((unsigned char)s[len - 1])) len--;
+    int space;
+    while ((space = trim_space_len(s, len))) { s += space; len -= space; }
+    while (len > 0) {
+        int at = len - 1;
+        while (at > 0 && len - at < 3 && ((unsigned char)s[at] & 0xc0) == 0x80) at--;
+        if (trim_space_len(s + at, len - at) != len - at) break;
+        len = at;
+    }
 
     *out = missval;
     if (len == 0 || (len == 1 && s[0] == '.')) return 1;

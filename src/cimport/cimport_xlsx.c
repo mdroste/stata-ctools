@@ -1469,6 +1469,9 @@ static const char *xlsx_sheetdata_end(const char *begin, const char *end)
 /* Scan a complete worksheet part: the <dimension> hint, then <sheetData>. */
 static ST_retcode xlsx_scan_buffer(XLSXContext *ctx, const char *buf, size_t len)
 {
+    /* Validate the whole part, including content outside a requested range.
+     * Worker/range boundaries are intentionally incomplete XML fragments. */
+    if (!xlsx_xml_validate_document(buf, len, "worksheet")) return 610;
     static const char *const names[] = {"ref"};
     const char *p = buf, *end = buf + len;
     while (p < end) {

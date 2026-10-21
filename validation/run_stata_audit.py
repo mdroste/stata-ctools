@@ -1,7 +1,9 @@
-"""Run the complete offline correctness gate using the stata shell alias."""
+"""Run the complete offline correctness gate using the configured Stata launcher."""
 from stata_runner import launch_driver
 from pathlib import Path
 import re
+import os
+import sys
 import subprocess
 import tempfile
 import uuid
@@ -31,6 +33,24 @@ def main():
     check_registry()
     subprocess.run(['python3', 'scripts/fetch_validation_data.py', '--check-only'], cwd=ROOT, check=True)
     LOG.unlink(missing_ok=True)
+    expected = os.environ.get('CTOOLS_EXPECTED_REVISION', '')
+    expected_platform = os.environ.get('CTOOLS_EXPECTED_PLATFORM', '')
+    if expected and not re.fullmatch(r'[0-9a-f]{40}', expected):
+        raise ValueError('Expected revision must be a full commit SHA')
+    if expected_platform:
+        sys.path.insert(0, str(ROOT))
+        from scripts.stage_package import native_platform
+        if native_platform() != expected_platform:
+            raise ValueError('Licensed runner platform does not match its candidate artifact')
+        if not os.environ.get('CTOOLS_STATA_EXECUTABLE'):
+            raise ValueError('Licensed CI requires CTOOLS_STATA_EXECUTABLE')
+    identity = ''
+    if expected:
+        identity = f"""adopath ++ build
+capture noisily ctools, version
+if _rc local failed = 1
+else if "`r(plugin_revision)'" != "{expected}" local failed = 1
+"""
     errors = []
     nonce = uuid.uuid4().hex
     with tempfile.TemporaryDirectory(prefix='ctools-stata-') as tmp:
@@ -41,6 +61,7 @@ set linesize 255
 capture log close _all
 log using "{LOG}", text replace
 local failed = 0
+{identity}
 foreach cmd in reghdfe ivreghdfe ppmlhdfe psmatch2 binscatter rangestat rangejoin winsor2 gstats {{
     capture which `cmd'
     if _rc {{

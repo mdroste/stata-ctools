@@ -1,3 +1,4 @@
+#include "ctools_file.h"
 #include "cio_internal.h"
 
 unsigned cio_dbf_u16(const unsigned char *p)
@@ -24,7 +25,7 @@ void cio_dbf_p32(unsigned char *p, uint32_t v)
 
 int cio_scan_dbf(cio_dataset *dataset, const char *path)
 {
-    FILE *fp = fopen(path, "rb");
+    FILE *fp = ctools_fopen(path, "rb");
     if (!fp)
         return 601;
     unsigned char h[32];
@@ -333,7 +334,7 @@ int cio_export_dbf(void)
     rc = ctools_output_prepare(&output, path, !strcmp(replace, "1"));
     if (rc)
         goto done;
-    fp = fopen(output.temporary, "wb");
+    fp = ctools_fopen(output.temporary, "wb");
     if (!fp)
     {
         rc = 603;

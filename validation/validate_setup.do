@@ -23,6 +23,8 @@ set trace off
 * Works from both project root and validation directory
 capture adopath ++ "build"
 capture adopath ++ "../build"
+local candidate : environment CTOOLS_TEST_PLUGIN_DIR
+if `"`candidate'"' != "" adopath ++ `"`candidate'"'
 
 * Offline, checksum-pinned examples prepared by scripts/fetch_validation_data.py.
 * The helper deliberately never falls back to a network request.

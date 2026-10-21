@@ -1,3 +1,4 @@
+#include "ctools_file.h"
 #include "cio_internal.h"
 
 int cio_metadata_cb(readstat_metadata_t *m, void *ctx)
@@ -546,6 +547,7 @@ int cio_do_export(const char *kind)
     if (!strcmp(kind, "dbase"))
         return cio_export_dbf();
     char path[4096], replace[10], label[1025];
+    ctools_output companions[2] = {{0}};
     ctools_output output;
     memset(&output, 0, sizeof(output));
     cio_local_text("__cio_filename", path, sizeof(path));
@@ -767,7 +769,7 @@ int cio_do_export(const char *kind)
     rc = ctools_output_prepare(&output, path, !strcmp(replace, "1"));
     if (rc)
         goto done;
-    fp = fopen(output.temporary, "wb");
+    fp = ctools_fopen(output.temporary, "wb");
     if (!fp)
     {
         rc = 603;
@@ -866,14 +868,17 @@ int cio_do_export(const char *kind)
     {
         char xpf[4096];
         cio_local_text("__cio_xpfoutput", xpf, sizeof(xpf));
-        if (*xpf && (rc = cio_export_xpf(nmeta, xpf, !strcmp(replace, "1"), sets)))
+        if (*xpf && (rc = cio_export_xpf(nmeta, xpf, !strcmp(replace, "1"), sets, &companions[0])))
             goto done;
     }
     char sascode[4096];
     cio_local_text("__cio_sascode", sascode, sizeof(sascode));
-    if (*sascode && (rc = cio_export_sascode(nmeta, sets, sascode, kind, !strcmp(replace, "1"))))
+    if (*sascode && (rc = cio_export_sascode(nmeta, sets, sascode, kind, !strcmp(replace, "1"), &companions[1])))
         goto done;
-    rc = ctools_output_commit(&output);
+    ctools_output *outputs[3] = {&output};
+    size_t count = 1;
+    for (int i = 0; i < 2; i++) if (companions[i].temporary) outputs[count++] = &companions[i];
+    rc = ctools_output_commit_group(outputs, count);
     goto done;
 codec_error:
     ctools_error("cexport", "%s", readstat_error_message(err));
@@ -882,6 +887,7 @@ done:
     if (fp)
         fclose(fp);
     ctools_output_cleanup(&output);
+    for (int i = 0; i < 2; i++) ctools_output_cleanup(&companions[i]);
     free(s);
     free(vars);
     free(dates);

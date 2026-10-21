@@ -24,13 +24,21 @@ program define cpplmhdfe_p
         }
         confirm double variable `e(d)', exact
     }
+    marksample touse, novarlist
+    local if "if `touse'"
+    local in ""
+    local target `varlist'
+    tempvar prediction
+    local varlist `prediction'
     if "`opt'" == "stdp" {
         _predict double `varlist' `if' `in', stdp
+        rename `varlist' `target'
         exit
     }
     if "`opt'" == "d" {
         if "`e(d)'" == "" quietly generate double `varlist' = 0 `if' `in'
         else quietly generate double `varlist' = `e(d)' `if' `in'
+        rename `varlist' `target'
         exit
     }
     * _predict adds e(offset). Exposure needs its logarithm instead.
@@ -41,16 +49,25 @@ program define cpplmhdfe_p
     else if "`e(offset)'" != "" {
         quietly replace `varlist' = `varlist' + `e(offset)' `if' `in'
     }
-    if "`opt'" == "xb" exit
+    if "`opt'" == "xb" {
+        rename `varlist' `target'
+        exit
+    }
     if "`e(absvars)'" != "_cons" {
         quietly replace `varlist' = `varlist' + `e(d)' `if' `in'
     }
     else if "`e(d)'" != "" {
-        quietly replace `varlist' = . if missing(`e(d)') `if' `in'
+        quietly replace `varlist' = . if missing(`e(d)') & `touse'
     }
-    if inlist("`opt'", "xbd", "eta") exit
+    if inlist("`opt'", "xbd", "eta") {
+        rename `varlist' `target'
+        exit
+    }
     quietly replace `varlist' = exp(`varlist') `if' `in'
-    if "`opt'" == "mu" exit
+    if "`opt'" == "mu" {
+        rename `varlist' `target'
+        exit
+    }
     local y `e(depvar)'
     confirm variable `y'
     if inlist("`opt'", "response", "scores") ///
@@ -63,4 +80,5 @@ program define cpplmhdfe_p
         quietly replace `varlist' = 1.5*(`y'^(2/3)-`varlist'^(2/3))/`varlist'^(1/6) `if' `in'
     else if "`opt'" == "working" ///
         quietly replace `varlist' = (`y'-`varlist')/`varlist' `if' `in'
+    rename `varlist' `target'
 end

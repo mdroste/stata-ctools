@@ -89,9 +89,9 @@ int cio_xlsx_raw(XLSXContext *x, int row, int col, double *number, const char **
 uint8_t cio_xlsx_native_format(XLSXContext *x, int row, int col);
 int cio_xlsx_numeric(int type);
 int cio_scan_xlsx(cio_dataset *dataset, const char *path);
-int cio_export_xpf(int nvar, const char *path, int replace, char (*mapped)[301]);
+int cio_export_xpf(int nvar, const char *path, int replace, char (*mapped)[301], ctools_output *pending);
 int cio_export_sascode(int nvar, char (*mapped)[301], const char *path, const char *kind,
-                       int replace);
+                       int replace, ctools_output *pending);
 int cio_excel_sheet_info(int index, const char *name, int row0, int col0, int row1, int col1);
 int cio_excel_workbook(const char *kind);
 void *cio_realloc(void *p, size_t n, size_t width);

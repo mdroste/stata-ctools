@@ -17,7 +17,7 @@ net install ctools, from("https://raw.githubusercontent.com/mdroste/stata-ctools
 
 ### Manual Installation
 
-1. Download a complete release archive and validate its extracted directory with `python3 validation/check_package.py /path/to/release/build`.
+1. Download a complete release archive and validate its extracted directory with `python3 validation/check_package.py /path/to/release/build --integrity`.
 2. In Stata, run `net install ctools, from("/absolute/path/to/release/build") replace`.
 
 A source checkout's `build/` is not necessarily an installable distribution: it
@@ -49,3 +49,23 @@ If you have a workstation/server CPU with lots of cache, you might want to try p
 See [DEVELOPERS.md](../DEVELOPERS.md) for additional information on ctools' architecture and core logic.
 
 
+
+## Licensed release validation
+
+Publication requires a successful Stata correctness run on each fresh candidate
+plugin: Mac ARM, Mac Intel, Windows, and Linux. Configure repository variable
+`CTOOLS_STATA_RUNNERS` as a JSON object mapping `mac_arm`, `mac_x86`, `windows`,
+and `linux` to trusted self-hosted runner label arrays. Each runner needs Python
+3, the documented reference commands and `CTOOLS_STATA_EXECUTABLE` set to the
+absolute licensed Stata executable path. The runner's OS/architecture and loaded
+plugin revision are checked against the candidate. Missing configuration permits
+candidate artifact builds but blocks public plugin commits and release assets.
+Untrusted pull requests never run on these licensed runners. Windows uses Stata's
+[noninteractive `/e` batch mode](https://www.stata.com/support/faqs/windows/batch-mode/).
+
+Exports normally publish with atomic rename. Multi-file SHP and XPORT exports
+retain originals until all outputs are published and roll back ordinary failures;
+this is not a crash-atomic filesystem transaction. Backups are retained with a
+reported path if rollback itself fails. On POSIX filesystems lacking both exclusive
+rename and hard links, the no-overwrite fallback copies into an exclusively created
+private destination and removes it on failure. Its name is visible while copying.

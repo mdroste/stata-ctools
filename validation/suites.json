@@ -1453,6 +1453,58 @@
         "reghdfe"
       ],
       "reason": "Opt-in: needs the 227 MB HDFE benchmark collection (fetch_validation_data.py --collection hdfe); run through run_hdfe_datasets.py."
+    },
+    {
+      "name": "oct21_native",
+      "path": "validation/test_oct21_native.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": []
+    },
+    {
+      "name": "oct21_release",
+      "path": "validation/test_oct21_release.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": []
+    },
+    {
+      "name": "oct21_stata",
+      "path": "validation/test_oct21_stata.py",
+      "runner": "python",
+      "category": "correctness",
+      "marker": "CTOOLS_OCT21_COMPLETE",
+      "fixtures": [],
+      "dependencies": [],
+      "command": [
+        "python3",
+        "validation/test_oct21_stata.py"
+      ],
+      "log": "temp/oct21_stata.log"
+    },
+    {
+      "name": "oct21_cases",
+      "path": "validation/validate_oct21.do",
+      "runner": "helper",
+      "category": "helper",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [],
+      "reason": "Executed with generated fixtures by test_oct21_stata.py"
+    },
+    {
+      "name": "windows_files",
+      "path": "validation/test_windows_files.py",
+      "runner": "helper",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [],
+      "reason": "Executed by the Windows MSYS2 build job; requires Windows file APIs"
     }
   ]
 }

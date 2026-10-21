@@ -1,3 +1,4 @@
+#include "ctools_file.h"
 /*
  * cimport_mmap.c
  * Cross-platform memory-mapped file I/O for cimport
@@ -13,32 +14,12 @@
 
 #ifdef CIMPORT_WINDOWS
 
-/*
- * Open for reading. Stata passes UTF-8 paths, which the ANSI API would read in
- * the system code page, so convert to UTF-16 (a string that is not valid UTF-8
- * keeps the ANSI API). Full sharing lets files stay open in other programs,
- * such as a CSV open in Excel.
- */
+/* Stata paths are UTF-8, including paths beyond legacy MAX_PATH. */
 static HANDLE cimport_open_read(const char *filename)
 {
-    const DWORD share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
-    int wlen = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, filename, -1, NULL, 0);
-    if (wlen <= 0)
-        return CreateFileA(filename, GENERIC_READ, share, NULL, OPEN_EXISTING,
-                           FILE_ATTRIBUTE_NORMAL, NULL);
-
-    wchar_t *wpath = malloc((size_t)wlen * sizeof(wchar_t));
-    if (!wpath) {
-        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
-        return INVALID_HANDLE_VALUE;
-    }
-    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, filename, -1, wpath, wlen);
-    HANDLE handle = CreateFileW(wpath, GENERIC_READ, share, NULL, OPEN_EXISTING,
-                                FILE_ATTRIBUTE_NORMAL, NULL);
-    DWORD err = GetLastError();
-    free(wpath);
-    SetLastError(err);
-    return handle;
+    return ctools_create_file(filename, GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL);
 }
 
 int cimport_mmap_file(CImportContext *ctx, const char *filename)

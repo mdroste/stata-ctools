@@ -1,10 +1,11 @@
-"""The single Stata launch boundary: interactive zsh alias, fresh completion nonce.
+"""The single Stata launch boundary: configured executable or local zsh alias.
 
 Stata batch exit status alone does not report do-file failure. Each driver must
 save _rc before logging/cleanup; a nonce rejects stale or interrupted output.
 """
 from pathlib import Path
 import re
+import os
 import shlex
 import subprocess
 import tempfile
@@ -14,7 +15,16 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def stata_command(driver):
-    return ['/bin/zsh', '-lic', 'stata -q -b do ' + shlex.quote(str(Path(driver).resolve()))]
+    executable = os.environ.get('CTOOLS_STATA_EXECUTABLE')
+    driver = str(Path(driver).resolve())
+    if executable:
+        # A path, not a shell command: spaces need no shell quoting.
+        batch = ['/e', 'do'] if os.name == 'nt' else ['-q', '-b', 'do']
+        return [executable, *batch, driver]
+    if os.name == 'nt':
+        raise ValueError('Set CTOOLS_STATA_EXECUTABLE to the licensed Stata executable')
+    # Retain the existing local alias workflow; CI configures an executable.
+    return ['/bin/zsh', '-lic', 'stata -q -b do ' + shlex.quote(driver)]
 
 
 def validate_completion(text, nonce):

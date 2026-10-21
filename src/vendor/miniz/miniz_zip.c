@@ -1,3 +1,4 @@
+#include "../../ctools_file.h"
 /**************************************************************************
  *
  * Copyright 2013-2014 RAD Game Tools and Valve Software
@@ -47,16 +48,19 @@ extern "C" {
 static WCHAR* mz_utf8z_to_widechar(const char* str)
 {
   int reqChars = MultiByteToWideChar(CP_UTF8, 0, str, -1, NULL, 0);
-  WCHAR* wStr = (WCHAR*)malloc(reqChars * sizeof(WCHAR));
-  MultiByteToWideChar(CP_UTF8, 0, str, -1, wStr, reqChars);
+  if (reqChars <= 0) return NULL;
+  WCHAR* wStr = (WCHAR*)malloc((size_t)reqChars * sizeof(WCHAR));
+  if (!wStr) return NULL;
+  if (!MultiByteToWideChar(CP_UTF8, 0, str, -1, wStr, reqChars)) { free(wStr); return NULL; }
   return wStr;
 }
 
 static FILE *mz_fopen(const char *pFilename, const char *pMode)
 {
-  WCHAR* wFilename = mz_utf8z_to_widechar(pFilename);
+  WCHAR* wFilename = ctools_wpath(pFilename);
   WCHAR* wMode = mz_utf8z_to_widechar(pMode);
   FILE* pFile = NULL;
+  if (!wFilename || !wMode) { free(wFilename); free(wMode); return NULL; }
   errno_t err = _wfopen_s(&pFile, wFilename, wMode);
   free(wFilename);
   free(wMode);
@@ -65,9 +69,10 @@ static FILE *mz_fopen(const char *pFilename, const char *pMode)
 
 static FILE *mz_freopen(const char *pPath, const char *pMode, FILE *pStream)
 {
-  WCHAR* wPath = mz_utf8z_to_widechar(pPath);
+  WCHAR* wPath = ctools_wpath(pPath);
   WCHAR* wMode = mz_utf8z_to_widechar(pMode);
   FILE* pFile = NULL;
+  if (!wPath || !wMode) { free(wPath); free(wMode); return NULL; }
   errno_t err = _wfreopen_s(&pFile, wPath, wMode, pStream);
   free(wPath);
   free(wMode);
@@ -76,7 +81,8 @@ static FILE *mz_freopen(const char *pPath, const char *pMode, FILE *pStream)
 
 static int mz_stat64(const char *path, struct __stat64 *buffer)
 {
-  WCHAR* wPath = mz_utf8z_to_widechar(path);
+  WCHAR* wPath = ctools_wpath(path);
+  if (!wPath) return -1;
   int res = _wstat64(wPath, buffer);
   free(wPath);
   return res;
@@ -95,7 +101,7 @@ static int mz_stat64(const char *path, struct __stat64 *buffer)
 #define MZ_FILE_STAT mz_stat64 
 #define MZ_FFLUSH fflush
 #define MZ_FREOPEN mz_freopen
-#define MZ_DELETE_FILE remove
+#define MZ_DELETE_FILE ctools_remove
 
 #elif defined(__MINGW32__) || defined(__WATCOMC__)
 #ifndef MINIZ_NO_TIME
@@ -111,7 +117,7 @@ static int mz_stat64(const char *path, struct __stat64 *buffer)
 #define MZ_FILE_STAT stat
 #define MZ_FFLUSH fflush
 #define MZ_FREOPEN(f, m, s) freopen(f, m, s)
-#define MZ_DELETE_FILE remove
+#define MZ_DELETE_FILE ctools_remove
 
 #elif defined(__TINYC__)
 #ifndef MINIZ_NO_TIME
@@ -127,7 +133,7 @@ static int mz_stat64(const char *path, struct __stat64 *buffer)
 #define MZ_FILE_STAT stat
 #define MZ_FFLUSH fflush
 #define MZ_FREOPEN(f, m, s) freopen(f, m, s)
-#define MZ_DELETE_FILE remove
+#define MZ_DELETE_FILE ctools_remove
 
 #elif defined(__USE_LARGEFILE64) /* gcc, clang */
 #ifndef MINIZ_NO_TIME
@@ -143,7 +149,7 @@ static int mz_stat64(const char *path, struct __stat64 *buffer)
 #define MZ_FILE_STAT stat64
 #define MZ_FFLUSH fflush
 #define MZ_FREOPEN(p, m, s) freopen64(p, m, s)
-#define MZ_DELETE_FILE remove
+#define MZ_DELETE_FILE ctools_remove
 
 #elif defined(__APPLE__) || defined(__FreeBSD__)
 #ifndef MINIZ_NO_TIME
@@ -159,7 +165,7 @@ static int mz_stat64(const char *path, struct __stat64 *buffer)
 #define MZ_FILE_STAT stat
 #define MZ_FFLUSH fflush
 #define MZ_FREOPEN(p, m, s) freopen(p, m, s)
-#define MZ_DELETE_FILE remove
+#define MZ_DELETE_FILE ctools_remove
 
 #else
 #pragma message("Using fopen, ftello, fseeko, stat() etc. path for file I/O - this path may not support large files.")
@@ -181,7 +187,7 @@ static int mz_stat64(const char *path, struct __stat64 *buffer)
 #define MZ_FILE_STAT stat
 #define MZ_FFLUSH fflush
 #define MZ_FREOPEN(f, m, s) freopen(f, m, s)
-#define MZ_DELETE_FILE remove
+#define MZ_DELETE_FILE ctools_remove
 #endif /* #ifdef _MSC_VER */
 #endif /* #ifdef MINIZ_NO_STDIO */
 

@@ -1,3 +1,4 @@
+#include "ctools_file.h"
 /* BIFF8 in an OLE compound file. Files are published atomically only after the
    complete workbook and FAT/DIFAT chains have been written. */
 #include "cexport_xls.h"
@@ -478,7 +479,7 @@ ST_retcode cexport_xls_main(const char *args) {
         goto done;
     }
     if (!replace) {
-        FILE *source = fopen(filename, "rb");
+        FILE *source = ctools_fopen(filename, "rb");
         if (source) {
             existing = 1;
             fclose(source);
@@ -503,7 +504,7 @@ ST_retcode cexport_xls_main(const char *args) {
     }
     if ((rc = ctools_output_prepare(&output, filename, replace || existing)))
         goto done;
-    out = fopen(output.temporary, "wb");
+    out = ctools_fopen(output.temporary, "wb");
     if (!out) {
         rc = 603;
         goto done;

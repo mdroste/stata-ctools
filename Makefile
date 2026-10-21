@@ -584,16 +584,7 @@ windows-docker: $(BUILD_DIR)
 clean:
 	@echo ""
 	@echo "  Cleaning build artifacts..."
-	@python3 -c 'from pathlib import Path; import shutil; p=Path("$(BUILD_DIR)"); shutil.rmtree(p/"obj", ignore_errors=True); [f.unlink() for f in p.glob("*.plugin.build.json")]'
-ifeq ($(DETECTED_OS),Windows)
-	@-del /Q $(BUILD_DIR)\ctools_*.plugin 2>NUL
-	@-del /Q $(BUILD_DIR)\*.o 2>NUL
-	@-del /Q $(SRC_DIR)\*.o 2>NUL
-else
-	@-rm -f $(BUILD_DIR)/ctools_*.plugin
-	@-rm -f $(BUILD_DIR)/*.o
-	@-rm -f $(SRC_DIR)/*.o
-endif
+	@python3 scripts/clean_build.py "$(BUILD_DIR)" "$(SRC_DIR)"
 	@echo "  Done."
 	@echo ""
 

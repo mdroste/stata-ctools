@@ -3071,16 +3071,23 @@ foreach mode in default snapshot fast {
 }
 
 * The SAS XPORT reader clears the data before parsing, as import sasxport8
-* does: a failure leaves the cleared dataset (with fast, the loaded data)
+* does by default. Explicit snapshot instead restores the original dataset.
 foreach mode in default snapshot fast {
     use `rb_copy', clear
     global CTOOLS_cimport_fault load
     capture cimport sasxport8 "`rb_file'.v8xpt", clear `=cond("`mode'"=="default","","`mode'")'
     local rc = _rc
     global CTOOLS_cimport_fault
-    local want = cond("`mode'" == "fast", 60, 0)
-    if `rc' == 1 & _N == `want' test_pass "[rollback] sasxport8 leaves cleared data [`mode']"
-    else test_fail "[rollback] sasxport8 leaves cleared data [`mode']" "rc=`rc' N=`=_N' k=`=c(k)'"
+    if "`mode'" == "snapshot" {
+        capture cf _all using `rb_copy', all
+        if `rc' == 1 & !_rc test_pass "[rollback] sasxport8 restores original [snapshot]"
+        else test_fail "[rollback] sasxport8 restores original [snapshot]" "rc=`rc', data comparison=`=_rc'"
+    }
+    else {
+        local want = cond("`mode'" == "fast", 60, 0)
+        if `rc' == 1 & _N == `want' test_pass "[rollback] sasxport8 leaves cleared data [`mode']"
+        else test_fail "[rollback] sasxport8 leaves cleared data [`mode']" "rc=`rc' N=`=_N' k=`=c(k)'"
+    }
 }
 
 * Imports under the frame prefix replace that frame's data only

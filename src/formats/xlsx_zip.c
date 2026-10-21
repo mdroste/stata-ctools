@@ -109,6 +109,8 @@ static void *xlsx_zip_extract_fast(xlsx_zip_archive *archive, size_t file_index,
     if (!mz_zip_reader_file_stat(&archive->zip, (mz_uint)file_index, &stat))
         return NULL;
 
+    if (stat.m_uncomp_size >= SIZE_MAX || stat.m_comp_size > SIZE_MAX)
+        return NULL;
     size_t uncomp_size = (size_t)stat.m_uncomp_size;
     size_t comp_size = (size_t)stat.m_comp_size;
 
@@ -163,6 +165,13 @@ static void *xlsx_zip_extract_fast(xlsx_zip_archive *archive, size_t file_index,
         return xlsx_zip_extract_to_heap(archive, file_index, out_size);
     }
 
+    /* Inflation success alone does not authenticate the bytes in a ZIP entry. */
+    if (actual_size != uncomp_size ||
+        libdeflate_crc32(0, uncomp_buf, actual_size) != stat.m_crc32)
+    {
+        free(uncomp_buf);
+        return NULL;
+    }
     if (out_size)
         *out_size = actual_size;
     return uncomp_buf;
@@ -183,6 +192,8 @@ void *xlsx_zip_extract_direct(xlsx_zip_archive *archive, size_t file_index, size
     if (!mz_zip_reader_file_stat(pZip, (mz_uint)file_index, &stat))
         return xlsx_zip_extract_fast(archive, file_index, out_size);
 
+    if (stat.m_uncomp_size >= SIZE_MAX || stat.m_comp_size > SIZE_MAX)
+        return NULL;
     size_t uncomp_size = (size_t)stat.m_uncomp_size;
     size_t comp_size = (size_t)stat.m_comp_size;
 
@@ -247,6 +258,13 @@ void *xlsx_zip_extract_direct(xlsx_zip_archive *archive, size_t file_index, size
         return xlsx_zip_extract_fast(archive, file_index, out_size);
     }
 
+    /* Inflation success alone does not authenticate the bytes in a ZIP entry. */
+    if (actual_size != uncomp_size ||
+        libdeflate_crc32(0, uncomp_buf, actual_size) != stat.m_crc32)
+    {
+        free(uncomp_buf);
+        return NULL;
+    }
     if (out_size)
         *out_size = actual_size;
     return uncomp_buf;

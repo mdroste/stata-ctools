@@ -1,3 +1,4 @@
+#include "ctools_file.h"
 /* Retain the original compound-file streams and edit only Workbook's BIFF data.
  */
 #include "vendor/libxls/include/libxls/xls_endian.h"
@@ -242,7 +243,7 @@ static int xe_sheet(FILE *f, const unsigned char *old, size_t oldlen,
    Workbook. This also preserves embedded objects and document properties. */
 static int xe_compound(FILE *out, const char *path, xlsWorkBook *wb, FILE *biff,
                        size_t bytes) {
-  FILE *original = fopen(path, "rb");
+  FILE *original = ctools_fopen(path, "rb");
   if (!original)
     return 601;
   int rc = 610;
