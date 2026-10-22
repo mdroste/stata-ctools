@@ -552,7 +552,7 @@ static ST_retcode do_iv_regression(void)
         }
     }
 
-    if (N_valid < K_total + K_iv + 1) {
+    if (N_valid <= K_total || N_valid < K_iv) {
         SF_error("civreghdfe: Insufficient observations\n");
         iv_rc = 2001;
         goto iv_cleanup;
@@ -756,7 +756,7 @@ static ST_retcode do_iv_regression(void)
     ctools_filtered_data_free(&filtered);
 
     /* Check we still have enough observations */
-    if (N < K_total + K_iv + 1) {
+    if (N <= K_total || N < K_iv) {
         SF_error("civreghdfe: Insufficient observations after singleton removal\n");
         iv_rc = 2001;
         goto iv_cleanup;
@@ -1447,8 +1447,12 @@ static ST_retcode do_iv_regression(void)
        sdofminus is sdofminus() + the partialled-out regressors + absorb_ct
        (max(1, df_a), the nested-in-cluster convention), and nopartialsmall
        is ignored. dofminus() is the large-sample adjustment. */
-    ST_int sdof_extra = (G > 0) ? sdofminus_opt + n_partial : 0;
-    ST_int dofminus_vce = (G > 0) ? dofminus : 0;
+    ST_int sdof_extra = sdofminus_opt + ((G > 0 || !nopartialsmall) ? n_partial : 0);
+    ST_double small_value = 0, has_cons_value = 0;
+    SF_scal_use("__civreghdfe_small", &small_value);
+    SF_scal_use("__civreghdfe_has_cons", &has_cons_value);
+    ST_int small = G > 0 || small_value != 0;
+    ST_int dofminus_vce = dofminus;
     ST_int df_a_small = df_a_for_vce + sdof_extra;
     if (sdof_extra > 0 && df_a_for_vce == 0 && nested_adj == 1) df_a_small = 1 + sdof_extra;
 
@@ -1467,7 +1471,7 @@ static ST_retcode do_iv_regression(void)
         (G > 0) ? (df_a_for_vce > 0 ? df_a_for_vce : 1) + sdof_extra : sdofminus_opt, center,
         &test_cols,
         n_abs_x_exog + n_abs_x_endog, n_abs_x_exog + n_abs_z_excl, n_abs_exog_all,
-        dofminus_vce
+        dofminus_vce, small
     );
     free(test_idx);
     free(ts_int);
@@ -1495,7 +1499,7 @@ static ST_retcode do_iv_regression(void)
         y_mean += w * y_dem[i];
         sum_w += w;
     }
-    y_mean /= sum_w;
+    y_mean = (G > 0 || has_cons_value != 0) ? y_mean / sum_w : 0.0;
 
     /* Compute TSS (centered) = sum(w * (y - ybar)^2) */
     for (ST_int i = 0; i < N; i++) {
@@ -1538,7 +1542,7 @@ static ST_retcode do_iv_regression(void)
     /* FE-absorbed columns kept as noise by ivreghdfe (stage 1 above) count */
     ST_int n_abs_x = n_abs_x_exog + n_abs_x_endog;
     ST_int K_for_dof = (G > 0) ? K_total + n_abs_x + sdof_extra
-                               : (nopartialsmall ? (K_total - n_partial) : K_total) + n_abs_x;
+                               : K_total + n_abs_x + sdof_extra;
     /* In double: N_eff (the sum of fweights) may exceed INT_MAX */
     ST_double df_r_val;
     if (kiefer) {
@@ -1560,6 +1564,7 @@ static ST_retcode do_iv_regression(void)
                        (df_a_for_vce > 0 ? df_a_for_vce : 1) : df_a;
     ST_double rmse_den = (ST_double)N_eff - K_total - n_abs_x - sdofminus
                          - sdof_extra - dofminus_vce;
+    if (!small) rmse_den = N_eff - dofminus;
     ST_double rmse = sqrt(rss / (rmse_den > 0 ? rmse_den : 1));
 
     /* End stats timing, start store timing */

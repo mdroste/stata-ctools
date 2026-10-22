@@ -1,0 +1,91 @@
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+      name:  <unnamed>
+       log:  /Users/mike/Documents/GitHub/stata-ctools/temp/performance_audit_20261022/final-winsor_rounding_probe.log
+  log type:  text
+ opened on:  22 Oct 2026, 11:27:56
+
+. capture noisily do `"/Users/mike/Documents/GitHub/stata-ctools/validation/probes/cwinsor_macro_rounding.do"' 
+
+. * Reproduces a pre-existing one-float-ULP difference; not a passing parity test.
+. * Both the pre-audit and optimized ctools builds give the same result.
+. clear all
+
+. set more off
+
+. adopath ++ build
+  [1]              "build"
+  [2]  (BASE)      "/Applications/StataNow/ado/base/"
+  [3]  (SITE)      "/Applications/StataNow/ado/site/"
+  [4]              "."
+  [5]  (PERSONAL)  "/Users/mike/Documents/Stata/ado/personal/"
+  [6]  (PLUS)      "/Users/mike/Library/Application Support/Stata/ado/plus/"
+  [7]  (OLDPLACE)  "~/ado/"
+
+. local candidate : environment CTOOLS_TEST_PLUGIN_DIR
+
+. if `"`candidate'"' != "" adopath ++ `"`candidate'"'
+
+. set obs 200
+Number of observations (_N) was 0, now 200.
+
+. gen float x=0
+
+. replace x=-3 in 1
+(1 real change made)
+
+. replace x=-2.3206636905670166 in 2
+(1 real change made)
+
+. replace x=-2.3202905654907227 in 3
+(1 real change made)
+
+. _pctile x, p(1 99)
+
+. scalar exact = r(r1)
+
+. local through_macro = scalar(exact)
+
+. di "exact cutoff: " %24.17g scalar(exact)
+exact cutoff:      -2.3204771280288696
+
+. di "macro cutoff: " %24.17g `through_macro'
+macro cutoff:      -2.3204771280288701
+
+. cwinsor x, suffix(_c)
+(1 variables winsorized at [1, 99] percentiles)
+
+. winsor2 x, suffix(_ref)
+
+. format x x_c x_ref %24.17g
+
+. list in 1/3
+
+     +-----------------------------------------------------------------+
+     |                   x                   x_c                 x_ref |
+     |-----------------------------------------------------------------|
+  1. |                  -3   -2.3204770088195801   -2.3204772472381592 |
+  2. | -2.3206636905670166   -2.3204770088195801   -2.3204772472381592 |
+  3. | -2.3202905654907227   -2.3202905654907227   -2.3202905654907227 |
+     +-----------------------------------------------------------------+
+
+. assert x_c[1]!=x_ref[1]
+
+. assert abs(x_c[1]-x_ref[1])==2^-22
+
+. di "CWINSOR_MACRO_ROUNDING_REPRODUCED"
+CWINSOR_MACRO_ROUNDING_REPRODUCED
+
+. 
+end of do-file
+
+. local rc = _rc
+
+. di "CTOOLS_LAUNCH=560e46ea1c814ad0ae4193ec0b1bf0fe RC=`rc'"
+CTOOLS_LAUNCH=560e46ea1c814ad0ae4193ec0b1bf0fe RC=0
+
+. log close
+      name:  <unnamed>
+       log:  /Users/mike/Documents/GitHub/stata-ctools/temp/performance_audit_20261022/final-winsor_rounding_probe.log
+  log type:  text
+ closed on:  22 Oct 2026, 11:27:56
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------

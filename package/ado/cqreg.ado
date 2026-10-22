@@ -325,7 +325,7 @@ program define cqreg, eclass
     if `df_r' < 1 local df_r = 1
 
     * Store scalar results (matching qreg)
-    ereturn scalar rank = `K_full'
+    _post_vce_rank
     ereturn scalar sparsity = `sparsity'
     ereturn scalar bwidth = `bandwidth'
     if `denmethod_num' == 2 {

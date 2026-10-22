@@ -68,7 +68,7 @@ static void build_ignore_table(const char *ignore_chars, int len)
 {
     memset(ignore_table, 0, sizeof(ignore_table));
     for (int i = 0; i < len; i++) {
-        ignore_table[(unsigned char)ignore_chars[i]] = 1;
+        if ((unsigned char)ignore_chars[i] < 128) ignore_table[(unsigned char)ignore_chars[i]] = 1;
     }
 }
 
@@ -127,7 +127,21 @@ static int convert_value(const char *src, const cdestring_options *opts,
     if (opts->strip || opts->dpcomma) {
         int n = 0;
         for (int i = 0; i < len && n < CDESTRING_STR_BUF_SIZE; i++) {
-            if (!ignore_table[(unsigned char)src[i]]) buf[n++] = src[i];
+            unsigned char c = (unsigned char)src[i];
+            if (ignore_table[c]) continue;
+            /* Match complete UTF-8 codepoints, never a union of their bytes. */
+            int width = c >= 0xf0 ? 4 : c >= 0xe0 ? 3 : c >= 0xc2 ? 2 : 1;
+            int ignored = 0;
+            if (width > 1 && i + width <= len) {
+                for (int j = 0; j + width <= opts->ignore_len; j++) {
+                    if (!memcmp(src + i, opts->ignore_chars + j, (size_t)width)) {
+                        ignored = 1;
+                        break;
+                    }
+                }
+            }
+            if (ignored) i += width - 1;
+            else buf[n++] = src[i];
         }
         s = buf;
         len = n;

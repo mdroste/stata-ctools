@@ -474,7 +474,11 @@ static ST_int cqreg_vce_cluster_kernel(ST_double *V,
         }
     }
     *num_clusters = G;
-    if (G < 2) goto cleanup;
+    if (G < 2) {
+        for (j = 0; j < K*K; j++) V[j] = NAN;
+        rc = 0;
+        goto cleanup;
+    }
 
     if (cqreg_kernel_hessian_inv(H, X, kval, N, K, kbwidth) != 0) goto cleanup;
     if (cqreg_sandwich_product(V, H, M, K) != 0) {
@@ -883,14 +887,14 @@ ST_int cqreg_compute_vce(cqreg_state *state, const ST_double *X)
             if (state->cluster_ids == NULL) {
                 return -1;
             }
-            if (state->density_method == CQREG_DENSITY_KERNEL) {
+            if (state->density_method == CQREG_DENSITY_KERNEL || state->density_method == CQREG_DENSITY_FITTED) {
                 /* qreg's cluster VCE with the kernel Hessian */
                 rc = cqreg_vce_cluster_kernel(state->V, X, state->residuals,
                                              state->obs_density,
                                              state->cluster_ids,
                                              &state->num_clusters,
                                              state->N, state->K,
-                                             state->quantile, state->kbwidth);
+                                             state->quantile, state->density_method == CQREG_DENSITY_FITTED ? 1.0 : state->kbwidth);
                 break;
             }
             /* Cluster VCE uses scalar sparsity */

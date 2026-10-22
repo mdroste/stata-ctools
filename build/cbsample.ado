@@ -16,30 +16,9 @@ program define cbsample
 
     * Parse syntax to match bsample exactly:
     * bsample [n] [if] [in], [strata(varlist) cluster(varlist) weight(varname)]
-    * Note: Must manually extract weight() because Stata treats it specially
-
-    * First, extract weight() option if present (before syntax parsing)
-    * Use __wgtvar to avoid conflict with Stata's reserved 'weight' local
-    local __wgtvar ""
-    local cmdline : copy local 0
-
-    * Use regex-like extraction for weight(varname)
-    if regexm(`"`cmdline'"', "weight\(([a-zA-Z_][a-zA-Z0-9_]*)\)") {
-        local __wgtvar = regexs(1)
-        local cmdline = regexr(`"`cmdline'"', "weight\([a-zA-Z_][a-zA-Z0-9_]*\)", "")
-    }
-    else if regexm(`"`cmdline'"', "Weight\(([a-zA-Z_][a-zA-Z0-9_]*)\)") {
-        local __wgtvar = regexs(1)
-        local cmdline = regexr(`"`cmdline'"', "Weight\([a-zA-Z_][a-zA-Z0-9_]*\)", "")
-    }
-    else if regexm(`"`cmdline'"', "WEIGHT\(([a-zA-Z_][a-zA-Z0-9_]*)\)") {
-        local __wgtvar = regexs(1)
-        local cmdline = regexr(`"`cmdline'"', "WEIGHT\([a-zA-Z_][a-zA-Z0-9_]*\)", "")
-    }
-
-    * Now parse the rest without the weight option
-    local 0 `"`cmdline'"'
-    syntax [anything(name=n)] [if] [in], [STRata(varlist) CLuster(varlist) Verbose THReads(integer 0)]
+    syntax [anything(name=n)] [if] [in], [STRata(varlist) CLuster(varlist) Weight(varname) Verbose THReads(integer 0)]
+    local __wgtvar `weight'
+    local weight
 
     local __do_timing = ("`verbose'" != "")
 

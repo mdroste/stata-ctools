@@ -16,7 +16,7 @@ static struct {
     uint32_t *tokens;
     int lengths[MAXSTR + 1], next[MAXSTR + 1], head[256];
     char firstbytes[257];
-    int ndelim, limit, trim, fields, verbose, ready;
+    int ndelim, limit, trim, fields, verbose, ready, fillall;
     size_t nobs;
 } state;
 
@@ -91,6 +91,8 @@ ST_retcode csplit_main(const char *args)
             memset(&state, 0, sizeof(state)); return 198;
         }
         if (state.limit > MAXSTR + 1) state.limit = MAXSTR + 1;
+        state.fillall = ctools_parse_bool_option(args, "fillall");
+        int flags = ctools_parse_bool_option(args, "skipif") ? CTOOLS_LOAD_SKIP_IF : CTOOLS_LOAD_CHECK_IF;
         double start = ctools_timer_seconds();
         state.delims = calloc(state.ndelim, sizeof(*state.delims));
         if (!state.delims) { rc = 920; goto fail; }
@@ -109,8 +111,9 @@ ST_retcode csplit_main(const char *args)
             state.next[d] = state.head[first]; state.head[first] = d;
         }
         int var = 1;
-        if ((rc = ctools_stata_rc(ctools_data_load(&state.input, &var, 1, 0, 0, CTOOLS_LOAD_CHECK_IF | CTOOLS_LOAD_NO_SORT_ORDER)))) { goto fail; }
+        if ((rc = ctools_stata_rc(ctools_data_load(&state.input, &var, 1, 0, 0, flags | CTOOLS_LOAD_NO_SORT_ORDER)))) { goto fail; }
         state.nobs = SF_nobs();
+        if (!state.input.data.nobs) { rc = 2000; goto fail; }
         state.tokens = malloc(state.input.data.nobs * sizeof(*state.tokens));
         if (!state.tokens) { rc = 920; goto fail; }
         double loaded = ctools_timer_seconds();
@@ -122,6 +125,12 @@ ST_retcode csplit_main(const char *args)
             int lengths[MAXSTR + 1];
             #pragma omp for schedule(static)
             for (size_t i = 0; i < state.input.data.nobs; i++) {
+                /* Empty input is excluded by native split's marksample, strok.
+                 * Keep its slot so unrestricted writes initialize every row. */
+                if (!state.input.data.vars[0].data.str[i][0]) {
+                    state.tokens[i] = 0;
+                    continue;
+                }
                 int k = tokenize(state.input.data.vars[0].data.str[i], starts, lengths);
                 if (k > maxfields) maxfields = k;
                 char *row = state.input.data.vars[0].data.str[i], *out = row;
@@ -147,6 +156,7 @@ ST_retcode csplit_main(const char *args)
                 for (int j = 0; j < maxfields; j++) if (localwidth[j] > widths[j]) widths[j] = localwidth[j];
             }
         }
+        if (!state.fields) { rc = 2000; goto fail; }
         char sizes[(MAXSTR + 1) * 6 + 1];
         size_t used = 0;
         for (int j = 0; j < state.fields; j++)
@@ -179,6 +189,10 @@ ST_retcode csplit_main(const char *args)
                         value += strlen(value) + (state.ndelim == 1 ? state.lengths[0] : 1);
                         if (state.ndelim == 1 && state.trim == 2) while (*value == ' ') value++;
                     }
+                }
+                if (state.fillall) for (int j = count; j < state.fields; j++) {
+                    int err = SF_sstore(j+1, state.input.obs_map[i], "");
+                    if (err) localrc = err;
                 }
             }
             #pragma omp critical

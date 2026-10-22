@@ -36,9 +36,9 @@ This is finite option coverage, not an exhaustive Cartesian product of options o
 | `cbinscatter` | `mlabels` | New differential cases 355; Numerical bin comparisons are supplemented by rendered SVG properties and independent regression coefficients. [validate_option_contracts.do](../validation/validate_option_contracts.do) |
 | `cbsample` | `strata` | New differential cases 261, 262, 267, 268, 273, 274, 408, 410, 412 |
 | `cbsample` | `cluster` | New differential cases 407, 408, 411, 412 |
+| `cbsample` | `weight` | contract: Weights must be nonnegative integer frequencies with native draw totals; repeated-seed tests check the inclusion distribution. [coverage_helpers.do](../validation/coverage_helpers.do) |
 | `cbsample` | `verbose` | New differential cases 261, 262, 267, 268, 273, 274 |
 | `cbsample` | `threads` | New differential cases 261, 262, 267, 268, 273, 274 |
-| `cbsample` | `weight` | contract: Weights must be nonnegative integer frequencies with native draw totals; repeated-seed tests check the inclusion distribution. [coverage_helpers.do](../validation/coverage_helpers.do) |
 | `cdecode` | `generate` | New differential cases 34, 35, 58, 59, 82, 83 |
 | `cdecode` | `replace` | New differential cases 461 |
 | `cdecode` | `maxlength` | New differential cases 35, 59, 83 |

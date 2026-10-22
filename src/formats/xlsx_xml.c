@@ -245,6 +245,22 @@ bool xlsx_xml_parse(xlsx_xml_parser *p, const char *data, size_t len, bool is_fi
             }
             else if (lt == c)
             {
+                /* Comments and CDATA can contain '<' and '>'; retain them
+                 * as text until the cell-string decoder processes the run. */
+                const char *close = NULL;
+                size_t opening = 0;
+                if (end-c >= 4 && !memcmp(c, "<!--", 4)) {close="-->";opening=4;}
+                else if (end-c >= 9 && !memcmp(c, "<![CDATA[", 9)) {close="]]>";opening=9;}
+                if (close) {
+                    const char *stop=c+opening;
+                    while (end-stop >= 3 && memcmp(stop, close, 3)) stop++;
+                    if (end-stop < 3) {set_error(p, "Unterminated XML text section");return false;}
+                    size_t span=(size_t)(stop+3-c);
+                    if (!ensure_text_space(p, span)) {set_error(p, "Out of memory");return false;}
+                    memcpy(p->text_buf+p->text_len,c,span);p->text_len+=span;
+                    p->total_pos+=span-1;c+=span-1;
+                    break;
+                }
                 /* '<' is the current character */
                 if (!emit_text(p))
                     return true;
@@ -776,4 +792,62 @@ bool xlsx_xml_validate_document(const char *data, size_t len, const char *root)
         }
     }
     return seen_root && depth == 0;
+}
+
+
+/* OOXML ST_Xstring escapes are decoded once: _x005F_x0041_ is the
+ * literal text _x0041_, not A. UTF-16 surrogate pairs become UTF-8. */
+static int xlsx_escape_code(const char *s, size_t n)
+{
+    if (n < 7 || s[0] != '_' || s[1] != 'x' || s[6] != '_') return -1;
+    int code = 0;
+    for (int j = 2; j < 6; j++) {
+        int c = (unsigned char)s[j];
+        int v = c >= '0' && c <= '9' ? c-'0' : c >= 'A' && c <= 'F' ? c-'A'+10 : c >= 'a' && c <= 'f' ? c-'a'+10 : -1;
+        if (v < 0) return -1;
+        code = 16*code + v;
+    }
+    return code;
+}
+size_t xlsx_decode_ooxml(char *s, size_t n)
+{
+    size_t r=0,w=0;
+    while (r<n) {
+        int code=xlsx_escape_code(s+r,n-r);
+        if (code < 0) { s[w++]=s[r++]; continue; }
+        size_t take=7;
+        if (code>=0xd800 && code<=0xdbff) {
+            int lo=xlsx_escape_code(s+r+7,n-r-7);
+            if (lo>=0xdc00 && lo<=0xdfff) { code=0x10000+((code-0xd800)<<10)+lo-0xdc00; take=14; }
+        }
+        if (!code || (code>=0xd800 && code<=0xdfff)) { s[w++]=s[r++]; continue; }
+        r+=take;
+        if(code<0x80) s[w++]=(char)code;
+        else if(code<0x800) {s[w++]=(char)(0xc0|(code>>6));s[w++]=(char)(0x80|(code&63));}
+        else if(code<0x10000) {s[w++]=(char)(0xe0|(code>>12));s[w++]=(char)(0x80|((code>>6)&63));s[w++]=(char)(0x80|(code&63));}
+        else {s[w++]=(char)(0xf0|(code>>18));s[w++]=(char)(0x80|((code>>12)&63));s[w++]=(char)(0x80|((code>>6)&63));s[w++]=(char)(0x80|(code&63));}
+    }
+    s[w]=0; return w;
+}
+/* Input is the contents of one XML text element, not its surrounding tags. */
+size_t xlsx_xml_decode_text(char *s, size_t n)
+{
+    size_t r=0,w=0;
+    while(r<n) {
+        if(n-r>=9 && !memcmp(s+r,"<![CDATA[",9)) {
+            size_t a=r+9,b=a;
+            while(b+3<=n && memcmp(s+b,"]]>",3)) b++;
+            memmove(s+w,s+a,b-a);w+=b-a;r=b+3;
+        } else if(n-r>=4 && !memcmp(s+r,"<!--",4)) {
+            r+=4;while(r+3<=n && memcmp(s+r,"-->",3)) r++;r+=3;
+        } else {
+            size_t a=r;
+            while(r<n && s[r]!='<') r++;
+            if(r==a) {r++;continue;}
+            char saved=s[r];s[r]=0;
+            size_t m=xlsx_xml_decode_entities(s+a,r-a);
+            s[r]=saved;memmove(s+w,s+a,m);w+=m;
+        }
+    }
+    s[w]=0;return w;
 }

@@ -26,7 +26,7 @@ static int cpsmatch_match_psmatch2_ties(const sorted_control_t *controls, size_t
     size_t *list = malloc((n_controls + (size_t)n_neighbors + 1) * sizeof(size_t));
     if (!list) return 920;
     const ssize_t j1 = (ssize_t)n_controls - 1;
-    const double cal = caliper > 0.0 ? caliper : INFINITY;
+    const double cal = caliper != 0.0 ? caliper : INFINITY;
     ssize_t jmatch = 0;
     int forward = 1;
     for (size_t t = 0; t < n_treated; t++) {
@@ -85,6 +85,7 @@ static int cpsmatch_match_psmatch2_ties(const sorted_control_t *controls, size_t
 
 ST_retcode cpsmatch_main(const char *args)
 {
+    int match_failed = 0;
     cpsmatch_options opts;
     double t_start, t_load, t_setup, t_sort, t_match, t_store, t_total;
     ST_retcode rc = 0;
@@ -174,10 +175,33 @@ ST_retcode cpsmatch_main(const char *args)
     for (size_t i = 0; i < n_filtered; i++) {
         /* psmatch2 excludes observations without a score from matching */
         if (SF_is_missing(treatment[i]) || SF_is_missing(pscore[i])) continue;
-        if (treatment[i] != 0.0) n_treated++;
-        else n_controls++;
+        if (treatment[i] == 1.0) n_treated++;
+        else if (treatment[i] == 0.0) n_controls++;
     }
 
+    /* psmatch2 defines the arms by ==1 and ==0, not by truthiness.
+     * Other numeric codes may be retained, but cannot become matches. */
+    if (n_treated == 0) {
+        for (size_t i=0; i<n_filtered && !rc; i++) {
+            ST_int obs=(ST_int)obs_map[i];
+            if (opts.out_nn_idx>0) rc=SF_vstore(opts.out_nn_idx,obs,SV_missval);
+            if (!rc && opts.out_weight_idx>0) rc=SF_vstore(opts.out_weight_idx,obs,0.0);
+            if (!rc && opts.out_match_idx>0) rc=SF_vstore(opts.out_match_idx,obs,SV_missval);
+            if (!rc && opts.out_support_idx>0) rc=SF_vstore(opts.out_support_idx,obs,1.0);
+        }
+        SF_scal_save("_cpsmatch_n_treated",0);
+        SF_scal_save("_cpsmatch_n_controls",(double)n_controls);
+        SF_scal_save("_cpsmatch_n_matched",0);
+        SF_scal_save("_cpsmatch_n_off_support",0);
+        SF_scal_save("_cpsmatch_time_load",t_load);
+        SF_scal_save("_cpsmatch_time_setup",0);
+        SF_scal_save("_cpsmatch_time_sort",0);
+        SF_scal_save("_cpsmatch_time_match",0);
+        SF_scal_save("_cpsmatch_time_store",0);
+        SF_scal_save("_cpsmatch_time_total",ctools_timer_seconds()-t_start);
+        ctools_filtered_data_free(&filtered);
+        return rc;
+    }
     if (n_treated == 0 || n_controls == 0) {
         ctools_filtered_data_free(&filtered);
         SF_error("cpsmatch: need both treated and control observations\n");
@@ -203,11 +227,11 @@ ST_retcode cpsmatch_main(const char *args)
     size_t ti = 0, ci = 0;
     for (size_t i = 0; i < n_filtered; i++) {
         if (SF_is_missing(treatment[i]) || SF_is_missing(pscore[i])) continue;
-        if (treatment[i] != 0.0) {
+        if (treatment[i] == 1.0) {
             treated_idx[ti] = i;  /* Index in filtered array */
             treated_pscore[ti] = pscore[i];
             ti++;
-        } else {
+        } else if (treatment[i] == 0.0) {
             control_idx[ci] = i;  /* Index in filtered array */
             control_pscore[ci] = pscore[i];
             ci++;
@@ -599,7 +623,7 @@ ST_retcode cpsmatch_main(const char *args)
         if (opts.method == MATCH_RADIUS) {
             double radius = (caliper > 0.0) ? caliper : CPSMATCH_DEFAULT_CALIPER;
 
-            #pragma omp parallel reduction(+:n_matched_treated, n_off_support)
+            #pragma omp parallel reduction(+:n_matched_treated, n_off_support) reduction(|:match_failed)
             {
                 int tid = 0;
                 #ifdef _OPENMP
@@ -663,7 +687,7 @@ ST_retcode cpsmatch_main(const char *args)
             }
         } else {
             /* NN and kernel matching with thread-local weights and workspaces */
-            #pragma omp parallel reduction(+:n_matched_treated, n_off_support)
+            #pragma omp parallel reduction(+:n_matched_treated, n_off_support) reduction(|:match_failed)
             {
                 int tid = 0;
                 #ifdef _OPENMP
@@ -714,7 +738,8 @@ ST_retcode cpsmatch_main(const char *args)
                             break;
                     }
 
-                    if (match_rc == 0 && result.n_matches > 0) {
+                    if (match_rc != 0) { match_failed = 1; continue; }
+                    if (result.n_matches > 0) {
                         n_matched_treated++;
                         out_nn[obs_idx] = (double)result.n_matches;
 
@@ -779,6 +804,8 @@ ST_retcode cpsmatch_main(const char *args)
     }
 
     free(treated_order);
+
+    if (match_failed) { rc=920; goto cleanup; }
 
     /* Mark controls on support - for psmatch2 compatibility, controls are always
      * on support for ATT estimation. The common support restriction only applies

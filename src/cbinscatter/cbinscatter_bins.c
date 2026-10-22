@@ -321,7 +321,7 @@ ST_retcode compute_bins_single_group(
     ST_int i, nq;
 
     nq = config->nquantiles;
-    if (N < 2) return CBINSCATTER_ERR_FEW_OBS;
+    if (N < 1) return CBINSCATTER_ERR_FEW_OBS;
 
     if (cutpoints_in) {
         if (!bin_ids) bin_ids = (ST_int *)malloc(N * sizeof(ST_int));

@@ -264,18 +264,21 @@ static ST_retcode xlsx_parse_rels(XLSXContext *ctx, const char *part, char *offi
     snprintf(dir, sizeof(dir), "%.*s", dlen, part);
     snprintf(rels, sizeof(rels), "%s_rels/%s.rels", dir, part + dlen);
     size_t size;
-    void *data = xlsx_zip_extract_file((xlsx_zip_archive *)ctx->zip_archive, rels, &size);
-    if (!data) return 0;
+    xlsx_zip_archive *zip = (xlsx_zip_archive *)ctx->zip_archive;
+    size_t index = xlsx_zip_locate_file(zip, rels);
+    if (index == (size_t)-1) return 0;
+    void *data = xlsx_zip_extract_to_heap(zip, index, &size);
+    if (!data) return 610;
     RelsParseState state = {ctx, dir, office_document};
     xlsx_xml_parser *parser = xlsx_xml_parser_create(rels_callback, &state);
     if (!parser) {
         free(data);
         return 920;
     }
-    xlsx_xml_parse(parser, (const char *)data, size, true);
+    bool ok = xlsx_xml_validate_document(data, size, "Relationships") && xlsx_xml_parse(parser, (const char *)data, size, true);
     xlsx_xml_parser_destroy(parser);
     free(data);
-    return 0;
+    return ok ? 0 : 610;
 }
 
 /* ============================================================================
@@ -397,7 +400,8 @@ ST_retcode xlsx_parse_workbook(XLSXContext *ctx)
         return 920;
     }
 
-    bool success = xlsx_xml_parse(parser, (const char *)data, size, true);
+    bool success = xlsx_xml_validate_document(data, size, "workbook") &&
+                   xlsx_xml_parse(parser, (const char *)data, size, true);
 
     xlsx_xml_parser_destroy(parser);
     free(data);
@@ -535,7 +539,8 @@ static bool shared_strings_callback(const xlsx_xml_event *event, void *user_data
             size_t decoded_len = 0;
             if (state->text_len) {
                 state->text[state->text_len] = '\0';
-                decoded_len = xlsx_xml_decode_entities(state->text, state->text_len);
+                decoded_len = xlsx_xml_decode_text(state->text, state->text_len);
+                decoded_len = xlsx_decode_ooxml(state->text, decoded_len);
                 string = state->text;
             }
 
@@ -588,7 +593,8 @@ static ST_retcode xlsx_parse_shared_strings_buf(XLSXContext *ctx, const void *da
     xlsx_xml_parser *parser = xlsx_xml_parser_create(shared_strings_callback, &state);
     if (!parser) return 920;
 
-    bool success = xlsx_xml_parse(parser, (const char *)data, size, true);
+    bool success = xlsx_xml_validate_document(data, size, "sst") &&
+                   xlsx_xml_parse(parser, (const char *)data, size, true);
     xlsx_xml_parser_destroy(parser);
     free(state.text);
 
@@ -721,7 +727,7 @@ static ST_retcode xlsx_parse_styles_buf(XLSXContext *ctx, const void *data, size
     xlsx_xml_parser *parser = xlsx_xml_parser_create(styles_callback, &state);
     if (!parser) return 920;
 
-    bool ok=xlsx_xml_parse(parser, (const char *)data, size, true);
+    bool ok=xlsx_xml_validate_document(data, size, "styleSheet") && xlsx_xml_parse(parser, (const char *)data, size, true);
     xlsx_xml_parser_destroy(parser);
 
     return state.failed ? 920 : (ok ? 0 : 610);
@@ -1013,6 +1019,7 @@ typedef struct {
     bool implicit_rows;         /* a chunk opened with a row lacking r= */
     bool disorder;              /* a cell named a row owned by another chunk */
     bool failed;                /* out of memory */
+    bool invalid;               /* unresolved shared-string reference */
 } xlsx_scan_local;
 
 static void xlsx_scan_local_init(xlsx_scan_local *loc)
@@ -1037,6 +1044,7 @@ static void xlsx_scan_merge(XLSXContext *ctx, xlsx_scan_local *total,
     total->implicit_rows |= loc->implicit_rows;
     total->disorder |= loc->disorder;
     total->failed |= loc->failed;
+    total->invalid |= loc->invalid;
 }
 
 /* Entity-decoded copy of cell text, owned by the scan arena. */
@@ -1046,7 +1054,7 @@ static const char *xlsx_arena_text(xlsx_scan_local *loc, const char *s, size_t n
     if (!copy) return NULL;
     memcpy(copy, s, n);
     copy[n] = '\0';
-    xlsx_xml_decode_entities(copy, n);
+    xlsx_xml_decode_text(copy, n);
     return copy;
 }
 
@@ -1176,6 +1184,16 @@ static const char *xlsx_scan_cell(const XLSXContext *ctx, xlsx_scan_local *loc,
             /* Character data never contains '<' */
             const char *text_end = (const char *)memchr(p, '<', (size_t)(end - p));
             if (!text_end) return NULL;
+            /* Comments and CDATA split one text node; the first rich-text
+             * run still ends only at its closing element. */
+            while (end-text_end >= 4 &&
+                   (!memcmp(text_end, "<!--", 4) ||
+                    (end-text_end >= 9 && !memcmp(text_end, "<![CDATA[", 9)))) {
+                const char *section_end = xlsx_markup_end(text_end, end);
+                if (!section_end) return NULL;
+                text_end = memchr(section_end+1, '<', (size_t)(end-section_end-1));
+                if (!text_end) return NULL;
+            }
             if (value) {
                 v = p;
                 vlen = (size_t)(text_end - p);
@@ -1205,6 +1223,7 @@ cell_value:
         return p;
     } else if (tn == 1 && t[0] == 's') {
         int index = xlsx_index(v, vlen);
+        if (index < 0 || (uint32_t)index >= ctx->num_shared_strings) {loc->invalid=true;return NULL;}
         if (index >= 0)
             xlsx_store_cell(ctx, loc, row, col, XLSX_CELL_SHARED_STRING, index, NULL, format);
     } else if (tn == 3 && !memcmp(t, "str", 3)) {  /* formula text result */
@@ -1409,6 +1428,7 @@ static ST_retcode xlsx_scan_sheet(XLSXContext *ctx, const char *begin, const cha
     for (int pass = 0; pass < 2; pass++) {
         xlsx_scan_local_init(&total);
         if (!xlsx_scan_parallel(ctx, begin, end, &total)) break;
+        if (total.invalid) return 610;
         if (total.failed) return 909;
         if (total.implicit_rows || total.disorder) {
             xlsx_cm_clear(ctx);
@@ -1429,6 +1449,7 @@ static ST_retcode xlsx_scan_sheet(XLSXContext *ctx, const char *begin, const cha
     xlsx_scan_rows(ctx, &loc, begin, end, true);
     xlsx_scan_local_init(&total);
     xlsx_scan_merge(ctx, &total, &loc);
+    if (loc.invalid) return 610;
     if (loc.failed) return 909;
     ctx->cells_seen = loc.seen;
     ctx->cells_stored = loc.stored;

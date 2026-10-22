@@ -1,0 +1,575 @@
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+      name:  <unnamed>
+       log:  /Users/mike/Documents/GitHub/stata-ctools/temp/performance_audit_20261022/final-csplit.log
+  log type:  text
+ opened on:  22 Oct 2026, 11:27:52
+
+. capture noisily do `"/Users/mike/Documents/GitHub/stata-ctools/validation/validate_csplit.do"' 
+
+. * Reference comparisons for C string tokenization and result metadata.
+. do "validation/validate_setup.do"
+
+. /*******************************************************************************
+>  * validate_setup.do
+>  *
+>  * Core validation framework for ctools test suite
+>  * Minimal output: only summary table and failures are displayed
+>  *
+>  * TOLERANCE POLICY:
+>  *   Generic comparisons use SIGNIFICANT FIGURES, not absolute differences.
+>  *   sigfigs = -log10(|a - b| / max(|a|, |b|))
+>  *   Default threshold is 7 significant figures ($DEFAULT_SIGFIGS).
+>  *   This ensures scale-invariant precision: 1e6 vs 1e6+1 and 0.001 vs 0.001000001
+>  *   both have ~6 sigfigs of agreement.
+>  *   Specialized covariance and pseudo-R2 checks additionally recognize
+>  *   cancellation within 16 machine epsilons of their operation scale.
+>  ******************************************************************************/
+. 
+. version 14.0
+
+. clear all
+
+. set more off
+
+. set trace off
+
+. 
+. * Add build directory with ctools to adopath (use ++ for highest priority)
+. * Works from both project root and validation directory
+. capture adopath ++ "build"
+
+. capture adopath ++ "../build"
+
+. local candidate : environment CTOOLS_TEST_PLUGIN_DIR
+
+. if `"`candidate'"' != "" adopath ++ `"`candidate'"'
+
+. 
+. * Offline, checksum-pinned examples prepared by scripts/fetch_validation_data.py.
+. * The helper deliberately never falls back to a network request.
+. capture program drop ctools_fixture
+
+. program define ctools_fixture
+  1.     syntax name(name=dataset) [, CLEAR]
+  2.     local path "validation/fixtures/data/`dataset'.dta"
+  3.     capture confirm file "`path'"
+  4.     if _rc local path "fixtures/data/`dataset'.dta"
+  5.     confirm file "`path'"
+  6.     use "`path'", `clear'
+  7. end
+
+. 
+. * Global counters
+. global TESTS_PASSED = 0
+
+. global TESTS_FAILED = 0
+
+. global TESTS_TOTAL = 0
+
+. global TESTS_SKIPPED = 0
+
+. 
+. * Default significant figures threshold - do NOT change this value except by human decision.
+. * This ensures numerical precision of ctools implementations.
+. * A value of 7 means results must agree to at least 7 significant figures.
+. global DEFAULT_SIGFIGS = 7
+
+. 
+. * Legacy alias for backwards compatibility
+. global DEFAULT_TOL = 1e-7
+
+. 
+. * Initialize failure tracking (up to 100 failures)
+. global FAILURE_COUNT = 0
+
+. forvalues i = 1/100 {
+  2.     global FAILURE_`i' = ""
+  3. }
+
+. 
+. /*******************************************************************************
+>  * test_pass - Record a passing test (silent)
+>  ******************************************************************************/
+. capture program drop test_pass
+
+. program define test_pass
+  1.     args testname
+  2.     global TESTS_PASSED = $TESTS_PASSED + 1
+  3.     global TESTS_TOTAL = $TESTS_TOTAL + 1
+  4.     * Silent - no output
+. end
+
+. 
+. /*******************************************************************************
+>  * test_fail - Record a failing test with description (silent, stores for later)
+>  ******************************************************************************/
+. capture program drop test_fail
+
+. program define test_fail
+  1.     args testname reason
+  2.     global TESTS_FAILED = $TESTS_FAILED + 1
+  3.     global TESTS_TOTAL = $TESTS_TOTAL + 1
+  4. 
+.     * Store failure details (silently)
+.     global FAILURE_COUNT = $FAILURE_COUNT + 1
+  5.     local idx = $FAILURE_COUNT
+  6.     if `idx' <= 100 {
+  7.         global FAILURE_`idx' = "`testname': `reason'"
+  8.     }
+  9.     * No immediate output - failures shown in summary
+. end
+
+. 
+. capture program drop test_skip
+
+. program define test_skip
+  1.     args testname reason
+  2.     global TESTS_SKIPPED = $TESTS_SKIPPED + 1
+  3.     di as text "SKIP: `testname': `reason'"
+  4. end
+
+. 
+. /*******************************************************************************
+>  * print_failures - Print all recorded failures (called by validate_all.do)
+>  ******************************************************************************/
+. capture program drop print_failures
+
+. program define print_failures
+  1.     if $FAILURE_COUNT == 0 {
+  2.         exit
+  3.     }
+  4. 
+.     local max_to_show = min($FAILURE_COUNT, 100)
+  5.     forvalues i = 1/`max_to_show' {
+  6.         di as error "  ${FAILURE_`i'}"
+  7.     }
+  8. 
+.     if $FAILURE_COUNT > 100 {
+  9.         local more = $FAILURE_COUNT - 100
+ 10.         di as error ""
+ 11.         di as error "  ... and `more' more failures not shown"
+ 12.     }
+ 13. end
+
+. 
+. /*******************************************************************************
+>  * print_section - No-op for backwards compatibility (silent)
+>  ******************************************************************************/
+. capture program drop print_section
+
+. program define print_section
+  1.     args title
+  2.     * Silent - no output
+. end
+
+. 
+. /*******************************************************************************
+>  * print_summary - No-op for backwards compatibility (silent)
+>  * Summary is now printed only by validate_all.do
+>  ******************************************************************************/
+. capture program drop print_summary
+
+. program define print_summary
+  1.     args component
+  2.     di as text ""
+  3.     di as text "{hline 45}"
+  4.     di as text "  `component' validation results"
+  5.     di as text "{hline 45}"
+  6.     di as text "  Passed: " as result "$TESTS_PASSED"
+  7.     di as text "  Failed: " _continue
+  8.     if $TESTS_FAILED == 0 {
+  9.         di as result "$TESTS_FAILED"
+ 10.     }
+ 11.     else {
+ 12.         di as error "$TESTS_FAILED"
+ 13.     }
+ 14.     di as text "  Skipped: " as result "$TESTS_SKIPPED"
+ 15.     di as text "  Total:  " as result "$TESTS_TOTAL"
+ 16.     di as text "{hline 45}"
+ 17.     if $TESTS_FAILED == 0 {
+ 18.         di as result "  ALL TESTS PASSED"
+ 19.     }
+ 20.     else {
+ 21.         di as error "  SOME TESTS FAILED"
+ 22.         print_failures
+ 23.     }
+ 24.     di as text "{hline 45}"
+ 25.     di as text ""
+ 26.     if $TESTS_FAILED > 0 exit 9
+ 27. 
+. end
+
+. 
+. /*******************************************************************************
+>  * sigfigs - Compute number of significant figures of agreement between two values
+>  *
+>  * Formula: -log10(|a - b| / max(|a|, |b|))
+>  *
+>  * Returns:
+>  *   - 15 (double precision limit) if values are identical
+>  *   - 0 if one value is zero and the other is not
+>  *   - Number of matching significant figures otherwise
+>  *
+>  * Examples:
+>  *   1.234567 vs 1.234568 → ~6.1 sig figs (differ in 7th digit)
+>  *   1000000 vs 1000001   → ~6.0 sig figs
+>  *   0.001234 vs 0.001235 → ~3.1 sig figs
+>  ******************************************************************************/
+. capture program drop sigfigs
+
+. program define sigfigs, rclass
+  1.     args val1 val2
+  2. 
+.     * Handle missing values
+.     if missing(`val1') | missing(`val2') {
+  3.         return scalar sigfigs = 0
+  4.         exit
+  5.     }
+  6. 
+.     * If values are identical (including both zero), return max precision
+.     if `val1' == `val2' {
+  7.         return scalar sigfigs = 15
+  8.         exit
+  9.     }
+ 10. 
+.     * If one is zero and other is not, no significant figures agree
+.     if (`val1' == 0) | (`val2' == 0) {
+ 11.         return scalar sigfigs = 0
+ 12.         exit
+ 13.     }
+ 14. 
+.     * Compute significant figures of agreement
+.     local absdiff = abs(`val1' - `val2')
+ 15.     local maxabs = max(abs(`val1'), abs(`val2'))
+ 16.     local reldiff = `absdiff' / `maxabs'
+ 17. 
+.     * Handle edge case where reldiff is 0 (shouldn't happen, but be safe)
+.     if `reldiff' == 0 {
+ 18.         return scalar sigfigs = 15
+ 19.         exit
+ 20.     }
+ 21. 
+.     * sigfigs = -log10(reldiff)
+.     local sf = -log10(`reldiff')
+ 22. 
+.     * Handle missing result from log10 (extreme values)
+.     if missing(`sf') {
+ 23.         return scalar sigfigs = 0
+ 24.         exit
+ 25.     }
+ 26. 
+.     * Clamp to [0, 15] range (double precision limits)
+.     if `sf' < 0 {
+ 27.         local sf = 0
+ 28.     }
+ 29.     if `sf' > 15 {
+ 30.         local sf = 15
+ 31.     }
+ 32. 
+.     return scalar sigfigs = `sf'
+ 33. end
+
+. 
+. /* Cancellation can leave numerical zero with no meaningful relative digits.
+>    Only specialized comparisons supply an operation scale: covariance uses the
+>    product of marginal SEs, and 1-ll/ll_0 uses one. This bound is 16 machine eps,
+>    not the seven-significant-figure acceptance threshold. Generic comparisons
+>    and all values above this roundoff bound retain strict relative precision. */
+. capture program drop sigfigs_cancellation
+
+. program define sigfigs_cancellation, rclass
+  1.     args val1 val2 scale
+  2.     sigfigs `val1' `val2'
+  3.     local sf = r(sigfigs)
+  4.     local bound = 16*c(epsdouble)*`scale'
+  5.     if !missing(`val1', `val2', `bound') & `bound' > 0 {
+  6.         if max(abs(`val1'),abs(`val2')) <= `bound' & abs(`val1'-`val2') <= `bound' {
+  7.             local sf = 15
+  8.         }
+  9.     }
+ 10.     return scalar sigfigs = `sf'
+ 11. end
+
+. 
+. /*******************************************************************************
+>  * assert_scalar_equal - Compare two scalar values by significant figures
+>  *
+>  * Tests whether two values agree to at least N significant figures.
+>  * Default threshold is 7 significant figures ($DEFAULT_SIGFIGS).
+>  ******************************************************************************/
+. capture program drop assert_scalar_equal
+
+. program define assert_scalar_equal
+  1.     args val1 val2 min_sigfigs testname
+  2. 
+.     if "`min_sigfigs'" == "" local min_sigfigs = $DEFAULT_SIGFIGS
+  3. 
+.     * Compute significant figures of agreement
+.     sigfigs `val1' `val2'
+  4.     local sf = r(sigfigs)
+  5. 
+.     if `sf' >= `min_sigfigs' {
+  6.         test_pass "`testname'"
+  7.     }
+  8.     else {
+  9.         local sf_fmt : display %5.1f `sf'
+ 10.         test_fail "`testname'" "expected `val2', got `val1' (sigfigs=`sf_fmt', need `min_sigfigs')"
+ 11.     }
+ 12. end
+
+. 
+. /*******************************************************************************
+>  * assert_matrix_equal - Compare two matrices element-wise by significant figures
+>  *
+>  * Tests whether all matrix elements agree to at least N significant figures.
+>  * Reports the minimum sigfigs found across all element comparisons.
+>  ******************************************************************************/
+. capture program drop assert_matrix_equal
+
+. program define assert_matrix_equal
+  1.     args mat1 mat2 min_sigfigs testname
+  2. 
+.     if "`min_sigfigs'" == "" local min_sigfigs = $DEFAULT_SIGFIGS
+  3. 
+.     local min_sf = 15
+  4.     local min_i = 1
+  5.     local min_j = 1
+  6.     local rows = rowsof(`mat1')
+  7.     local cols = colsof(`mat1')
+  8.     if `rows' != rowsof(`mat2') | `cols' != colsof(`mat2') {
+  9.         test_fail "`testname'" "matrix dimensions differ"
+ 10.         exit
+ 11.     }
+ 12.     forvalues i = 1/`rows' {
+ 13.         forvalues j = 1/`cols' {
+ 14.             local v1 = `mat1'[`i', `j']
+ 15.             local v2 = `mat2'[`i', `j']
+ 16.             sigfigs `v1' `v2'
+ 17.             local sf = r(sigfigs)
+ 18.             if `sf' < `min_sf' {
+ 19.                 local min_sf = `sf'
+ 20.                 local min_i = `i'
+ 21.                 local min_j = `j'
+ 22.             }
+ 23.         }
+ 24.     }
+ 25. 
+.     if `min_sf' >= `min_sigfigs' {
+ 26.         test_pass "`testname'"
+ 27.     }
+ 28.     else {
+ 29.         local sf_fmt : display %5.1f `min_sf'
+ 30.         test_fail "`testname'" "element [`min_i',`min_j'] sigfigs=`sf_fmt', need `min_sigfigs'"
+ 31.     }
+ 32. end
+
+. 
+. /*******************************************************************************
+>  * matrix_min_sigfigs - Return minimum sigfigs across all matrix elements
+>  *
+>  * For use in inline comparisons. Returns r(min_sigfigs), r(min_i), r(min_j).
+>  ******************************************************************************/
+. capture program drop matrix_min_sigfigs
+
+. program define matrix_min_sigfigs, rclass
+  1.     args mat1 mat2
+  2. 
+.     local min_sf = 15
+  3.     local min_i = 1
+  4.     local min_j = 1
+  5.     local rows = rowsof(`mat1')
+  6.     local cols = colsof(`mat1')
+  7.     if `rows' != rowsof(`mat2') | `cols' != colsof(`mat2') {
+  8.         return scalar min_sigfigs = 0
+  9.         return scalar min_i = .
+ 10.         return scalar min_j = .
+ 11.         exit
+ 12.     }
+ 13.     forvalues i = 1/`rows' {
+ 14.         forvalues j = 1/`cols' {
+ 15.             local v1 = `mat1'[`i', `j']
+ 16.             local v2 = `mat2'[`i', `j']
+ 17.             sigfigs `v1' `v2'
+ 18.             local sf = r(sigfigs)
+ 19.             if `sf' < `min_sf' {
+ 20.                 local min_sf = `sf'
+ 21.                 local min_i = `i'
+ 22.                 local min_j = `j'
+ 23.             }
+ 24.         }
+ 25.     }
+ 26. 
+.     return scalar min_sigfigs = `min_sf'
+ 27.     return scalar min_i = `min_i'
+ 28.     return scalar min_j = `min_j'
+ 29. end
+
+. 
+. /*******************************************************************************
+>  * assert_var_equal - Compare two numeric variables by significant figures
+>  *
+>  * Tests whether all observations agree to at least N significant figures.
+>  ******************************************************************************/
+. capture program drop assert_var_equal
+
+. program define assert_var_equal
+  1.     args var1 var2 min_sigfigs testname
+  2. 
+.     if "`min_sigfigs'" == "" local min_sigfigs = $DEFAULT_SIGFIGS
+  3. 
+.     * Generate sigfigs for each observation
+.     tempvar sf
+  4.     quietly {
+  5.         * Handle identical values (including both zero)
+.         gen double `sf' = 15 if `var1' == `var2'
+  6.         * Handle one zero, other non-zero
+.         replace `sf' = 0 if (`sf' == .) & ((`var1' == 0) | (`var2' == 0))
+  7.         * Compute sigfigs for remaining cases
+.         replace `sf' = -log10(abs(`var1' - `var2') / max(abs(`var1'), abs(`var2'))) if `sf' == .
+  8.         * Clamp to valid range
+.         replace `sf' = 0 if `sf' < 0
+  9.         replace `sf' = 15 if `sf' > 15 & !missing(`sf')
+ 10.         replace `sf' = 0 if missing(`sf')
+ 11.     }
+ 12. 
+.     * Count observations that fail the threshold
+.     quietly count if `sf' < `min_sigfigs'
+ 13.     local ndiff = r(N)
+ 14. 
+.     if `ndiff' == 0 {
+ 15.         test_pass "`testname'"
+ 16.     }
+ 17.     else {
+ 18.         quietly summarize `sf'
+ 19.         local min_sf : display %5.1f r(min)
+ 20.         test_fail "`testname'" "`ndiff' values below `min_sigfigs' sigfigs (min=`min_sf')"
+ 21.     }
+ 22. end
+
+. 
+. /*******************************************************************************
+>  * assert_strvar_equal - Compare two string variables
+>  ******************************************************************************/
+. capture program drop assert_strvar_equal
+
+. program define assert_strvar_equal
+  1.     args var1 var2 testname
+  2. 
+.     quietly count if `var1' != `var2'
+  3.     local ndiff = r(N)
+  4. 
+.     if `ndiff' == 0 {
+  5.         test_pass "`testname'"
+  6.     }
+  7.     else {
+  8.         test_fail "`testname'" "`ndiff' values differ"
+  9.     }
+ 10. end
+
+. 
+. /*******************************************************************************
+>  * assert_data_equal - Compare two datasets (with optional sorting)
+>  ******************************************************************************/
+. capture program drop assert_data_equal
+
+. program define assert_data_equal
+  1.     args file1 file2 testname
+  2. 
+.     preserve
+  3. 
+.     * Try direct comparison first
+.     capture quietly {
+  4.         use "`file1'", clear
+  5.         cf _all using "`file2'"
+  6.     }
+  7.     local rc = _rc
+  8. 
+.     if `rc' == 0 {
+  9.         restore
+ 10.         test_pass "`testname'"
+ 11.         exit
+ 12.     }
+ 13. 
+.     * Try sorted comparison
+.     capture quietly {
+ 14.         use "`file1'", clear
+ 15.         ds
+ 16.         local allvars `r(varlist)'
+ 17.         sort `allvars'
+ 18.         tempfile sorted1
+ 19.         save `sorted1', replace
+ 20. 
+.         use "`file2'", clear
+ 21.         sort `allvars'
+ 22.         cf _all using `sorted1'
+ 23.     }
+ 24.     local rc2 = _rc
+ 25.     restore
+ 26. 
+.     if `rc2' == 0 {
+ 27.         test_pass "`testname'"
+ 28.     }
+ 29.     else {
+ 30.         test_fail "`testname'" "datasets differ"
+ 31.     }
+ 32. end
+
+. 
+. /*******************************************************************************
+>  * reset_counters - Reset test counters (for running multiple test suites)
+>  ******************************************************************************/
+. capture program drop reset_counters
+
+. program define reset_counters
+  1.     global TESTS_PASSED = 0
+  2.     global TESTS_FAILED = 0
+  3.     global TESTS_TOTAL = 0
+  4.     global FAILURE_COUNT = 0
+  5.     forvalues i = 1/100 {
+  6.         global FAILURE_`i' = ""
+  7.     }
+  8. end
+
+. 
+. * Load benchmark helper programs (works from project root or validation dir)
+. capture quietly do "validation/benchmark_helpers.do"
+
+. if _rc != 0 {
+.     quietly do "benchmark_helpers.do"
+. }
+
+. 
+end of do-file
+
+. quietly {
+
+. print_summary "csplit"
+
+---------------------------------------------
+  csplit validation results
+---------------------------------------------
+  Passed: 132
+  Failed: 0
+  Skipped: 0
+  Total:  132
+---------------------------------------------
+  ALL TESTS PASSED
+---------------------------------------------
+
+
+. global CTOOLS_COMPONENT_COMPLETE "csplit"
+
+. 
+end of do-file
+
+. local rc = _rc
+
+. di "CTOOLS_LAUNCH=ad435550eabd41b899b9ecaeeef75756 RC=`rc'"
+CTOOLS_LAUNCH=ad435550eabd41b899b9ecaeeef75756 RC=0
+
+. log close
+      name:  <unnamed>
+       log:  /Users/mike/Documents/GitHub/stata-ctools/temp/performance_audit_20261022/final-csplit.log
+  log type:  text
+ closed on:  22 Oct 2026, 11:27:52
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------

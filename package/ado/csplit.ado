@@ -14,9 +14,6 @@ program define csplit, rclass
     if "`generate'" == "" local generate `varlist'
     confirm name `generate'
     if `: word count `generate'' != 1 exit 198
-    marksample touse, strok
-    quietly count if `touse'
-    if r(N) == 0 error 2000
     local trimcode = "`trim'" == ""
     if `"`parse'"' == "" | `"`parse'"' == `"""' {
         if "`trim'" != "" exit 198
@@ -33,6 +30,10 @@ program define csplit, rclass
     local cap = cond(`limit' == 0, 2046, min(`limit',2046))
     local threadopt
     if `threads' local threadopt threads(`threads')
+    local selectopt
+    if `"`if'"' == "" local selectopt skipif
+    local fillall = (`"`if'`in'"' == "")
+    if `fillall' local selectopt `selectopt' fillall
     local timing = "`verbose'" != ""
     * SPI cannot write long strings. Native split retains full strL semantics.
     if "`: type `varlist''" == "strL" {
@@ -53,8 +54,8 @@ program define csplit, rclass
     if _rc != 0 & _rc != 110 exit 601
     _ctools_strw `varlist'
     capture noisily {
-        plugin call ctools_plugin `varlist' if `touse', ///
-            "csplit `threadopt' scan `nparse' `cap' `trimcode' `timing'"
+        plugin call ctools_plugin `varlist' `if' `in', ///
+            "csplit `threadopt' scan `nparse' `cap' `trimcode' `timing' `selectopt'"
         local k : word count `csplit_widths'
         local newvars
         forvalues j = 1/`k' {
@@ -64,7 +65,7 @@ program define csplit, rclass
         local staged
         foreach width of local csplit_widths {
             tempvar part
-            quietly gen str`width' `part' = ""
+            mata: (void) st_addvar("str`width'", "`part'", `fillall')
             local staged `staged' `part'
         }
         plugin call ctools_plugin `staged', "csplit `threadopt' write"

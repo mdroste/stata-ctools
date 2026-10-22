@@ -738,7 +738,7 @@ ST_retcode ivest_compute_2sls(
     ST_int n_absorbed_x,
     ST_int n_absorbed_iv,
     ST_int n_absorbed_iv_all,
-    ST_int dofminus
+    ST_int dofminus, ST_int small
 )
 {
     /* Heap state released at est_cleanup; every error path after the first
@@ -1417,6 +1417,8 @@ ST_retcode ivest_compute_2sls(
         dof_adj_s = (ST_double)(N_eff - dofminus) / (ST_double)df_r_s;
     }
 
+    if (!small) dof_adj_s = 1.0;
+
     if (gmm_hessian_inv != NULL) {
         /*
            Efficient GMM2S / CUE VCE (ivreg2's s_egmm, s_gmmcue): with the
@@ -1445,7 +1447,7 @@ ST_retcode ivest_compute_2sls(
             N, N_eff, K_total, K_iv,
             cluster_ids, num_clusters,
             cluster2_ids, num_clusters2,
-            effective_df_a,
+            effective_df_a, small,
             V
         );
         if (vce_rc) {
@@ -1513,7 +1515,7 @@ ST_retcode ivest_compute_2sls(
             /* the absorbed columns count like absorbed dof, after the
                nested-fixed-effect adjustment */
             ((vce_type == CIVREGHDFE_VCE_CLUSTER && df_a == 0 && nested_adj == 1) ? 1 : df_a) + n_absorbed_x,
-            0, dofminus,
+            0, dofminus, small,
             V
         );
 
@@ -1522,6 +1524,14 @@ ST_retcode ivest_compute_2sls(
             est_rc = vce_rc;
             goto est_cleanup;
         }
+    }
+
+    /* dofminus rescales the nonclustered moment covariance by N/(N-d).
+     * This is independent of small and applies to HC, HAC and GMM alike. */
+    if (s_noniid && !s_cluster && dofminus != 0) {
+        ST_double adjustment = N_eff / (N_eff - dofminus);
+        for (i=0; i<K_total*K_total; i++) V[i] *= adjustment;
+        for (i=0; i<K_iv*K_iv; i++) S_main[i] *= adjustment;
     }
 
     /* Step 10: Compute first-stage F statistics */

@@ -1075,7 +1075,7 @@ ST_retcode cqreg_full_regression(const char *args)
      * - KERNEL: Kernel weights with Powell sandwich
      * (RESIDUAL was rejected above, as in qreg.)
      */
-    if (state->density_method == CQREG_DENSITY_FITTED && state->vce_type == CQREG_VCE_ROBUST) {
+    if (state->density_method == CQREG_DENSITY_FITTED && state->vce_type != CQREG_VCE_IID) {
         /* Fitted method for robust: compute per-observation densities using
          * Stata's approach - difference quotients from QR at τ±h.
          * f_i = (2h) / (Q̂(τ+h|x_i) - Q̂(τ-h|x_i))

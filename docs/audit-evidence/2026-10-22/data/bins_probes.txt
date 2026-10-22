@@ -1,0 +1,78 @@
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+      name:  <unnamed>
+       log:  /tmp/ctools-data-audit/bins_probes.log
+  log type:  text
+ opened on:  22 Oct 2026, 10:42:34
+
+. capture which binscatter
+
+. di "BINS_REFERENCE_AVAILABLE=" (_rc==0)
+BINS_REFERENCE_AVAILABLE=0
+
+. set obs 3
+Number of observations (_N) was 0, now 3.
+
+. gen x=_n
+
+. gen y=x*10
+
+. gen g=cond(_n==3,2,1)
+
+. frame create _ctools_graph_frame
+
+. frame _ctools_graph_frame: set obs 1
+Number of observations (_N) was 0, now 1.
+
+. frame _ctools_graph_frame: gen protected=99
+
+. capture noisily cbinscatter y x, discrete by(g) linetype(none) nograph
+
+. di "CBINS_SINGLETON_RC=" _rc
+CBINS_SINGLETON_RC=0
+
+. capture confirm frame _ctools_graph_frame
+
+. di "USER_FRAME_SURVIVED=" (_rc==0)
+USER_FRAME_SURVIVED=0
+
+. matrix list e(bindata)
+
+e(bindata)[6,5]
+    c1  c2  c3  c4  c5
+r1   1   1   1  10   1
+r2   1   2   2  20   1
+r3   .   .   .   .   .
+r4   .   .   .   .   .
+r5   .   .   .   .   .
+r6   .   .   .   .   .
+
+. di "CBINS_REPORTED_N=" e(N)
+CBINS_REPORTED_N=3
+
+. capture noisily binscatter y x, discrete by(g) linetype(none) savedata("/tmp/ctools-data-audit/native_bins") replace
+command binscatter is unrecognized
+
+. di "BINS_REFERENCE_RC=" _rc
+BINS_REFERENCE_RC=199
+
+. capture noisily cbinscatter y x, nquantiles(2) nograph reportreg
+
+. di "CBINS_REPORTREG_RC=" _rc
+CBINS_REPORTREG_RC=0
+
+. program define twoway
+  1.     di `"CAPTURED_TWOWAY: `macval(0)'"'
+  2. end
+
+. capture noisily cbinscatter y x, nquantiles(2) linetype(connect)
+CAPTURED_TWOWAY: (scatteri  15 1.5  30 3 , mcolor(navy) lcolor(navy) ) , graphregion(fcolor(white)) ytitle(`"y"') xtitle(`"x"') legend(off)  
+
+. di "CBINS_CONNECT_RC=" _rc
+CBINS_CONNECT_RC=0
+
+. log close
+      name:  <unnamed>
+       log:  /tmp/ctools-data-audit/bins_probes.log
+  log type:  text
+ closed on:  22 Oct 2026, 10:42:34
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------

@@ -10,7 +10,7 @@ static ST_plugin mock;
 ST_plugin *_stata_ = &mock;
 static int nr, nv, types[16], calls, fail_at, alive, write_error, load_error;
 static double numbers[16][16];
-static char strings[16][16][2046], widths[16000], nout[64];
+static char strings[16][16][2046], widths[16000], nout[64], nmissing[64];
 static void *owned[1000];
 static void track(void *p) { if(p) {for(int i=0;i<1000;i++)if(!owned[i]){owned[i]=p;alive++;return;}abort();} }
 static void *test_malloc(size_t n) {if(++calls==fail_at)return NULL;void *p=malloc(n);track(p);return p;}
@@ -22,7 +22,7 @@ static ST_boolean isstr(ST_int v){assert(v>=1&&v<=nv);return types[v-1];}
 static ST_boolean isstrl(ST_int v){(void)v;return 0;}
 static ST_retcode putnum(ST_int v,ST_int r,ST_double x){assert(v>=1&&v<=nv&&r>=1&&r<=nr);if(write_error)return 459;numbers[v-1][r-1]=x;return 0;}
 static ST_retcode putstr(ST_int v,ST_int r,char *x){assert(v>=1&&v<=nv&&r>=1&&r<=nr);assert(strlen(x)<=2045);if(write_error)return 459;strcpy(strings[v-1][r-1],x);return 0;}
-static ST_retcode macro_save(char *key,char *value){if(!strcmp(key,"_csplit_widths"))strcpy(widths,value);else if(!strcmp(key,"_crangejoin_nout"))strcpy(nout,value);else abort();return 0;}
+static ST_retcode macro_save(char *key,char *value){if(!strcmp(key,"_csplit_widths"))strcpy(widths,value);else if(!strcmp(key,"_crangejoin_nout"))strcpy(nout,value);else if(!strcmp(key,"_cipolate_nmissing"))strcpy(nmissing,value);else abort();return 0;}
 static ST_retcode macro_get(char *key,char *value,ST_int size){const char *s=!strcmp(key,"_csplit_delim1")?"::":":";assert(size>=(int)strlen(s)+1);strcpy(value,s);return 0;}
 int ctools_get_max_threads(void){return 1;}
 double ctools_timer_seconds(void){return 0;}
@@ -70,7 +70,7 @@ static void reset(void){assert(alive==0);memset(numbers,0,sizeof(numbers));memse
 static int interpolation(void){
  reset();nr=4;nv=3;numbers[0][0]=numbers[0][2]=mock.missval;numbers[0][1]=10;numbers[0][3]=30;
  for(int i=0;i<nr;i++)numbers[1][i]=i;
- int rc=cipolate_main("0 1 0");if(!rc)for(int i=0;i<nr;i++)assert(numbers[2][i]==10*i);
+ int rc=cipolate_main("0 1 0");if(!rc){for(int i=0;i<nr;i++)assert(numbers[2][i]==10*i);assert(!strcmp(nmissing,"0"));}
  assert(alive==0);return rc;
 }
 static int splitting(void){
@@ -108,6 +108,25 @@ int CTOOLS_HARNESS_MAIN(void){
   for(int i=0;i<nr;i++)assert(numbers[2][i]==0);
  }
  load_error=0;
+ /* No-fill destinations must be completely overwritten, including empty
+  * source strings and rows with fewer tokens than the maximum. */
+ reset();nr=3;nv=1;types[0]=1;
+ strcpy(strings[0][0],"a::b");strcpy(strings[0][2],"c");
+ assert(csplit_main("scan 1 2046 1 0 skipif fillall")==0);
+ nv=2;types[0]=types[1]=1;
+ for(int k=0;k<2;k++)for(int i=0;i<3;i++)strcpy(strings[k][i],"dirty");
+ assert(csplit_main("write")==0);
+ assert(!strcmp(strings[0][0],"a")&&!strcmp(strings[1][0],"b"));
+ assert(!strcmp(strings[0][1],"")&&!strcmp(strings[1][1],""));
+ assert(!strcmp(strings[0][2],"c")&&!strcmp(strings[1][2],""));
+ reset();nr=2;nv=1;types[0]=1;
+ assert(csplit_main("scan 1 2046 1 0 skipif fillall")==2000);assert(alive==0);
+ reset();nr=3;nv=3;
+ numbers[0][0]=10;numbers[0][1]=mock.missval;numbers[0][2]=30;
+ numbers[1][0]=0;numbers[1][1]=mock.missval;numbers[1][2]=2;
+ assert(cipolate_main("0 1 0 skipif")==0);
+ assert(numbers[2][0]==10&&numbers[2][1]==mock.missval&&numbers[2][2]==30);
+ assert(!strcmp(nmissing,"1"));assert(alive==0);
  /* Exact missing-key grouping and stable ties, independent of Stata's sorter. */
  reset();nr=4;nv=1;numbers[0][0]=mock.missval;numbers[0][1]=nextafter(mock.missval,INFINITY);numbers[0][2]=mock.missval;numbers[0][3]=2;
  ctools_filtered_data fd={0};assert(ctools_data_load(&fd,NULL,0,0,0,0)==0);int keys[]={0};assert(ctools_order_stable(&fd.data,keys,1)==0);

@@ -382,8 +382,9 @@ ST_retcode cwinsor_main(const char *args)
         return 198;
     }
 
-    /* Load targets and by-variables together, sharing one if/in selection and
-     * observation map. Plugin-local columns are targets, then by-variables. */
+    /* Load sources and by-variables together, sharing one selection/map.
+     * Separate output columns, when present, follow these input columns and
+     * are addressed by store_indices; in-place sources are also the targets. */
     load_indices = (int *)malloc(nload * sizeof(int));
     if (!load_indices) {
         free(store_indices);
@@ -404,8 +405,10 @@ ST_retcode cwinsor_main(const char *args)
     /* The loaded dataset owns all columns, the sort order, and the row map. */
     ctools_filtered_data target_filtered;
     ctools_filtered_data_init(&target_filtered);
+    int load_flags = nby ? 0 : CTOOLS_LOAD_NO_SORT_ORDER;
+    if (ctools_parse_bool_option(args, "skipif")) load_flags |= CTOOLS_LOAD_SKIP_IF;
     stata_retcode load_rc = ctools_data_load(&target_filtered, load_indices,
-                                              nload, 0, 0, nby ? 0 : CTOOLS_LOAD_NO_SORT_ORDER);
+                                              nload, 0, 0, load_flags);
     if (load_rc != STATA_OK) {
         free(store_indices);
         free(load_indices);
@@ -436,6 +439,13 @@ ST_retcode cwinsor_main(const char *args)
     }
     for (size_t v = 0; v < nvars; v++) {
         var_data[v] = target_filtered.data.vars[v].data.dbl;
+    }
+    if (ctools_parse_bool_option(args, "newoutputs")) {
+        /* gen new = source if !missing(source) initializes all missing codes
+         * as ordinary missing. Match it while keeping the inputs read-only. */
+        for (size_t v = 0; v < nvars; v++)
+            for (size_t i = 0; i < nobs; i++)
+                if (var_data[v][i] >= SV_missval) var_data[v][i] = SV_missval;
     }
 
     /* The undo copy is taken in load order, matching obs_map. */

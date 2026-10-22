@@ -217,7 +217,7 @@ ST_retcode ivest_compute_2sls(
     ST_int n_absorbed_x,
     ST_int n_absorbed_iv,
     ST_int n_absorbed_iv_all,
-    ST_int dofminus
+    ST_int dofminus, ST_int small
 );
 
 #endif /* CIVREGHDFE_ESTIMATE_H */

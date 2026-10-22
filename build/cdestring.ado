@@ -299,6 +299,13 @@ program define cdestring
             }
         }
         else {
+            local vlabel : variable label `v'
+            label variable `dv' `"`vlabel'"'
+            local characteristics : char `v'[]
+            foreach ch of local characteristics {
+                local value : char `v'[`ch']
+                char `dv'[`ch'] `"`value'"'
+            }
             if "`replace'" != "" {
                 * Replace the original string variable with the temp var
                 drop `v'

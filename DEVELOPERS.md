@@ -1161,6 +1161,18 @@ then `validation/summarize_readme_benchmarks.py` to validate complete logs and
 retain every trial. The harness uses a monotonic clock, alternates execution
 order, and checks every output cell outside the timed region.
 
+The [October 2026 audit](docs/PERFORMANCE_AUDIT_20261022.md) screens all public
+commands on 40 mixed-type columns, then confirms the selection/output changes
+with separate B-C-C-B processes. `validation/run_performance_audit.py` freezes
+each plugin and wrapper set and rejects incomplete timing or output-check grids.
+`cipolate` and `csplit` pass original selections to the plugin; `skipif` is valid
+only when the wrapper knows there is no predicate. An uninitialized destination
+requires a complete write, including missing interpolation results and every
+absent split field. Restricted outputs must remain initialized. `cwinsor` can
+load original sources and write separate floating-point destinations, retaining
+double working precision and avoiding repeated Stata `recast` copies. Its trim,
+integer-output and in-place undo paths retain their existing contracts.
+
 ### Parallelization
 
 1. **Check data size before parallelizing**:

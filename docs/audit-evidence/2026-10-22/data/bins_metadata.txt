@@ -1,0 +1,48 @@
+-------------------------------------------------------------------------------
+      name:  <unnamed>
+       log:  /tmp/ctools-data-audit/bins_metadata.log
+  log type:  text
+ opened on:  22 Oct 2026, 10:45:25
+
+. set obs 20
+Number of observations (_N) was 0, now 20.
+
+. gen x=_n
+
+. gen y=x^2+mod(_n,3)
+
+. gen g=mod(_n,2)
+
+. gen c=mod(_n,3)
+
+. cbinscatter y x, nq(2) by(g) controls(i.c) nograph
+
+. local recorded_by `"`e(by)'"'
+
+. local recorded_controls `"`e(controls)'"'
+
+. di "RECORDED_BY=`recorded_by'"
+RECORDED_BY=__000005
+
+. di "RECORDED_CONTROLS=`recorded_controls'"
+RECORDED_CONTROLS=__000002 __000003 __000004
+
+. capture confirm variable `recorded_by'
+
+. di "RECORDED_BY_EXISTS=" (_rc==0)
+RECORDED_BY_EXISTS=0
+
+. foreach v of local recorded_controls {
+  2.     capture confirm variable `v'
+  3.     di "CONTROL_`v'_EXISTS=" (_rc==0)
+  4. }
+CONTROL___000002_EXISTS=0
+CONTROL___000003_EXISTS=0
+CONTROL___000004_EXISTS=0
+
+. log close
+      name:  <unnamed>
+       log:  /tmp/ctools-data-audit/bins_metadata.log
+  log type:  text
+ closed on:  22 Oct 2026, 10:45:25
+-------------------------------------------------------------------------------

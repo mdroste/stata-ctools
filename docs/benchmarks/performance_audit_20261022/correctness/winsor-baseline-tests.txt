@@ -1,0 +1,61 @@
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+      name:  <unnamed>
+       log:  /Users/mike/Documents/GitHub/stata-ctools/temp/performance_audit_20261022/winsor-baseline-tests.log
+  log type:  text
+ opened on:  22 Oct 2026, 10:48:15
+
+. capture noisily do `"/Users/mike/Documents/GitHub/stata-ctools/validation/validate_cwinsor.do"' 
+
+. /*******************************************************************************
+>  * validate_cwinsor.do
+>  *
+>  * Comprehensive validation tests for cwinsor vs winsor2 (documented replacement)
+>  * Tests all options: cuts, p/q, trim, by, suffix/prefix, replace
+>  *
+>  * VERIFICATION: All tests compare winsorized/trimmed values between
+>  * winsor2 and cwinsor using significant figures comparison. Direct gstats
+>  * checks below are supplementary checks on fixtures where the references agree.
+>  ******************************************************************************/
+. 
+. * Load setup (works from project root or validation dir)
+. capture do "validation/validate_setup.do"
+
+. if _rc != 0 {
+.     do "validate_setup.do"
+. }
+
+. 
+. quietly {
+Running validation tests for cwinsor...
+(1 variables winsorized at [1, 99] percentiles)
+
+. 
+. print_summary "cwinsor"
+
+---------------------------------------------
+  cwinsor validation results
+---------------------------------------------
+  Passed: 90
+  Failed: 1
+  Skipped: 0
+  Total:  91
+---------------------------------------------
+  SOME TESTS FAILED
+  large dataset (100k obs): x: 1000 values differ beyond tolerance
+---------------------------------------------
+
+r(9);
+
+end of do-file
+
+. local rc = _rc
+
+. di "CTOOLS_LAUNCH=e8f6b4d703aa4d70b6c47d0dac5a4698 RC=`rc'"
+CTOOLS_LAUNCH=e8f6b4d703aa4d70b6c47d0dac5a4698 RC=9
+
+. log close
+      name:  <unnamed>
+       log:  /Users/mike/Documents/GitHub/stata-ctools/temp/performance_audit_20261022/winsor-baseline-tests.log
+  log type:  text
+ closed on:  22 Oct 2026, 10:48:16
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------

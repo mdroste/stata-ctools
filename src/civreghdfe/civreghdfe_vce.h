@@ -70,7 +70,7 @@ ST_retcode ivvce_compute_twoway(
     ST_int num_clusters1,
     const ST_int *cluster2_ids,
     ST_int num_clusters2,
-    ST_int df_a,
+    ST_int df_a, ST_int small,
     ST_double *V
 );
 
@@ -135,7 +135,7 @@ ST_retcode ivvce_compute_full(
     ST_int num_clusters,
     ST_int df_a,
     ST_int nested_adj,
-    ST_int dofminus,
+    ST_int dofminus, ST_int small,
     ST_double *V
 );
 

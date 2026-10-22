@@ -39,8 +39,8 @@ program define cbinscatter, eclass sortpreserve
     * This ensures errors don't leave the dataset in a bad state
     * =========================================================================
 
-    * Clean up any leftover frame from a previous failed run
-    capture frame drop _ctools_graph_frame
+    * Own only the frame created by this invocation
+    tempname graph_frame
 
     * Validate nquantiles early
     if `nquantiles' < 0 {
@@ -82,6 +82,13 @@ program define cbinscatter, eclass sortpreserve
             exit 198
         }
     }
+
+    if "`reportreg'" != "" & `linetype_num' == 0 {
+        di as error "Cannot specify reportreg when no fit line is being created."
+        exit 198
+    }
+    local connect_opt
+    if "`linetype_lower'" == "connect" local connect_opt "connect(l)"
 
     * Validate method option early (Cattaneo et al. "On Binscatter")
     * 0 = classic (default): residualize both Y and X, bin on residualized X
@@ -296,6 +303,65 @@ program define cbinscatter, eclass sortpreserve
     local N_dropped = `nobs' - `N_used'
     local actual_num_groups = __cbinscatter_num_groups
 
+    * reportreg prints the underlying fit regressions, as binscatter does.
+    * Compute these only on request; plotted estimates remain the plugin's.
+    if "`reportreg'" != "" {
+        local ry `depvar'
+        local rx `xvar'
+        local wt
+        if "`weight'" != "" local wt [`weight'=`weight_var']
+        * areg retains singleton FE groups, matching binscatter's residualization.
+        * Encode labels for string/negative FE values; additional FEs are dummies.
+        local report_absorb
+        local report_fe
+        foreach fe of local absorb {
+            tempvar report_group
+            quietly _ctools_group `fe' if `touse', generate(`report_group')
+            if "`report_absorb'" == "" local report_absorb `report_group'
+            else local report_fe `report_fe' i.`report_group'
+        }
+        if `method_num' == 0 & "`controls'`absorb'" != "" {
+            foreach role in ry rx {
+                tempvar resid
+                if "`absorb'" == "" {
+                    quietly regress ``role'' `controls' `wt' if `touse'
+                    quietly predict double `resid' if `touse', residuals
+                }
+                else {
+                    quietly areg ``role'' `controls' `report_fe' `wt' if `touse', absorb(`report_absorb')
+                    quietly predict double `resid' if `touse', residuals
+                }
+                quietly summarize ``role'' `wt' if `touse', meanonly
+                quietly replace `resid' = `resid' + r(mean) if `touse'
+                local `role' `resid'
+            }
+        }
+        local fitvars `rx'
+        if `linetype_num' >= 2 {
+            tempvar quadratic
+            quietly gen double `quadratic' = `rx'^2 if `touse'
+            local fitvars `quadratic' `fitvars'
+        }
+        if `linetype_num' == 3 {
+            tempvar cubic
+            quietly gen double `cubic' = `rx'^3 if `touse'
+            local fitvars `cubic' `fitvars'
+        }
+        forvalues g=1/`actual_num_groups' {
+            local group_if
+            if "`by'" != "" local group_if & `by' == `g'
+            di as text "Fit regression: `depvar' on `xvar' (group `g')"
+            if `method_num' == 1 & "`absorb'" != "" {
+                areg `ry' `fitvars' `controls' `report_fe' `wt' if `touse' `group_if', absorb(`report_absorb')
+            }
+            else {
+                local fitcontrols
+                if `method_num' == 1 local fitcontrols `controls'
+                regress `ry' `fitvars' `fitcontrols' `wt' if `touse' `group_if'
+            }
+        }
+    }
+
     * Display timing if requested
     if "`verbose'" != "" {
         local plugin_overhead = `elapsed' - __cbinscatter_time_total
@@ -428,7 +494,7 @@ program define cbinscatter, eclass sortpreserve
             if "`symbol'" != "" local thissymbol "msymbol(`symbol')"
 
             * Build scatter with mcolor and lcolor (lcolor for connect mode)
-            local scatters `"(scatteri `coords', mcolor(`thismcolor') lcolor(`thislcolor') `thissymbol')"'
+            local scatters `"(scatteri `coords', mcolor(`thismcolor') lcolor(`thislcolor') `thissymbol' `connect_opt')"'
 
             * Add fit line if requested
             if `linetype_num' > 0 {
@@ -500,7 +566,7 @@ program define cbinscatter, eclass sortpreserve
                 local symbol : word `g' of `msymbols'
                 if "`symbol'" != "" local thissymbol "msymbol(`symbol')"
 
-                local scatters `"`scatters' (scatteri `coords', mcolor(`thismcolor') lcolor(`thislcolor') `thissymbol')"'
+                local scatters `"`scatters' (scatteri `coords', mcolor(`thismcolor') lcolor(`thislcolor') `thissymbol' `connect_opt')"'
                 local group_label : label (`by') `g'
                 local legend_labels `"`legend_labels' label(`legend_idx' "`by_orig'==`group_label'")"'
                 local legend_order "`legend_order' `legend_idx'"
@@ -562,9 +628,9 @@ program define cbinscatter, eclass sortpreserve
             * Stata 16+: use frames for speed (no preserve/restore overhead)
             * Use capture to ensure proper cleanup if twoway fails
             local _orig_frame = c(frame)
-            capture frame drop _ctools_graph_frame
-            frame create _ctools_graph_frame
-            frame change _ctools_graph_frame
+            capture frame drop `graph_frame'
+            frame create `graph_frame'
+            frame change `graph_frame'
 
             capture noisily twoway `scatters' `fits', ///
                 graphregion(fcolor(white)) ///
@@ -578,7 +644,7 @@ program define cbinscatter, eclass sortpreserve
 
             * Always clean up frame, even on error
             frame change `_orig_frame'
-            capture frame drop _ctools_graph_frame
+            capture frame drop `graph_frame'
 
             if `_graph_rc' {
                 di as error "cbinscatter: graph generation failed (rc=`_graph_rc')"
@@ -623,13 +689,13 @@ program define cbinscatter, eclass sortpreserve
     ereturn local depvar "`depvar'"
     ereturn local xvar "`xvar'"
     if "`controls'" != "" {
-        ereturn local controls "`controls'"
+        ereturn local controls "`controls_original'"
     }
     if "`absorb'" != "" {
         ereturn local absorb "`absorb'"
     }
     if "`by'" != "" {
-        ereturn local by "`by'"
+        ereturn local by "`by_orig'"
     }
     ereturn local linetype "`linetype'"
     ereturn local cmd "cbinscatter"

@@ -1,0 +1,659 @@
+AUDIT_START,b1,2000000,ipolate,1,0
+cipolate: load 0.1612s; sort 0.0546s; interpolate 0.0170s; store 0.0105s
+AUDIT,b1,2000000,ipolate,1,0,    0.406328,0,2000000,41
+AUDIT_CHECK,b1,2000000,ipolate,1,2000000:41(82833):22319452:2433120648,.
+
+AUDIT_START,b1,2000000,split,1,0
+csplit: load 0.1421s; tokenize/size 0.0382s; 3 output fields
+csplit: write 0.0669s
+variables created: part1 part2 part3
+AUDIT,b1,2000000,split,1,0,    0.405478,0,2000000,43
+AUDIT_CHECK,b1,2000000,split,1,2000000:43(33569):2637914976:904319348,.
+
+AUDIT_START,b1,2000000,winsor_by,1,0
+x1_w:  2000000 values changed
+x2_w:  21260 values changed
+x3_w:  19800 values changed
+extra_d1_w:  2000000 values changed
+extra_d2_w:  2000000 values changed
+extra_d3_w:  2000000 values changed
+extra_d4_w:  2000000 values changed
+
+------------------------------------------------------------
+cwinsor timing breakdown:
+------------------------------------------------------------
+  Stata pre-plugin:
+    Syntax/validation:        0.3664 sec
+    Sort by-variables:        0.0001 sec
+  ----------------------------------------------------------
+    Pre-plugin total:         0.3665 sec
+  ----------------------------------------------------------
+  C plugin phases:
+    Data load:                0.3446 sec
+    Sort by-variables:        0.0705 sec
+    Group detection:          0.0349 sec
+    Winsorization:            0.1200 sec
+    Data store:               0.1134 sec
+  ----------------------------------------------------------
+    C plugin total:           0.6834 sec
+  ----------------------------------------------------------
+  Stata post-plugin:          0.0001 sec
+------------------------------------------------------------
+    Wall clock total:         2.3858 sec
+------------------------------------------------------------
+
+  Dataset: 2000000 obs x 7 vars
+  Groups:      1000
+  Mode:    winsorize at [1, 99] percentiles
+  Threads:        1
+------------------------------------------------------------
+AUDIT,b1,2000000,winsor_by,1,0,    2.428672,0,2000000,47
+AUDIT_CHECK,b1,2000000,winsor_by,1,2000000:47(96221):3444804944:2612406360,.
+
+AUDIT_START,b1,2000000,encode,1,0
+
+-------------------------------------------------------
+cencode timing breakdown:
+-------------------------------------------------------
+  C plugin internals:
+    Argument parsing:         0.0000 sec
+    Read and code strings:    0.0853 sec
+    Merge unique values:      0.0000 sec
+    Sort:                     0.0000 sec
+    Encode:                   0.0107 sec
+    Apply labels:             0.0009 sec
+  -----------------------------------------------------
+    C plugin total:           0.0969 sec
+
+  Stata overhead:
+    Pre-plugin setup:         0.0003 sec
+    Plugin call overhead:     0.0002 sec
+    Post-plugin cleanup:      0.0007 sec
+  -----------------------------------------------------
+    Stata overhead total:     0.0012 sec
+-------------------------------------------------------
+    Wall clock total:         0.0984 sec
+-------------------------------------------------------
+
+  Variables encoded:        1
+
+  Thread diagnostics:
+    OpenMP enabled:                1
+    Max threads available:         1
+-------------------------------------------------------
+AUDIT,b1,2000000,encode,1,0,    0.099722,0,2000000,41
+AUDIT_CHECK,b1,2000000,encode,1,2000000:41(82833):1406247165:231049010,.
+
+AUDIT_START,b1,5000000,ipolate,1,0
+cipolate: load 0.4398s; sort 0.1317s; interpolate 0.0452s; store 0.0251s
+AUDIT,b1,5000000,ipolate,1,0,    1.072183,0,5000000,41
+AUDIT_CHECK,b1,5000000,ipolate,1,5000000:41(82833):2168995193:294492868,.
+
+AUDIT_START,b1,5000000,split,1,0
+csplit: load 0.3875s; tokenize/size 0.1002s; 3 output fields
+csplit: write 0.1660s
+variables created: part1 part2 part3
+AUDIT,b1,5000000,split,1,0,    1.064334,0,5000000,43
+AUDIT_CHECK,b1,5000000,split,1,5000000:43(33569):630598489:4255998906,.
+
+AUDIT_START,b1,5000000,winsor_by,1,0
+x1_w:  5000000 values changed
+x2_w:  51000 values changed
+x3_w:  49350 values changed
+extra_d1_w:  5000000 values changed
+extra_d2_w:  5000000 values changed
+extra_d3_w:  5000000 values changed
+extra_d4_w:  5000000 values changed
+
+------------------------------------------------------------
+cwinsor timing breakdown:
+------------------------------------------------------------
+  Stata pre-plugin:
+    Syntax/validation:        1.1677 sec
+    Sort by-variables:        0.0001 sec
+  ----------------------------------------------------------
+    Pre-plugin total:         1.1678 sec
+  ----------------------------------------------------------
+  C plugin phases:
+    Data load:                0.8682 sec
+    Sort by-variables:        0.2891 sec
+    Group detection:          0.1612 sec
+    Winsorization:            0.3012 sec
+    Data store:               0.3243 sec
+  ----------------------------------------------------------
+    C plugin total:           1.9440 sec
+  ----------------------------------------------------------
+  Stata post-plugin:          0.0001 sec
+------------------------------------------------------------
+    Wall clock total:         6.4111 sec
+------------------------------------------------------------
+
+  Dataset: 5000000 obs x 7 vars
+  Groups:      1000
+  Mode:    winsorize at [1, 99] percentiles
+  Threads:        1
+------------------------------------------------------------
+AUDIT,b1,5000000,winsor_by,1,0,    6.515450,0,5000000,47
+AUDIT_CHECK,b1,5000000,winsor_by,1,5000000:47(96221):2121839945:1517093444,.
+
+AUDIT_START,b1,5000000,encode,1,0
+
+-------------------------------------------------------
+cencode timing breakdown:
+-------------------------------------------------------
+  C plugin internals:
+    Argument parsing:         0.0000 sec
+    Read and code strings:    0.2117 sec
+    Merge unique values:      0.0000 sec
+    Sort:                     0.0000 sec
+    Encode:                   0.0267 sec
+    Apply labels:             0.0006 sec
+  -----------------------------------------------------
+    C plugin total:           0.2390 sec
+
+  Stata overhead:
+    Pre-plugin setup:         0.0002 sec
+    Plugin call overhead:     0.0002 sec
+    Post-plugin cleanup:      0.0002 sec
+  -----------------------------------------------------
+    Stata overhead total:     0.0006 sec
+-------------------------------------------------------
+    Wall clock total:         0.2400 sec
+-------------------------------------------------------
+
+  Variables encoded:        1
+
+  Thread diagnostics:
+    OpenMP enabled:                1
+    Max threads available:         1
+-------------------------------------------------------
+AUDIT,b1,5000000,encode,1,0,    0.240549,0,5000000,41
+AUDIT_CHECK,b1,5000000,encode,1,5000000:41(82833):1821131103:416851858,.
+
+AUDIT_START,b2,2000000,ipolate,1,0
+cipolate: load 0.1626s; sort 0.0558s; interpolate 0.0172s; store 0.0106s
+AUDIT,b2,2000000,ipolate,1,0,    0.410835,0,2000000,41
+AUDIT_CHECK,b2,2000000,ipolate,1,2000000:41(82833):22319452:2433120648,.
+
+AUDIT_START,b2,2000000,split,1,0
+csplit: load 0.1442s; tokenize/size 0.0386s; 3 output fields
+csplit: write 0.0657s
+variables created: part1 part2 part3
+AUDIT,b2,2000000,split,1,0,    0.407574,0,2000000,43
+AUDIT_CHECK,b2,2000000,split,1,2000000:43(33569):2637914976:904319348,.
+
+AUDIT_START,b2,2000000,winsor_by,1,0
+x1_w:  2000000 values changed
+x2_w:  21260 values changed
+x3_w:  19800 values changed
+extra_d1_w:  2000000 values changed
+extra_d2_w:  2000000 values changed
+extra_d3_w:  2000000 values changed
+extra_d4_w:  2000000 values changed
+
+------------------------------------------------------------
+cwinsor timing breakdown:
+------------------------------------------------------------
+  Stata pre-plugin:
+    Syntax/validation:        0.3650 sec
+    Sort by-variables:        0.0001 sec
+  ----------------------------------------------------------
+    Pre-plugin total:         0.3650 sec
+  ----------------------------------------------------------
+  C plugin phases:
+    Data load:                0.3460 sec
+    Sort by-variables:        0.0734 sec
+    Group detection:          0.0381 sec
+    Winsorization:            0.1217 sec
+    Data store:               0.1258 sec
+  ----------------------------------------------------------
+    C plugin total:           0.7050 sec
+  ----------------------------------------------------------
+  Stata post-plugin:          0.0001 sec
+------------------------------------------------------------
+    Wall clock total:         2.4069 sec
+------------------------------------------------------------
+
+  Dataset: 2000000 obs x 7 vars
+  Groups:      1000
+  Mode:    winsorize at [1, 99] percentiles
+  Threads:        1
+------------------------------------------------------------
+AUDIT,b2,2000000,winsor_by,1,0,    2.449835,0,2000000,47
+AUDIT_CHECK,b2,2000000,winsor_by,1,2000000:47(96221):3444804944:2612406360,.
+
+AUDIT_START,b2,2000000,encode,1,0
+
+-------------------------------------------------------
+cencode timing breakdown:
+-------------------------------------------------------
+  C plugin internals:
+    Argument parsing:         0.0000 sec
+    Read and code strings:    0.0916 sec
+    Merge unique values:      0.0000 sec
+    Sort:                     0.0000 sec
+    Encode:                   0.0111 sec
+    Apply labels:             0.0006 sec
+  -----------------------------------------------------
+    C plugin total:           0.1033 sec
+
+  Stata overhead:
+    Pre-plugin setup:         0.0003 sec
+    Plugin call overhead:     0.0001 sec
+    Post-plugin cleanup:      0.0003 sec
+  -----------------------------------------------------
+    Stata overhead total:     0.0008 sec
+-------------------------------------------------------
+    Wall clock total:         0.1044 sec
+-------------------------------------------------------
+
+  Variables encoded:        1
+
+  Thread diagnostics:
+    OpenMP enabled:                1
+    Max threads available:         1
+-------------------------------------------------------
+AUDIT,b2,2000000,encode,1,0,    0.105849,0,2000000,41
+AUDIT_CHECK,b2,2000000,encode,1,2000000:41(82833):1406247165:231049010,.
+
+AUDIT_START,b2,5000000,ipolate,1,0
+cipolate: load 0.4290s; sort 0.1325s; interpolate 0.0449s; store 0.0346s
+AUDIT,b2,5000000,ipolate,1,0,    1.077926,0,5000000,41
+AUDIT_CHECK,b2,5000000,ipolate,1,5000000:41(82833):2168995193:294492868,.
+
+AUDIT_START,b2,5000000,split,1,0
+csplit: load 0.3861s; tokenize/size 0.1009s; 3 output fields
+csplit: write 0.1648s
+variables created: part1 part2 part3
+AUDIT,b2,5000000,split,1,0,    1.057635,0,5000000,43
+AUDIT_CHECK,b2,5000000,split,1,5000000:43(33569):630598489:4255998906,.
+
+AUDIT_START,b2,5000000,winsor_by,1,0
+x1_w:  5000000 values changed
+x2_w:  51000 values changed
+x3_w:  49350 values changed
+extra_d1_w:  5000000 values changed
+extra_d2_w:  5000000 values changed
+extra_d3_w:  5000000 values changed
+extra_d4_w:  5000000 values changed
+
+------------------------------------------------------------
+cwinsor timing breakdown:
+------------------------------------------------------------
+  Stata pre-plugin:
+    Syntax/validation:        0.9270 sec
+    Sort by-variables:        0.0001 sec
+  ----------------------------------------------------------
+    Pre-plugin total:         0.9271 sec
+  ----------------------------------------------------------
+  C plugin phases:
+    Data load:                0.8722 sec
+    Sort by-variables:        0.2911 sec
+    Group detection:          0.1654 sec
+    Winsorization:            0.3042 sec
+    Data store:               0.3486 sec
+  ----------------------------------------------------------
+    C plugin total:           1.9815 sec
+  ----------------------------------------------------------
+  Stata post-plugin:          0.0001 sec
+------------------------------------------------------------
+    Wall clock total:         6.1994 sec
+------------------------------------------------------------
+
+  Dataset: 5000000 obs x 7 vars
+  Groups:      1000
+  Mode:    winsorize at [1, 99] percentiles
+  Threads:        1
+------------------------------------------------------------
+AUDIT,b2,5000000,winsor_by,1,0,    6.304004,0,5000000,47
+AUDIT_CHECK,b2,5000000,winsor_by,1,5000000:47(96221):2121839945:1517093444,.
+
+AUDIT_START,b2,5000000,encode,1,0
+
+-------------------------------------------------------
+cencode timing breakdown:
+-------------------------------------------------------
+  C plugin internals:
+    Argument parsing:         0.0000 sec
+    Read and code strings:    0.2119 sec
+    Merge unique values:      0.0000 sec
+    Sort:                     0.0000 sec
+    Encode:                   0.0265 sec
+    Apply labels:             0.0018 sec
+  -----------------------------------------------------
+    C plugin total:           0.2403 sec
+
+  Stata overhead:
+    Pre-plugin setup:         0.0002 sec
+    Plugin call overhead:     0.0002 sec
+    Post-plugin cleanup:      0.0002 sec
+  -----------------------------------------------------
+    Stata overhead total:     0.0006 sec
+-------------------------------------------------------
+    Wall clock total:         0.2412 sec
+-------------------------------------------------------
+
+  Variables encoded:        1
+
+  Thread diagnostics:
+    OpenMP enabled:                1
+    Max threads available:         1
+-------------------------------------------------------
+AUDIT,b2,5000000,encode,1,0,    0.241806,0,5000000,41
+AUDIT_CHECK,b2,5000000,encode,1,5000000:41(82833):1821131103:416851858,.
+
+AUDIT_START,c1,2000000,ipolate,1,0
+cipolate: load 0.0852s; sort 0.0559s; interpolate 0.0167s; store 0.0112s
+AUDIT,c1,2000000,ipolate,1,0,    0.169553,0,2000000,41
+AUDIT_CHECK,c1,2000000,ipolate,1,2000000:41(82833):22319452:2433120648,.
+
+AUDIT_START,c1,2000000,split,1,0
+csplit: load 0.0654s; tokenize/size 0.0379s; 3 output fields
+csplit: write 0.0667s
+variables created: part1 part2 part3
+AUDIT,c1,2000000,split,1,0,    0.173673,0,2000000,43
+AUDIT_CHECK,c1,2000000,split,1,2000000:43(33569):2637914976:904319348,.
+
+AUDIT_START,c1,2000000,winsor_by,1,0
+
+------------------------------------------------------------
+cwinsor timing breakdown:
+------------------------------------------------------------
+  Stata pre-plugin:
+    Syntax/validation:        0.0274 sec
+    Sort by-variables:        0.0001 sec
+  ----------------------------------------------------------
+    Pre-plugin total:         0.0275 sec
+  ----------------------------------------------------------
+  C plugin phases:
+    Data load:                0.2689 sec
+    Sort by-variables:        0.0720 sec
+    Group detection:          0.0358 sec
+    Winsorization:            0.1221 sec
+    Data store:               0.1310 sec
+  ----------------------------------------------------------
+    C plugin total:           0.6297 sec
+  ----------------------------------------------------------
+  Stata post-plugin:          0.0002 sec
+------------------------------------------------------------
+    Wall clock total:         0.6576 sec
+------------------------------------------------------------
+
+  Dataset: 2000000 obs x 7 vars
+  Groups:      1000
+  Mode:    winsorize at [1, 99] percentiles
+  Threads:        1
+------------------------------------------------------------
+AUDIT,c1,2000000,winsor_by,1,0,    0.698277,0,2000000,47
+AUDIT_CHECK,c1,2000000,winsor_by,1,2000000:47(96221):3444804944:2612406360,.
+
+AUDIT_START,c1,2000000,encode,1,0
+
+-------------------------------------------------------
+cencode timing breakdown:
+-------------------------------------------------------
+  C plugin internals:
+    Argument parsing:         0.0000 sec
+    Read and code strings:    0.0724 sec
+    Merge unique values:      0.0000 sec
+    Sort:                     0.0000 sec
+    Encode:                   0.0101 sec
+    Apply labels:             0.0002 sec
+  -----------------------------------------------------
+    C plugin total:           0.0828 sec
+
+  Stata overhead:
+    Pre-plugin setup:         0.0003 sec
+    Plugin call overhead:     0.0001 sec
+    Post-plugin cleanup:      0.0003 sec
+  -----------------------------------------------------
+    Stata overhead total:     0.0007 sec
+-------------------------------------------------------
+    Wall clock total:         0.0838 sec
+-------------------------------------------------------
+
+  Variables encoded:        1
+
+  Thread diagnostics:
+    OpenMP enabled:                1
+    Max threads available:         1
+-------------------------------------------------------
+AUDIT,c1,2000000,encode,1,0,    0.085025,0,2000000,41
+AUDIT_CHECK,c1,2000000,encode,1,2000000:41(82833):1406247165:231049010,.
+
+AUDIT_START,c1,5000000,ipolate,1,0
+cipolate: load 0.2542s; sort 0.1347s; interpolate 0.0454s; store 0.0372s
+AUDIT,c1,5000000,ipolate,1,0,    0.472056,0,5000000,41
+AUDIT_CHECK,c1,5000000,ipolate,1,5000000:41(82833):2168995193:294492868,.
+
+AUDIT_START,c1,5000000,split,1,0
+csplit: load 0.1967s; tokenize/size 0.1017s; 3 output fields
+csplit: write 0.1702s
+variables created: part1 part2 part3
+AUDIT,c1,5000000,split,1,0,    0.469397,0,5000000,43
+AUDIT_CHECK,c1,5000000,split,1,5000000:43(33569):630598489:4255998906,.
+
+AUDIT_START,c1,5000000,winsor_by,1,0
+
+------------------------------------------------------------
+cwinsor timing breakdown:
+------------------------------------------------------------
+  Stata pre-plugin:
+    Syntax/validation:        0.1765 sec
+    Sort by-variables:        0.0001 sec
+  ----------------------------------------------------------
+    Pre-plugin total:         0.1766 sec
+  ----------------------------------------------------------
+  C plugin phases:
+    Data load:                0.6968 sec
+    Sort by-variables:        0.2782 sec
+    Group detection:          0.1651 sec
+    Winsorization:            0.2985 sec
+    Data store:               0.3322 sec
+  ----------------------------------------------------------
+    C plugin total:           1.7707 sec
+  ----------------------------------------------------------
+  Stata post-plugin:          0.0002 sec
+------------------------------------------------------------
+    Wall clock total:         1.9478 sec
+------------------------------------------------------------
+
+  Dataset: 5000000 obs x 7 vars
+  Groups:      1000
+  Mode:    winsorize at [1, 99] percentiles
+  Threads:        1
+------------------------------------------------------------
+AUDIT,c1,5000000,winsor_by,1,0,    2.043655,0,5000000,47
+AUDIT_CHECK,c1,5000000,winsor_by,1,5000000:47(96221):2121839945:1517093444,.
+
+AUDIT_START,c1,5000000,encode,1,0
+
+-------------------------------------------------------
+cencode timing breakdown:
+-------------------------------------------------------
+  C plugin internals:
+    Argument parsing:         0.0000 sec
+    Read and code strings:    0.2013 sec
+    Merge unique values:      0.0000 sec
+    Sort:                     0.0000 sec
+    Encode:                   0.0245 sec
+    Apply labels:             0.0014 sec
+  -----------------------------------------------------
+    C plugin total:           0.2273 sec
+
+  Stata overhead:
+    Pre-plugin setup:         0.0002 sec
+    Plugin call overhead:     0.0002 sec
+    Post-plugin cleanup:      0.0002 sec
+  -----------------------------------------------------
+    Stata overhead total:     0.0006 sec
+-------------------------------------------------------
+    Wall clock total:         0.2282 sec
+-------------------------------------------------------
+
+  Variables encoded:        1
+
+  Thread diagnostics:
+    OpenMP enabled:                1
+    Max threads available:         1
+-------------------------------------------------------
+AUDIT,c1,5000000,encode,1,0,    0.228712,0,5000000,41
+AUDIT_CHECK,c1,5000000,encode,1,5000000:41(82833):1821131103:416851858,.
+
+AUDIT_START,c2,2000000,ipolate,1,0
+cipolate: load 0.0856s; sort 0.0511s; interpolate 0.0167s; store 0.0111s
+AUDIT,c2,2000000,ipolate,1,0,    0.165072,0,2000000,41
+AUDIT_CHECK,c2,2000000,ipolate,1,2000000:41(82833):22319452:2433120648,.
+
+AUDIT_START,c2,2000000,split,1,0
+csplit: load 0.0690s; tokenize/size 0.0418s; 3 output fields
+csplit: write 0.0778s
+variables created: part1 part2 part3
+AUDIT,c2,2000000,split,1,0,    0.192041,0,2000000,43
+AUDIT_CHECK,c2,2000000,split,1,2000000:43(33569):2637914976:904319348,.
+
+AUDIT_START,c2,2000000,winsor_by,1,0
+
+------------------------------------------------------------
+cwinsor timing breakdown:
+------------------------------------------------------------
+  Stata pre-plugin:
+    Syntax/validation:        0.0270 sec
+    Sort by-variables:        0.0001 sec
+  ----------------------------------------------------------
+    Pre-plugin total:         0.0271 sec
+  ----------------------------------------------------------
+  C plugin phases:
+    Data load:                0.2723 sec
+    Sort by-variables:        0.0742 sec
+    Group detection:          0.0368 sec
+    Winsorization:            0.1209 sec
+    Data store:               0.1221 sec
+  ----------------------------------------------------------
+    C plugin total:           0.6264 sec
+  ----------------------------------------------------------
+  Stata post-plugin:          0.0003 sec
+------------------------------------------------------------
+    Wall clock total:         0.6539 sec
+------------------------------------------------------------
+
+  Dataset: 2000000 obs x 7 vars
+  Groups:      1000
+  Mode:    winsorize at [1, 99] percentiles
+  Threads:        1
+------------------------------------------------------------
+AUDIT,c2,2000000,winsor_by,1,0,    0.695063,0,2000000,47
+AUDIT_CHECK,c2,2000000,winsor_by,1,2000000:47(96221):3444804944:2612406360,.
+
+AUDIT_START,c2,2000000,encode,1,0
+
+-------------------------------------------------------
+cencode timing breakdown:
+-------------------------------------------------------
+  C plugin internals:
+    Argument parsing:         0.0000 sec
+    Read and code strings:    0.0731 sec
+    Merge unique values:      0.0000 sec
+    Sort:                     0.0000 sec
+    Encode:                   0.0103 sec
+    Apply labels:             0.0010 sec
+  -----------------------------------------------------
+    C plugin total:           0.0843 sec
+
+  Stata overhead:
+    Pre-plugin setup:         0.0003 sec
+    Plugin call overhead:     0.0002 sec
+    Post-plugin cleanup:      0.0003 sec
+  -----------------------------------------------------
+    Stata overhead total:     0.0008 sec
+-------------------------------------------------------
+    Wall clock total:         0.0854 sec
+-------------------------------------------------------
+
+  Variables encoded:        1
+
+  Thread diagnostics:
+    OpenMP enabled:                1
+    Max threads available:         1
+-------------------------------------------------------
+AUDIT,c2,2000000,encode,1,0,    0.086715,0,2000000,41
+AUDIT_CHECK,c2,2000000,encode,1,2000000:41(82833):1406247165:231049010,.
+
+AUDIT_START,c2,5000000,ipolate,1,0
+cipolate: load 0.2498s; sort 0.1312s; interpolate 0.0438s; store 0.0296s
+AUDIT,c2,5000000,ipolate,1,0,    0.455130,0,5000000,41
+AUDIT_CHECK,c2,5000000,ipolate,1,5000000:41(82833):2168995193:294492868,.
+
+AUDIT_START,c2,5000000,split,1,0
+csplit: load 0.1970s; tokenize/size 0.1004s; 3 output fields
+csplit: write 0.1665s
+variables created: part1 part2 part3
+AUDIT,c2,5000000,split,1,0,    0.464680,0,5000000,43
+AUDIT_CHECK,c2,5000000,split,1,5000000:43(33569):630598489:4255998906,.
+
+AUDIT_START,c2,5000000,winsor_by,1,0
+
+------------------------------------------------------------
+cwinsor timing breakdown:
+------------------------------------------------------------
+  Stata pre-plugin:
+    Syntax/validation:        0.1841 sec
+    Sort by-variables:        0.0001 sec
+  ----------------------------------------------------------
+    Pre-plugin total:         0.1842 sec
+  ----------------------------------------------------------
+  C plugin phases:
+    Data load:                0.6980 sec
+    Sort by-variables:        0.2844 sec
+    Group detection:          0.1589 sec
+    Winsorization:            0.2996 sec
+    Data store:               0.3441 sec
+  ----------------------------------------------------------
+    C plugin total:           1.7851 sec
+  ----------------------------------------------------------
+  Stata post-plugin:          0.0002 sec
+------------------------------------------------------------
+    Wall clock total:         1.9697 sec
+------------------------------------------------------------
+
+  Dataset: 5000000 obs x 7 vars
+  Groups:      1000
+  Mode:    winsorize at [1, 99] percentiles
+  Threads:        1
+------------------------------------------------------------
+AUDIT,c2,5000000,winsor_by,1,0,    2.066029,0,5000000,47
+AUDIT_CHECK,c2,5000000,winsor_by,1,5000000:47(96221):2121839945:1517093444,.
+
+AUDIT_START,c2,5000000,encode,1,0
+
+-------------------------------------------------------
+cencode timing breakdown:
+-------------------------------------------------------
+  C plugin internals:
+    Argument parsing:         0.0000 sec
+    Read and code strings:    0.2036 sec
+    Merge unique values:      0.0000 sec
+    Sort:                     0.0000 sec
+    Encode:                   0.0247 sec
+    Apply labels:             0.0011 sec
+  -----------------------------------------------------
+    C plugin total:           0.2294 sec
+
+  Stata overhead:
+    Pre-plugin setup:         0.0002 sec
+    Plugin call overhead:     0.0002 sec
+    Post-plugin cleanup:      0.0002 sec
+  -----------------------------------------------------
+    Stata overhead total:     0.0006 sec
+-------------------------------------------------------
+    Wall clock total:         0.2303 sec
+-------------------------------------------------------
+
+  Variables encoded:        1
+
+  Thread diagnostics:
+    OpenMP enabled:                1
+    Max threads available:         1
+-------------------------------------------------------
+AUDIT,c2,5000000,encode,1,0,    0.230842,0,5000000,41
+AUDIT_CHECK,c2,5000000,encode,1,5000000:41(82833):1821131103:416851858,.

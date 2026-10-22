@@ -1,0 +1,141 @@
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+      name:  <unnamed>
+       log:  /tmp/ctools-data-audit/probes.log
+  log type:  text
+ opened on:  22 Oct 2026, 10:36:39
+
+. set obs 4
+Number of observations (_N) was 0, now 4.
+
+. gen x = _n
+
+. capture noisily cwinsor x, by(x) cuts(10 90) suffix(_w)
+(1 variables winsorized at [10, 90] percentiles)
+
+. di "WINSOR_OVERLAP_RC=" _rc
+WINSOR_OVERLAP_RC=0
+
+. list
+
+     +---------+
+     | x   x_w |
+     |---------|
+  1. | 1     1 |
+  2. | 2     2 |
+  3. | 3     3 |
+  4. | 4     4 |
+     +---------+
+
+. clear
+
+. set obs 2
+Number of observations (_N) was 0, now 2.
+
+. gen str10 s = "12©"
+
+. capture noisily destring s, generate(native) ignore("é¢")
+s: contains characters not specified in ignore(); no generate
+
+. di "NATIVE_UNICODE_RC=" _rc
+NATIVE_UNICODE_RC=0
+
+. capture confirm variable native
+
+. di "NATIVE_UNICODE_EXISTS=" (_rc == 0)
+NATIVE_UNICODE_EXISTS=0
+
+. capture noisily cdestring s, generate(fast) ignore("é¢")
+s -> fast: string to byte
+
+. di "FAST_UNICODE_RC=" _rc
+FAST_UNICODE_RC=0
+
+. list
+
+     +------------+
+     |   s   fast |
+     |------------|
+  1. | 12©     12 |
+  2. | 12©     12 |
+     +------------+
+
+. clear
+
+. set obs 2
+Number of observations (_N) was 0, now 2.
+
+. gen str10 x = string(_n)
+
+. gen keep = 1
+
+. label variable x "Original variable label"
+
+. char x[custom] "custom metadata"
+
+. clonevar y = x
+
+. capture noisily destring x, replace
+x: all characters numeric; replaced as byte
+
+. capture noisily cdestring y, replace
+y: string to byte
+
+. di "NATIVE_LABEL=|`: variable label x'| NATIVE_CHAR=|`: char x[custom]'|"
+NATIVE_LABEL=|Original variable label| NATIVE_CHAR=|custom metadata|
+
+. di "FAST_LABEL=|`: variable label y'| FAST_CHAR=|`: char y[custom]'|"
+FAST_LABEL=|| FAST_CHAR=||
+
+. clear
+
+. set obs 5
+Number of observations (_N) was 0, now 5.
+
+. gen double x = _n
+
+. gen double y = x
+
+. replace y=. in 2/4
+(3 real changes made, 3 to missing)
+
+. capture noisily cipolate y x, generate(ya) by(x)
+(3 missing values generated)
+
+. di "IPOLATE_BY_X_RC=" _rc
+IPOLATE_BY_X_RC=0
+
+. clear
+
+. set obs 2
+Number of observations (_N) was 0, now 2.
+
+. gen byte wt = 0
+
+. gen s = "weight(wt)"
+
+. capture noisily cbsample if s == "weight(wt)"
+
+. di "BSAMPLE_STRING_IF_RC=" _rc
+BSAMPLE_STRING_IF_RC=0
+
+. list
+
+     +-----------------+
+     | wt            s |
+     |-----------------|
+  1. |  0   weight(wt) |
+  2. |  0   weight(wt) |
+     +-----------------+
+
+. capture noisily cbsample, weight( wt )
+option weight() not allowed
+
+. di "BSAMPLE_WEIGHT_SPACES_RC=" _rc
+BSAMPLE_WEIGHT_SPACES_RC=198
+
+. log close
+      name:  <unnamed>
+       log:  /tmp/ctools-data-audit/probes.log
+  log type:  text
+ closed on:  22 Oct 2026, 10:36:39
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------

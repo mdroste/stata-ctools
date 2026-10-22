@@ -1,0 +1,32 @@
+[
+  {
+    "suite": "cipolate",
+    "error": null,
+    "passed": 31,
+    "failed": 0,
+    "skipped": 0
+  },
+  {
+    "suite": "csplit",
+    "error": null,
+    "passed": 132,
+    "failed": 0,
+    "skipped": 0
+  },
+  {
+    "suite": "cwinsor",
+    "error": "Stata failed or did not finish this driver: ['9']",
+    "passed": 90,
+    "failed": 1,
+    "skipped": 0
+  },
+  {
+    "suite": "performance_paths",
+    "error": null,
+    "variants": 60
+  },
+  {
+    "suite": "winsor_rounding_probe",
+    "error": null
+  }
+]

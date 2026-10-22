@@ -1,6 +1,7 @@
 /* Linear interpolation: one stable index sort, then scans within each group. */
 #include <stdlib.h>
 #include <math.h>
+#include <stdio.h>
 #include "cipolate_impl.h"
 #include "ctools_types.h"
 #include "ctools_order.h"
@@ -30,11 +31,13 @@ ST_retcode cipolate_main(const char *args)
     int *keys = malloc((nby + 1) * sizeof(*keys));
     size_t *groups = NULL;
     double *out = NULL;
+    size_t nmissing = (size_t)SF_nobs();
     if (!vars || !keys) { rc = 920; goto done; }
     for (int k = 0; k < nby + 2; k++) vars[k] = k + 1;
     for (int k = 0; k < nby; k++) keys[k] = k + 2;
     keys[nby] = 1;
-    if ((rc = ctools_stata_rc(ctools_data_load(&fd, vars, nby + 2, 0, 0, CTOOLS_LOAD_CHECK_IF)))) { goto done; }
+    int flags = ctools_parse_bool_option(args, "skipif") ? CTOOLS_LOAD_SKIP_IF : CTOOLS_LOAD_CHECK_IF;
+    if ((rc = ctools_stata_rc(ctools_data_load(&fd, vars, nby + 2, 0, 0, flags)))) { goto done; }
     size_t n = fd.data.nobs;
     if (!n) goto done;
     if (fd.data.vars[0].type != STATA_TYPE_DOUBLE || fd.data.vars[1].type != STATA_TYPE_DOUBLE) { rc = 109; goto done; }
@@ -103,10 +106,17 @@ ST_retcode cipolate_main(const char *args)
         }
     }
     double tcompute = ctools_timer_seconds();
+    /* Include excluded observations: their initialized destination stays missing. */
+    for (size_t i = 0; i < n; i++) if (out[i] < SV_missval) nmissing--;
     if ((rc = ctools_stata_rc(ctools_store_filtered(out, n, nby + 3, fd.obs_map)))) { goto done; }
     ctools_verbose("cipolate", verbose, "load %.4fs; sort %.4fs; interpolate %.4fs; store %.4fs",
         tload-t0, tsort-tload, tcompute-tsort, ctools_timer_seconds()-tcompute);
 done:
+    if (!rc) {
+        char count[32];
+        snprintf(count, sizeof(count), "%zu", nmissing);
+        rc = SF_macro_save("_cipolate_nmissing", count);
+    }
     free(vars); free(keys); free(groups); free(out);
     ctools_filtered_data_free(&fd);
     return rc;

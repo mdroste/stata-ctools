@@ -97,7 +97,7 @@ ST_retcode ivvce_compute_twoway(
     ST_int num_clusters1,
     const ST_int *cluster2_ids,
     ST_int num_clusters2,
-    ST_int df_a,
+    ST_int df_a, ST_int small,
     ST_double *V
 )
 {
@@ -125,6 +125,8 @@ ST_retcode ivvce_compute_twoway(
     if (df_r <= 0) df_r = 1;
     ST_double N_clust = (ST_double)((num_clusters1 < num_clusters2) ? num_clusters1 : num_clusters2);
     ST_double dof_adj = ((ST_double)(N_eff - 1) / (ST_double)df_r) * (N_clust / (N_clust - 1.0));
+
+    if (!small) dof_adj = 1.0;
 
     ctools_vce_data d;
     d.X_eff = PzX;
@@ -194,7 +196,7 @@ ST_retcode ivvce_compute_full(
     ST_int num_clusters,
     ST_int df_a,
     ST_int nested_adj,
-    ST_int dofminus,
+    ST_int dofminus, ST_int small,
     ST_double *V
 )
 {
@@ -222,7 +224,7 @@ ST_retcode ivvce_compute_full(
 
     if (vce_type == CIVREGHDFE_VCE_UNADJUSTED) {
         /* Unadjusted: V = sigma^2 * XkX_inv */
-        ST_double sigma2 = rss / df_r;
+        ST_double sigma2 = rss / (small ? df_r : (N_eff - dofminus));
         for (i = 0; i < K_total * K_total; i++) {
             V[i] = sigma2 * XkX_inv[i];
         }
@@ -252,6 +254,7 @@ ST_retcode ivvce_compute_full(
         ST_double G = (ST_double)num_clusters;
         ST_double dof_adj = ((ST_double)(N_eff - 1) / denom) * (G / (G - 1.0));
 
+        if (!small) dof_adj = 1.0;
         ctools_vce_data d;
         d.X_eff = PzX;
         d.D = XkX_inv;
@@ -269,6 +272,7 @@ ST_retcode ivvce_compute_full(
         /* Standard HC robust — delegate to shared VCE engine */
         ST_double dof_adj = (ST_double)(N_eff - dofminus) / (ST_double)df_r;
 
+        if (!small) dof_adj = 1.0;
         ctools_vce_data d;
         d.X_eff = PzX;
         d.D = XkX_inv;

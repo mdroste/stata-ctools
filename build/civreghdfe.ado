@@ -684,6 +684,8 @@ program define civreghdfe, eclass
     scalar __civreghdfe_tdelta = `ts_delta'
 
     * DOF adjustment options
+    scalar __civreghdfe_small = ("`small'" != "" | "`absorb'" != "")
+    scalar __civreghdfe_has_cons = ("`noconstant'" == "")
     scalar __civreghdfe_dofminus = `dofminus'
     scalar __civreghdfe_sdofminus = `sdofminus'
     scalar __civreghdfe_nopartialsmall = ("`nopartialsmall'" != "")
@@ -1019,11 +1021,31 @@ program define civreghdfe, eclass
 
     * Compute Wald F-statistic BEFORE posting (b' * V^{-1} * b / K)
     tempname Vinv b_col wald_temp wald_stat
-    matrix `Vinv' = syminv(`V_temp')
-    matrix `b_col' = `b_temp''
-    matrix `wald_temp' = `Vinv' * `b_col'
-    matrix `wald_stat' = `b_temp' * `wald_temp'
-    local F_wald = `wald_stat'[1,1] / `K'
+    tempname slope_b slope_V omitted
+    _ms_omit_info `b_temp'
+    matrix `omitted' = r(omit)
+    local slope_indices
+    local names : colnames `b_temp'
+    local j = 0
+    foreach name of local names {
+        local ++j
+        if "`name'" != "_cons" & !`omitted'[1,`j'] local slope_indices `slope_indices' `j'
+    }
+    local model_df = 0
+    local F_wald = .
+    matrix `wald_stat' = J(1,1,.)
+    if "`slope_indices'" != "" {
+        mata: st_matrix(st_local("slope_b"), st_matrix(st_local("b_temp"))[., strtoreal(tokens(st_local("slope_indices")))])
+        mata: st_matrix(st_local("slope_V"), st_matrix(st_local("V_temp"))[strtoreal(tokens(st_local("slope_indices"))), strtoreal(tokens(st_local("slope_indices")))])
+        * ivreg2 divides the omnibus Wald by the active slope count,
+        * including when clustering makes the covariance rank deficient.
+        local model_df : word count `slope_indices'
+        matrix `Vinv' = syminv(`slope_V')
+        matrix `b_col' = `slope_b''
+        matrix `wald_temp' = `Vinv' * `b_col'
+        matrix `wald_stat' = `slope_b' * `wald_temp'
+        local F_wald = `wald_stat'[1,1] / `model_df'
+    }
 
     * Post results
     ereturn clear
@@ -1032,7 +1054,10 @@ program define civreghdfe, eclass
 
     * Store scalars
     ereturn scalar N = `N_used'
-    ereturn scalar df_r = `df_r'
+    if "`small'`absorb'" != "" {
+        ereturn scalar df_r = `df_r'
+        ereturn local small "small"
+    }
     * Report df_a_for_vce when clustering (matches ivreghdfe behavior)
     * When FE is nested in cluster, df_a_for_vce = 0
     if `vce_type' == 2 | `vce_type' == 3 | `vce_type' == 4 {
@@ -1139,10 +1164,17 @@ program define civreghdfe, eclass
     ereturn scalar mss = `tss' - `rss'
     ereturn scalar r2 = `r2'
     ereturn scalar rmse = `rmse'
+    if "`small'`absorb'" == "" {
+        if `vce_type' < 2 local F_wald = `F_wald' * `df_r' / (`N_used' - `dofminus')
+        else local F_wald = `F_wald' * `df_r'/(`df_r'+1) * ///
+            (`N_used'-`K'-`sdofminus'-cond("`nopartialsmall'"=="",`n_partial',0))/(`N_used'-1)
+    }
     ereturn scalar F = `F_wald'
+    ereturn scalar Fdf1 = `model_df'
+    ereturn scalar Fdf2 = `df_r'
 
     * Model degrees of freedom (use K from plugin, which reflects collinearity removal)
-    ereturn scalar df_m = `K'
+    ereturn scalar df_m = `model_df'
 
     * Number of absorbed fixed effect dimensions (matches reghdfe/ivreghdfe)
     ereturn scalar N_hdfe = `G'
@@ -1168,14 +1200,14 @@ program define civreghdfe, eclass
         local sdofminus = max(1, `df_a_for_vce') + `sdofminus' + `n_partial' + `dofminus'
     }
     else {
-        local sdofminus = 0
+        local sdofminus = `sdofminus' + `dofminus' + cond("`nopartialsmall'" == "", `n_partial', 0)
     }
     * Use K (plugin's non-collinear count) not K_total, so vars absorbed by FE
     * don't inflate the denominator (matches df_r = N - K - df_a from plugin)
     local adj_denom = `N_used' - `K' - `sdofminus'
     if `adj_denom' > 0 {
         * With absorb, constant is partialled out, so use N not N-1
-        local r2_a = 1 - (1 - `r2') * `N_used' / `adj_denom'
+        local r2_a = 1 - (1 - `r2') * (`N_used' - (`G' == 0 & "`noconstant'" == "")) / `adj_denom'
     }
     else {
         local r2_a = .
@@ -1321,16 +1353,16 @@ program define civreghdfe, eclass
         * F statistic (Wald test). Its numerator df is K, the regressors left
         * after collinearity removal, which is also the divisor of F_wald.
         * For two-way clustering, use min(N_clust1, N_clust2) - 1 for degrees of freedom
-        local prob_F = Ftail(`K', `df_r', `F_wald')
+        local prob_F = Ftail(`model_df', `df_r', `F_wald')
         if `vce_type' == 2 {
-            di as text _col(55) "F(" %3.0f `K' "," %6.0f (`N_clust' - 1) ") =" as result %9.2f `F_wald'
+            di as text _col(55) "F(" %3.0f `model_df' "," %6.0f (`N_clust' - 1) ") =" as result %9.2f `F_wald'
         }
         else if `vce_type' == 3 {
             local min_clust = min(`N_clust', `N_clust2')
-            di as text _col(55) "F(" %3.0f `K' "," %6.0f (`min_clust' - 1) ") =" as result %9.2f `F_wald'
+            di as text _col(55) "F(" %3.0f `model_df' "," %6.0f (`min_clust' - 1) ") =" as result %9.2f `F_wald'
         }
         else {
-            di as text _col(55) "F(" %3.0f `K' "," %6.0f `df_r' ") =" as result %9.2f `F_wald'
+            di as text _col(55) "F(" %3.0f `model_df' "," %6.0f `df_r' ") =" as result %9.2f `F_wald'
         }
         di as text _col(55) "Prob > F      =" as result %9.4f `prob_F'
 

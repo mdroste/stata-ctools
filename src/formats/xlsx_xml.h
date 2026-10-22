@@ -106,6 +106,8 @@ const char *xlsx_xml_get_attr(const xlsx_xml_event *event, const char *name);
  * Handles: &amp; &lt; &gt; &quot; &apos; and numeric refs &#N; &#xN;
  * Returns new length */
 size_t xlsx_xml_decode_entities(char *str, size_t len);
+size_t xlsx_xml_decode_text(char *str, size_t len);
+size_t xlsx_decode_ooxml(char *str, size_t len);
 
 /* Parse a cell reference like "A1" into column (0-based) and row (1-based)
  * Returns true on success */

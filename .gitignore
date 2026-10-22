@@ -31,3 +31,5 @@ __pycache__/
 !docs/benchmarks/hdfe_datasets_*.csv
 
 !docs/benchmarks/readme_profile/timings.csv
+
+!docs/benchmarks/performance_audit_20261022/**/*.csv

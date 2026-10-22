@@ -57,6 +57,10 @@ static void check(const char *attrs, const char *body, int type,
         char *input=malloc(length ? (size_t)length : 1);
         assert(input);memcpy(input,xml,(size_t)length);
         XLSXContext x; xlsx_context_init(&x);
+        if (type==XLSX_CELL_SHARED_STRING) {
+            const char *sst="<sst><si><t>zero</t></si><si><t>one</t></si><si><t>two</t></si><si><t>three</t></si></sst>";
+            assert(xlsx_parse_shared_strings_buf(&x,sst,strlen(sst))==0);
+        }
         assert(xlsx_cm_reserve(&x,1,1));
         xlsx_scan_local loc; xlsx_scan_local_init(&loc);
         loc.arena=&x.parse_arena;loc.grow=&x;
@@ -65,7 +69,7 @@ static void check(const char *attrs, const char *body, int type,
         int prev=-1;
         const char *after=gt ? xlsx_scan_cell(&x,&loc,input+2,gt,end,1,&prev,false) : NULL;
         if (length==n) {
-            assert(after==end && !loc.failed);
+            assert(after==end && !loc.failed && !loc.invalid);
             assert(x.cm_types[0][0]==type);
             if (text) {
                 const char *parsed=NULL;memcpy(&parsed,&x.cm_numeric[0][0],sizeof(parsed));

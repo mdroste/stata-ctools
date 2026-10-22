@@ -226,7 +226,7 @@ int cpsmatch_find_nearest_neighbors_fast(double pscore_treated,
 
         if (take_left)
         {
-            if (caliper > 0.0 && dist_left > caliper)
+            if (caliper != 0.0 && dist_left > caliper)
             {
                 left = -1; /* No more valid on left */
             }
@@ -240,7 +240,7 @@ int cpsmatch_find_nearest_neighbors_fast(double pscore_treated,
         }
         else
         {
-            if (caliper > 0.0 && dist_right > caliper)
+            if (caliper != 0.0 && dist_right > caliper)
             {
                 right = n_controls; /* No more valid on right */
             }
@@ -367,7 +367,7 @@ int cpsmatch_find_kernel_matches_fast(double pscore_treated,
     {
         search_radius = 6.0 * bandwidth; /* Normal has infinite support, use 6 SD for precision */
     }
-    if (caliper > 0.0 && caliper < search_radius)
+    if (caliper != 0.0 && caliper < search_radius)
     {
         search_radius = caliper;
     }
@@ -398,7 +398,7 @@ int cpsmatch_find_kernel_matches_fast(double pscore_treated,
     for (size_t i = start; i < end; i++)
     {
         double dist = fabs(pscore_treated - sorted_controls[i].pscore);
-        if (caliper > 0.0 && dist > caliper)
+        if (caliper != 0.0 && dist > caliper)
             continue;
 
         double u = dist / bandwidth;

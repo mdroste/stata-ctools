@@ -1505,6 +1505,85 @@
       "fixtures": [],
       "dependencies": [],
       "reason": "Executed by the Windows MSYS2 build job; requires Windows file APIs"
+    },
+    {
+      "name": "performance_audit",
+      "path": "validation/benchmark_audit.do",
+      "runner": "manual",
+      "category": "performance",
+      "marker": "AUDIT_COMPLETE",
+      "fixtures": [],
+      "dependencies": [],
+      "reason": "Opt-in million-row campaign using run_performance_audit.py and frozen builds."
+    },
+    {
+      "name": "performance_paths",
+      "path": "validation/validate_performance_paths.do",
+      "runner": "do",
+      "category": "correctness",
+      "marker": "PERFORMANCE_PATHS_COMPLETE",
+      "fixtures": [],
+      "dependencies": [
+        "winsor2"
+      ]
+    },
+    {
+      "name": "performance_evidence",
+      "path": "validation/test_performance_audit.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": []
+    },
+    {
+      "name": "oct22_native",
+      "path": "validation/test_oct22_native.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": []
+    },
+    {
+      "name": "oct22_stata",
+      "path": "validation/test_oct22_stata.py",
+      "runner": "python",
+      "category": "correctness",
+      "marker": "OCT22_REGRESSIONS_COMPLETE",
+      "fixtures": [],
+      "dependencies": [
+        "licensed-stata"
+      ],
+      "command": [
+        "python3",
+        "validation/test_oct22_stata.py"
+      ],
+      "log": "temp/registry_logs/oct22_stata.log"
+    },
+    {
+      "name": "oct22_stata_fixture",
+      "path": "validation/validate_oct22.do",
+      "runner": "helper",
+      "category": "helper",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [],
+      "reason": "Executed by test_oct22_stata.py with generated XLSX/SHP fixtures."
+    },
+    {
+      "name": "oct22_reference",
+      "path": "validation/validate_oct22_reference.do",
+      "runner": "do",
+      "category": "correctness",
+      "marker": "OCT22_REFERENCE_COMPLETE",
+      "fixtures": [],
+      "dependencies": [
+        "ivreg2",
+        "ranktest",
+        "binscatter",
+        "psmatch2"
+      ]
     }
   ]
 }

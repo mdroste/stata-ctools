@@ -69,7 +69,8 @@ program define cpplmhdfe_p
         exit
     }
     local y `e(depvar)'
-    confirm variable `y'
+    quietly tsrevar `y'
+    local y `r(varlist)'
     if inlist("`opt'", "response", "scores") ///
         quietly replace `varlist' = `y' - `varlist' `if' `in'
     else if "`opt'" == "pearson" ///

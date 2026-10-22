@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include "ctools_file.h"
 
 #include "stplugin.h"
 #include "ctools_types.h"
@@ -231,7 +232,7 @@ int ctools_str_hash_lookup(ctools_str_hash_table *ht, const char *key, int *valu
 int ctools_label_write_file(const char **strings, const int *codes, size_t n_labels,
                             const char *filepath)
 {
-    FILE *fp = fopen(filepath, "wb");
+    FILE *fp = ctools_fopen(filepath, "wb");
     if (!fp)
         return -1;
     fprintf(fp, "CTOOLS_LABELS_1\n");

@@ -455,8 +455,9 @@ static ST_retcode xlsx_edit_file(XLSXExportContext *ctx,
   mz_zip_archive in = {0}, out = {0};
   ST_retcode rc = 610;
   char *book = NULL, *rels = NULL, *types = NULL, *styles = NULL, *sheet = NULL,
-       *fresh = NULL, *merged = NULL;
+       *fresh = NULL, *merged = NULL, *newshared = NULL;
   char *newbook = NULL, *newrels = NULL, *newtypes = NULL, *newstyles = NULL;
+  char shared_path[MAX_PATH_LEN] = "xl/sharedStrings.xml";
   char target[MAX_PATH_LEN] = {0}, chain[MAX_PATH_LEN] = {0}, rid[256] = {0};
   if (!mz_zip_reader_init_file(&in, ctx->input_filename, 0))
     goto done;
@@ -533,7 +534,7 @@ static ST_retcode xlsx_edit_file(XLSXExportContext *ctx,
     do {
       snprintf(rid, sizeof(rid), "ctoolsSheet%u", relation++);
     } while (strstr(rels, rid));
-    char escaped[MAX_SHEET_NAME * 6 + 1], child[2048];
+    char escaped[MAX_SHEET_NAME * 7 + 1], child[2048];
     xlsx_escape_xml(ctx->sheet_name, escaped, sizeof(escaped));
     snprintf(
         child, sizeof(child),
@@ -566,6 +567,58 @@ static ST_retcode xlsx_edit_file(XLSXExportContext *ctx,
     if (!newbook || !newrels || !newtypes) {
       rc = 920;
       goto done;
+    }
+  }
+
+  if (ctx->num_shared_strings) {
+    const char *rp = newrels ? newrels : rels;
+    const char *rend = rp+strlen(rp);
+    int found=0;
+    while (xedit_find(rp,rend,"Relationship",&node)) {
+      char *type=xedit_attr(&node,"Type"), *target_s=xedit_attr(&node,"Target");
+      if(type && target_s && strstr(type,"/sharedStrings")) {
+        snprintf(shared_path,sizeof(shared_path),target_s[0]=='/' ? "%s" : "xl/%s", target_s[0]=='/' ? target_s+1 : target_s);
+        found=1;
+      }
+      free(type);free(target_s);rp=node.end;
+    }
+    char *old=found ? xedit_zip_text(&in,shared_path) : strdup(SHARED_STRINGS_XML);
+    if(!old || !xlsx_xml_validate_document(old,strlen(old),"sst")) {free(old);goto done;}
+    const char *sp=old;
+    while(xedit_find(sp,old+strlen(old),"si",&node)) {ctx->shared_offset++;sp=node.end;}
+    char *items=xlsx_shared_items(ctx);
+    if(!items) {free(old);rc=920;goto done;}
+    newshared=xedit_insert(old,"sst",items);
+    free(old);free(items);
+    if(!newshared) {rc=920;goto done;}
+    xedit_node root;
+    if(!xedit_find(newshared,newshared+strlen(newshared),"sst",&root)) goto done;
+    char *updated=xedit_set_attr(&root,"uniqueCount",ctx->shared_offset+ctx->num_shared_strings);
+    if(!updated) {rc=920;goto done;}
+    free(newshared);newshared=updated;
+    /* The total reference count is optional. Remove a stale count rather
+       than confusing unique strings with references across all worksheets. */
+    if (xedit_find(newshared, newshared+strlen(newshared), "sst", &root)) {
+      const char *a, *b, *value;
+      size_t length;
+      if (xedit_attr_span(&root, "count", &a, &b, &value, &length)) {
+        StringBuffer clean;
+        if (!strbuf_init(&clean, strlen(newshared)+1)) {rc=920;goto done;}
+        strbuf_append_n(&clean, root.start, (size_t)(a-root.start));
+        strbuf_append_n(&clean, b, (size_t)(root.end-b));
+        if (!clean.data) {rc=920;goto done;}
+        free(newshared);newshared=clean.data;
+      }
+    }
+    if(!found) {
+      char id[64];unsigned serial=1;
+      do {snprintf(id,sizeof(id),"ctoolsStrings%u",serial++);} while(strstr(newrels ? newrels : rels,id));
+      char relation[1024];
+      snprintf(relation,sizeof(relation),"<Relationship xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\" Id=\"%s\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings\" Target=\"sharedStrings.xml\"/>",id);
+      updated=xedit_insert(newrels ? newrels : rels,"Relationships",relation);
+      if(!updated) {rc=920;goto done;} free(newrels);newrels=updated;
+      updated=xedit_insert(newtypes ? newtypes : types,"Types","<Override xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\" PartName=\"/xl/sharedStrings.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml\"/>");
+      if(!updated) {rc=920;goto done;} free(newtypes);newtypes=updated;
     }
   }
   /* Dates in 1904 workbooks use a different serial origin. */
@@ -664,7 +717,7 @@ static ST_retcode xlsx_edit_file(XLSXExportContext *ctx,
     mz_zip_archive_file_stat stat;
     if (!mz_zip_reader_file_stat(&in, i, &stat))
       goto done;
-    int changed = *chain && !strcmp(stat.m_filename, chain);
+    int changed = (*chain && !strcmp(stat.m_filename, chain)) || (newshared && !strcmp(stat.m_filename,shared_path));
     for (int j = 0; j < 5; j++)
       if (!strcmp(stat.m_filename, names[j]))
         changed = 1;
@@ -675,6 +728,7 @@ static ST_retcode xlsx_edit_file(XLSXExportContext *ctx,
     if (!mz_zip_writer_add_mem(&out, names[j], values[j], strlen(values[j]),
                                MZ_DEFAULT_COMPRESSION))
       goto done;
+  if (newshared && !mz_zip_writer_add_mem(&out,shared_path,newshared,strlen(newshared),MZ_DEFAULT_COMPRESSION)) goto done;
   if (!mz_zip_writer_finalize_archive(&out))
     goto done;
   rc = 0;
@@ -694,5 +748,6 @@ done:
   free(newrels);
   free(newtypes);
   free(newstyles);
+  free(newshared);
   return rc;
 }

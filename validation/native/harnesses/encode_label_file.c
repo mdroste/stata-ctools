@@ -12,6 +12,13 @@ int main(void)
     int fd = mkstemp(path);
     assert(fd >= 0);
     close(fd);
+    char unicode_path[256];
+    snprintf(unicode_path,sizeof(unicode_path),"%s-é東京",path);
+    assert(ctools_label_write_file(NULL,NULL,0,unicode_path)==0);
+    FILE *unicode_file=ctools_fopen(unicode_path,"rb");
+    assert(unicode_file);
+    fclose(unicode_file);
+    ctools_remove(unicode_path);
     char longest[2046];
     memset(longest, 'x', 2045);
     longest[2045] = '\0';

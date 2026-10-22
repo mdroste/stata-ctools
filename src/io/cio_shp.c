@@ -79,6 +79,14 @@ int cio_scan_shp(cio_dataset *dataset, const char *path)
     }
     if (cio_shp_be32(shp_file_header) != 9994 || cio_dbf_u32(shp_file_header + 28) != 1000)
         goto done;
+    uint64_t expected_bytes = (uint64_t)cio_shp_be32(shp_file_header + 24) * 2;
+    if (expected_bytes < 100 || ctools_fseek(fp, 0, SEEK_END) != 0) goto done;
+    int64_t actual_bytes = ctools_ftell(fp);
+    if (actual_bytes < 0 || (uint64_t)actual_bytes != expected_bytes ||
+        ctools_fseek(fp, 100, SEEK_SET) != 0) {
+        rc = 3300; /* native import shp reports a truncated record stream */
+        goto done;
+    }
     unsigned type = cio_dbf_u32(shp_file_header + 32);
     int hasz, hasm, ispoint, ismulti;
     if (!cio_shp_dims(type, &hasz, &hasm, &ispoint, &ismulti))
@@ -139,6 +147,9 @@ int cio_scan_shp(cio_dataset *dataset, const char *path)
         if (id > INT_MAX || words < 2 || words > INT_MAX / 2)
             goto done;
         size_t bytes = (size_t)words * 2;
+        int64_t position = ctools_ftell(fp);
+        if (position < 0 || (uint64_t)position > expected_bytes ||
+            bytes > expected_bytes - (uint64_t)position) goto done;
         body = malloc(bytes);
         if (!body)
         {

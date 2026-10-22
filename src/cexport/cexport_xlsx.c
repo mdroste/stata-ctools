@@ -1,4 +1,5 @@
 #include "ctools_file.h"
+#include "ctools_hash.h"
 #include "formats/excel_address.h"
 /*
     cexport_xlsx.c
@@ -70,6 +71,8 @@ typedef struct {
     bool has_dates;  /* true if any column is a date */
 
     /* Shared strings for deduplication */
+    ctools_str_hash_table shared_map;
+    size_t shared_offset;
     char **shared_strings;
     size_t num_shared_strings;
     size_t shared_strings_capacity;
@@ -140,7 +143,7 @@ static char *xlsx_gen_workbook_xml(const char *sheet_name) {
     char *xml = malloc(2048);
     if (!xml) return NULL;
 
-    char escaped_name[MAX_SHEET_NAME * 6 + 1];
+    char escaped_name[MAX_SHEET_NAME * 7 + 1];
     xlsx_escape_xml(sheet_name, escaped_name, sizeof(escaped_name));
 
     snprintf(xml, 2048,
@@ -165,7 +168,7 @@ static size_t xlsx_escape_xml(const char *src, char *dst, size_t dst_size) {
     /* Fast path: SIMD-accelerated scan for characters that need escaping.
      * Most strings contain no special chars — do a single memcpy. */
     size_t src_len = strlen(src);
-    if (src_len > 0 && src_len < dst_size) {
+    if (src_len > 0 && src_len < dst_size && !strstr(src, "_x")) {
         bool needs_escape = false;
         const char *p = src;
         size_t remaining = src_len;
@@ -298,7 +301,7 @@ static size_t xlsx_escape_xml(const char *src, char *dst, size_t dst_size) {
     }
 
     size_t di = 0;
-    for (size_t si = 0; src[si] && di < dst_size - 6; si++) {
+    for (size_t si = 0; src[si] && di + 7 < dst_size; si++) {
         switch (src[si]) {
             case '&':
                 memcpy(dst + di, "&amp;", 5);
@@ -321,11 +324,14 @@ static size_t xlsx_escape_xml(const char *src, char *dst, size_t dst_size) {
                 di += 6;
                 break;
             default:
-                /* Filter control characters except tab, newline, carriage return */
-                if ((unsigned char)src[si] >= 32 || src[si] == '\t' ||
-                    src[si] == '\n' || src[si] == '\r') {
-                    dst[di++] = src[si];
-                }
+                if ((unsigned char)src[si] < 32 && src[si] != '\t' && src[si] != '\n') {
+                    snprintf(dst+di, 8, "_x%04X_", (unsigned char)src[si]);
+                    di += 7;
+                } else if (src[si] == '_' && src_len-si >= 7 && src[si+1] == 'x' && src[si+6] == '_' &&
+                           isxdigit((unsigned char)src[si+2]) && isxdigit((unsigned char)src[si+3]) &&
+                           isxdigit((unsigned char)src[si+4]) && isxdigit((unsigned char)src[si+5])) {
+                    memcpy(dst+di, "_x005F_", 7); di += 7;
+                } else dst[di++] = src[si];
                 break;
         }
     }
@@ -381,6 +387,7 @@ static void xlsx_context_free(XLSXExportContext *ctx) {
     free(ctx->date_cols);
     free(ctx->missing_value);
     free(ctx->preserved_styles);
+    ctools_str_hash_free(&ctx->shared_map);
 
     if (ctx->shared_strings) {
         for (size_t i = 0; i < ctx->num_shared_strings; i++) {
@@ -1056,6 +1063,56 @@ typedef struct {
     bool failed;                /* escape buffer or output growth failed */
 } xlsx_chunk_args_t;
 
+
+/* Native Excel readers decode ST_Xstring in the shared-string table only.
+ * Keep ordinary text inline, and intern text requiring OOXML escapes. */
+static int xlsx_collect_string(XLSXExportContext *ctx, const char *text)
+{
+    if (!text || !*text) return 0;
+    bool special = strstr(text,"_x") != NULL;
+    for (const unsigned char *p=(const unsigned char *)text; *p && !special;p++)
+        special = *p<32 && *p!='\t' && *p!='\n';
+    if (!special) return 0;
+    if (!ctx->shared_map.capacity && ctools_str_hash_init(&ctx->shared_map,64)) return 920;
+    int existing;
+    if (ctools_str_hash_lookup(&ctx->shared_map,text,&existing)) return 0;
+    if (ctx->num_shared_strings >= INT_MAX) return 920;
+    if (ctx->num_shared_strings == ctx->shared_strings_capacity) {
+        size_t cap=ctx->shared_strings_capacity ? ctx->shared_strings_capacity*2 : 64;
+        char **next=realloc(ctx->shared_strings,cap*sizeof(*next));
+        if (!next) return 920;
+        ctx->shared_strings=next;ctx->shared_strings_capacity=cap;
+    }
+    char *copy=strdup(text);
+    if (!copy) return 920;
+    if (ctools_str_hash_insert_value(&ctx->shared_map,text,(int)ctx->num_shared_strings)) {free(copy);return 920;}
+    ctx->shared_strings[ctx->num_shared_strings++]=copy;
+    return 0;
+}
+static bool xlsx_shared_cell(StringBuffer *sb, const XLSXExportContext *ctx,
+                             const char *prefix, long long row, const char *text)
+{
+    int index;
+    if (!text || !ctx->shared_map.capacity ||
+        !ctools_str_hash_lookup((ctools_str_hash_table *)&ctx->shared_map,text,&index)) return false;
+    strbuf_appendf(sb,"%s%lld\" t=\"s\"><v>%zu</v></c>\n",prefix,row,ctx->shared_offset+(size_t)index);
+    return true;
+}
+static char *xlsx_shared_items(const XLSXExportContext *ctx)
+{
+    StringBuffer sb;
+    if (!strbuf_init(&sb,1024)) return NULL;
+    char *escaped=malloc(MAX_CELL_CONTENT*7+1);
+    if (!escaped) {free(sb.data);return NULL;}
+    for (size_t i=0;i<ctx->num_shared_strings && sb.data;i++) {
+        xlsx_escape_xml(ctx->shared_strings[i],escaped,MAX_CELL_CONTENT*7+1);
+        strbuf_append(&sb,"<si xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><t xml:space=\"preserve\">");
+        strbuf_append(&sb,escaped);
+        strbuf_append(&sb,"</t></si>");
+    }
+    free(escaped);return sb.data;
+}
+
 /* Format a chunk of data rows into XML (called per thread) */
 static void *xlsx_format_chunk(void *arg) {
     xlsx_chunk_args_t *a = (xlsx_chunk_args_t *)arg;
@@ -1065,7 +1122,7 @@ static void *xlsx_format_chunk(void *arg) {
     long long row_num = a->start_row_num;
 
     /* Per-thread escape buffer for strings (heap-allocated for thread safety) */
-    char *escaped = malloc(MAX_CELL_CONTENT * 6 + 1);
+    char *escaped = malloc(MAX_CELL_CONTENT * 7 + 1);
     if (!escaped) {
         a->failed = true;
         return (void *)(intptr_t)-1;
@@ -1097,6 +1154,7 @@ static void *xlsx_format_chunk(void *arg) {
             if (vartype == 0) {
                 /* String variable */
                 const char *str = filtered->data.vars[j].data.str[i];
+                if (xlsx_shared_cell(sb,ctx,prefix,row_num,str)) continue;
                 if (!str || str[0] == '\0') {
                     int pos = 0;
                     memcpy(cell_buf, prefix, prefix_len); pos = (int)prefix_len;
@@ -1104,7 +1162,7 @@ static void *xlsx_format_chunk(void *arg) {
                     memcpy(cell_buf + pos, "\"/>\n", 4); pos += 4;
                     strbuf_append_n(sb, cell_buf, (size_t)pos);
                 } else {
-                    size_t esc_len = xlsx_escape_xml(str, escaped, MAX_CELL_CONTENT * 6 + 1);
+                    size_t esc_len = xlsx_escape_xml(str, escaped, MAX_CELL_CONTENT * 7 + 1);
                     int pos = 0;
                     memcpy(cell_buf, prefix, prefix_len); pos = (int)prefix_len;
                     pos += ctools_int64_to_str((int64_t)row_num, cell_buf + pos);
@@ -1127,6 +1185,7 @@ static void *xlsx_format_chunk(void *arg) {
                         memcpy(cell_buf+pos,"</v></c>\n",9);pos+=9;
                         strbuf_append_n(sb,cell_buf,(size_t)pos);
                     } else if (a->escaped_missing) {
+                        if (xlsx_shared_cell(sb,ctx,prefix,row_num,ctx->missing_value)) continue;
                         int pos = 0;
                         memcpy(cell_buf, prefix, prefix_len); pos = (int)prefix_len;
                         pos += ctools_int64_to_str((int64_t)row_num, cell_buf + pos);
@@ -1218,7 +1277,7 @@ static bool xlsx_gen_worksheet_segments(XLSXExportContext *ctx,
     }
 
     /* Prepare escaped missing value */
-    char escaped_missing[MAX_CELL_CONTENT * 6 + 1];
+    char escaped_missing[MAX_CELL_CONTENT * 7 + 1];
     size_t escaped_missing_len = 0;
     if (ctx->missing_value) {
         escaped_missing_len = xlsx_escape_xml(ctx->missing_value, escaped_missing, sizeof(escaped_missing));
@@ -1253,7 +1312,10 @@ static bool xlsx_gen_worksheet_segments(XLSXExportContext *ctx,
     if (ctx->firstrow) {
         strbuf_appendf(&preamble, "    <row r=\"%lld\">\n", data_start_row);
         for (ST_int j = 0; j < ctx->nvars; j++) {
-            char escaped_name[1025 * 6 + 1];
+            char header_prefix[32];
+            snprintf(header_prefix,sizeof(header_prefix),"      <c r=\"%s",col_letters_arr[j]);
+            if (xlsx_shared_cell(&preamble,ctx,header_prefix,data_start_row,ctx->varnames[j])) continue;
+            char escaped_name[1025 * 7 + 1];
             xlsx_escape_xml(ctx->varnames[j], escaped_name, sizeof(escaped_name));
             strbuf_appendf(&preamble, "      <c r=\"%s%lld\" t=\"inlineStr\"><is><t>%s</t></is></c>\n",
                           col_letters_arr[j], data_start_row, escaped_name);
@@ -1507,9 +1569,19 @@ static ST_retcode xlsx_write_file(XLSXExportContext *ctx, ctools_filtered_data *
     }
 
     /* Add xl/sharedStrings.xml */
-    if (!mz_zip_writer_add_mem(&zip, "xl/sharedStrings.xml",
-                               SHARED_STRINGS_XML, strlen(SHARED_STRINGS_XML),
-                               MZ_DEFAULT_COMPRESSION)) {
+    char *items=xlsx_shared_items(ctx);
+    StringBuffer shared;
+    if (!items || !strbuf_init(&shared,1024)) {free(items);mz_zip_writer_end(&zip);return 920;}
+    strbuf_appendf(&shared,"<sst xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" uniqueCount=\"%zu\">",ctx->num_shared_strings);
+    strbuf_append(&shared,items);
+    strbuf_append(&shared,"</sst>");
+    free(items);
+    if (!shared.data) {mz_zip_writer_end(&zip);return 920;}
+    bool shared_ok=mz_zip_writer_add_mem(&zip, "xl/sharedStrings.xml",
+                               shared.data, shared.len,
+                               MZ_DEFAULT_COMPRESSION);
+    free(shared.data);
+    if (!shared_ok) {
         mz_zip_writer_end(&zip);
         snprintf(ctx->error_message, sizeof(ctx->error_message),
                  "Failed to write xl/sharedStrings.xml\n");
@@ -1663,6 +1735,13 @@ ST_retcode cexport_xlsx_main(const char *args) {
         ctools_filtered_data_free(&filtered);xlsx_context_free(&ctx);return 198;
     }
 
+    for (int j=0;j<ctx.nvars && !rc;j++) {
+        if (ctx.firstrow) rc=xlsx_collect_string(&ctx,ctx.varnames[j]);
+        if (ctx.vartypes[j]==0)
+            for (size_t i=0;i<filtered.data.nobs && !rc;i++) rc=xlsx_collect_string(&ctx,filtered.data.vars[j].data.str[i]);
+    }
+    if (!rc) rc=xlsx_collect_string(&ctx,ctx.missing_value);
+    if (rc) {ctools_filtered_data_free(&filtered);xlsx_context_free(&ctx);return rc;}
     double t_load = ctools_timer_seconds();
 
     ctools_output output;

@@ -14,12 +14,29 @@ program define cipolate, byable(onecall)
     local y `1'
     local x `2'
     * Alias copies allow x/y also to appear among the by variables.
-    tempvar touse result yy xx
-    marksample touse, novarlist
-    quietly replace `touse' = 0 if missing(`x')
-    quietly gen double `result' = .
-    quietly count if `touse'
-    if r(N) {
+    tempvar result yy xx touse
+    local sample `"`if' `in'"'
+    local longby = 0
+    foreach v of local by {
+        if "`: type `v''" == "strL" local longby = 1
+    }
+    local run = _N > 0
+    if `longby' {
+        * Do not load a long by-key from a missing-x row: the SPI cannot read
+        * arbitrary strL values, and native ipolate excludes that row first.
+        marksample touse, novarlist
+        markout `touse' `x'
+        local sample "if `touse'"
+        quietly count if `touse'
+        local run = r(N) > 0
+    }
+    * The plugin already leaves missing x values missing. Pass the original
+    * selection through once instead of materializing and rescanning touse.
+    * With no restriction it writes every result, including missing values.
+    if `"`if'`in'"' == "" & !`longby' mata: (void) st_addvar("double", st_local("result"), 1)
+    else quietly gen double `result' = .
+    local cipolate_nmissing = _N
+    if `run' {
         local sourcey `y'
         local sourcex `x'
         if `: list y in by' {
@@ -38,12 +55,13 @@ program define cipolate, byable(onecall)
         local timing = "`verbose'" != ""
         local threadopt
         if `threads' local threadopt threads(`threads')
+        local selectopt
+        if `"`if'"' == "" & !`longby' local selectopt skipif
         _ctools_strw `sourcey' `sourcex' `by'
-        plugin call ctools_plugin `sourcey' `sourcex' `by' `result' if `touse', ///
-            "cipolate `threadopt' `nby' `ext' `timing'"
+        plugin call ctools_plugin `sourcey' `sourcex' `by' `result' `sample', ///
+            "cipolate `threadopt' `nby' `ext' `timing' `selectopt'"
     }
     label variable `result' "Interpolation of `y' on `x'"
     rename `result' `generate'
-    quietly count if missing(`generate')
-    if r(N) di as text "(" r(N) " missing values generated)"
+    if `cipolate_nmissing' di as text "(`cipolate_nmissing' missing values generated)"
 end

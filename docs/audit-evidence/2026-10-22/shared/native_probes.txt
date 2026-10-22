@@ -1,0 +1,9 @@
+Observed native prefix-kernel output:
+value=10000000000000000 mean=10000000000000000 sum=10000000000000000
+value=1 mean=0 sum=0
+value=2 mean=0 sum=0
+value=3 mean=4 sum=4
+
+Observed ASan/UBSan matching allocation-injection output:
+fail_growth=0 rc=0 matched=1 treated_support=1
+fail_growth=1 rc=0 matched=0 treated_support=0

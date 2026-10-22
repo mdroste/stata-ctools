@@ -132,6 +132,19 @@ program define _cwinsor_impl
     quietly _ctools_clock __ct_now
     local __ct_elapsed91 = `__ct_elapsed91' + (`__ct_now' - `__ct_start91')
 
+    * Floating-point outputs can be written directly from the plugin's double
+    * working columns. Native recast otherwise copies and scans each column
+    * again, then moves it back through the entire dataset.
+    local inplace = "`suffix'`prefix'" == ""
+    local direct_outputs = !`inplace' & "`trim'" == ""
+    local overlap : list varlist & by
+    if "`overlap'" != "" local direct_outputs = 0
+    foreach v of local varlist {
+        local output_type : type `v'
+        if "`by'" != "" local output_type "`c(type)'"
+        if !inlist("`output_type'", "float", "double") local direct_outputs = 0
+    }
+
     * Handle generate new variables
     local target_varlist "`varlist'"
     if "`suffix'" != "" | "`prefix'" != "" {
@@ -148,14 +161,19 @@ program define _cwinsor_impl
                 di as error "cwinsor: variable `newvar' already exists"
                 exit 110
             }
-            quietly gen double `newvar' = `v' if `touse' & !missing(`v')
+            if `direct_outputs' {
+                local output_type : type `v'
+                if "`by'" != "" local output_type "`c(type)'"
+                local nofill = (`"`if'`in'"' == "")
+                mata: (void) st_addvar(st_local("output_type"), st_local("newvar"), `nofill')
+            }
+            else quietly gen double `newvar' = `v' if `touse' & !missing(`v')
             local target_varlist "`target_varlist' `newvar'"
         }
     }
 
     * In place, the default keeps an undo copy of the targets in the plugin,
     * and their variable labels in the record
-    local inplace = "`suffix'`prefix'" == ""
     local undo_opt ""
     if `inplace' & "`snapshot'`fast'" == "" {
         local undo_opt "undo"
@@ -169,7 +187,7 @@ program define _cwinsor_impl
     * Checked SPI stores use positions in the plugin varlist, just like reads.
     * Only target variables need store indices; by-variables are read-only.
     local store_indices ""
-    local __pos = 0
+    local __pos = cond(`direct_outputs', `nvars' + `nby', 0)
     foreach v of local target_varlist {
         local ++__pos
         local store_indices "`store_indices' `__pos'"
@@ -177,6 +195,8 @@ program define _cwinsor_impl
 
     * Build options
     local opts "p=`p' q=`q'"
+    if `direct_outputs' local opts "`opts' newoutputs"
+    if `"`if'`in'"' == "" local opts "`opts' skipif"
     if "`trim'" != "" local opts "`opts' trim"
     * winsor2 expands non-grouped bounds through numeric local macros. This
     * rounding can change whether an observed percentile is trimmed. Keep C's
@@ -202,17 +222,22 @@ program define _cwinsor_impl
     if "`__ct_elapsed90'" == "" local __ct_elapsed90 = 0
     quietly _ctools_clock __ct_start90
 
-    * Call plugin with only needed variables (target + by)
-    * C uses plugin-local indices for both loading and writing
+    * Load source + by columns; separate final-type outputs follow them when
+    * requested. C uses plugin-local indices for both loading and writing.
     local nvars_target : word count `target_varlist'
 
-    plugin call ctools_plugin `target_varlist' `by' if `touse', ///
+    local plugin_varlist `target_varlist' `by'
+    if `direct_outputs' local plugin_varlist `varlist' `by' `target_varlist'
+    plugin call ctools_plugin `plugin_varlist' if `touse', ///
         "cwinsor `threads_opt' `nvars_target' `nby' `store_indices' `opts' `undo_opt'"
     if strpos("`undo_opt'", "undo") {
         * The plugin holds the original values until cwinsor commits
         global CTOOLS_cwinsor_plugin "`__ctools_plugin'"
         global CTOOLS_cwinsor_targets "`target_varlist'"
     }
+
+    * Include metadata, conversion and cleanup in the post-plugin measurement.
+    quietly _ctools_clock __ct_start92
 
     if "`trim'"!="" & "`by'"=="" {
         local bound_index=0
@@ -235,7 +260,7 @@ program define _cwinsor_impl
         local source_label : variable label `v'
         if `"`source_label'"'=="" local source_label "`v'"
         label variable `target' `"`source_label'"'
-        if "`target'"!="`v'" {
+        if "`target'"!="`v'" & !`direct_outputs' {
             local output_type : type `v'
             if "`by'"!="" & "`trim'"=="" local output_type "`c(type)'"
             recast `output_type' `target', force
@@ -259,10 +284,6 @@ program define _cwinsor_impl
     }
     * Validation hook: fail after the targets were written and relabeled
     if "$CTOOLS_cwinsor_fault" == "post" error 1
-
-    * Record post-plugin time
-    if "`__ct_elapsed92'" == "" local __ct_elapsed92 = 0
-    quietly _ctools_clock __ct_start92
 
     * Finish timing
     quietly _ctools_clock __ct_now

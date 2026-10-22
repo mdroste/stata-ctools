@@ -653,8 +653,10 @@ program define _cmerge_impl, rclass
     local keepusing_types ""
 
     if "`keepusing'" != "" {
-        * When selective use was done, vars are already validated by Stata's use
-        * Just build the name/type lists
+        * Expand wildcard, abbreviation and range syntax against using data.
+        unab keepusing : `keepusing'
+        if `merge_by_n' keep `keepusing'
+        * Build concrete name/type lists
         foreach var of local keepusing {
             local using_keep_vars "`using_keep_vars' `var'"
             local keepusing_names "`keepusing_names' `var'"
@@ -928,12 +930,6 @@ program define _cmerge_impl, rclass
             local merge_matched = 0
         }
 
-        * Handle keep() option for empty datasets
-        if "`keep'" != "" {
-            local empty_result = cond(`master_nobs' > 0, 1, 2)
-            if !`: list empty_result in keep_codes' quietly keep if 0
-        }
-
         * Handle assert() option for empty datasets (a failure keeps the result)
         if "`assert'" != "" {
             capture noisily _cmerge_assert "`assert_codes'" `merge_master' `merge_using' 0 0 0
@@ -942,6 +938,12 @@ program define _cmerge_impl, rclass
                 if `__preserved' restore, not
                 exit `rc'
             }
+        }
+
+        * Handle keep() option for empty datasets
+        if "`keep'" != "" {
+            local empty_result = cond(`master_nobs' > 0, 1, 2)
+            if !`: list empty_result in keep_codes' quietly keep if 0
         }
 
         * Like merge, a 1:1 result without using-only rows is sorted by keys

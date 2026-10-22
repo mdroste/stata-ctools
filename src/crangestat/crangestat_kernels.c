@@ -663,6 +663,24 @@ double crangestat_compute_stat_with_prefix(stat_type type, const prefix_arrays *
         return SV_missval;
     }
 
+    if (type == STAT_SUM || type == STAT_MEAN) {
+        double total = sum + (double)n * pa->origin;
+        double scale = fabs(pa->prefix_sum[win_end-g_start]) +
+                       fabs(pa->prefix_sum[win_start-g_start]) + fabs((double)n*pa->origin);
+        if (!isfinite(total) || fabs(total) <= sqrt(DBL_EPSILON)*scale) {
+            /* Local Neumaier sum avoids both prefix subtraction and the
+             * cancellation from adding back a distant group origin. */
+            double local=0.0, correction=0.0;
+            for (size_t i=win_start;i<win_end;i++) {
+                if ((exclude_self && i==self_idx) || data[i]>=SV_missval) continue;
+                double x=data[i], next=local+x;
+                correction += fabs(local)>=fabs(x) ? (local-next)+x : (x-next)+local;
+                local=next;
+            }
+            total=local+correction;
+        }
+        return type==STAT_MEAN ? total/(double)n : total;
+    }
     switch (type)
     {
     case STAT_COUNT:

@@ -1,0 +1,156 @@
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+      name:  <unnamed>
+       log:  /tmp/ctools-audit-oct22/more_components.log
+  log type:  text
+ opened on:  22 Oct 2026, 10:45:16
+
+. foreach component in cimport cexport cqreg {
+  2.  capture noisily do validation/validate_`component'.do
+  3.  local rc = _rc
+  4.  noi di "AUDIT_COMPONENT=`component' RC=`rc' PASSED=$TESTS_PASSED FAILED=$TESTS_FAILED SKIPPED=$TESTS_SKIPPED COMPLETE=$CTOOLS_COMPONENT_COMPLETE"
+  5. }
+
+. /*******************************************************************************
+>  * validate_cimport.do
+>  *
+>  * Comprehensive validation tests for cimport delimited vs import delimited
+>  * Tests all import options: delimiters, varnames, case, bindquotes, encoding, etc.
+>  *
+>  * VERIFICATION: All tests use cf _all to verify byte-for-byte identical data
+>  ******************************************************************************/
+. 
+. * Load setup (works from project root or validation dir)
+. capture do "validation/validate_setup.do"
+
+. if _rc != 0 {
+.     do "validate_setup.do"
+. }
+
+. 
+. capture mkdir "temp"
+
+. 
+. quietly {
+Running validation tests for cimport...
+
+---------------------------------------------
+  cimport validation results
+---------------------------------------------
+  Passed: 360
+  Failed: 0
+  Skipped: 0
+  Total:  360
+---------------------------------------------
+  ALL TESTS PASSED
+---------------------------------------------
+
+
+. 
+. * Reached only after the complete component script.
+. global CTOOLS_COMPONENT_COMPLETE "cimport"
+
+. 
+end of do-file
+AUDIT_COMPONENT=cimport RC=0 PASSED=360 FAILED=0 SKIPPED=0 COMPLETE=cimport
+
+. /*******************************************************************************
+>  * validate_cexport.do
+>  *
+>  * Comprehensive validation tests for cexport delimited vs export delimited
+>  * Tests all export options: delimiter, novarnames, quote, nolabel, if/in
+>  *
+>  * VERIFICATION: Exports both CSVs, imports them back into Stata, and compares:
+>  *   - First attempts cf _all for byte-for-byte comparison
+>  *   - Falls back to ABSOLUTE tolerance-based comparison (1e-7)
+>  *     to handle floating point precision differences in CSV formatting
+>  *   - String variables must match exactly
+>  *   - Reports max difference even when tests pass (if tolerance check was needed)
+>  ******************************************************************************/
+. 
+. * Load setup (works from project root or validation dir)
+. capture do "validation/validate_setup.do"
+
+. if _rc != 0 {
+.     do "validate_setup.do"
+. }
+
+. 
+. capture mkdir "temp"
+
+. 
+. quietly {
+Running validation tests for cexport...
+
+---------------------------------------------
+  cexport validation results
+---------------------------------------------
+  Passed: 213
+  Failed: 0
+  Skipped: 0
+  Total:  213
+---------------------------------------------
+  ALL TESTS PASSED
+---------------------------------------------
+
+
+. 
+. * Reached only after the complete component script.
+. global CTOOLS_COMPONENT_COMPLETE "cexport"
+
+. 
+end of do-file
+AUDIT_COMPONENT=cexport RC=0 PASSED=213 FAILED=0 SKIPPED=0 COMPLETE=cexport
+
+. /*******************************************************************************
+>  * validate_cqreg.do
+>  *
+>  * Comprehensive validation tests for cqreg vs qreg
+>  * Tests all options: quantile, vce, denmethod, bwmethod, tolerance, maxiter
+>  *
+>  * VERIFICATION: Uses benchmark_qreg helper which compares all e() results:
+>  *   - e(N), e(df_r) - counts and degrees of freedom
+>  *   - e(q) - quantile
+>  *   - e(sum_adev), e(sum_rdev) - deviation statistics
+>  *   - e(q_v), e(f_r) - quantile variance and pseudo F df
+>  *   - e(convcode) - convergence code
+>  *   - e(b) - coefficient vector
+>  *   - e(V) - variance-covariance matrix
+>  ******************************************************************************/
+. 
+. * Load setup (works from project root or validation dir)
+. capture do "validation/validate_setup.do"
+
+. if _rc != 0 {
+.     do "validate_setup.do"
+. }
+
+. 
+. quietly {
+Running validation tests for cqreg...
+
+---------------------------------------------
+  cqreg validation results
+---------------------------------------------
+  Passed: 220
+  Failed: 0
+  Skipped: 0
+  Total:  220
+---------------------------------------------
+  ALL TESTS PASSED
+---------------------------------------------
+
+
+. 
+. * Reached only after the complete component script.
+. global CTOOLS_COMPONENT_COMPLETE "cqreg"
+
+. 
+end of do-file
+AUDIT_COMPONENT=cqreg RC=0 PASSED=220 FAILED=0 SKIPPED=0 COMPLETE=cqreg
+
+. log close
+      name:  <unnamed>
+       log:  /tmp/ctools-audit-oct22/more_components.log
+  log type:  text
+ closed on:  22 Oct 2026, 10:45:39
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------

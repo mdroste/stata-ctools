@@ -1,0 +1,103 @@
+-------------------------------------------------------------------------------
+      name:  <unnamed>
+       log:  /tmp/ctools-regression-audit/cqreg_single.log
+  log type:  text
+ opened on:  22 Oct 2026, 10:44:36
+
+. adopath ++ "/Users/mike/Documents/GitHub/stata-ctools/package/ado"
+  [1]              "/Users/mike/Documents/GitHub/stata-ctools/package/ado"
+  [2]  (BASE)      "/Applications/StataNow/ado/base/"
+  [3]  (SITE)      "/Applications/StataNow/ado/site/"
+  [4]              "."
+  [5]  (PERSONAL)  "/Users/mike/Documents/Stata/ado/personal/"
+  [6]  (PLUS)      "/Users/mike/Library/Application Support/Stata/ado/plus/"
+  [7]  (OLDPLACE)  "~/ado/"
+
+. adopath ++ "/tmp/ctools-audit-oct22/build"
+  [1]              "/tmp/ctools-audit-oct22/build"
+  [2]              "/Users/mike/Documents/GitHub/stata-ctools/package/ado"
+  [3]  (BASE)      "/Applications/StataNow/ado/base/"
+  [4]  (SITE)      "/Applications/StataNow/ado/site/"
+  [5]              "."
+  [6]  (PERSONAL)  "/Users/mike/Documents/Stata/ado/personal/"
+  [7]  (PLUS)      "/Users/mike/Library/Application Support/Stata/ado/plus/"
+  [8]  (OLDPLACE)  "~/ado/"
+
+. set obs 300
+Number of observations (_N) was 0, now 300.
+
+. set seed 845
+
+. gen double x=rnormal()
+
+. gen double y=.4*x+rnormal()
+
+. gen cl=1
+
+. capture noisily qreg y x, vce(excluster cl, fitted)
+
+Iteration 1:  WLS sum of weighted deviations =  120.34255
+
+Iteration 1:  Sum of abs. weighted deviations =  120.29825
+Iteration 2:  Sum of abs. weighted deviations =  120.26014
+Iteration 3:  Sum of abs. weighted deviations =   120.2599
+Iteration 4:  Sum of abs. weighted deviations =  120.25868
+
+Median regression                                   Number of obs =        300
+  Raw sum of deviations 135.0936 (about -.00315406)
+  Min sum of deviations 120.2587                    Pseudo R2     =     0.1098
+
+                                     (Std. err. adjusted for 1 clusters in cl)
+------------------------------------------------------------------------------
+             |               Robust
+           y | Coefficient  std. err.      t    P>|t|     [95% conf. interval]
+-------------+----------------------------------------------------------------
+           x |   .5284985          .        .       .            .           .
+       _cons |  -.0170656          .        .       .            .           .
+------------------------------------------------------------------------------
+
+. di "NATIVE SINGLE RC=" _rc
+NATIVE SINGLE RC=0
+
+. capture noisily cqreg y x, vce(cluster cl)
+
+Median regression                                  Number of obs =        300
+  Raw sum of deviations 135.094  (about -.0031541)
+  Min sum of deviations 120.259                    Pseudo R2     =     0.1098
+
+                                     (Std. err. adjusted for 1 clusters in cl)
+------------------------------------------------------------------------------
+           y | Coefficient  Std. err.      t    P>|t|     [95% conf. interval]
+-------------+----------------------------------------------------------------
+           x |   .5284985                   .       .            .           .
+       _cons |  -.0170656                   .       .            .           .
+------------------------------------------------------------------------------
+
+. di "CTOOLS SINGLE RC=" _rc
+CTOOLS SINGLE RC=0
+
+. matrix list e(V)
+
+symmetric e(V)[2,2]
+           x  _cons
+    x       
+_cons              
+
+. scalar v=e(V)[1,1]
+
+. di "CTOOLS V11=" v " MISSING=" missing(v)
+CTOOLS V11=. MISSING=1
+
+. capture noisily cqreg y x, vce(cluster cl) denmethod(kernel(gaussian))
+cqreg: VCE computation failed
+cqreg: regression failed (rc=498)
+
+. di "CTOOLS KERNEL SINGLE RC=" _rc
+CTOOLS KERNEL SINGLE RC=498
+
+. log close
+      name:  <unnamed>
+       log:  /tmp/ctools-regression-audit/cqreg_single.log
+  log type:  text
+ closed on:  22 Oct 2026, 10:44:36
+-------------------------------------------------------------------------------

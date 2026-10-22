@@ -719,7 +719,11 @@ static ST_retcode do_compute_bins(void) {
 
         ST_int n_group = group_sizes[g];
 
-        if (n_group < 2) {
+        if (n_group == 1 && config.method == 0 && config.linetype > 0) {
+            rc = 2001; /* binscatter's group regression needs two observations */
+            goto cleanup;
+        }
+        if (n_group == 0) {
             group->num_bins = 0;
             group->bins = NULL;
             continue;

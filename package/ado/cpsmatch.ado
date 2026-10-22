@@ -40,6 +40,22 @@ program define cpsmatch, rclass sortpreserve
         exit 2000
     }
 
+    if `neighbor' <= 0 {
+        di as error "variable _n1 not found"
+        exit 111
+    }
+    if !inlist("`kerneltype'", "", "epan", "normal", "biweight", "uniform", "tricube") {
+        di as error "Kerneltype `kerneltype' not recognized"
+        exit 198
+    }
+    local inputs `varlist' `pscore' `outcome'
+    foreach input of local inputs {
+        if inlist("`input'", "_weight", "_id", "_support", "_pscore", "_treated", "_nn") {
+            di as error "input variable `input' conflicts with a matching output"
+            exit 111
+        }
+    }
+
     * Determine matching method
     local method = 0  /* 0=nearest, 1=radius, 2=kernel */
     if "`radius'" != "" {
