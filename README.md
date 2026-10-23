@@ -19,26 +19,26 @@
 
 | Stata command | Replaced with | Description | Approx. speedup¹ |
 | --- | --- | --- | ---: |
-| `import` | `cimport` | Import text, Excel, dBase, SAS, SPSS, and shapefiles | 30–50× |
-| `export` | `cexport` | Export text, Excel, dBase, SAS, SPSS, and shapefiles | 40–60× |
-| `sort` | `csort` | Sort dataset | 1–3× |
-| `merge` | `cmerge` | Merge (join) datasets | 1–7× |
-| `sample` | `csample` | Resampling without replacement | 5–8× |
-| `bsample` | `cbsample` | Resampling with replacement | 3–4× |
-| `encode` | `cencode` | Recast string as labeled numeric | 15–60× |
-| `decode` | `cdecode` | Recast labeled numeric as string | 1–10× |
-| `destring` | `cdestring` | Recast string as numeric type | 40× |
-| `ipolate` | [`cipolate`](docs/USAGE.md#linear-interpolation-cipolate) | Linear interpolation and extrapolation | 10–12× |
-| `split` | [`csplit`](docs/USAGE.md#string-fields-csplit) | Split strings into fields | 15–18× |
-| `rangejoin` | [`crangejoin`](docs/USAGE.md#interval-joins-crangejoin) | Join observations within inclusive intervals | 10-15× |
-| `qreg` | `cqreg` | Quantile regression | 5–6× |
-| `gstats winsor` | `cwinsor` | Winsorize variables | 1.5–2× |
-| `rangestat` | `crangestat` | Range statistics of variables | 80–110× |
-| `psmatch2` | `cpsmatch` | Propensity score matching | 1.5–2.5× |
-| `binscatter` | `cbinscatter` | Binned scatter plots | 5–10× |
-| `reghdfe` | `creghdfe` | OLS with multi-way fixed effects | 9.0–13.0× |
-| `ivreghdfe` | `civreghdfe` | 2SLS/GMM with multi-way fixed effects | 14–16× |
-| `ppmlhdfe` | `cpplmhdfe` | PPML with multi-way fixed effects | 5–6× |
+| `import` | `cimport` | Import text, Excel, dBase, SAS, SPSS, and shapefiles | 0.8–21.9× |
+| `export` | `cexport` | Export text, Excel, dBase, SAS, SPSS, and shapefiles | 34.2–37.5× |
+| `sort` | `csort` | Sort dataset | 0.8–1.2× |
+| `merge` | `cmerge` | Merge (join) datasets | 1.2–4.0× |
+| `sample` | `csample` | Resampling without replacement | 5.6–10.2× |
+| `bsample` | `cbsample` | Resampling with replacement | 2.6–4.3× |
+| `encode` | `cencode` | Recast string as labeled numeric | 20.9–35.9× |
+| `decode` | `cdecode` | Recast labeled numeric as string | 4.7–7.2× |
+| `destring` | `cdestring` | Recast string as numeric type | 20.7–38.1× |
+| `ipolate` | [`cipolate`](docs/USAGE.md#linear-interpolation-cipolate) | Linear interpolation and extrapolation | 8.2–46.3× |
+| `split` | [`csplit`](docs/USAGE.md#string-fields-csplit) | Split strings into fields | 21.4–69.3× |
+| `rangejoin` | [`crangejoin`](docs/USAGE.md#interval-joins-crangejoin) | Join observations within inclusive intervals | 8.3–12.6× |
+| `qreg` | `cqreg` | Quantile regression | 3.5–4.9× |
+| `gstats winsor` | `cwinsor` | Winsorize variables | 1.0–3.6× |
+| `rangestat` | `crangestat` | Range statistics of variables | 23.5–65.9× |
+| `psmatch2` | `cpsmatch` | Propensity score matching | 1.5–2.2× |
+| `binscatter` | `cbinscatter` | Binned scatter plots | 5.6–9.0× |
+| `reghdfe` | `creghdfe` | OLS with multi-way fixed effects | 4.8–7.7× |
+| `ivreghdfe` | `civreghdfe` | 2SLS/GMM with multi-way fixed effects | 3.8–10.7× |
+| `ppmlhdfe` | `cpplmhdfe` | PPML with multi-way fixed effects | 2.7–4.8× |
 
 ¹ Approximate speedups from three benchmarks with **1M, 10M, and 25M observations** and 20 mixed-type variables. Import/export timings use CSV. Values below 1× mean ctools was slower. Your mileage may vary. See [benchmark details and results](docs/README_BENCHMARK.md).
 

@@ -16,6 +16,8 @@ program define profile_readme
     args outdir sizes threads
     set processors `threads'
     adopath ++ "build"
+    local candidate : environment CTOOLS_TEST_PLUGIN_DIR
+    if `"`candidate'"' != "" adopath ++ `"`candidate'"'
     about
     ctools, version
     di "PROFILE_SETTINGS sizes=`sizes' variables=20 processors=`threads' seed=95183"

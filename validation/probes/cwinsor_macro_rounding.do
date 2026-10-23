@@ -1,5 +1,4 @@
-* Reproduces a pre-existing one-float-ULP difference; not a passing parity test.
-* Both the pre-audit and optimized ctools builds give the same result.
+* Regression for the former one-float-ULP cutoff rounding difference.
 clear all
 set more off
 adopath ++ build
@@ -19,6 +18,5 @@ cwinsor x, suffix(_c)
 winsor2 x, suffix(_ref)
 format x x_c x_ref %24.17g
 list in 1/3
-assert x_c[1]!=x_ref[1]
-assert abs(x_c[1]-x_ref[1])==2^-22
-di "CWINSOR_MACRO_ROUNDING_REPRODUCED"
+assert x_c==x_ref
+di "CWINSOR_MACRO_ROUNDING_FIXED"

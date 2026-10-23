@@ -204,6 +204,7 @@ int ctools_command_begin(const ctools_command_descriptor *cmd, const char *args)
     case CTOOLS_CMD_CWINSOR:
         /* an in-place call keeps its undo copy until rollback or commit */
         if (!strcmp(op, "rollback") || !strcmp(op, "commit")) preserve = 1;
+        else if (!strcmp(op, "apply")) { required = 1; next_phase = 2; }
         else next_phase = 1;
         break;
     case CTOOLS_CMD_CIMPORT:

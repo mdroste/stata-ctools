@@ -576,6 +576,12 @@ save `rb_copy'
 
 _ctools_rb_case, cmd(cwinsor y x1, cuts(5 95)) ///
     global(CTOOLS_cwinsor_fault) fault(post) testname("[rollback] in place after plugin")
+_ctools_rb_case, cmd(cwinsor y x1, cuts(5 95)) ///
+    global(CTOOLS_cwinsor_fault) fault(bounds) modes(default snapshot) testname("[rollback] in place between cutoff phases")
+_ctools_rb_case, cmd(cwinsor y x1, cuts(5 95) suffix(_w)) ///
+    global(CTOOLS_cwinsor_fault) fault(bounds) testname("[rollback] new outputs between cutoff phases")
+_ctools_rb_case, cmd(cwinsor y x1, cuts(5 95)) ///
+    global(CTOOLS_cwinsor_fault) fault(store) rc(920) testname("[rollback] multiple variables, deferred store fails")
 _ctools_rb_case, cmd(cwinsor y x2 if keep, cuts(10 90) by(f2)) ///
     global(CTOOLS_cwinsor_fault) fault(post) testname("[rollback] in place by() if, sort variable")
 _ctools_rb_case, cmd(cwinsor y x1 if keep, cuts(10 90) by(f2) replace) ///

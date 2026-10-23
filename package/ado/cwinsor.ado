@@ -21,7 +21,7 @@ program define cwinsor
         if `rc' {
             if "`mode'" == "" {
                 * Values first, then labels, sort marker and c(changed)
-                if "$CTOOLS_cwinsor_plugin" != "" {
+                if "$CTOOLS_cwinsor_targets" != "" {
                     capture program ctools_plugin, plugin using("$CTOOLS_cwinsor_plugin")
                     capture noisily plugin call ctools_plugin $CTOOLS_cwinsor_targets, "cwinsor rollback"
                     if _rc di as error "cwinsor: the original values could not be restored"
@@ -29,6 +29,10 @@ program define cwinsor
                 _ctools_undo rollback CTOOLS_u_cwinsor_
             }
             else if "`mode'" == "snapshot" restore
+            if "$CTOOLS_cwinsor_plugin" != "" {
+                capture program ctools_plugin, plugin using("$CTOOLS_cwinsor_plugin")
+                capture plugin call ctools_plugin, "cwinsor commit"
+            }
             macro drop CTOOLS_cwinsor_plugin CTOOLS_cwinsor_targets
             exit `rc'
         }
@@ -199,12 +203,12 @@ program define _cwinsor_impl
     if `"`if'`in'"' == "" local opts "`opts' skipif"
     if "`trim'" != "" local opts "`opts' trim"
     * winsor2 expands non-grouped bounds through numeric local macros. This
-    * rounding can change whether an observed percentile is trimmed. Keep C's
-    * quickselect, but perform the same Stata expansion before comparisons.
-    if "`trim'"!="" & "`by'"=="" {
+    * rounding affects both clipping and trimming, including float midpoints.
+    * Keep C's loaded columns and quickselect across this scalar-only step.
+    if "`by'"=="" {
         tempname cwinsor_bounds
         matrix `cwinsor_bounds' = J(`nvars', 2, .)
-        local opts "`opts' returnbounds"
+        local opts "`opts' deferbounds"
     }
 
     if "`verbose'" != "" local opts "`opts' verbose"
@@ -230,23 +234,31 @@ program define _cwinsor_impl
     if `direct_outputs' local plugin_varlist `varlist' `by' `target_varlist'
     plugin call ctools_plugin `plugin_varlist' if `touse', ///
         "cwinsor `threads_opt' `nvars_target' `nby' `store_indices' `opts' `undo_opt'"
+    global CTOOLS_cwinsor_plugin "`__ctools_plugin'"
     if strpos("`undo_opt'", "undo") {
         * The plugin holds the original values until cwinsor commits
-        global CTOOLS_cwinsor_plugin "`__ctools_plugin'"
         global CTOOLS_cwinsor_targets "`target_varlist'"
     }
 
     * Include metadata, conversion and cleanup in the post-plugin measurement.
     quietly _ctools_clock __ct_start92
 
-    if "`trim'"!="" & "`by'"=="" {
+    if "`by'"=="" {
+        if "$CTOOLS_cwinsor_fault" == "bounds" error 1
         local bound_index=0
         foreach target of local target_varlist {
             local ++bound_index
             local lower = `cwinsor_bounds'[`bound_index',1]
             local upper = `cwinsor_bounds'[`bound_index',2]
-            quietly replace `target' = . if `touse' & !missing(`target') & ///
-                (`target'<`lower' | `target'>`upper')
+            matrix `cwinsor_bounds'[`bound_index',1] = `lower'
+            matrix `cwinsor_bounds'[`bound_index',2] = `upper'
+        }
+        capture noisily plugin call ctools_plugin `plugin_varlist', "cwinsor `threads_opt' apply"
+        local apply_rc = _rc
+        if `apply_rc' {
+            * The plugin restores a failed store before releasing its cache.
+            macro drop CTOOLS_cwinsor_targets
+            exit `apply_rc'
         }
     }
 

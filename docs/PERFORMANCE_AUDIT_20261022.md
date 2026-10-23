@@ -184,7 +184,8 @@ injections**, with no leaks reported by its allocation tracker. The new benchmar
 evidence parser passed all eight tests for incomplete grids, duplicate/missing
 checks, unsuccessful completion, invalid timings and mismatching outputs.
 Package synchronization, command inventory and suite registry checks passed.
-The numerical parity failure below means the complete winsor suite is **not green**.
+At the time of this performance audit, the numerical parity failure below meant
+the complete winsor suite was **not green**.
 
 The existing `validate_cwinsor.do` suite has one reproducible failure on **both**
 the untouched matched baseline and the candidate: its 100K-observation float
@@ -195,6 +196,15 @@ The resulting outputs differ by `2.384185791015625e-7` (one float ULP), just bey
 the suite's seven-significant-digit threshold. The optimization intentionally
 preserves existing numerical results; it does not relax this assertion or mask
 the failure. See the standalone reproducer in `validation/probes/`.
+
+The follow-up rounding fix now resolves this mismatch. It retains the loaded
+columns while Stata expands each ungrouped cutoff through numeric locals, then
+applies the rounded bounds in C without another data load or dataset scan.
+The updated winsor suite passes all 99 checks, and
+[`validate_winsor_rounding.do`](../validation/validate_winsor_rounding.do) adds
+433 exact-value comparisons against `winsor2`. The historical benchmark and
+baseline-failure records above are retained; follow-up performance measurements
+are recorded in [`winsor_rounding_20261022.json`](benchmarks/winsor_rounding_20261022.json).
 
 A smoke probe also found that `creghdfe ..., absorb(string_variable)` returns
 r(2000): its ado `markout` treats the string absorb variable as missing. The broad

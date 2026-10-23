@@ -71,6 +71,17 @@ static void lifecycle(void) {
  invoke(&winsor,"1 0 1 undo",0); invoke(&join,"using 1",0);
  assert(freed[CTOOLS_CMD_CWINSOR]==winsors+3);
  ctools_command_reset();
+ assert(ctools_command_begin(&winsor,"apply")==198);
+ winsors=freed[CTOOLS_CMD_CWINSOR];
+ invoke(&winsor,"1 0 1 deferbounds undo",0);
+ invoke(&winsor,"apply",0);
+ assert(freed[CTOOLS_CMD_CWINSOR]==winsors);
+ invoke(&winsor,"rollback",0);
+ assert(freed[CTOOLS_CMD_CWINSOR]==winsors+1);
+ invoke(&winsor,"1 0 1 deferbounds",0); invoke(&winsor,"apply",0);
+ assert(ctools_command_begin(&winsor,"apply")==198);
+ invoke(&winsor,"1 0 1 deferbounds",0); invoke(&winsor,"apply",459);
+ assert(ctools_command_begin(&winsor,"apply")==198);
 }
 static void parsing(void) {
  char b[32]="untouched";int n=47;uint64_t u=47;double d=47;

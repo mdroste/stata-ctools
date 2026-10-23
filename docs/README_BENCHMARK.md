@@ -100,16 +100,20 @@ change the results substantially.
 
 ## Results and provenance
 
-Measured October 14, 2026 on an Apple M4 Pro (12 logical CPUs, 48 GiB RAM),
-macOS 26.7.1, StataNow/MP 19.5 (revision August 12, 2026). Stata ran with
+Measured October 22, 2026 on an Apple M4 (10 logical CPUs, 16 GiB RAM),
+macOS 27.0, StataNow/MP 19.5 (revision May 21, 2025). Stata ran with
 **four processors**, the current Stata license limit, so the reference commands
-used at most four cores. ctools ran at its **default thread count: all 12
+used at most four cores. ctools ran at its **default thread count: all 10
 logical CPUs**. The speedups therefore include the extra cores ctools can use,
-not only per-core efficiency. The previous run (October 12) capped ctools at four
-threads as well. The plugin and `build/` wrappers were rebuilt from the
-working tree with `make macos-arm` immediately before the run; the manifest
-records their hashes. The working tree contains uncommitted work, so its HEAD
-is not asserted to identify the compiled source.
+not only per-core efficiency. The previous run (October 14) used an Apple M4 Pro
+with 12 logical CPUs and 48 GiB RAM; differences between runs also reflect the
+hardware and software environment.
+
+The Mac ARM OpenMP plugin was freshly rebuilt with the winsor2 cutoff-rounding
+fix. The profiler used a frozen copy of the plugin and wrappers through
+`CTOOLS_TEST_PLUGIN_DIR`; the manifest records their hashes and the source-tree
+hash. The working tree contained uncommitted fixes at measurement time, so its
+HEAD is context rather than the binary's source identity.
 
 All 120 timed calls completed with return code zero; all observation-count,
 imported-column-count, and estimator-sample-size checks passed. These checks

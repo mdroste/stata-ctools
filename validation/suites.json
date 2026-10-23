@@ -1584,6 +1584,17 @@
         "binscatter",
         "psmatch2"
       ]
+    },
+    {
+      "name": "winsor_rounding",
+      "path": "validation/validate_winsor_rounding.do",
+      "runner": "do",
+      "category": "correctness",
+      "marker": "WINSOR_ROUNDING_COMPLETE",
+      "fixtures": [],
+      "dependencies": [
+        "winsor2"
+      ]
     }
   ]
 }

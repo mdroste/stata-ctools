@@ -1172,6 +1172,11 @@ absent split field. Restricted outputs must remain initialized. `cwinsor` can
 load original sources and write separate floating-point destinations, retaining
 double working precision and avoiding repeated Stata `recast` copies. Its trim,
 integer-output and in-place undo paths retain their existing contracts.
+Ungrouped `cwinsor` retains its loaded columns between cutoff computation and
+application. Stata expands the two cutoffs per variable through numeric locals,
+matching `winsor2` rounding exactly, then the plugin applies them and stores the
+outputs once. The runtime owns this pending phase and clears it on interruption,
+failure, commit, or a different command; the undo copy survives successful apply.
 
 ### Parallelization
 

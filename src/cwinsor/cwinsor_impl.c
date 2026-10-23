@@ -168,6 +168,7 @@ typedef struct {
     double upper_pctl;
     int trim;
     int return_bounds;
+    int defer_bounds;  /* retain loaded columns while Stata rounds the cutoffs */
     int verbose;
     int undo;          /* keep the loaded target values for cwinsor rollback */
     int fault_store;   /* validation hook: fail after storing half the rows */
@@ -187,8 +188,28 @@ static struct {
     size_t nvars, nobs;
 } undo;
 
+static struct {
+    ctools_filtered_data data;
+    int *store_indices;
+    double *bounds;
+    size_t nvars;
+    ST_int host_nobs, host_nvars;
+    int trim, fault_store;
+    char matrix[256];
+    double time_winsor, time_store, time_total;
+} pending;
+
+static void cwinsor_pending_clear(void)
+{
+    ctools_filtered_data_free(&pending.data);
+    free(pending.store_indices);
+    free(pending.bounds);
+    memset(&pending, 0, sizeof(pending));
+}
+
 void cwinsor_cleanup_state(void)
 {
+    cwinsor_pending_clear();
     if (undo.values) {
         for (size_t v = 0; v < undo.nvars; v++) free(undo.values[v]);
         free(undo.values);
@@ -267,6 +288,58 @@ static void apply_trim_bounds(double *data, size_t nobs, double lower, double up
     ctools_simd_replace_oob(data, nobs, lower, upper, SV_missval);
 }
 
+/* The ado has expanded each cutoff through the same numeric local macros as
+ * winsor2. Keep the original contiguous columns across that scalar-only step:
+ * no second load, output initialization, or full-dataset replace is needed. */
+static ST_retcode cwinsor_apply_pending(void)
+{
+    if (!pending.nvars || pending.host_nobs != SF_nobs() ||
+        pending.host_nvars != SF_nvars()) {
+        cwinsor_cleanup_state();
+        return 198;
+    }
+    int rc = 0;
+    size_t nvars = pending.nvars, nobs = pending.data.data.nobs;
+    /* Read every cutoff before modifying or storing any column. */
+    for (size_t v = 0; v < nvars && !rc; v++) {
+        rc = SF_mat_el(pending.matrix, v+1, 1, &pending.bounds[2*v]);
+        if (!rc) rc = SF_mat_el(pending.matrix, v+1, 2, &pending.bounds[2*v+1]);
+    }
+    if (rc) { cwinsor_cleanup_state(); return rc; }
+    double start = ctools_timer_seconds();
+    #pragma omp parallel for schedule(static)
+    for (size_t v = 0; v < nvars; v++) {
+        double *values = pending.data.data.vars[v].data.dbl;
+        if (pending.trim) apply_trim_bounds(values, nobs, pending.bounds[2*v], pending.bounds[2*v+1]);
+        else apply_winsor_bounds(values, nobs, pending.bounds[2*v], pending.bounds[2*v+1]);
+    }
+    double computed = ctools_timer_seconds();
+    size_t nstore = pending.fault_store ? nobs/2 : nobs;
+    if (nvars == 1) {
+        rc = ctools_store_filtered_rowpar(pending.data.data.vars[0].data.dbl,
+                                         nstore, pending.store_indices[0], pending.data.obs_map);
+    } else {
+        #pragma omp parallel for schedule(static) reduction(max:rc)
+        for (size_t v = 0; v < nvars; v++) {
+            int err = ctools_store_filtered(pending.data.data.vars[v].data.dbl,
+                                           nstore, pending.store_indices[v], pending.data.obs_map);
+            if (err > rc) rc = err;
+        }
+    }
+    if (!rc && pending.fault_store) rc = STATA_ERR_MEMORY;
+    double stored = ctools_timer_seconds();
+    SF_scal_save("_cwinsor_time_winsor", pending.time_winsor + computed-start);
+    SF_scal_save("_cwinsor_time_store", pending.time_store + stored-computed);
+    SF_scal_save("_cwinsor_time_total", pending.time_total + stored-start);
+    cwinsor_pending_clear();
+    if (rc) {
+        if (undo.values && cwinsor_undo_restore())
+            ctools_error(CWINSOR_MODULE, "the original values could not be restored");
+        cwinsor_cleanup_state();
+    }
+    return ctools_stata_rc(rc);
+}
+
 /* ===========================================================================
    Group Detection
    =========================================================================== */
@@ -301,6 +374,8 @@ ST_retcode cwinsor_main(const char *args)
         return 198;
     }
 
+    if (!strcmp(args, "apply")) return cwinsor_apply_pending();
+
     /* End an in-place call: put the original values back, or drop the copy. */
     if (!strcmp(args, "commit")) {
         cwinsor_cleanup_state();
@@ -325,6 +400,8 @@ ST_retcode cwinsor_main(const char *args)
     config.upper_pctl = ctools_parse_double_option(args, "q", DEFAULT_UPPER_PCTL);
     config.trim = ctools_parse_bool_option(args, "trim");
     config.return_bounds = ctools_parse_bool_option(args, "returnbounds");
+    config.defer_bounds = ctools_parse_bool_option(args, "deferbounds");
+    if (config.defer_bounds) config.return_bounds = 1;
     config.verbose = ctools_parse_bool_option(args, "verbose");
     config.undo = ctools_parse_bool_option(args, "undo");
     config.fault_store = ctools_parse_bool_option(args, "fault_store");
@@ -742,6 +819,23 @@ ST_retcode cwinsor_main(const char *args)
 
     t_store = ctools_timer_seconds() - store_start;
 
+    if (!store_rc && config.defer_bounds) {
+        pending.data = target_filtered;
+        ctools_filtered_data_init(&target_filtered);
+        pending.store_indices = store_indices;
+        store_indices = NULL;
+        pending.bounds = bounds;
+        bounds = NULL;
+        pending.nvars = nvars;
+        pending.host_nobs = SF_nobs();
+        pending.host_nvars = SF_nvars();
+        pending.trim = config.trim;
+        pending.fault_store = config.fault_store;
+        memcpy(pending.matrix, bounds_name, sizeof(bounds_name));
+        pending.time_winsor = t_winsor;
+        pending.time_store = t_store;
+    }
+
     /* === Cleanup === */
 cleanup:
     free(bounds);
@@ -765,6 +859,7 @@ cleanup:
 
     /* Store timing scalars */
     double total = ctools_timer_seconds() - t_start;
+    if (pending.nvars) pending.time_total = total;
     SF_scal_save("_cwinsor_time_load", t_load);
     SF_scal_save("_cwinsor_time_sort", t_sort);
     SF_scal_save("_cwinsor_time_groups", t_groups);

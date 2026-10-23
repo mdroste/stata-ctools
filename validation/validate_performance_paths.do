@@ -120,11 +120,11 @@ foreach selection in "" "if mod(id,3)==0" "in 13/17000" {
     replace selected=1 `selection'
     foreach source in v1 vf {
         _pctile `source' if selected, p(5 95)
-        tempname lower upper
-        scalar `lower'=r(r1)
-        scalar `upper'=r(r2)
+        * winsor2 expands numeric locals, rounding the ungrouped cutoffs.
+        local lower=r(r1)
+        local upper=r(r2)
         local storage : type `source'
-        gen `storage' expected=min(max(`source',scalar(`lower')),scalar(`upper')) ///
+        gen `storage' expected=min(max(`source',`lower'),`upper') ///
             if selected & !missing(`source')
         cwinsor `source' `selection', cuts(5 95) suffix(_direct)
         assert `source'_direct==expected

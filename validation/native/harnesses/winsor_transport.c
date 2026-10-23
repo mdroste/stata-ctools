@@ -7,7 +7,10 @@
 
 static ST_plugin host;
 ST_plugin *_stata_ = &host;
-static int targets, byvars, store_at, store_calls, return_bounds;
+static int targets, byvars, store_at, store_calls, return_bounds, load_calls, read_at, read_calls;
+static int host_rows = 256;
+
+static ST_int host_nobs(void) { return host_rows; }
 
 static ST_int host_nvars(void)
 {
@@ -29,6 +32,12 @@ static ST_retcode store_bound(char *name, ST_int row, ST_int col, double value)
     assert(strcmp(name, "bounds") == 0);
     assert(value == input_value(row, col == 1 ? 1 : 255));
     return ++store_calls == store_at ? 459 : 0;
+}
+static ST_retcode read_bound(char *name, ST_int row, ST_int col, double *value)
+{
+    assert(strcmp(name, "bounds") == 0);
+    *value = input_value(row, col == 1 ? 1 : 255);
+    return ++read_calls == read_at ? 459 : 0;
 }
 int ctools_get_max_threads(void)
 {
@@ -63,6 +72,7 @@ static double input_value(int v, int obs)
 stata_retcode ctools_data_load(ctools_filtered_data *d, int *vars, size_t n, size_t start,
                                size_t end, int flags)
 {
+    load_calls++;
     const int count = 128;
     d->data.vars = calloc(n, sizeof(stata_variable));
     if (!d->data.vars)
@@ -135,9 +145,18 @@ static int run_command(void)
 {
     char args[128];
     snprintf(args, sizeof(args), "%d %d %s p=0 q=100 %s", targets, byvars,
-             targets == 1 ? "1" : "1 2 3", return_bounds ? "trim returnbounds" : "");
-    store_calls = 0;
+             targets == 1 ? "1" : "1 2 3",
+             return_bounds == 2 ? "deferbounds" : return_bounds ? "trim returnbounds" : "");
+    store_calls = read_calls = load_calls = 0;
     int rc = cwinsor_main(args);
+    if (!rc && return_bounds == 2) {
+        assert(pending.nvars == (size_t)targets);
+        assert(store_calls == 2*targets); /* Only the cutoff matrix was written. */
+        rc = cwinsor_main("apply");
+        assert(!pending.nvars);
+        assert(load_calls == 1);
+    }
+    cwinsor_cleanup_state();
     leftovers();
     assert(alive == 0);
     return rc;
@@ -146,16 +165,19 @@ static int run_command(void)
 int main(void)
 {
     host.nvars = host_nvars;
+    host.nobs = host_nobs;
     host.scalsave = save_scalar;
     host.macuse = read_macro;
     host.matstore = store_bound;
     host.safematstore = store_bound;
+    host.matel = read_bound;
+    host.safematel = read_bound;
     host.missval = 8.98846567431158e307;
 #ifdef _OPENMP
     omp_set_num_threads(4);
 #endif
     int checked = 0;
-    for (return_bounds = 0; return_bounds <= 1; return_bounds++)
+    for (return_bounds = 0; return_bounds <= 2; return_bounds++)
         for (targets = 1; targets <= 3; targets += 2)
             for (byvars = 0; byvars <= 2; byvars += 2)
             {
@@ -174,12 +196,32 @@ int main(void)
                     assert(run_command() == 0);
                     checked++;
                 }
-                for (store_at = 1; store_at <= (return_bounds ? 2 * targets : 128); store_at *= 2)
+                for (store_at = 1; store_at <= (return_bounds == 1 ? 2 * targets : 128); store_at *= 2)
                 {
                     assert(run_command() == 459);
                     checked++;
                 }
+                store_at = 0;
+                if (return_bounds == 2) {
+                    for (read_at = 1; read_at <= 2*targets; read_at++) {
+                        assert(run_command() == 459);
+                        assert(store_calls == 2*targets); /* No data stores on a cutoff read failure. */
+                        checked++;
+                    }
+                    read_at = 0;
+                }
             }
+    targets=1; byvars=0; fail_at=store_at=read_at=0;
+    assert(cwinsor_main("apply") == 198);
+    assert(cwinsor_main("1 0 1 p=0 q=100 deferbounds") == 0);
+    host_rows++;
+    assert(cwinsor_main("apply") == 198);
+    host_rows--;
+    assert(!pending.nvars);
+    assert(cwinsor_main("1 0 1 p=0 q=100 deferbounds") == 0);
+    assert(cwinsor_main("commit") == 0);
+    assert(cwinsor_main("apply") == 198);
+    leftovers(); assert(alive == 0);
     printf("PASS winsor transport: %d allocation/store injections, no leaks\n", checked);
     return 0;
 }
