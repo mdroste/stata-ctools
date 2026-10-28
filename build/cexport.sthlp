@@ -173,7 +173,7 @@ variables. This overrides the variables' display formats. Common formats include
 
 {phang}
 {opt threads(#)} specifies the maximum number of threads to use for parallel
-operations. By default, {cmd:cexport} uses all available CPU cores.
+operations. By default, {cmd:cexport} uses the {help ctools##threads:ctools thread setting}, which is at most 16 threads unless you change it.
 
 {dlgtab:Advanced Performance}
 

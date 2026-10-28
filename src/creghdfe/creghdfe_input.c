@@ -2,6 +2,18 @@
 #include <string.h>
 #include <stdio.h>
 
+/* A scalar the wrapper always sets: a missing one is a protocol error, not a
+ * value left over from the previous read. */
+static ST_retcode read_required(const char *name, ST_double *value)
+{
+    if (SF_scal_use((char *)name, value) == 0)
+        return 0;
+    char msg[96];
+    snprintf(msg, sizeof(msg), "creghdfe: plugin scalar %s is not set\n", name);
+    SF_error(msg);
+    return 198;
+}
+
 ST_retcode creghdfe_read_input(creghdfe_input *input)
 {
     ST_int K = 0;
@@ -16,24 +28,34 @@ ST_retcode creghdfe_read_input(creghdfe_input *input)
     ST_int resid_var_idx = 0;
     ST_double df_a_nested = 0;
     ST_double val = 0;
+    ST_retcode rc;
     /* Read parameters */
-    SF_scal_use("__creghdfe_K", &val);
+    if ((rc = read_required("__creghdfe_K", &val)))
+        return rc;
     K = (ST_int)val;
-    SF_scal_use("__creghdfe_G", &val);
+    if ((rc = read_required("__creghdfe_G", &val)))
+        return rc;
     G = (ST_int)val;
-    SF_scal_use("__creghdfe_drop_singletons", &val);
+    if ((rc = read_required("__creghdfe_drop_singletons", &val)))
+        return rc;
     drop_singletons = (ST_int)val;
-    SF_scal_use("__creghdfe_verbose", &val);
+    if ((rc = read_required("__creghdfe_verbose", &val)))
+        return rc;
     verbose = (ST_int)val;
-    SF_scal_use("__creghdfe_maxiter", &val);
+    if ((rc = read_required("__creghdfe_maxiter", &val)))
+        return rc;
     maxiter = (ST_int)val;
-    SF_scal_use("__creghdfe_tolerance", &val);
+    if ((rc = read_required("__creghdfe_tolerance", &val)))
+        return rc;
     ST_double tolerance = val;
-    SF_scal_use("__creghdfe_standardize", &val);
+    if ((rc = read_required("__creghdfe_standardize", &val)))
+        return rc;
     standardize = (ST_int)val;
-    SF_scal_use("__creghdfe_vce_type", &val);
+    if ((rc = read_required("__creghdfe_vce_type", &val)))
+        return rc;
     vcetype = (ST_int)val;
-    SF_scal_use("__creghdfe_df_a_nested", &val);
+    if ((rc = read_required("__creghdfe_df_a_nested", &val)))
+        return rc;
     df_a_nested = val;
 
     /* Read weight parameters */

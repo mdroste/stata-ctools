@@ -1101,14 +1101,9 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
     ctx->plain_numbers = ctx->decimal_separator == '.' && ctx->group_separator == '\0' &&
                          !cimport_locale_active();
 
-#ifdef CIMPORT_WINDOWS
-    SYSTEM_INFO sysinfo;
-    GetSystemInfo(&sysinfo);
-    int cpu_count = (int)sysinfo.dwNumberOfProcessors;
-#else
-    int cpu_count = (int)sysconf(_SC_NPROCESSORS_ONLN);
-#endif
-    if (cpu_count <= 0) cpu_count = 4;
+    /* Chunks follow the thread limit, so threads() and the default cap apply. */
+    int cpu_count = ctools_get_max_threads();
+    if (cpu_count <= 0) cpu_count = 1;
     if (cpu_count > CIMPORT_MAX_THREADS) cpu_count = CIMPORT_MAX_THREADS;
     ctx->num_threads = cpu_count;
 

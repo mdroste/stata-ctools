@@ -149,7 +149,7 @@ density estimation used in computing standard errors.
 {opt verbose} displays detailed progress information and timing breakdown.
 
 {phang}
-{opt threads(#)} specifies the maximum number of threads to use for parallel operations. By default, {cmd:cqreg} uses all available CPU cores.
+{opt threads(#)} specifies the maximum number of threads to use for parallel operations. By default, {cmd:cqreg} uses the {help ctools##threads:ctools thread setting}, which is at most 16 threads unless you change it.
 
 {dlgtab:Optimization}
 

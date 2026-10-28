@@ -101,7 +101,7 @@ labels to a specific length.
 
 {phang}
 {opt threads(#)} limits the number of threads the ctools plugin uses. The
-default is all available processors. It has no effect on variables decoded by
+default is the {help ctools##threads:ctools thread setting}, at most 16 threads unless you change it. It has no effect on variables decoded by
 {cmd:decode} itself.
 
 {phang}

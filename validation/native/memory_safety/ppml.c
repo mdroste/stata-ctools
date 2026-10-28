@@ -3,7 +3,7 @@
 #include "ctools_types.h"
 #include "stplugin.h"
 #include <math.h>
-static int store_at, store_calls;
+static int store_at, store_calls, scalar_at, scalar_calls, matrix_at, matrix_calls;
 static ST_plugin mock;
 ST_plugin *_stata_ = &mock;
 static int clustered = 0, weighted = 0, mode = 0;
@@ -37,11 +37,13 @@ static ST_retcode scalar(char *k, double *v) {
         *v = 1;
     return 0;
 }
-static ST_retcode save(char *k, double v) { return 0; }
+static ST_retcode save(char *k, double v) { return ++scalar_calls == scalar_at ? 459 : 0; }
 static ST_retcode store(ST_int v, ST_int i, double x) {
     return ++store_calls == store_at ? 459 : 0;
 }
-static ST_retcode mat(char *k, ST_int i, ST_int j, double x) { return 0; }
+static ST_retcode mat(char *k, ST_int i, ST_int j, double x) {
+    return ++matrix_calls == matrix_at ? 459 : 0;
+}
 static ST_boolean missing(double x) { return x >= 8.98846567431158e307; }
 int ctools_get_max_threads(void) { return 1; }
 int ctools_get_max_threads_used(void) { return 1; }
@@ -100,6 +102,8 @@ stata_retcode ctools_data_load(ctools_filtered_data *d, int *v, size_t n, size_t
 #include "ctools_spi.c"
 int main(int argc, char **argv) {
     store_at = argc > 5 ? atoi(argv[5]) : 0;
+    scalar_at = argc > 6 ? atoi(argv[6]) : 0;
+    matrix_at = argc > 7 ? atoi(argv[7]) : 0;
     fail_at = argc > 1 ? atoi(argv[1]) : 0;
     clustered = argc > 2 ? atoi(argv[2]) : 1;
     weighted = argc > 3 ? atoi(argv[3]) : 1;
@@ -122,7 +126,7 @@ int main(int argc, char **argv) {
     int first_rc = rc, first_calls = calls;
     assert(alive == 0);
     fail_at = 0;
-    store_at = 0;
+    store_at = scalar_at = matrix_at = 0;
     calls = 0;
     assert(do_ppml_regression(0, NULL) == 0);
     assert(alive == 0);

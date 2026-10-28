@@ -124,7 +124,7 @@ such as "1.234,56", also specify {cmd:ignore(".")}.
 
 {phang}
 {opt threads(#)} specifies the maximum number of threads to use for parallel
-operations. By default, {cmd:cdestring} uses all available CPU cores.
+operations. By default, {cmd:cdestring} uses the {help ctools##threads:ctools thread setting}, which is at most 16 threads unless you change it.
 
 {phang}
 {opt verbose} displays detailed progress information and timing breakdown.

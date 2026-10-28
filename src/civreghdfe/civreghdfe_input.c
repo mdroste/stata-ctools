@@ -2,59 +2,90 @@
 #include <string.h>
 #include <stdio.h>
 
+/* A scalar the wrapper always sets: a missing one is a protocol error, not a
+ * value left over from the previous read. */
+static ST_retcode read_required(const char *name, ST_double *value)
+{
+    if (SF_scal_use((char *)name, value) == 0)
+        return 0;
+    char msg[96];
+    snprintf(msg, sizeof(msg), "civreghdfe: plugin scalar %s is not set\n", name);
+    SF_error(msg);
+    return 198;
+}
+
 ST_retcode civreghdfe_read_input(civreghdfe_input *input)
 {
     ST_double dval = 0;
+    ST_retcode rc;
     /* Read configuration scalars */
     ST_int K_endog, K_exog, K_iv, G;
     ST_int has_cluster, has_weights, weight_type;
     ST_int vce_type, maxiter, verbose;
     ST_double tolerance;
 
-    SF_scal_use("__civreghdfe_K_endog", &dval);
+    if ((rc = read_required("__civreghdfe_K_endog", &dval)))
+        return rc;
     K_endog = (ST_int)dval;
-    SF_scal_use("__civreghdfe_K_exog", &dval);
+    if ((rc = read_required("__civreghdfe_K_exog", &dval)))
+        return rc;
     K_exog = (ST_int)dval;
-    SF_scal_use("__civreghdfe_K_iv", &dval);
+    if ((rc = read_required("__civreghdfe_K_iv", &dval)))
+        return rc;
     K_iv = (ST_int)dval;
-    SF_scal_use("__civreghdfe_G", &dval);
+    if ((rc = read_required("__civreghdfe_G", &dval)))
+        return rc;
     G = (ST_int)dval;
-    SF_scal_use("__civreghdfe_has_cluster", &dval);
+    if ((rc = read_required("__civreghdfe_has_cluster", &dval)))
+        return rc;
     has_cluster = (ST_int)dval;
     ST_int has_cluster2 = 0;
-    SF_scal_use("__civreghdfe_has_cluster2", &dval);
+    if ((rc = read_required("__civreghdfe_has_cluster2", &dval)))
+        return rc;
     has_cluster2 = (ST_int)dval;
-    SF_scal_use("__civreghdfe_has_weights", &dval);
+    if ((rc = read_required("__civreghdfe_has_weights", &dval)))
+        return rc;
     has_weights = (ST_int)dval;
-    SF_scal_use("__civreghdfe_weight_type", &dval);
+    if ((rc = read_required("__civreghdfe_weight_type", &dval)))
+        return rc;
     weight_type = (ST_int)dval;
-    SF_scal_use("__civreghdfe_vce_type", &dval);
+    if ((rc = read_required("__civreghdfe_vce_type", &dval)))
+        return rc;
     vce_type = (ST_int)dval;
-    SF_scal_use("__civreghdfe_maxiter", &dval);
+    if ((rc = read_required("__civreghdfe_maxiter", &dval)))
+        return rc;
     maxiter = (ST_int)dval;
-    SF_scal_use("__civreghdfe_tolerance", &dval);
+    if ((rc = read_required("__civreghdfe_tolerance", &dval)))
+        return rc;
     tolerance = dval;
-    SF_scal_use("__civreghdfe_verbose", &dval);
+    if ((rc = read_required("__civreghdfe_verbose", &dval)))
+        return rc;
     verbose = (ST_int)dval;
     /* nested_fe_index from .ado is no longer used — data-based detection in C handles it */
 
     /* New scalars for estimation method */
     ST_int est_method = 0;
     ST_double kclass_user = 0, fuller_alpha = 0;
-    SF_scal_use("__civreghdfe_est_method", &dval);
+    if ((rc = read_required("__civreghdfe_est_method", &dval)))
+        return rc;
     est_method = (ST_int)dval;
-    SF_scal_use("__civreghdfe_kclass", &dval);
+    if ((rc = read_required("__civreghdfe_kclass", &dval)))
+        return rc;
     kclass_user = dval;
-    SF_scal_use("__civreghdfe_fuller", &dval);
+    if ((rc = read_required("__civreghdfe_fuller", &dval)))
+        return rc;
     fuller_alpha = dval;
 
     /* HAC parameters */
     ST_int kernel_type = 0, bw = 0, kiefer = 0;
-    SF_scal_use("__civreghdfe_kernel", &dval);
+    if ((rc = read_required("__civreghdfe_kernel", &dval)))
+        return rc;
     kernel_type = (ST_int)dval;
-    SF_scal_use("__civreghdfe_bw", &dval);
+    if ((rc = read_required("__civreghdfe_bw", &dval)))
+        return rc;
     bw = (ST_int)dval;
-    SF_scal_use("__civreghdfe_kiefer", &dval);
+    if ((rc = read_required("__civreghdfe_kiefer", &dval)))
+        return rc;
     kiefer = (ST_int)dval;
 
     /* tsset structure for the kernel estimators (HAC, AC, Driscoll-Kraay,
@@ -70,13 +101,17 @@ ST_retcode civreghdfe_read_input(civreghdfe_input *input)
 
     /* DOF adjustment parameters */
     ST_int dofminus = 0, sdofminus_opt = 0, nopartialsmall = 0, center = 0;
-    SF_scal_use("__civreghdfe_dofminus", &dval);
+    if ((rc = read_required("__civreghdfe_dofminus", &dval)))
+        return rc;
     dofminus = (ST_int)dval;
-    SF_scal_use("__civreghdfe_sdofminus", &dval);
+    if ((rc = read_required("__civreghdfe_sdofminus", &dval)))
+        return rc;
     sdofminus_opt = (ST_int)dval;
-    SF_scal_use("__civreghdfe_nopartialsmall", &dval);
+    if ((rc = read_required("__civreghdfe_nopartialsmall", &dval)))
+        return rc;
     nopartialsmall = (ST_int)dval;
-    SF_scal_use("__civreghdfe_center", &dval);
+    if ((rc = read_required("__civreghdfe_center", &dval)))
+        return rc;
     center = (ST_int)dval;
 
     input->K_endog = K_endog;

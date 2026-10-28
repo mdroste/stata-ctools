@@ -158,26 +158,67 @@
    Unified Thread Management
 
    All ctools modules use these functions for thread configuration.
-   The default thread limit is captured from the OS CPU count at plugin entry,
+   The default thread limit is resolved once per process at plugin entry,
    and can be overridden via the threads() option in Stata commands.
 
-   Thread limit hierarchy:
-   1. User-specified via threads() option -> ctools_set_max_threads()
-   2. OS CPU capacity captured before third-party plugins alter OpenMP
-   3. OpenMP-only kernels use one worker when OpenMP is unavailable
+   Thread limit hierarchy (first that is set wins):
+   1. threads() option on the command            -> ctools_set_max_threads()
+   2. Session setting: global CTOOLS_THREADS     (ctools, threads(#))
+   3. CTOOLS_NUM_THREADS environment variable
+   4. Saved per-user setting                     (ctools, threads(#) permanently)
+   5. OMP_NUM_THREADS environment variable (first entry)
+   6. CTOOLS_DEFAULT_THREAD_CAP
+   Every source is clamped to the CPUs this process may use (affinity mask and
+   Linux cgroup quota), OMP_THREAD_LIMIT and CTOOLS_MAX_THREADS. The default
+   is captured before third-party plugins can alter the OpenMP runtime.
+   OpenMP-only kernels use one worker when OpenMP is unavailable.
 
    Usage:
    - Call ctools_get_max_threads() to get current limit
    - Call ctools_set_max_threads(n) to override (0 = reset to default)
    ============================================================================ */
 
-/* Capture the true system thread count at plugin init, before external
+/* Default thread count when nothing is configured. Most ctools work is memory
+ * bound, so large servers gain little beyond this and are often shared. */
+#define CTOOLS_DEFAULT_THREAD_CAP 16
+
+typedef struct {
+    int detected;    /* logical CPUs reported by the OS */
+    int available;   /* CPUs this process may use: affinity, cgroup quota */
+    int omp_limit;   /* OMP_THREAD_LIMIT: >0 set, 0 unset, -1 invalid */
+    int env_ctools;  /* CTOOLS_NUM_THREADS, same encoding */
+    int saved;       /* threads= in the settings file, same encoding */
+    int env_omp;     /* OMP_NUM_THREADS (first entry), same encoding */
+    int limit;       /* most threads any source may request */
+    int threads;     /* resolved default */
+    const char *source;  /* which input chose threads */
+    char settings_path[4096];  /* UTF-8; empty when no home directory */
+} ctools_thread_policy;
+
+/* Parse a thread count: >0 valid, 0 empty, -1 invalid. When list is nonzero
+ * the value may continue with ",..." (OMP_NUM_THREADS nesting levels). */
+int ctools_parse_thread_value(const char *text, int list);
+
+/* Fill limit, threads and source from the other fields. Pure. */
+void ctools_thread_policy_resolve(ctools_thread_policy *policy);
+
+/* Process-wide policy, read from the OS and environment on first use. */
+const ctools_thread_policy *ctools_thread_policy_get(void);
+
+/* Clamp an explicit request to the policy limit. */
+int ctools_clamp_thread_request(int n);
+
+/* Save (n > 0) or remove (n == 0) the per-user thread setting and make it
+ * the default for this process. Returns 0, or -1 with errno set. */
+int ctools_save_thread_setting(int n);
+
+/* Capture the resolved default at plugin init, before external
  * plugins can pollute it. Call once at plugin entry. */
 void ctools_init_thread_count(void);
 
 /* Get the current maximum thread count for ctools operations.
- * Returns the user-set limit if specified, otherwise the system default
- * captured at init (immune to external OpenMP pollution). */
+ * Returns the user-set limit if specified, otherwise the default
+ * resolved at init (immune to external OpenMP pollution). */
 /* Bound explicit requests before passing them to OpenMP. Large scratch users
  * further reduce concurrency to a 256 MiB aggregate workspace target. One
  * worker is always allowed, even when its required buffer exceeds the target. */
@@ -215,8 +256,8 @@ static inline int ctools_get_openmp_threads(void)
  * Pass n > 0 to set a specific limit. */
 void ctools_set_max_threads(int n);
 
-/* Reset thread limit to default (runtime-detected).
- * Also restores the OpenMP runtime to the system default. */
+/* Reset thread limit to the resolved default.
+ * Also restores the OpenMP runtime to that default. */
 void ctools_reset_max_threads(void);
 
 /*

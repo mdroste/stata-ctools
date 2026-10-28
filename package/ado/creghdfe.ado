@@ -69,34 +69,47 @@ program define _creghdfe_impl, eclass
 
     * Parse absorb option for suboptions (savefe)
     local savefe = 0
-    local absorb_vars ""
+    local absorb_vars "`absorb'"
     if strpos(`"`absorb'"', ",") > 0 {
         gettoken absorb_vars absorb_opts : absorb, parse(",")
-        local absorb_opts = subinstr("`absorb_opts'", ",", "", 1)
-        local absorb_opts = trim("`absorb_opts'")
-        if strpos(lower("`absorb_opts'"), "savefe") > 0 {
-            local savefe = 1
-        }
-        local absorb_vars = trim("`absorb_vars'")
+        _creghdfe_absorb_opts `absorb_opts'
     }
-    else {
-        local absorb_vars "`absorb'"
-    }
-    * Reassign absorb to the varlist portion only. Expand wildcards and
-    * ranges (fe*, fe1-fe3): the FE count and every plugin variable position
-    * are computed from this list, while markout and plugin call expand it.
-    unab absorb : `absorb_vars'
 
     * Parse dofadjustments option as reghdfe does
     * 0=all (default), 1=none, 2=firstpair, 3=pairwise; all implies clusters
     local dof_lower = lower(`"`dofadjustments'"')
-    _creghdfe_parse_dof, `dof_lower'
+    _ctools_hdfe_dof, `dof_lower'
     local dof_adjust_type = `s(type)'
     local dof_clusters = `s(clusters)'
+    local dofmethods `s(methods)'
 
     * Mark sample - include absorb and cluster variables
     marksample touse
-    markout `touse' `absorb'
+
+    * One variable per absorbed effect, in order: the FE count and every
+    * plugin variable position are computed from this list. A numeric
+    * variable goes to the plugin as it is; string variables and
+    * interactions are numbered first (the plugin renumbers every effect on
+    * the estimation sample). absorb_names holds the effects as reghdfe
+    * names them, for e(absorb) and the output.
+    _ctools_hdfe_absorb `absorb_vars', touse(`touse') cmd(creghdfe)
+    local nfe = r(n)
+    forvalues g = 1/`nfe' {
+        local absorb_name_`g' `r(name_`g')'
+        local absorb_vars_`g' `r(vars_`g')'
+        local absorb_group_`g' = r(group_`g')
+    }
+    local absorb
+    local absorb_names
+    forvalues g = 1/`nfe' {
+        local absorb_names `absorb_names' `absorb_name_`g''
+        if `absorb_group_`g'' {
+            tempvar absorb_id_`g'
+            quietly _ctools_group `absorb_vars_`g'' if `touse', generate(`absorb_id_`g'')
+            local absorb `absorb' `absorb_id_`g''
+        }
+        else local absorb `absorb' `absorb_vars_`g''
+    }
 
     * Parse weights
     local weight_var ""
@@ -107,6 +120,58 @@ program define _creghdfe_impl, eclass
         _ctools_weight, generate(`evaluated_weight') touse(`touse') type(`weight') expression(`"`exp'"')
         local weight_var "`evaluated_weight'"
         local weight_type = cond("`weight'" == "aweight", 1, cond("`weight'" == "fweight", 2, 3))
+    }
+
+    * Parse VCE option. Its cluster variables are marked out before the
+    * factor variables are expanded, so that their levels come from the
+    * estimation sample.
+    local vcetype = 0   // 0=unadjusted, 1=robust, 2=cluster
+    local clustervar ""
+    local clustervar_orig ""
+
+    * pweight forces robust VCE (unless clustering)
+    if `weight_type' == 3 {
+        local vcetype = 1
+    }
+
+    if `"`vce'"' != "" {
+        _ctools_hdfe_vce, spec(`"`vce'"') touse(`touse') cmd(creghdfe)
+        local vce_kind `r(kind)'
+        if "`vce_kind'" == "cluster" {
+            local vcetype = 2
+            if r(ndims) == 0 {
+                di as error "creghdfe: cluster variable required with vce(cluster)"
+                exit 198
+            }
+            if r(ndims) > 1 {
+                di as error "creghdfe: multi-way clustering is not supported; specify one cluster variable in vce(cluster)"
+                exit 198
+            }
+            * Reported as reghdfe names it; a string variable or an
+            * interaction is numbered first, as egen group() would
+            local clustervar_orig `r(name_1)'
+            local clustervar `r(vars_1)'
+            if r(group_1) {
+                tempvar clustervar_numeric
+                quietly _ctools_group `clustervar' if `touse', generate(`clustervar_numeric')
+                local clustervar `clustervar_numeric'
+            }
+        }
+        else if "`vce_kind'" == "robust" {
+            local vcetype = 1
+        }
+        else if inlist("`vce_kind'", "unadjusted", "ols") {
+            * As in reghdfe: pweights need robust or clustered standard errors
+            if `weight_type' == 3 {
+                di as error "pweights do not work with vce(unadjusted), use a different vce()"
+                exit 9
+            }
+            local vcetype = 0
+        }
+        else {
+            di as error "creghdfe: unrecognized vce() option"
+            exit 9
+        }
     }
 
     * Parse variable list
@@ -148,65 +213,6 @@ program define _creghdfe_impl, eclass
     }
 
     local nvars : word count `varlist_expanded'
-    local nfe : word count `absorb'
-
-    * Parse VCE option
-    local vcetype = 0   // 0=unadjusted, 1=robust, 2=cluster
-    local clustervar ""
-    local clustervar_orig ""
-    local clustervar_is_temp = 0
-
-    * pweight forces robust VCE (unless clustering)
-    if `weight_type' == 3 {
-        local vcetype = 1
-    }
-
-    if `"`vce'"' != "" {
-        _ctools_vce vce_kind clustervar : `vce'
-        if "`vce_kind'" == "cluster" {
-            local vcetype = 2
-            if "`clustervar'" == "" {
-                di as error "creghdfe: cluster variable required with vce(cluster)"
-                exit 198
-            }
-            unab clustervar : `clustervar'
-            if `: word count `clustervar'' > 1 {
-                di as error "creghdfe: multi-way clustering is not supported; specify one cluster variable in vce(cluster)"
-                exit 198
-            }
-            * Save original cluster variable name for reporting
-            local clustervar_orig "`clustervar'"
-            * Check if cluster variable is string - if so, convert to numeric
-            capture confirm numeric variable `clustervar'
-            if _rc != 0 {
-                * String variable - number its values in C, as egen group() would
-                tempvar clustervar_numeric
-                quietly _ctools_group `clustervar', generate(`clustervar_numeric')
-                local clustervar "`clustervar_numeric'"
-                local clustervar_is_temp = 1
-            }
-            * Mark out cluster variable from sample (only for numeric vars)
-            * String variables are handled by marking missing string values
-            capture confirm numeric variable `clustervar_orig'
-            if _rc == 0 {
-                markout `touse' `clustervar_orig'
-            }
-            else {
-                * For string variables, mark out empty strings
-                quietly replace `touse' = 0 if `clustervar_orig' == "" & `touse' == 1
-            }
-        }
-        else if "`vce_kind'" == "robust" {
-            local vcetype = 1
-        }
-        else if inlist("`vce_kind'", "unadjusted", "ols") {
-            local vcetype = 0
-        }
-        else {
-            di as error "creghdfe: unrecognized vce() option"
-            exit 9
-        }
-    }
 
     * Count observations
     qui count if `touse'
@@ -356,7 +362,6 @@ program define _creghdfe_impl, eclass
     local num_singletons = __creghdfe_num_singletons
     local K_keep = __creghdfe_K_keep
     local df_a = __creghdfe_df_a
-    local mobility_groups = __creghdfe_mobility_groups
     capture local num_iters = __creghdfe_iterations
     if _rc != 0 local num_iters = 1
 
@@ -458,8 +463,8 @@ program define _creghdfe_impl, eclass
     * Label the groupvar variable (mobility group identifier), as reghdfe
     * labels the groups of its first pair of absorbed effects
     if "`groupvar'" != "" {
-        local __fe1 : word 1 of `absorb'
-        local __fe2 : word 2 of `absorb'
+        local __fe1 : word 1 of `absorb_names'
+        local __fe2 : word 2 of `absorb_names'
         if "`__fe2'" != "" label var `groupvar' "Mobility group between `__fe1' and `__fe2'"
         else label var `groupvar' "Mobility group"
     }
@@ -467,7 +472,7 @@ program define _creghdfe_impl, eclass
     * Label the savefe variables (fixed effect estimates)
     if `savefe' {
         forval g = 1/`nfe' {
-            local fevar : word `g' of `absorb'
+            local fevar : word `g' of `absorb_names'
             label var __hdfe`g'__ "FE for `fevar'"
         }
     }
@@ -511,28 +516,32 @@ program define _creghdfe_impl, eclass
     ereturn scalar tss = scalar(`cr_tss')
     ereturn scalar tss_within = scalar(`cr_tss_w')
     ereturn scalar df_a = `df_a_adjusted'
-    ereturn scalar df_a_initial = `df_a'
     ereturn scalar df_a_nested = `df_a_nested'
     ereturn scalar F = `F'
     ereturn scalar rank = `df_m'
-    ereturn scalar N_hdfe = `nfe'
-    ereturn scalar N_hdfe_extended = `mobility_groups'
     ereturn scalar num_singletons = `num_singletons'
+    ereturn scalar drop_singletons = 1
 
-    if `vcetype' == 2 {
-        ereturn scalar N_clust = __creghdfe_N_clust
-        ereturn local clustvar "`clustervar_orig'"
-    }
-
+    * The absorbed effects (creghdfe has no slopes to add), the absorbed
+    * degrees of freedom table and the covariance labels, as reghdfe posts
+    * them; the model without absorb() absorbs _cons
     if `__noabsorb' {
         ereturn local absorb ""
+        local absvars _cons
     }
     else {
-        ereturn local absorb "`absorb'"
+        ereturn local absorb "`absorb_names'"
+        local absvars `absorb_names'
     }
+    local vcename = cond(`vcetype'==0, "unadjusted", cond(`vcetype'==1, "robust", "cluster"))
+    local cluster_post
+    if `vcetype' == 2 local cluster_post clustvars(`clustervar_orig') nclust(`=__creghdfe_N_clust')
+    _ctools_hdfe_post, stub(__creghdfe) absvars(`absvars') nhdfe(`nfe') vce(`vcename') ///
+        dofmethod(`dofmethods') `cluster_post'
+    ereturn local title "HDFE Linear regression"
+    ereturn local title2 = "Absorbing `nfe' HDFE " + cond(`nfe' > 1, "groups", "group")
     ereturn local depvar "`depvar_orig'"
     ereturn local indepvars "`indepvars'"
-    ereturn local vce = cond(`vcetype'==0, "unadjusted", cond(`vcetype'==1, "robust", "cluster"))
     if "`resid_varname'" != "" {
         ereturn local resid "`resid_varname'"
     }
@@ -573,7 +582,7 @@ program define _creghdfe_impl, eclass
     local total_coefs = 0
     local has_nested = 0
     forval g = 1/`nfe' {
-        local fevar : word `g' of `absorb'
+        local fevar : word `g' of `absorb_names'
         local cats = `fe_levels_`g''
         * Redundant coefficients as counted by the plugin: every level of an
         * FE nested within the clusters, otherwise reghdfe's mobility-group count
@@ -647,17 +656,9 @@ program define _creghdfe_impl, eclass
     if "$CTOOLS_creghdfe_fault" == "post" error 1
 end
 
-* dofadjustments(): all (the default), none, or any of firstpair|pairwise,
-* clusters and continuous, with reghdfe's abbreviations and exclusions.
-* Returns s(type): 0=all, 1=none, 2=firstpair, 3=pairwise, and s(clusters).
-* continuous concerns slope coefficients, which creghdfe does not absorb.
-program define _creghdfe_parse_dof, sclass
+* absorb(absvars, savefe): reghdfe's only suboption; anything else is an error
+program define _creghdfe_absorb_opts
     version 14.1
-    syntax [, ALL NONE FIRSTpair PAIRwise CLusters CONTinuous]
-    if "`none'`firstpair'`pairwise'`clusters'`continuous'" == "" local all all
-    opts_exclusive "`all' `none' `firstpair' `pairwise'" dofadjustments
-    opts_exclusive "`all' `none' `clusters'" dofadjustments
-    opts_exclusive "`all' `none' `continuous'" dofadjustments
-    sreturn local type = cond("`all'" != "", 0, cond("`firstpair'" != "", 2, cond("`pairwise'" != "", 3, 1)))
-    sreturn local clusters = "`all'`clusters'" != ""
+    syntax [, SAVEfe]
+    c_local savefe = ("`savefe'" != "")
 end

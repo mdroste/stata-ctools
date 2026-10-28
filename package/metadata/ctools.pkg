@@ -99,6 +99,10 @@ f _ctools_lap.ado
 f _ctools_vce.ado
 f _ctools_mode.ado
 f _ctools_undo.ado
+f _ctools_hdfe_absorb.ado
+f _ctools_hdfe_dof.ado
+f _ctools_hdfe_vce.ado
+f _ctools_hdfe_post.ado
 f _civreghdfe_fvstrip.ado
 f _civreghdfe_optflags.ado
 f _cmerge_assert.ado

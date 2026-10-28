@@ -365,6 +365,8 @@ This is finite option coverage, not an exhaustive Cartesian product of options o
 | `ctools` | `environment_check` | contract: The utility has no replacement command: version/plugin identity and data preservation are asserted. [validate_option_contracts.do](../validation/validate_option_contracts.do) |
 | `ctools` | `verbose` | contract: The utility has no replacement command: version/plugin identity and data preservation are asserted. [validate_option_contracts.do](../validation/validate_option_contracts.do) |
 | `ctools` | `update` | contract: A test-only copy replaces only network dispatch; success, up-to-date, and error branches are exercised without installation. [validate_option_contracts.do](../validation/validate_option_contracts.do) |
+| `ctools` | `threads` | contract: The utility has no replacement command: session setting, per-command override, clamping, invalid values and clearing are asserted. [validate_threads.do](../validation/validate_threads.do) |
+| `ctools` | `permanently` | contract: The utility has no replacement command: the saved setting is written, becomes the default, and is removed; the developer's own setting is restored. [validate_threads.do](../validation/validate_threads.do) |
 | `cwinsor` | `cuts` | New differential cases 52, 53, 54, 55, 76, 77, 78, 79, 100, 101, 102, 103 |
 | `cwinsor` | `p` | New differential cases 104, 105 |
 | `cwinsor` | `q` | New differential cases 104, 105 |

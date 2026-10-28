@@ -13,11 +13,15 @@ program define civreghdfe, eclass
     * Start wall clock timer immediately
     quietly _ctools_clock __ct_lap97
 
+    * e(cmdline) is the command as typed: syntax below reuses `0' for the
+    * variable specification alone
+    local cmdline `"civreghdfe `0'"'
+
     * Parse syntax
     * Basic syntax: civreghdfe depvar (endogvars = instruments) [exogvars], absorb() [options]
     * absorb() is optional - without it, runs as regular IV (no FE absorption)
     syntax anything(name=0 equalok) [if] [in] [aw fw pw/], ///
-        [Absorb(varlist) ///
+        [Absorb(string) ///
         vce(string) ///
         Robust ///
         CLuster(varlist) ///
@@ -199,13 +203,78 @@ program define civreghdfe, eclass
         }
         confirm numeric variable `v'
     }
-    foreach v of local absorb {
-        confirm variable `v'
-    }
-
     * Mark sample early for fvrevar
     marksample touse
-    markout `touse' `depvar' `absorb'
+    markout `touse' `depvar'
+
+    * One numeric variable per absorbed effect for the plugin: string
+    * variables and interactions are numbered first (the plugin renumbers
+    * every effect on the estimation sample). absorb_names holds the effects
+    * as reghdfe names them, for e(absorb), the output and the auxiliary
+    * creghdfe regressions.
+    local absorb_names
+    if `"`absorb'"' != "" {
+        if strpos(`"`absorb'"', ",") {
+            di as error "civreghdfe: absorb() takes no suboptions"
+            exit 198
+        }
+        _ctools_hdfe_absorb `absorb', touse(`touse') cmd(civreghdfe)
+        local n_absorb = r(n)
+        forvalues g = 1/`n_absorb' {
+            local absorb_name_`g' `r(name_`g')'
+            local absorb_vars_`g' `r(vars_`g')'
+            local absorb_group_`g' = r(group_`g')
+        }
+        local absorb
+        forvalues g = 1/`n_absorb' {
+            local absorb_names `absorb_names' `absorb_name_`g''
+            if `absorb_group_`g'' {
+                tempvar absorb_id_`g'
+                quietly _ctools_group `absorb_vars_`g'' if `touse', generate(`absorb_id_`g'')
+                local absorb `absorb' `absorb_id_`g''
+            }
+            else local absorb `absorb' `absorb_vars_`g''
+        }
+    }
+
+    * Parse VCE. Its cluster variables are marked out before the factor
+    * variables are expanded, so that their levels come from the estimation
+    * sample. cluster_var and cluster_var2 hold the dimensions as reghdfe
+    * names them (an interaction as var1#var2).
+    local vce_type = 0
+    local cluster_var ""
+    local cluster_var2 ""
+    if `"`vce'"' != "" {
+        _ctools_hdfe_vce, spec(`"`vce'"') touse(`touse') cmd(civreghdfe)
+        local vce_kind `r(kind)'
+        if "`vce_kind'" == "robust" {
+            local vce_type = 1
+        }
+        else if "`vce_kind'" == "cluster" {
+            * One-way (2) or two-way (3) clustering
+            if !inlist(r(ndims), 1, 2) {
+                di as error "vce(cluster) supports 1 or 2 cluster variables"
+                exit 198
+            }
+            local vce_type = 1 + r(ndims)
+            local cluster_var `r(name_1)'
+            if r(ndims) == 2 local cluster_var2 `r(name_2)'
+        }
+        else if inlist("`vce_kind'", "unadjusted", "ols") {
+            local vce_type = 0
+        }
+        else {
+            di as error "vce(`vce') not supported. Use vce(robust), vce(cluster varname), or vce(cluster var1 var2)"
+            exit 198
+        }
+    }
+    * The first-stage and reduced-form regressions run through creghdfe,
+    * which clusters in one dimension only: refuse before estimating rather
+    * than fail after the main results are shown
+    if `vce_type' == 3 & "`first'`rf'`savefirst'`saverf'" != "" {
+        di as error "civreghdfe: first, rf, savefirst and saverf are not available with two-way clustering"
+        exit 198
+    }
 
     * Expand factor variables — single fvrevar, base pre-filter, then _rmcoll
     * fvexpand (cheap) gets names; fvrevar (expensive) creates temp vars
@@ -309,52 +378,6 @@ program define civreghdfe, eclass
         di as error "  Exogenous variables: `K_exog'"
         di as error "  Total instruments: `K_iv'"
         exit 481
-    }
-
-    * Parse VCE
-    local vce_type = 0
-    local cluster_var ""
-    local cluster_var2 ""
-    if `"`vce'"' != "" {
-        _ctools_vce vce_kind vce_rest : `vce'
-        if "`vce_kind'" == "robust" {
-            local vce_type = 1
-        }
-        else if "`vce_kind'" == "cluster" {
-            * Extract cluster variable(s)
-            local cluster_spec `"`vce'"'
-            gettoken vce_cmd cluster_vars : cluster_spec, parse(" (")
-            local cluster_vars = strtrim(subinstr("`cluster_vars'", "(", "", .))
-            local cluster_vars = strtrim(subinstr("`cluster_vars'", ")", "", .))
-
-            * Count cluster variables
-            local n_cluster : word count `cluster_vars'
-            if `n_cluster' == 1 {
-                * One-way clustering
-                local vce_type = 2
-                local cluster_var `cluster_vars'
-                confirm variable `cluster_var'
-            }
-            else if `n_cluster' == 2 {
-                * Two-way clustering
-                local vce_type = 3
-                local cluster_var : word 1 of `cluster_vars'
-                local cluster_var2 : word 2 of `cluster_vars'
-                confirm variable `cluster_var'
-                confirm variable `cluster_var2'
-            }
-            else {
-                di as error "vce(cluster) supports 1 or 2 cluster variables"
-                exit 198
-            }
-        }
-        else if inlist("`vce_kind'", "unadjusted", "ols") {
-            local vce_type = 0
-        }
-        else {
-            di as error "vce(`vce') not supported. Use vce(robust), vce(cluster varname), or vce(cluster var1 var2)"
-            exit 198
-        }
     }
 
     * Handle weights
@@ -521,24 +544,6 @@ program define civreghdfe, eclass
     markout `touse' `endogvars_expanded' `exogvars_expanded' `instruments_expanded'
     if `ts_mode' == 2 markout `touse' `ts_ivar' `ts_tvar'
     else if `ts_mode' == 1 markout `touse' `ts_tvar'
-    if "`cluster_var'" != "" {
-        capture confirm numeric variable `cluster_var'
-        if _rc == 0 {
-            markout `touse' `cluster_var'
-        }
-        else {
-            quietly replace `touse' = 0 if `cluster_var' == "" & `touse' == 1
-        }
-    }
-    if "`cluster_var2'" != "" {
-        capture confirm numeric variable `cluster_var2'
-        if _rc == 0 {
-            markout `touse' `cluster_var2'
-        }
-        else {
-            quietly replace `touse' = 0 if `cluster_var2' == "" & `touse' == 1
-        }
-    }
     * Count observations
     qui count if `touse'
     local N = r(N)
@@ -558,7 +563,7 @@ program define civreghdfe, eclass
         di as text "Endogenous variables:  `endogvars' (`K_endog')"
         di as text "Exogenous variables:   `exogvars' (`K_exog')"
         di as text "Excluded instruments:  `instruments' (`K_inst_excl')"
-        di as text "Absorbed FE:           `absorb' (`G')"
+        di as text "Absorbed FE:           `absorb_names' (`G')"
         di as text "Observations:          `N'"
         if `vce_type' == 1 {
             di as text "VCE:                   Robust"
@@ -811,12 +816,24 @@ program define civreghdfe, eclass
     * The exogenous regressors are also instruments (K_iv counts them) but are
     * sent once; the plugin copies them into the instrument matrix.
     * Use expanded variables (factor variables converted to temp numeric vars)
+    * The plugin numbers a single cluster variable itself (strings
+    * included); an interaction is numbered here first
+    forvalues dim = 1/2 {
+        local cluster_name = cond(`dim' == 1, "`cluster_var'", "`cluster_var2'")
+        local cluster_plugin_`dim' `cluster_name'
+        if strpos("`cluster_name'", "#") {
+            local cluster_parts : subinstr local cluster_name "#" " ", all
+            tempvar cluster_id_`dim'
+            quietly _ctools_group `cluster_parts' if `touse', generate(`cluster_id_`dim'')
+            local cluster_plugin_`dim' `cluster_id_`dim''
+        }
+    }
     local plugin_vars `depvar' `endogvars_expanded' `exogvars_expanded' `instruments_expanded' `absorb'
     if `vce_type' == 2 | `vce_type' == 3 | `vce_type' == 4 {
-        local plugin_vars `plugin_vars' `cluster_var'
+        local plugin_vars `plugin_vars' `cluster_plugin_1'
     }
     if `vce_type' == 3 {
-        local plugin_vars `plugin_vars' `cluster_var2'
+        local plugin_vars `plugin_vars' `cluster_plugin_2'
     }
     if `has_weights' {
         local plugin_vars `plugin_vars' `weight_var'
@@ -881,6 +898,7 @@ program define civreghdfe, eclass
     * If noreturn specified, skip all result retrieval and e() posting
     if "`noreturn'" != "" {
         di as text "(noreturn specified - skipping result storage)"
+        _ctools_cleanup civreghdfe
         exit 0
     }
 
@@ -1096,12 +1114,12 @@ program define civreghdfe, eclass
     ereturn local predict "civreghdfe_p"
     ereturn local resid "`residuals'"
     ereturn local cmd "civreghdfe"
-    ereturn local cmdline `"civreghdfe `0'"'
+    ereturn local cmdline `"`cmdline'"'
     ereturn local depvar "`depname_use'"
     ereturn local endogvars "`endogvars'"
     ereturn local exogvars "`exogvars'"
     ereturn local instruments "`instruments'"
-    ereturn local absorb "`absorb'"
+    ereturn local absorb "`absorb_names'"
 
     * Set title and estimation method based on est_method
     if `est_method' == 1 {
@@ -1143,7 +1161,8 @@ program define civreghdfe, eclass
     }
     else if `vce_type' == 3 {
         ereturn local vcetype "Two-way Cluster"
-        ereturn local clustvar "`cluster_var'"
+        * Both variables, as ivreghdfe posts them
+        ereturn local clustvar "`cluster_var' `cluster_var2'"
         ereturn local clustvar1 "`cluster_var'"
         ereturn local clustvar2 "`cluster_var2'"
     }
@@ -1223,7 +1242,7 @@ program define civreghdfe, eclass
     if "`weight'" != "" local aux_wt "[`weight'=`weight_var']"
     local aux_vce = cond(`"`vce'"' == "", "unadjusted", `"`vce'"')
     local aux_absorb ""
-    if "`absorb'" != "" local aux_absorb "absorb(`absorb')"
+    if "`absorb'" != "" local aux_absorb "absorb(`absorb_names')"
 
     * first: as in ivreg2, display each first-stage regression ahead of the
     * main results, and the first-stage summary statistics (ffirst)
@@ -1766,7 +1785,7 @@ program define civreghdfe, eclass
     local total_coefs = 0
     local has_nested = 0
     forval g = 1/`G' {
-        local fevar : word `g' of `absorb'
+        local fevar : word `g' of `absorb_names'
         local cats = `fe_levels_`g''
         * For nested FEs: all levels are redundant
         if `fe_nested_`g'' == 1 {
@@ -1849,8 +1868,10 @@ program define civreghdfe, eclass
             local save_N = e(N)
             local save_dof = e(df_r)
             local save_rmse = e(rmse)
+            local save_vcetype `e(vcetype)'
             * no e(sample), as in ivreg2's stored first-stage/reduced-form results
             ereturn post `save_b' `save_V', depname(`save_dep') obs(`save_N') dof(`save_dof')
+            if "`save_vcetype'" != "" ereturn local vcetype "`save_vcetype'"
             ereturn scalar rmse = `save_rmse'
             ereturn scalar df_m = colsof(e(b))
             ereturn local model "`save_stage'"

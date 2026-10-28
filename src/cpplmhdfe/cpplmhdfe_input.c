@@ -2,6 +2,18 @@
 #include <string.h>
 #include <stdio.h>
 
+/* A scalar the wrapper always sets: a missing one is a protocol error, not a
+ * value left over from the previous read. */
+static ST_retcode read_required(const char *name, ST_double *value)
+{
+    if (SF_scal_use((char *)name, value) == 0)
+        return 0;
+    char msg[96];
+    snprintf(msg, sizeof(msg), "cpplmhdfe: plugin scalar %s is not set\n", name);
+    SF_error(msg);
+    return 198;
+}
+
 ST_retcode cpplmhdfe_read_input(cpplmhdfe_input *input)
 {
     ST_int K = 0;
@@ -9,24 +21,31 @@ ST_retcode cpplmhdfe_read_input(cpplmhdfe_input *input)
     ST_int verbose = 0;
     ST_double val = 0;
     ST_int g;
+    ST_retcode rc;
     char scalar_name[64];
     /* Read parameters */
-    SF_scal_use("__cpplmhdfe_K", &val);
+    if ((rc = read_required("__cpplmhdfe_K", &val)))
+        return rc;
     K = (ST_int)val;
-    SF_scal_use("__cpplmhdfe_G", &val);
+    if ((rc = read_required("__cpplmhdfe_G", &val)))
+        return rc;
     G = (ST_int)val;
-    SF_scal_use("__cpplmhdfe_verbose", &val);
+    if ((rc = read_required("__cpplmhdfe_verbose", &val)))
+        return rc;
     verbose = (ST_int)val;
 
     ST_int maxiter;
     ST_double tolerance;
-    SF_scal_use("__cpplmhdfe_maxiter", &val);
+    if ((rc = read_required("__cpplmhdfe_maxiter", &val)))
+        return rc;
     maxiter = (ST_int)val;
-    SF_scal_use("__cpplmhdfe_tolerance", &val);
+    if ((rc = read_required("__cpplmhdfe_tolerance", &val)))
+        return rc;
     tolerance = val;
 
     ST_int vcetype;
-    SF_scal_use("__cpplmhdfe_vce_type", &val);
+    if ((rc = read_required("__cpplmhdfe_vce_type", &val)))
+        return rc;
     vcetype = (ST_int)val;
 
     ST_int cluster_terms = vcetype == 2 ? 1 : 0;

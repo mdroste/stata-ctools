@@ -3,6 +3,7 @@
 {viewerjumpto "Syntax" "ctools##syntax"}{...}
 {viewerjumpto "Description" "ctools##description"}{...}
 {viewerjumpto "Options" "ctools##options"}{...}
+{viewerjumpto "Threads" "ctools##threads"}{...}
 {viewerjumpto "Commands" "ctools##commands"}{...}
 {viewerjumpto "Examples" "ctools##examples"}{...}
 {title:Title}
@@ -18,6 +19,11 @@
 {cmdab:ctools}
 [{cmd:,} {opt env:ironment_check} {opt update}]
 
+{p 8 17 2}
+{cmdab:ctools}{cmd:,}
+{opt thr:eads(#|default)}
+[{opt perm:anently}]
+
 
 {marker options}{...}
 {title:Options}
@@ -26,7 +32,21 @@
 {opt environment_check} loads the ctools C plugin and reports whether it was
 successfully loaded. This is useful for diagnosing installation issues. The
 plugin is automatically detected for your platform (macOS ARM/Intel, Windows,
-Linux).
+Linux). It also reports the thread settings described {help ctools##threads:below}.
+
+{phang}
+{opt threads(#)} sets the number of threads ctools commands use for the rest of
+the Stata session when they are called without their own {opt threads()}
+option. {it:#} is an integer from 1 through 256. {opt threads(default)} removes
+the session setting. The setting is stored in the global macro
+{cmd:CTOOLS_THREADS}.
+
+{phang}
+{opt permanently}, specified with {opt threads()}, also saves the setting for
+future Stata sessions, or with {opt threads(default)} removes the saved
+setting. The setting is saved in a small per-user file outside the ado
+directories, so it survives updates and reinstalls of ctools; its location is
+shown by {cmd:ctools, environment_check}.
 
 {phang}
 {opt update} downloads and installs the latest version of ctools from GitHub.
@@ -52,6 +72,38 @@ Use {cmd:ctools, version} to report the installed ado and plugin versions.
 The common {cmd:threads()} option accepts integers from 1 through 256.
 Sampling and range statistics may use fewer workers to limit scratch memory
 or when there are fewer groups to process.
+
+{marker threads}{...}
+{title:Threads}
+
+{pstd}
+By default, ctools uses one thread per CPU it is allowed to run on, but at most
+16. Most ctools work is limited by memory bandwidth, so more threads add little
+speed, and large servers are often shared with other users. The first of the
+following that is set determines the number of threads:
+
+{p 8 12 2}1. the {opt threads(#)} option of the command;{p_end}
+{p 8 12 2}2. the session setting, {cmd:ctools, threads(#)};{p_end}
+{p 8 12 2}3. the environment variable {cmd:CTOOLS_NUM_THREADS}, intended for
+administrators and batch job scripts;{p_end}
+{p 8 12 2}4. the saved setting, {cmd:ctools, threads(#) permanently};{p_end}
+{p 8 12 2}5. the environment variable {cmd:OMP_NUM_THREADS} (its first value);{p_end}
+{p 8 12 2}6. the number of usable CPUs, at most 16.{p_end}
+
+{pstd}
+In every case ctools uses no more threads than there are CPUs it may run on,
+and respects {cmd:OMP_THREAD_LIMIT}. On Linux, the usable CPUs follow the
+process's CPU affinity (for example {cmd:taskset}, Slurm or PBS allocations)
+and container CPU limits. To use more than 16 threads on a large machine, set
+a higher value with any of the methods above.
+
+{pstd}
+{cmd:ctools, threads()} and {cmd:ctools, environment_check} store
+{cmd:r(threads)} (threads used by commands without {opt threads()}),
+{cmd:r(threads_default)}, {cmd:r(threads_cap)}, {cmd:r(threads_limit)}
+(most threads any setting can request here), {cmd:r(cpus_detected)},
+{cmd:r(cpus_available)}, and the locals {cmd:r(threads_source)},
+{cmd:r(threads_session)}, {cmd:r(threads_saved)}, and {cmd:r(threads_file)}.
 
 {marker commands}{...}
 {title:Available Commands}
@@ -102,6 +154,12 @@ or when there are fewer groups to process.
 {phang}{cmd:. cimport delimited using data.csv, clear}{p_end}
 {phang}{cmd:. cexport delimited using output.csv, replace}{p_end}
 {phang}{cmd:. creghdfe y x1 x2, absorb(firm year)}{p_end}
+
+{pstd}Thread settings:{p_end}
+{phang}{cmd:. ctools, environment_check}{p_end}
+{phang}{cmd:. ctools, threads(8)}{p_end}
+{phang}{cmd:. ctools, threads(32) permanently}{p_end}
+{phang}{cmd:. ctools, threads(default) permanently}{p_end}
 
 
 {title:Author}

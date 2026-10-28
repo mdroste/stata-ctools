@@ -64,11 +64,13 @@ def main():
                         rc, _ = run(exe, 0, *variant, store)
                         assert rc == 459, (name, variant, store, rc)
                         cases += 1
-            if name == "regress":
-                for scalar in (1, 8, 20):
+            if name in ("regress", "ppml"):
+                # ppml: the API marker and the first collinearity flag, then
+                # the first input scales; all are checked writes
+                for scalar in (1, 8, 20) if name == "regress" else (1, 2):
                     assert run(exe, 0, 1, 1, 0, 0, scalar)[0] == 459
                     cases += 1
-                for matrix in (1, 2, 4):
+                for matrix in (1, 2, 4) if name == "regress" else (1, 2):
                     assert run(exe, 0, 1, 1, 0, 0, 0, matrix)[0] == 459
                     cases += 1
             print(f"{name}: allocation and output failures passed", flush=True)

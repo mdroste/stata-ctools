@@ -225,7 +225,8 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
     PPML_Options configuration;
     ppml_read_options(&configuration);
     const PPML_Options *options = &configuration;
-    ctools_scal_save("__cpplmhdfe_api", 3);
+    output_rc = ctools_scal_save("__cpplmhdfe_api", 3);
+    if (output_rc) return output_rc;
     t_start = get_time_sec();
 
     in1 = SF_in1();
@@ -649,7 +650,8 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
             if (fixed_scales) {
                 SF_mat_el("__cpplmhdfe_input_scales", 1, k+2, &sd);
                 if (k < 0) stdev_y = sd; else stdev_x[k] = sd;
-            } else ctools_mat_store("__cpplmhdfe_input_scales", 1, k+2, sd);
+            } else if ((output_rc = ctools_mat_store("__cpplmhdfe_input_scales", 1, k+2, sd)))
+                goto ppml_cleanup;
             for (i = 0; i < N; i++) column[i] /= sd;
         }
     }
@@ -663,9 +665,9 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
         if(nsep) {
             sample_var_idx=(int)ppml_option("sample_idx",0);
             for(i=0;i<N && !output_rc;i++)if(!sep_m[i])output_rc=SF_vstore(sample_var_idx,(int)obs_map[i],1);
-            ctools_scal_save("__cpplmhdfe_refit",1);
-            ctools_scal_save("__cpplmhdfe_num_singletons",num_singletons);
-            ctools_scal_save("__cpplmhdfe_num_separated",num_separated+nsep);
+            if(!output_rc)output_rc=ctools_scal_save("__cpplmhdfe_refit",1);
+            if(!output_rc)output_rc=ctools_scal_save("__cpplmhdfe_num_singletons",num_singletons);
+            if(!output_rc)output_rc=ctools_scal_save("__cpplmhdfe_num_separated",num_separated+nsep);
             goto ppml_cleanup;
         }
     }
@@ -675,7 +677,7 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
      * removed by FE screening, singleton removal, or simplex. */
     if(check_relu) for(i=0;i<N && !output_rc;i++) {
         if(options->tag_idx)output_rc=SF_vstore(options->tag_idx,(int)obs_map[i],sep_m[i]);
-        if(options->certificate_idx)output_rc=SF_vstore(options->certificate_idx,(int)obs_map[i],separation_certificate[i]);
+        if(!output_rc && options->certificate_idx)output_rc=SF_vstore(options->certificate_idx,(int)obs_map[i],separation_certificate[i]);
     }
     if(output_rc || ppml_option("diagnostic",0))goto ppml_cleanup;
     if (relu_separated) {
@@ -687,9 +689,9 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
         if (SF_scal_use("__cpplmhdfe_sample_idx", &val) == 0) sample_var_idx = (ST_int)val;
         for (i = 0; i < N && !output_rc; i++)
             if (!sep_m[i]) output_rc = SF_vstore(sample_var_idx, (ST_int)obs_map[i], 1.0);
-        ctools_scal_save("__cpplmhdfe_refit", 2);
-        ctools_scal_save("__cpplmhdfe_num_singletons", num_singletons);
-        ctools_scal_save("__cpplmhdfe_num_separated", num_separated + relu_separated);
+        if (!output_rc) output_rc = ctools_scal_save("__cpplmhdfe_refit", 2);
+        if (!output_rc) output_rc = ctools_scal_save("__cpplmhdfe_num_singletons", num_singletons);
+        if (!output_rc) output_rc = ctools_scal_save("__cpplmhdfe_num_separated", num_separated + relu_separated);
         goto ppml_cleanup;
     }
 
@@ -1079,9 +1081,9 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
             for(i=0;i<N && !output_rc;i++) {
                 if(!sep_m[i])output_rc=SF_vstore(sample_var_idx,(int)obs_map[i],1);
             }
-            ctools_scal_save("__cpplmhdfe_refit",3);
-            ctools_scal_save("__cpplmhdfe_num_singletons",num_singletons);
-            ctools_scal_save("__cpplmhdfe_num_separated",num_separated+nsep);
+            if(!output_rc)output_rc=ctools_scal_save("__cpplmhdfe_refit",3);
+            if(!output_rc)output_rc=ctools_scal_save("__cpplmhdfe_num_singletons",num_singletons);
+            if(!output_rc)output_rc=ctools_scal_save("__cpplmhdfe_num_separated",num_separated+nsep);
             goto ppml_cleanup;
         }
     }
@@ -1142,10 +1144,12 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
     K_keep = K_x - num_collinear;
 
     /* Store collinearity flags */
-    ctools_scal_save("__cpplmhdfe_num_collinear", (ST_double)num_collinear);
+    if ((output_rc = ctools_scal_save("__cpplmhdfe_num_collinear", (ST_double)num_collinear)))
+        goto ppml_cleanup;
     for (k = 0; k < K_x; k++) {
         snprintf(scalar_name, sizeof(scalar_name), "__cpplmhdfe_collinear_%d", k + 1);
-        ctools_scal_save(scalar_name, (ST_double)(is_collinear ? is_collinear[k] : 0));
+        if ((output_rc = ctools_scal_save(scalar_name, (ST_double)(is_collinear ? is_collinear[k] : 0))))
+            goto ppml_cleanup;
     }
 
     /* Build non-collinear index */
@@ -1323,7 +1327,7 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
             }
             if (ncl < num_clusters) num_clusters = ncl;
             snprintf(scalar_name, sizeof(scalar_name), "__cpplmhdfe_N_clust_%d", ++dim);
-            ctools_scal_save(scalar_name, ncl);
+            if ((output_rc = ctools_scal_save(scalar_name, ncl))) goto ppml_cleanup;
             for (g = 0; g < G; g++) {
                 if (slope_only[g] || !(dof_flags & 4)) continue;
                 ST_int is_nested = ctools_fe_nested_in_cluster(
@@ -1340,7 +1344,7 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
     }
     for (g = 0; g < G; g++) {
         snprintf(scalar_name, sizeof(scalar_name), "__cpplmhdfe_fe_nested_%d", g + 1);
-        ctools_scal_save(scalar_name, nested[g]);
+        if ((output_rc = ctools_scal_save(scalar_name, nested[g]))) goto ppml_cleanup;
     }
 
     /* Match reghdfe's pairwise mobility and cluster-nesting accounting.
@@ -1392,14 +1396,14 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
     for (g = 0; g < G; g++) {
         df_redundant += redundant[g];
         snprintf(scalar_name, sizeof(scalar_name), "__cpplmhdfe_fe_redundant_%d", g+1);
-        ctools_scal_save(scalar_name, redundant[g]);
+        if ((output_rc = ctools_scal_save(scalar_name, redundant[g]))) goto ppml_cleanup;
         snprintf(scalar_name, sizeof(scalar_name), "__cpplmhdfe_fe_exact_%d", g+1);
-        ctools_scal_save(scalar_name, exact[g]);
+        if ((output_rc = ctools_scal_save(scalar_name, exact[g]))) goto ppml_cleanup;
     }
     df_a = df_initial - df_redundant;
-    ctools_scal_save("__cpplmhdfe_df_initial", df_initial);
-    ctools_scal_save("__cpplmhdfe_df_nested", df_nested);
-    ctools_scal_save("__cpplmhdfe_df_redundant", df_redundant);
+    if ((output_rc = ctools_scal_save("__cpplmhdfe_df_initial", df_initial))) goto ppml_cleanup;
+    if ((output_rc = ctools_scal_save("__cpplmhdfe_df_nested", df_nested))) goto ppml_cleanup;
+    if ((output_rc = ctools_scal_save("__cpplmhdfe_df_redundant", df_redundant))) goto ppml_cleanup;
 
     /* Compute VCE: PPML sandwich estimator matching creghdfe/reghdfe.
      * Uses extended (K_keep+1)x(K_keep+1) system with constant column,
@@ -1512,10 +1516,12 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
                 V_ext[K_keep*K_with_cons+K_keep] = corner;
             }
             for (i = 0; i < K_with_cons; i++) {
-                ctools_mat_store("__cpplmhdfe_scales", 1, i+1,
-                                 i < K_keep ? stdev_x[keep_idx[i]] : 1.0);
+                if ((output_rc = ctools_mat_store("__cpplmhdfe_scales", 1, i+1,
+                                                  i < K_keep ? stdev_x[keep_idx[i]] : 1.0)))
+                    goto ppml_cleanup;
                 for (j = 0; j < K_with_cons; j++)
-                    ctools_mat_store("__cpplmhdfe_V_full", i+1, j+1, V_ext[i*K_with_cons+j]);
+                    if ((output_rc = ctools_mat_store("__cpplmhdfe_V_full", i+1, j+1, V_ext[i*K_with_cons+j])))
+                        goto ppml_cleanup;
             }
 
             /* Extract K_keep×K_keep submatrix (dropping constant row/col) */
@@ -1556,7 +1562,7 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
         if (offset_compact) constant -= (soff.hi + soff.lo) / wsum;
         constant += log(stdev_y);
     }
-    ctools_scal_save("__cpplmhdfe_cons", constant);
+    if ((output_rc = ctools_scal_save("__cpplmhdfe_cons", constant))) goto ppml_cleanup;
     ST_int d_var_idx = 0;
     if (SF_scal_use("__cpplmhdfe_d_idx", &val) == 0) d_var_idx = (ST_int)val;
     if (d_var_idx > 0) {
@@ -1571,7 +1577,8 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
         separation_certificate[i]=z_orig[i]-vce_resid[i]-mean_d;
         for(k=0;k<K_keep;k++)separation_certificate[i]-=X[(size_t)keep_idx[k]*N+i]*beta_final[k];
     }
-    output_rc=ppml_save_effects(g_ppml_state,separation_certificate,obs_map);
+    /* A failed d() store above must not be replaced by this call's status */
+    if(!output_rc)output_rc=ppml_save_effects(g_ppml_state,separation_certificate,obs_map);
     if(output_rc)goto ppml_cleanup;
 
     /* Un-standardize y and mu for log-likelihood computation.
@@ -1651,13 +1658,13 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
     if (output_rc) goto ppml_cleanup;
 
     /* Timing */
-    ctools_scal_save("_cpplmhdfe_time_load", t_load - t_start);
-    ctools_scal_save("_cpplmhdfe_time_remap", t_remap - t_load);
-    ctools_scal_save("_cpplmhdfe_time_singleton", t_singleton - t_remap);
-    ctools_scal_save("_cpplmhdfe_time_dof", t_dof - t_singleton);
-    ctools_scal_save("_cpplmhdfe_time_irls", t_irls - t_dof);
-    ctools_scal_save("_cpplmhdfe_time_vce", t_vce - t_irls);
-    ctools_scal_save("_cpplmhdfe_time_total", t_vce - t_start);
+    if ((output_rc = ctools_scal_save("_cpplmhdfe_time_load", t_load - t_start))) goto ppml_cleanup;
+    if ((output_rc = ctools_scal_save("_cpplmhdfe_time_remap", t_remap - t_load))) goto ppml_cleanup;
+    if ((output_rc = ctools_scal_save("_cpplmhdfe_time_singleton", t_singleton - t_remap))) goto ppml_cleanup;
+    if ((output_rc = ctools_scal_save("_cpplmhdfe_time_dof", t_dof - t_singleton))) goto ppml_cleanup;
+    if ((output_rc = ctools_scal_save("_cpplmhdfe_time_irls", t_irls - t_dof))) goto ppml_cleanup;
+    if ((output_rc = ctools_scal_save("_cpplmhdfe_time_vce", t_vce - t_irls))) goto ppml_cleanup;
+    if ((output_rc = ctools_scal_save("_cpplmhdfe_time_total", t_vce - t_start))) goto ppml_cleanup;
     CTOOLS_SAVE_THREAD_INFO("_cpplmhdfe");
 
     /* ================================================================

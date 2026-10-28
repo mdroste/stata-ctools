@@ -109,7 +109,7 @@ statistics like the mean of all {it:other} observations in the range.
 
 {phang}
 {opt threads(#)} specifies the maximum number of threads to use for parallel
-operations. By default, {cmd:crangestat} uses all available CPU cores.
+operations. By default, {cmd:crangestat} uses the {help ctools##threads:ctools thread setting}, which is at most 16 threads unless you change it.
 
 {phang}
 {opt verbose} displays detailed progress information and timing breakdown.
@@ -182,7 +182,7 @@ enabling efficient binary search to find observation windows in O(log n) time
 instead of O(n) linear search.{p_end}
 
 {p 8 12 2}2. {bf:Parallel processing}: Observations within each group are
-processed in parallel using OpenMP, utilizing all available CPU cores.{p_end}
+processed in parallel using OpenMP.{p_end}
 
 {p 8 12 2}3. {bf:Efficient memory access}: Cache-friendly data layout and
 SIMD-optimized operations for maximum throughput.{p_end}

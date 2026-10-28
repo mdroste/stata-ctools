@@ -281,7 +281,7 @@ incomplete import. {opt fast} may not be combined with {opt snapshot}.
 
 {phang}
 {opt threads(#)} specifies the maximum number of threads to use for parallel
-operations. By default, {cmd:cimport} uses all available CPU cores.
+operations. By default, {cmd:cimport} uses the {help ctools##threads:ctools thread setting}, which is at most 16 threads unless you change it.
 
 
 {marker remarks}{...}

@@ -41,6 +41,12 @@ and limits are in the [README usage notes](README.md#linear-interpolation-cipola
 ctools `cipolate` performs linear interpolation; it is distinct from the SSC
 cubic interpolator with the same name.
 
+By default every command uses one thread per CPU it may run on, but at most 16,
+so large shared servers are not saturated. `ctools, threads(#)` changes this for
+the session and `ctools, threads(#) permanently` saves it for later sessions;
+`CTOOLS_NUM_THREADS` and `OMP_NUM_THREADS` are also honored. On Linux the usable
+CPUs follow taskset/Slurm affinity and container CPU limits. See `help ctools`.
+
 ---
 
 ## cencode / cdecode

@@ -138,7 +138,11 @@ alternative estimators can be selected via options.
 {phang}
 {opt absorb(varlist)} specifies categorical variables whose fixed effects are
 absorbed from all variables (dependent, endogenous, exogenous, and instruments)
-before IV estimation. This is required.
+before IV estimation. As in {cmd:reghdfe}, each term is a numeric or string
+variable, an {cmd:i.}{it:var}, or an interaction {it:var1}{cmd:#}{it:var2}
+absorbed as one effect; heterogeneous slopes and suboptions are not supported.
+The cluster variables of {opt vce(cluster)} may likewise be string variables or
+interactions.
 
 {dlgtab:Estimators}
 
@@ -265,7 +269,7 @@ solver used in HDFE absorption. Default is 1e-8.
 
 {phang}
 {opt threads(#)} specifies the maximum number of threads to use for parallel
-operations. By default, {cmd:civreghdfe} uses all available CPU cores.
+operations. By default, {cmd:civreghdfe} uses the {help ctools##threads:ctools thread setting}, which is at most 16 threads unless you change it.
 
 {phang}
 {opt noconstant} suppresses the constant term. Note that with absorbed fixed
@@ -288,6 +292,11 @@ endogenous variable (e.g., {cmd:e(partial_r2_1)}, {cmd:e(F_first1)}).
 {phang}
 {opt rf} reports reduced-form regression estimates (regression of the dependent
 variable directly on all instruments).
+
+{phang}
+The first-stage and reduced-form regressions of {opt first}, {opt rf},
+{opt savefirst} and {opt saverf} are run by {cmd:creghdfe}, which clusters in one
+dimension only; with two-way clustering these options are an error.
 
 {phang}
 {opt coviv} displays the covariance matrix of the IV estimators.

@@ -140,10 +140,10 @@ static ST_retcode map_test_cols(const char *name, const char *opt, ST_int opt_co
             snprintf(msg, sizeof(msg),
                      "civreghdfe: a variable in %s() was dropped as collinear or absorbed by the fixed effects\n", opt);
             SF_error(msg);
-            ctools_scal_save("__civreghdfe_dropped_opt", (ST_double)opt_code);
-            ctools_scal_save("__civreghdfe_dropped_col", (ST_double)(j + 1));
+            ST_retcode save_rc = ctools_scal_save("__civreghdfe_dropped_opt", (ST_double)opt_code);
+            if (!save_rc) save_rc = ctools_scal_save("__civreghdfe_dropped_col", (ST_double)(j + 1));
             free(flags);
-            return 198;
+            return save_rc ? save_rc : 198;
         }
         out[n++] = pos;
     }
@@ -945,8 +945,9 @@ static ST_retcode do_iv_regression(void)
         ST_int K_excl = K_iv - K_exog;  /* Number of excluded instruments */
 
         for (ST_int k = 0; k < K_exog; k++) {
-            if (is_partial[k] == 2)
-                ctools_mat_store("__civreghdfe_partial_flags", 1, k + 1, 2.0);
+            if (is_partial[k] == 2 &&
+                (iv_rc = ctools_mat_store("__civreghdfe_partial_flags", 1, k + 1, 2.0)))
+                goto iv_cleanup;
         }
 
         /* Remove partial columns from X_exog (and their pre-partialling SS) */
@@ -998,11 +999,13 @@ static ST_retcode do_iv_regression(void)
         /* Save per-FE num_levels to Stata scalars for absorbed DOF table */
         char scalar_name[64];
         snprintf(scalar_name, sizeof(scalar_name), "__civreghdfe_num_levels_%d", (int)(g + 1));
-        ctools_scal_save(scalar_name, (ST_double)state->factors[g].num_levels);
+        if ((iv_rc = ctools_scal_save(scalar_name, (ST_double)state->factors[g].num_levels)))
+            goto iv_cleanup;
     }
 
     /* Save mobility groups for absorbed DOF table display */
-    ctools_scal_save("__civreghdfe_mobility_groups", (ST_double)mobility_groups);
+    if ((iv_rc = ctools_scal_save("__civreghdfe_mobility_groups", (ST_double)mobility_groups)))
+        goto iv_cleanup;
 
     /* For VCE calculation when FE is nested in cluster:
        - nested FE levels don't contribute to df_a for VCE
@@ -1056,7 +1059,8 @@ static ST_retcode do_iv_regression(void)
 
             char scalar_name[64];
             snprintf(scalar_name, sizeof(scalar_name), "__civreghdfe_fe_nested_%d", (int)(g + 1));
-            ctools_scal_save(scalar_name, (ST_double)is_nested);
+            if ((iv_rc = ctools_scal_save(scalar_name, (ST_double)is_nested)))
+                goto iv_cleanup;
         }
         /* Recompute VCE DOF with data-based nesting results */
         df_a_for_vce = df_a - df_a_nested;
@@ -1216,10 +1220,12 @@ static ST_retcode do_iv_regression(void)
     /* Store collinearity flags to Stata scalars (in [exog, endog] order) */
     {
         char scalar_name[64];
-        ctools_scal_save("__civreghdfe_num_collinear", (ST_double)num_collinear_x);
+        if ((iv_rc = ctools_scal_save("__civreghdfe_num_collinear", (ST_double)num_collinear_x)))
+            goto iv_cleanup;
         for (ST_int k = 0; k < K_total_orig; k++) {
             snprintf(scalar_name, sizeof(scalar_name), "__civreghdfe_collinear_%d", (int)(k + 1));
-            ctools_scal_save(scalar_name, (ST_double)is_collinear_x[k]);
+            if ((iv_rc = ctools_scal_save(scalar_name, (ST_double)is_collinear_x[k])))
+                goto iv_cleanup;
         }
     }
 
@@ -1358,7 +1364,8 @@ static ST_retcode do_iv_regression(void)
     }
 
     /* Store compacted dimensions */
-    ctools_scal_save("__civreghdfe_K_keep", (ST_double)K_total);
+    if ((iv_rc = ctools_scal_save("__civreghdfe_K_keep", (ST_double)K_total)))
+        goto iv_cleanup;
 
     /* Allocate output arrays */
     beta = (ST_double *)calloc(K_total, sizeof(ST_double));
@@ -1416,7 +1423,7 @@ static ST_retcode do_iv_regression(void)
             /* Time span of the estimation sample: the ado reports T = span + 1
                as Kiefer's bandwidth; as ivreg2, a bandwidth may not exceed
                span / delta */
-            ctools_scal_save("__civreghdfe_tspan", tmax - tmin);
+            if (!rc) rc = ctools_scal_save("__civreghdfe_tspan", tmax - tmin);
             if (!rc && kernel_type > 0 && !kiefer && (ST_double)bw > (tmax - tmin) / tdelta) {
                 SF_error("invalid bandwidth in option bw() - cannot exceed timespan of data\n");
                 rc = 198;
@@ -1604,19 +1611,21 @@ static ST_retcode do_iv_regression(void)
     t_store = ctools_timer_seconds() - t_store_start;
     double t_total = ctools_timer_seconds() - t_total_start;
 
-    /* Save timing scalars - less critical but still use checked wrappers */
-    ctools_scal_save("_civreghdfe_time_load", t_load);
-    ctools_scal_save("_civreghdfe_time_extract", t_extract);
-    ctools_scal_save("_civreghdfe_time_missing", t_missing);
-    ctools_scal_save("_civreghdfe_time_singleton", t_singleton);
-    ctools_scal_save("_civreghdfe_time_remap", t_hdfe_setup);
-    ctools_scal_save("_civreghdfe_time_fwl", t_fwl);
-    ctools_scal_save("_civreghdfe_time_partial", t_partial_out);
-    ctools_scal_save("_civreghdfe_time_dof", t_postproc);
-    ctools_scal_save("_civreghdfe_time_estimate", t_estimate);
-    ctools_scal_save("_civreghdfe_time_stats", t_stats);
-    ctools_scal_save("_civreghdfe_time_store", t_store);
-    ctools_scal_save("_civreghdfe_time_total", t_total);
+    /* Save timing scalars (checked, as every other result) */
+    {
+        const char *const time_names[] = {
+            "_civreghdfe_time_load", "_civreghdfe_time_extract", "_civreghdfe_time_missing",
+            "_civreghdfe_time_singleton", "_civreghdfe_time_remap", "_civreghdfe_time_fwl",
+            "_civreghdfe_time_partial", "_civreghdfe_time_dof", "_civreghdfe_time_estimate",
+            "_civreghdfe_time_stats", "_civreghdfe_time_store", "_civreghdfe_time_total"};
+        const double time_values[] = {t_load, t_extract, t_missing, t_singleton,
+                                      t_hdfe_setup, t_fwl, t_partial_out, t_postproc,
+                                      t_estimate, t_stats, t_store, t_total};
+        for (size_t t = 0; t < sizeof(time_values) / sizeof(time_values[0]); t++) {
+            if ((iv_rc = ctools_scal_save(time_names[t], time_values[t])))
+                goto iv_cleanup;
+        }
+    }
     CTOOLS_SAVE_THREAD_INFO("_civreghdfe");
 
 iv_cleanup:

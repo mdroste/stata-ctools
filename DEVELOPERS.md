@@ -491,8 +491,24 @@ typedef void *(*ctools_thread_func)(void *arg);
 ```c
 int n = ctools_get_max_threads();      // Current thread limit
 ctools_set_max_threads(4);             // Override
-ctools_reset_max_threads();            // Reset to default (omp_get_max_threads)
+ctools_reset_max_threads();            // Reset to the resolved default
 ```
+
+The default is resolved once per process by `ctools_thread_policy_get()` in
+`src/ctools_threads.c`. The first set source wins: `threads()` on the command,
+the session global `CTOOLS_THREADS` (`ctools, threads(#)`), the
+`CTOOLS_NUM_THREADS` environment variable, the saved per-user setting
+(`ctools, threads(#) permanently`), `OMP_NUM_THREADS`, and finally
+`CTOOLS_DEFAULT_THREAD_CAP` (16). Every source is clamped to the CPUs the
+process may use (Linux affinity mask and cgroup CPU quota, Windows process
+affinity, macOS `hw.activecpu`), `OMP_THREAD_LIMIT`, and `CTOOLS_MAX_THREADS`.
+The dispatcher clamps explicit requests with `ctools_clamp_thread_request()`;
+`ctools_set_max_threads()` itself does not, so native harnesses can still run
+12 workers on small CI machines. The saved setting lives in
+`%APPDATA%\ctools\ctools.conf` (Windows),
+`~/Library/Application Support/ctools/ctools.conf` (macOS), or
+`$XDG_CONFIG_HOME/ctools/ctools.conf`, default `~/.config/ctools/ctools.conf`
+(Linux). `ctools, environment_check` reports every input.
 
 ---
 
@@ -521,7 +537,7 @@ ctools uses a mixed threading model. OpenMP is preferred for tight, regular loop
 
 ### OpenMP tuning tips
 
-- `OMP_NUM_THREADS`: set to physical cores for compute-bound code; keep below `CTOOLS_IO_MAX_THREADS + OMP_NUM_THREADS` to avoid oversubscription.
+- `OMP_NUM_THREADS`: ctools uses its first value as the default unless `CTOOLS_NUM_THREADS`, a saved setting, the session setting or `threads()` takes precedence. `CTOOLS_NUM_THREADS` sets ctools alone without affecting other OpenMP programs.
 - `OMP_PROC_BIND=spread` and `OMP_PLACES=cores`: keep threads pinned and reduce cache thrash.
 - `OMP_DYNAMIC=FALSE`: avoid runtime thread count changes that interfere with sizing heuristics.
 - `OMP_WAIT_POLICY=PASSIVE` (lower CPU use when waiting) or `ACTIVE` (lower latency for short tasks).
@@ -748,7 +764,7 @@ if (CTOOLS_UNLIKELY(error)) {
 
 ### Thread Count
 
-Thread limits are determined at runtime via `omp_get_max_threads()` and can be overridden per-command with `threads()`:
+Thread limits are resolved at plugin entry (see [Thread Count Management](#thread-count-management)) and can be overridden per-command with `threads()`:
 
 ```c
 int n = ctools_get_max_threads();
@@ -1326,6 +1342,10 @@ The estimation wrappers (`creghdfe`, `civreghdfe`, `cpplmhdfe`, `cqreg`,
 | `_ctools_cleanup` | Drops every scalar and matrix named `__<command>_*` or `_<command>_*`. Each wrapper calls it on entry, after a plugin error and on exit. |
 | `_ctools_lap` | One lap of a caller-local wall clock started with `_ctools_clock`. |
 | `_ctools_vce` | Classifies a `vce()` string (cluster, robust, unadjusted, ols, iid, bootstrap); which kinds a command accepts stays with the command. |
+| `_ctools_hdfe_absorb` | `absorb()` terms of `creghdfe` and `civreghdfe` as reghdfe accepts them (variables, string variables, `i.`, `a#b`): marks out the sample and returns each effect's name, variables and whether `_ctools_group` must number it. Slopes, `##` and `newvar=` are refused; `cpplmhdfe` keeps its own parser for them. |
+| `_ctools_hdfe_vce` | `vce()` of the three HDFE wrappers: the `_ctools_vce` kind and, for clusters, each dimension's name, variables and grouping flag (`i.`, `a#b`, strings), with the sample marked out. Call it before factor variables are expanded. Accepted kinds, dimension limits and messages stay with each command. |
+| `_ctools_hdfe_dof` | `dofadjustments()` with reghdfe's abbreviations: `s(flags)`, `s(methods)` (as `e(dofmethod)`), `creghdfe`'s `s(type)` and `s(clusters)`. |
+| `_ctools_hdfe_post` | The reghdfe `e()` fields `creghdfe` and `cpplmhdfe` share: `e(absvars)`, `e(extended_absvars)`, `e(N_hdfe*)`, `e(dof_table)` from the plugin's per-effect scalars, `e(df_a_initial)`, `e(df_a_redundant)`, `e(dofmethod)`, `e(vce)`/`e(vcetype)` and the cluster fields. `civreghdfe` follows ivreghdfe's conventions and posts its own. |
 | `_ctools_group` | Group identifiers in place of `egen group()`: the `group` plugin command numbers a varlist's distinct values in sort order (missing keys stay missing), and `label` rebuilds `egen group(, label)`'s value label in Mata from one observation per group. `count` only counts groups. Do not call `egen` from ctools ado files. |
 
 A wrapper that keeps a statistic between plugin calls holds it in a `tempname`

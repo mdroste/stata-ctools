@@ -11,6 +11,8 @@ enum
     OBS = 40
 };
 static int weighted, two_fe, singleton;
+static int save_at, save_calls; /* nonzero: the save_at-th scalar save fails */
+static const char *missing_scalar; /* reported as not set, its destination untouched */
 static double coefficient, variance, sample_size;
 static ST_retcode message(char *s)
 {
@@ -27,6 +29,8 @@ static ST_int obs(void)
 }
 static ST_retcode scalar(char *key, double *value)
 {
+    if (missing_scalar && !strcmp(key, missing_scalar))
+        return 111;
     *value = 0;
     if (!strcmp(key, "__civreghdfe_K_endog") || !strcmp(key, "__civreghdfe_K_iv"))
         *value = 1;
@@ -44,6 +48,8 @@ static ST_retcode scalar(char *key, double *value)
 }
 static ST_retcode save(char *key, double value)
 {
+    if (save_at && ++save_calls == save_at)
+        return 459;
     if (!strcmp(key, "__civreghdfe_N"))
         sample_size = value;
     return 0;
@@ -150,6 +156,8 @@ int main(int argc, char **argv)
     weighted = argc > 2 ? atoi(argv[2]) : 0;
     two_fe = argc > 3 ? atoi(argv[3]) : 0;
     singleton = argc > 4 ? atoi(argv[4]) : 0;
+    int save_failure = argc > 5 ? atoi(argv[5]) : 0;
+    const char *missing = argc > 6 ? argv[6] : NULL;
     host.nobs1 = one;
     host.nobs2 = obs;
     host.nobs = obs;
@@ -167,6 +175,9 @@ int main(int argc, char **argv)
     int allocations = calls;
     fail_at = failure;
     calls = 0;
+    save_at = save_failure;
+    save_calls = 0;
+    missing_scalar = missing;
     coefficient = variance = sample_size = NAN;
     int rc = do_iv_regression();
     printf("failure=%d rc=%d allocations=%d alive=%d b=%.17g expected=%.17g\n", failure, rc,
@@ -174,7 +185,14 @@ int main(int argc, char **argv)
     leftovers();
     fflush(stdout);
     assert(alive == 0 && iv_state == NULL);
-    if (rc == 0)
+    /* A failed scalar save is the command's status, never ignored; a
+       configuration scalar that is not set is an error, not the value of the
+       scalar read before it */
+    if (missing_scalar)
+        assert(rc == 198);
+    else if (save_at)
+        assert(rc == 459);
+    else if (rc == 0)
     {
         assert(fabs(coefficient - expected_b) < 1e-10);
         assert(fabs(variance - expected_v) < 1e-10);
@@ -184,6 +202,8 @@ int main(int argc, char **argv)
         assert(rc == 920 || rc == 430);
     /* A failed command must not contaminate the next command in the same host. */
     fail_at = 0;
+    save_at = 0;
+    missing_scalar = NULL;
     assert(do_iv_regression() == 0);
     assert(alive == 0 && iv_state == NULL);
     assert(fabs(coefficient - expected_b) < 1e-10);

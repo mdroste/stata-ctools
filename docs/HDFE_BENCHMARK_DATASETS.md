@@ -124,7 +124,7 @@ Unless stated otherwise both commands use their defaults: `tolerance(1e-8)`, `re
 `absorb(id1 id2)`, the specification the collection is built around. Three things happen here that do not with one effect.
 
 1. **Singleton removal iterates.** Dropping a row that is alone in its `id1` level can leave another row alone in its `id2` level. The counts match on every graph.
-2. **Mobility groups are counted.** After singletons are removed, each connected component of the graph makes one coefficient of the second effect redundant. `reghdfe` reports this in `e(dof_table)` and `creghdfe` in `e(N_hdfe_extended)`. The test also requests `groupvar()` from both commands and requires the two identifiers to define the same partition of the rows. Group labels are not required to match.
+2. **Mobility groups are counted.** After singletons are removed, each connected component of the graph makes one coefficient of the second effect redundant. Both commands report this in `e(dof_table)`. The test also requests `groupvar()` from both commands and requires the two identifiers to define the same partition of the rows. Group labels are not required to match.
 3. **The projection iterates.** The `reghdfe` iteration count is a rough guide to how hard the graph is, from 2 on the complete design to several hundred on the sparse real networks.
 
 `synthetic-zigzag` is not in this table. Its two-way model is saturated with two regressors, and it is treated in [section 6](#6-exact-solutions).
@@ -304,7 +304,7 @@ On `synthetic-zigzag` both commands report convergence at `tolerance(1e-8)` whil
 
 ### 3. Stored results the suite does not compare
 
-`e(N_hdfe_extended)` holds the number of mobility groups in `creghdfe`, as its help file says, and the number of absorbed effects and slopes in `reghdfe`. `e(df_a_initial)` is the absorbed count before the nesting adjustment in `creghdfe`, and the total number of levels before any redundancy is removed in `reghdfe`.
+The fourth column of `e(dof_table)` differs: `reghdfe` flags redundant counts that are only bounds, while `creghdfe` does not compute the flag and leaves it missing. Since 27 October 2026, `e(N_hdfe_extended)` and `e(df_a_initial)` follow `reghdfe` (the absorbed effects; the levels before any redundancy is removed). Earlier versions of `creghdfe` stored the mobility groups and the count after redundancy there.
 
 ## Timing notes
 

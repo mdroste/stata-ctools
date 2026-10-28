@@ -79,6 +79,14 @@ def main():
                 f"PASS IV {variant}: {count} allocation failures, estimates and recovery",
                 flush=True,
             )
+        # Scalar outputs (FE levels, then mobility groups) are checked writes
+        for save in (1, 2):
+            run(iv, 0, 0, 0, 0, save)
+            cases += 1
+        for missing in ("__civreghdfe_has_cluster2", "__civreghdfe_tolerance", "__civreghdfe_center"):
+            run(iv, 0, 0, 0, 0, 0, missing)
+            cases += 1
+        print("PASS IV: failed scalar saves and unset configuration scalars are errors", flush=True)
         bins = build("bins_hdfe")
         for weighted in (0, 1):
             for first in (0, 1, 2):

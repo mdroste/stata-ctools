@@ -1,95 +1,494 @@
 /*
  * ctools_threads.c - Thread pool utilities for ctools
  *
- * Provides a persistent thread pool for efficient parallel execution.
+ * Provides a persistent thread pool for efficient parallel execution, and
+ * the thread-count policy shared by every command.
  */
 
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE  /* sched_getaffinity, CPU_ALLOC */
+#endif
+#include <errno.h>
+#include <limits.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#elif defined(__APPLE__)
+#else
+#include <pwd.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#if defined(__APPLE__)
 #include <sys/sysctl.h>
 #elif defined(__linux__)
-#include <unistd.h>
+#include <sched.h>
+#endif
 #endif
 
 #include "ctools_threads.h"
 #include "ctools_config.h"
+#include "ctools_file.h"
 
 /* ===========================================================================
    Unified Thread Management Implementation
 
-   Global thread limit that can be set via threads() option in Stata commands.
-   When not set (0), defaults to the system CPU count.
+   The default comes from ctools_thread_policy_get(); the threads() option
+   and the session setting override it for one plugin call. The precedence
+   is documented in ctools_config.h.
    =========================================================================== */
 
 /* User-specified thread limit (0 = use default) */
 static int g_ctools_max_threads = 0;
 
-/* True system CPU count, queried directly from the OS.
+/* Resolved default, captured once from the OS and environment.
  * This is immune to pollution from other Stata plugins (reghdfe, gtools, etc.)
  * that may call omp_set_num_threads() and lower the OpenMP thread count. */
 static int g_ctools_system_threads = 0;
 
-/*
- * Query the OS for the number of logical CPUs.
- * This is immune to omp_set_num_threads() pollution.
- */
-static int query_system_cpu_count(void)
+static ctools_thread_policy g_thread_policy;
+static int g_thread_policy_ready = 0;
+
+#define CTOOLS_SETTINGS_HEADER "# ctools settings; change with: ctools, threads(#) permanently\n"
+
+int ctools_parse_thread_value(const char *text, int list)
 {
-    int n = 0;
+    long long value = 0;
+    if (text == NULL) return 0;
+    while (*text == ' ' || *text == '\t') text++;
+    if (*text == '\0') return 0;
+    if (*text < '0' || *text > '9') return -1;
+    while (*text >= '0' && *text <= '9') {
+        value = value * 10 + (*text++ - '0');
+        if (value > INT_MAX) value = INT_MAX;  /* clamped later */
+    }
+    while (*text == ' ' || *text == '\t' || *text == '\r' || *text == '\n') text++;
+    if (*text != '\0' && !(list && *text == ',')) return -1;
+    return value > 0 ? (int)value : -1;
+}
+
+void ctools_thread_policy_resolve(ctools_thread_policy *p)
+{
+    int limit = p->available > 0 ? p->available : 1;
+    if (p->omp_limit > 0 && p->omp_limit < limit) limit = p->omp_limit;
+    if (limit > CTOOLS_MAX_THREADS) limit = CTOOLS_MAX_THREADS;
+    p->limit = limit;
+
+    if (p->env_ctools > 0) {
+        p->threads = p->env_ctools;
+        p->source = "CTOOLS_NUM_THREADS";
+    } else if (p->saved > 0) {
+        p->threads = p->saved;
+        p->source = "saved setting";
+    } else if (p->env_omp > 0) {
+        p->threads = p->env_omp;
+        p->source = "OMP_NUM_THREADS";
+    } else {
+        p->threads = CTOOLS_DEFAULT_THREAD_CAP;
+        p->source = "automatic";
+    }
+    if (p->threads > limit) p->threads = limit;
+}
+
+#if defined(__linux__)
+/* CPUs granted by one cgroup's quota (v2 cpu.max, v1 CFS), or 0 if none. */
+static int cgroup_quota_cpus(const char *dir, int v2)
+{
+    char path[4200], word[32] = "";
+    long long quota = 0, period = 0;
+    FILE *fp;
+    int ok;
+
+    snprintf(path, sizeof(path), v2 ? "%s/cpu.max" : "%s/cpu.cfs_quota_us", dir);
+    if ((fp = fopen(path, "r")) == NULL) return 0;
+    ok = v2 ? fscanf(fp, "%31s %lld", word, &period) == 2 : fscanf(fp, "%lld", &quota) == 1;
+    fclose(fp);
+    if (!ok) return 0;
+    if (v2) {
+        if (strcmp(word, "max") == 0) return 0;
+        quota = strtoll(word, NULL, 10);
+    } else {
+        snprintf(path, sizeof(path), "%s/cpu.cfs_period_us", dir);
+        if ((fp = fopen(path, "r")) == NULL) return 0;
+        ok = fscanf(fp, "%lld", &period) == 1;
+        fclose(fp);
+        if (!ok) return 0;
+    }
+    if (quota <= 0 || period <= 0) return 0;
+    quota = quota / period + (quota % period != 0);
+    return quota > INT_MAX ? INT_MAX : (int)quota;
+}
+
+/* Tightest quota from this process's cgroup up to the hierarchy root. */
+static int cgroup_walk(const char *root, const char *rel, int v2)
+{
+    char dir[4096];
+    size_t base = strlen(root);
+    int best = 0;
+
+    if (rel[0] != '/' || strstr(rel, "..") != NULL) rel = "";
+    if ((size_t)snprintf(dir, sizeof(dir), "%s%s", root, rel) >= sizeof(dir)) return 0;
+    for (;;) {
+        size_t len = strlen(dir);
+        while (len > base && dir[len - 1] == '/') dir[--len] = '\0';
+        int n = cgroup_quota_cpus(dir, v2);
+        if (n > 0 && (best == 0 || n < best)) best = n;
+        if (len <= base) return best;
+        *strrchr(dir + base, '/') = '\0';
+    }
+}
+
+/* CPU quota of the cgroup that contains this process, or 0 if unlimited.
+ * Containers (docker --cpus, Kubernetes limits) set one without changing
+ * the affinity mask. */
+static int cgroup_cpu_limit(void)
+{
+    char line[4096], v1[4096] = "", v2[4096] = "", controllers[4100];
+    int have_v1 = 0, have_v2 = 0, best = 0;
+    FILE *fp = fopen("/proc/self/cgroup", "r");
+
+    if (fp == NULL) return 0;
+    /* Lines are "hierarchy-id:controllers:path"; v2 is "0::path". */
+    while (fgets(line, sizeof(line), fp) != NULL) {
+        char *ctl = strchr(line, ':');
+        char *path = ctl ? strchr(ctl + 1, ':') : NULL;
+        if (path == NULL) continue;
+        *ctl++ = '\0';
+        *path++ = '\0';
+        path[strcspn(path, "\r\n")] = '\0';
+        if (strcmp(line, "0") == 0 && *ctl == '\0') {
+            snprintf(v2, sizeof(v2), "%s", path);
+            have_v2 = 1;
+            continue;
+        }
+        snprintf(controllers, sizeof(controllers), ",%s,", ctl);
+        if (strstr(controllers, ",cpu,") != NULL) {
+            snprintf(v1, sizeof(v1), "%s", path);
+            have_v1 = 1;
+        }
+    }
+    fclose(fp);
+
+    if (have_v2) best = cgroup_walk("/sys/fs/cgroup", v2, 1);
+    if (best == 0 && have_v1) {
+        best = cgroup_walk("/sys/fs/cgroup/cpu", v1, 0);
+        if (best == 0) best = cgroup_walk("/sys/fs/cgroup/cpu,cpuacct", v1, 0);
+    }
+    return best;
+}
+
+/* CPUs in this thread's affinity mask (taskset, Slurm, numactl), or 0. */
+static int linux_affinity_cpus(void)
+{
+#ifdef CPU_ALLOC_SIZE
+    for (int ncpu = 1024; ncpu <= 65536; ncpu *= 2) {
+        cpu_set_t *set = CPU_ALLOC(ncpu);
+        size_t size = CPU_ALLOC_SIZE(ncpu);
+        int n, error;
+        if (set == NULL) return 0;
+        CPU_ZERO_S(size, set);
+        n = sched_getaffinity(0, size, set) == 0 ? CPU_COUNT_S(size, set) : -1;
+        error = errno;
+        CPU_FREE(set);
+        if (n >= 0) return n;
+        if (error != EINVAL) return 0;  /* EINVAL: mask larger than the set */
+    }
+#endif
+    return 0;
+}
+#endif
+
+/* Logical CPUs on the machine, and those this process may run on. */
+static void detect_cpus(int *detected, int *available)
+{
+    int total = 0, usable = 0;
 #if defined(_WIN32)
+    DWORD_PTR process_mask = 0, system_mask = 0;
+#ifdef ALL_PROCESSOR_GROUPS
+    total = (int)GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+#else
     SYSTEM_INFO si;
     GetSystemInfo(&si);
-    n = (int)si.dwNumberOfProcessors;
-#elif defined(__APPLE__)
-    int mib[2] = { CTL_HW, HW_NCPU };
-    size_t len = sizeof(n);
-    sysctl(mib, 2, &n, &len, NULL, 0);
-#elif defined(__linux__)
-    n = (int)sysconf(_SC_NPROCESSORS_ONLN);
+    total = (int)si.dwNumberOfProcessors;
 #endif
-    if (n < 1) n = omp_get_max_threads();  /* last resort fallback */
-    n = ctools_workspace_threads(n, 0, 0);
-    return n;
+    /* Both masks are zero when threads already span processor groups. */
+    if (GetProcessAffinityMask(GetCurrentProcess(), &process_mask, &system_mask)) {
+        for (; process_mask != 0; process_mask &= process_mask - 1) usable++;
+    }
+#elif defined(__APPLE__)
+    size_t len = sizeof(total);
+    if (sysctlbyname("hw.logicalcpu_max", &total, &len, NULL, 0) != 0) total = 0;
+    len = sizeof(usable);
+    if (sysctlbyname("hw.activecpu", &usable, &len, NULL, 0) != 0) usable = 0;
+#else
+    total = (int)sysconf(_SC_NPROCESSORS_ONLN);
+#if defined(__linux__)
+    usable = linux_affinity_cpus();
+    int quota = cgroup_cpu_limit();
+    if (quota > 0 && (usable < 1 || quota < usable)) usable = quota;
+#endif
+#endif
+    if (total < 1) total = omp_get_max_threads();  /* last resort fallback */
+    if (usable < 1 || usable > total) usable = total;
+    *detected = total;
+    *available = usable;
+}
+
+/* Per-user settings file: %APPDATA%\ctools\ctools.conf on Windows,
+ * ~/Library/Application Support/ctools/ctools.conf on macOS, and
+ * $XDG_CONFIG_HOME/ctools/ctools.conf (default ~/.config) elsewhere.
+ * It lives outside the ado tree so reinstalling ctools keeps it. */
+static int thread_settings_path(char *out, size_t size)
+{
+    int n;
+#if defined(_WIN32)
+    wchar_t wide[2048];
+    char base[4096];
+    DWORD len = GetEnvironmentVariableW(L"APPDATA", wide, 2048);
+    if (len == 0 || len >= 2048) return -1;
+    if (!WideCharToMultiByte(CP_UTF8, 0, wide, -1, base, (int)sizeof(base), NULL, NULL)) return -1;
+    n = snprintf(out, size, "%s\\ctools\\ctools.conf", base);
+#else
+    const char *home = getenv("HOME");
+#if !defined(__APPLE__)
+    const char *xdg = getenv("XDG_CONFIG_HOME");
+    if (xdg != NULL && xdg[0] == '/') {
+        n = snprintf(out, size, "%s/ctools/ctools.conf", xdg);
+        return n > 0 && (size_t)n < size ? 0 : -1;
+    }
+#endif
+    if (home == NULL || home[0] != '/') {
+        struct passwd *pw = getpwuid(getuid());
+        home = pw != NULL ? pw->pw_dir : NULL;
+    }
+    if (home == NULL || home[0] != '/') return -1;
+#if defined(__APPLE__)
+    n = snprintf(out, size, "%s/Library/Application Support/ctools/ctools.conf", home);
+#else
+    n = snprintf(out, size, "%s/.config/ctools/ctools.conf", home);
+#endif
+#endif
+    return n > 0 && (size_t)n < size ? 0 : -1;
+}
+
+/* Value text of a "threads=" line, or NULL for any other line. */
+static const char *thread_setting_value(const char *line)
+{
+    if (strncmp(line, "\xEF\xBB\xBF", 3) == 0) line += 3;  /* editors may add a BOM */
+    while (*line == ' ' || *line == '\t') line++;
+    if (strncmp(line, "threads", 7) != 0) return NULL;
+    line += 7;
+    while (*line == ' ' || *line == '\t') line++;
+    return *line == '=' ? line + 1 : NULL;
+}
+
+/* Last threads= value in the settings file, encoded like
+ * ctools_parse_thread_value. A missing file is not an error. */
+static int read_thread_setting(const char *path)
+{
+    char line[1024];
+    const char *text;
+    int value = 0;
+    FILE *fp = ctools_fopen(path, "r");
+
+    if (fp == NULL) return 0;
+    while (fgets(line, sizeof(line), fp) != NULL) {
+        if ((text = thread_setting_value(line)) != NULL) {
+            value = ctools_parse_thread_value(text, 0);
+        }
+    }
+    fclose(fp);
+    return value;
+}
+
+#if defined(_WIN32)
+#define CTOOLS_PATH_SEP '\\'
+static int make_dir(const char *path)
+{
+    wchar_t *wide = ctools_wpath(path);
+    BOOL ok;
+    if (wide == NULL) return -1;
+    ok = CreateDirectoryW(wide, NULL) || GetLastError() == ERROR_ALREADY_EXISTS;
+    free(wide);
+    if (!ok) errno = EACCES;
+    return ok ? 0 : -1;
+}
+static void remove_empty_dir(const char *path)
+{
+    wchar_t *wide = ctools_wpath(path);
+    if (wide != NULL) RemoveDirectoryW(wide);
+    free(wide);
+}
+#else
+#define CTOOLS_PATH_SEP '/'
+static int make_dir(const char *path)
+{
+    return mkdir(path, 0700) == 0 || errno == EEXIST ? 0 : -1;
+}
+static void remove_empty_dir(const char *path)
+{
+    (void)rmdir(path);
+}
+#endif
+
+/* Create any missing directories above a file path. */
+static int make_parent_dirs(char *path)
+{
+    char *sep = strrchr(path, CTOOLS_PATH_SEP);
+    int rc;
+    if (sep == NULL || sep == path) return 0;
+    *sep = '\0';
+    rc = make_dir(path);
+    if (rc != 0 && make_parent_dirs(path) == 0) rc = make_dir(path);
+    *sep = CTOOLS_PATH_SEP;
+    return rc;
+}
+
+const ctools_thread_policy *ctools_thread_policy_get(void)
+{
+    ctools_thread_policy *p = &g_thread_policy;
+    if (!g_thread_policy_ready) {
+        detect_cpus(&p->detected, &p->available);
+        p->omp_limit = ctools_parse_thread_value(getenv("OMP_THREAD_LIMIT"), 0);
+        p->env_ctools = ctools_parse_thread_value(getenv("CTOOLS_NUM_THREADS"), 0);
+        p->env_omp = ctools_parse_thread_value(getenv("OMP_NUM_THREADS"), 1);
+        if (thread_settings_path(p->settings_path, sizeof(p->settings_path)) == 0) {
+            p->saved = read_thread_setting(p->settings_path);
+        } else {
+            p->settings_path[0] = '\0';
+        }
+        ctools_thread_policy_resolve(p);
+        g_thread_policy_ready = 1;
+    }
+    return p;
+}
+
+int ctools_clamp_thread_request(int n)
+{
+    int limit = ctools_thread_policy_get()->limit;
+    return n > limit ? limit : n;
+}
+
+int ctools_save_thread_setting(int n)
+{
+    ctools_thread_policy *p = &g_thread_policy;
+    char path[4096], temp[4200], line[1024];
+    const char *text;
+    int keep = 0, ok;
+    unsigned long pid;
+    FILE *in, *out;
+
+    if (n < 0) n = 0;
+    if (n > CTOOLS_MAX_THREADS) n = CTOOLS_MAX_THREADS;
+    (void)ctools_thread_policy_get();
+    if (p->settings_path[0] == '\0') {
+        errno = ENOENT;
+        return -1;
+    }
+    snprintf(path, sizeof(path), "%s", p->settings_path);
+    if (n > 0 && make_parent_dirs(path) != 0) return -1;
+#if defined(_WIN32)
+    pid = (unsigned long)GetCurrentProcessId();
+#else
+    pid = (unsigned long)getpid();
+#endif
+
+    /* Rewrite through a temporary file and rename it over the original, so
+     * a concurrent reader sees the old or the new file, never a partial one.
+     * Lines other than threads= are kept for settings added later. */
+    in = ctools_fopen(path, "r");
+    if (in == NULL && n == 0) {
+        /* Missing is already removed; unreadable is still removable. */
+        if (errno != ENOENT && ctools_remove(path) != 0 && errno != ENOENT) return -1;
+        goto saved;
+    }
+    snprintf(temp, sizeof(temp), "%s.%lu.tmp", path, pid);
+    out = ctools_fopen(temp, "w");
+    if (out == NULL) {
+        if (in != NULL) fclose(in);
+        return -1;
+    }
+    fputs(CTOOLS_SETTINGS_HEADER, out);
+    while (in != NULL && fgets(line, sizeof(line), in) != NULL) {
+        if (thread_setting_value(line) != NULL || strcmp(line, CTOOLS_SETTINGS_HEADER) == 0) continue;
+        for (text = line; *text == ' ' || *text == '\t'; text++) {}
+        if (*text != '#' && *text != '\r' && *text != '\n' && *text != '\0') keep = 1;
+        fputs(line, out);
+    }
+    if (in != NULL) fclose(in);
+    if (n > 0) fprintf(out, "threads=%d\n", n);
+    ok = !ferror(out);
+    ok = fclose(out) == 0 && ok;
+    if (ok && n == 0 && !keep) {
+        /* Nothing else is configured: remove the file, and its ctools
+         * directory when that is now empty. */
+        ctools_remove(temp);
+        ok = ctools_remove(path) == 0 || errno == ENOENT;
+        if (ok) {
+            char *sep = strrchr(path, CTOOLS_PATH_SEP);
+            if (sep != NULL) {
+                *sep = '\0';
+                remove_empty_dir(path);
+            }
+        }
+    } else if (ok) {
+#if defined(_WIN32)
+        ok = ctools_move_file(temp, path, 1) == 0;
+#else
+        ok = rename(temp, path) == 0;
+#endif
+    }
+    if (!ok) {
+        int error = errno;
+        ctools_remove(temp);
+        errno = error;
+        return -1;
+    }
+
+saved:
+    p->saved = n;
+    ctools_thread_policy_resolve(p);
+    g_ctools_system_threads = p->threads;
+    return 0;
 }
 
 /*
- * Initialize the true system thread count from the OS.
- * Safe to call multiple times (only queries once).
+ * Capture the resolved default thread count.
+ * Safe to call multiple times (only resolves once).
  */
 void ctools_init_thread_count(void)
 {
     if (g_ctools_system_threads == 0) {
-        g_ctools_system_threads = query_system_cpu_count();
+        g_ctools_system_threads = ctools_thread_policy_get()->threads;
     }
 }
 
 /*
  * Get the current maximum thread count for ctools operations.
- * Returns the user-set limit if specified, otherwise the system default
- * captured at init (immune to external OpenMP pollution).
+ * Returns the user-set limit if specified, otherwise the default
+ * resolved at init (immune to external OpenMP pollution).
  */
 int ctools_get_max_threads(void)
 {
     if (g_ctools_max_threads > 0) {
         return g_ctools_max_threads;
     }
-    /* Use the captured system default, immune to omp_set_num_threads()
+    /* Use the captured default, immune to omp_set_num_threads()
      * calls by external plugins (reghdfe, gtools, etc.) */
     if (g_ctools_system_threads > 0) {
         return g_ctools_system_threads;
     }
+    /* Not initialized (native harnesses): follow the OpenMP runtime. */
     return ctools_workspace_threads(omp_get_max_threads(), 0, 0);
 }
 
 /*
  * Set the maximum thread count for ctools operations.
- * Pass 0 to reset to default (omp_get_max_threads()).
- * Pass n > 0 to set a specific limit.
+ * Pass 0 to reset to the resolved default.
+ * Pass n > 0 to set a specific limit. Callers that take the value from the
+ * user clamp it with ctools_clamp_thread_request() first.
  */
 void ctools_set_max_threads(int n)
 {
@@ -106,16 +505,16 @@ void ctools_set_max_threads(int n)
 }
 
 /*
- * Reset thread limit to default (runtime-detected).
- * Also restores the OpenMP runtime thread count so that direct
- * omp_get_max_threads() calls elsewhere return the correct value.
+ * Reset thread limit to the resolved default.
+ * Also restores the OpenMP runtime thread count so that OpenMP regions
+ * without a num_threads() clause use the same default.
  */
 void ctools_reset_max_threads(void)
 {
     g_ctools_max_threads = 0;
 
 #ifdef _OPENMP
-    /* Always restore system thread count — protects against both
+    /* Always restore the default — protects against both
      * our own threads() option and external plugin pollution */
     if (g_ctools_system_threads > 0) {
         omp_set_num_threads(g_ctools_system_threads);

@@ -530,6 +530,17 @@
       "public": false
     },
     {
+      "name": "oct27",
+      "path": "validation/validate_oct27.do",
+      "runner": "master",
+      "category": "correctness",
+      "marker": "oct27",
+      "fixtures": [],
+      "dependencies": [
+        "Stata"
+      ]
+    },
+    {
       "name": "memory_safety",
       "path": "validation/validate_memory_safety.do",
       "runner": "master",
@@ -1198,6 +1209,20 @@
       }
     },
     {
+      "name": "test_thread_policy_native",
+      "path": "validation/test_thread_policy_native.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [
+        "C compiler"
+      ],
+      "env": {
+        "CTOOLS_SANITIZERS": "address,undefined"
+      }
+    },
+    {
       "name": "test_validation_registry",
       "path": "validation/test_validation_registry.py",
       "runner": "native",
@@ -1212,6 +1237,17 @@
       "runner": "master",
       "category": "correctness",
       "marker": "contracts",
+      "fixtures": [],
+      "dependencies": [
+        "Stata"
+      ]
+    },
+    {
+      "name": "threads",
+      "path": "validation/validate_threads.do",
+      "runner": "master",
+      "category": "correctness",
+      "marker": "threads",
       "fixtures": [],
       "dependencies": [
         "Stata"

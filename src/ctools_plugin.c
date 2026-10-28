@@ -36,6 +36,7 @@
 #if defined(__linux__) && !defined(_GNU_SOURCE)
 #define _GNU_SOURCE  /* dladdr */
 #endif
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -166,6 +167,82 @@ static int parse_threads_arg(char *cmd_args)
 
     return num_threads;
 }
+
+/*
+    Session thread setting from ctools, threads(#): global CTOOLS_THREADS.
+    Encoded like ctools_parse_thread_value (>0 set, 0 unset, -1 invalid).
+*/
+static int session_threads(void)
+{
+    char value[64] = "";
+    if (SF_macro_use("CTOOLS_THREADS", value, (int)sizeof(value)) != 0) return 0;
+    return ctools_parse_thread_value(value, 0);
+}
+
+static ST_retcode save_thread_local(char *name, int value)
+{
+    char text[16] = "";
+    if (value < 0) snprintf(text, sizeof(text), "invalid");
+    else if (value > 0) snprintf(text, sizeof(text), "%d", value);
+    return SF_macro_save(name, text);
+}
+
+/*
+    Thread settings for ctools.ado: "threads_info" reports the policy in
+    locals; "threads_save N" saves N to the per-user settings file, or
+    removes the saved value when N is 0. No worker threads are started.
+*/
+static ST_retcode thread_settings_call(const char *args)
+{
+    const ctools_thread_policy *p;
+    char text[32];
+    int n = 0, session, effective;
+    ST_retcode rc = 0;
+
+    if (strncmp(args, "save ", 5) == 0) {
+        if (!ctools_safe_atoi(args + 5, &n) || n < 0 || n > CTOOLS_MAX_THREADS) {
+            SF_error("ctools: threads() must be an integer from 1 through 256, or default\n");
+            return 198;
+        }
+        if (ctools_save_thread_setting(n) != 0) {
+            char msg[4400];
+            const char *path = ctools_thread_policy_get()->settings_path;
+            snprintf(msg, sizeof(msg), "ctools: could not update thread setting in %s (%s)\n",
+                     path[0] ? path : "home directory", strerror(errno));
+            SF_error(msg);
+            return 603;
+        }
+    } else if (strcmp(args, "info") != 0) {
+        SF_error("ctools: unknown thread settings request\n");
+        return 198;
+    }
+
+    p = ctools_thread_policy_get();
+    session = session_threads();
+    effective = session > 0 ? ctools_clamp_thread_request(session) : p->threads;
+    snprintf(text, sizeof(text), "%d", effective);
+    rc = rc ? rc : SF_macro_save("_ctools_threads_effective", text);
+    snprintf(text, sizeof(text), "%d", p->threads);
+    rc = rc ? rc : SF_macro_save("_ctools_threads_default", text);
+    rc = rc ? rc : SF_macro_save("_ctools_threads_source", (char *)p->source);
+    snprintf(text, sizeof(text), "%d", p->detected);
+    rc = rc ? rc : SF_macro_save("_ctools_threads_detected", text);
+    snprintf(text, sizeof(text), "%d", p->available);
+    rc = rc ? rc : SF_macro_save("_ctools_threads_available", text);
+    snprintf(text, sizeof(text), "%d", p->limit);
+    rc = rc ? rc : SF_macro_save("_ctools_threads_limit", text);
+    snprintf(text, sizeof(text), "%d", CTOOLS_DEFAULT_THREAD_CAP);
+    rc = rc ? rc : SF_macro_save("_ctools_threads_cap", text);
+    snprintf(text, sizeof(text), "%d", CTOOLS_OPENMP_ENABLED);
+    rc = rc ? rc : SF_macro_save("_ctools_threads_openmp", text);
+    rc = rc ? rc : save_thread_local("_ctools_threads_session", session);
+    rc = rc ? rc : save_thread_local("_ctools_threads_saved", p->saved);
+    rc = rc ? rc : save_thread_local("_ctools_threads_env", p->env_ctools);
+    rc = rc ? rc : save_thread_local("_ctools_threads_omp", p->env_omp);
+    rc = rc ? rc : save_thread_local("_ctools_threads_omp_limit", p->omp_limit);
+    rc = rc ? rc : SF_macro_save("_ctools_threads_file", (char *)p->settings_path);
+    return rc;
+}
 #include "csort/csort_impl.h"
 #include "creghdfe/creghdfe_impl.h"
 #include "civreghdfe/civreghdfe_impl.h"
@@ -240,6 +317,10 @@ STDLL stata_call(int argc, char *argv[])
     /* Reset thread limit to default at start of each call */
     ctools_reset_max_threads();
 
+    if (argc > 0 && argv[0] && strncmp(argv[0], "threads_", 8) == 0) {
+        return thread_settings_call(argv[0] + 8);
+    }
+
     /* Check for arguments */
     if (argc < 1 || argv[0] == NULL || strlen(argv[0]) == 0) {
         SF_error("ctools: no command specified\n");
@@ -276,8 +357,20 @@ STDLL stata_call(int argc, char *argv[])
         ctools_command_reset();
         return 198;
     }
+    if (thread_count == 0) {
+        /* No threads() option: the session setting applies, if any. */
+        thread_count = session_threads();
+        if (thread_count < 0) {
+            SF_error("ctools: global CTOOLS_THREADS must be an integer from 1 through 256; "
+                     "clear it with ctools, threads(default)\n");
+            free(cmd_str);
+            ctools_command_reset();
+            return 198;
+        }
+    }
     if (thread_count > 0) {
-        ctools_set_max_threads(thread_count);
+        /* More threads than usable CPUs only adds contention. */
+        ctools_set_max_threads(ctools_clamp_thread_request(thread_count));
     }
 
     const ctools_command_descriptor *command = NULL;

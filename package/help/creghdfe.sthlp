@@ -82,7 +82,10 @@ for models with many fixed effects or large datasets.
 
 {phang}
 {opt absorb(varlist[, savefe])} specifies one or more categorical variables whose fixed
-effects are to be absorbed. This option is required. The optional {opt savefe}
+effects are to be absorbed. This option is required. As in {cmd:reghdfe}, each term
+is a numeric or string variable, an {cmd:i.}{it:var}, or an interaction
+{it:var1}{cmd:#}{it:var2} absorbed as one effect; heterogeneous slopes
+({cmd:c.}{it:var}), {cmd:##} and {it:newvar}{cmd:=} terms are not supported. The optional {opt savefe}
 suboption creates variables {cmd:__hdfe1__}, {cmd:__hdfe2__}, etc. containing
 the estimated fixed effect for each observation. {bf:Note:} Variable value storage
 is currently a known limitation; the variables are created but may not contain values.
@@ -112,8 +115,13 @@ a known limitation; the variable is created but may not contain values.
 
 {phang}
 {opt vce(cluster clustvar)} computes cluster-robust standard errors, clustering
-on the specified variable. Only one cluster variable is allowed; multi-way
-clustering is not supported.
+on the specified variable, which may be a string variable, an {cmd:i.}{it:var}, or
+an interaction {it:var1}{cmd:#}{it:var2}. Only one cluster dimension is allowed;
+multi-way clustering is not supported.
+
+{phang}
+With {cmd:pweight}s the standard errors are robust unless {opt vce(cluster)} is
+specified; {opt vce(unadjusted)} and {opt vce(ols)} are an error, as in {cmd:reghdfe}.
 
 {dlgtab:Convergence}
 
@@ -127,7 +135,7 @@ demeaning algorithm. The default is {cmd:10000}.
 
 {phang}
 {opt threads(#)} specifies the maximum number of threads to use for parallel
-operations. By default, {cmd:creghdfe} uses all available CPU cores.
+operations. By default, {cmd:creghdfe} uses the {help ctools##threads:ctools thread setting}, which is at most 16 threads unless you change it.
 
 {phang}
 {opt nostandardize} specifies that variables should not be standardized
@@ -227,14 +235,18 @@ stay in the data. {opt fast} may not be combined with {opt snapshot}.
 {synopt:{cmd:e(tss)}}total sum of squares{p_end}
 {synopt:{cmd:e(tss_within)}}within total sum of squares{p_end}
 {synopt:{cmd:e(df_a)}}absorbed degrees of freedom (adjusted){p_end}
-{synopt:{cmd:e(df_a_initial)}}absorbed degrees of freedom (before nested adjustment){p_end}
+{synopt:{cmd:e(df_a_initial)}}levels of the absorbed effects, before redundant coefficients are removed{p_end}
+{synopt:{cmd:e(df_a_redundant)}}redundant coefficients of the absorbed effects, nested ones included{p_end}
 {synopt:{cmd:e(df_a_nested)}}degrees of freedom from nested FEs{p_end}
 {synopt:{cmd:e(F)}}F-statistic{p_end}
 {synopt:{cmd:e(rank)}}rank of e(V){p_end}
 {synopt:{cmd:e(N_hdfe)}}number of absorbed FE groups{p_end}
-{synopt:{cmd:e(N_hdfe_extended)}}number of mobility groups{p_end}
+{synopt:{cmd:e(N_hdfe_extended)}}number of absorbed effects, as in {cmd:reghdfe} (the mobility groups are the second row's redundant count in {cmd:e(dof_table)}){p_end}
 {synopt:{cmd:e(num_singletons)}}number of singleton observations dropped{p_end}
+{synopt:{cmd:e(drop_singletons)}}1: singletons are always dropped{p_end}
 {synopt:{cmd:e(N_clust)}}number of clusters (if {cmd:vce(cluster)}){p_end}
+{synopt:{cmd:e(N_clust1)}}number of clusters (if {cmd:vce(cluster)}){p_end}
+{synopt:{cmd:e(N_clustervars)}}number of cluster dimensions (if {cmd:vce(cluster)}){p_end}
 
 {synoptset 24 tabbed}{...}
 {p2col 5 24 28 2: Macros}{p_end}
@@ -243,8 +255,15 @@ stay in the data. {opt fast} may not be combined with {opt snapshot}.
 {synopt:{cmd:e(depvar)}}name of dependent variable{p_end}
 {synopt:{cmd:e(indepvars)}}names of independent variables{p_end}
 {synopt:{cmd:e(absorb)}}absorbed fixed effect variables{p_end}
+{synopt:{cmd:e(absvars)}}absorbed effects as specified ({cmd:_cons} without {opt absorb()}){p_end}
+{synopt:{cmd:e(extended_absvars)}}absorbed effects without {cmd:i.} prefixes{p_end}
+{synopt:{cmd:e(title)}}{cmd:HDFE Linear regression}{p_end}
+{synopt:{cmd:e(title2)}}number of absorbed effects{p_end}
+{synopt:{cmd:e(dofmethod)}}degrees-of-freedom adjustments applied{p_end}
 {synopt:{cmd:e(vce)}}VCE type: {cmd:unadjusted}, {cmd:robust}, or {cmd:cluster}{p_end}
+{synopt:{cmd:e(vcetype)}}{cmd:Robust} (if {cmd:vce(robust)} or {cmd:vce(cluster)}){p_end}
 {synopt:{cmd:e(clustvar)}}name of cluster variable (if {cmd:vce(cluster)}){p_end}
+{synopt:{cmd:e(clustvar1)}}name of cluster variable (if {cmd:vce(cluster)}){p_end}
 {synopt:{cmd:e(resid)}}name of residual variable (if {cmd:resid} or {cmd:resid2()} specified){p_end}
 {synopt:{cmd:e(predict)}}program used to implement {cmd:predict}{p_end}
 
@@ -252,6 +271,7 @@ stay in the data. {opt fast} may not be combined with {opt snapshot}.
 {p2col 5 24 28 2: Matrices}{p_end}
 {synopt:{cmd:e(b)}}coefficient vector{p_end}
 {synopt:{cmd:e(V)}}variance-covariance matrix of the estimators{p_end}
+{synopt:{cmd:e(dof_table)}}per effect: categories, redundant, coefficients, inexact (missing: not computed) and nested{p_end}
 
 {synoptset 24 tabbed}{...}
 {p2col 5 24 28 2: Functions}{p_end}

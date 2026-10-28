@@ -94,7 +94,7 @@ for bootstrap estimation.
 
 {phang}
 {opt threads(#)} specifies the maximum number of threads to use for parallel
-operations. By default, {cmd:cbsample} uses all available CPU cores.
+operations. By default, {cmd:cbsample} uses the {help ctools##threads:ctools thread setting}, which is at most 16 threads unless you change it.
 
 {phang}
 {opt verbose} displays detailed progress information and timing breakdown.

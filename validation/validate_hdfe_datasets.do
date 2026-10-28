@@ -82,9 +82,9 @@ end
  *
  * Exact: e(N), e(num_singletons), e(df_a), e(df_r), e(df_m), e(rank),
  *        e(N_hdfe), e(N_clust). With two effects and no clustering, also the
- *        number of mobility groups: reghdfe's redundant coefficients of the
- *        second effect in e(dof_table), creghdfe's e(N_hdfe_extended). Neither
- *        quantity counts mobility groups in other models.
+ *        number of mobility groups: the redundant coefficients of the second
+ *        effect in each command's e(dof_table). That count is not the
+ *        mobility groups in other models.
  * $DEFAULT_SIGFIGS: e(r2), e(r2_a), e(r2_within), e(rss), e(tss), e(mss),
  *        e(F), e(rmse), and every element of e(b) and e(V).
  *
@@ -126,11 +126,10 @@ program define hdfe_run, rclass
         foreach stat in `stats_exact' `stats_float' ic {
             local `cmd'_`stat' = e(`stat')
         }
-        if `nfe' == 2 & "`cmd'" == "r" & !strmatch("`vce'", "cl*") {
+        if `nfe' == 2 & !strmatch("`vce'", "cl*") {
             matrix `dof' = e(dof_table)
-            local r_groups = `dof'[2, 2]
+            local `cmd'_groups = `dof'[2, 2]
         }
-        if !missing(`r_groups') & "`cmd'" == "c" local c_groups = e(N_hdfe_extended)
     }
 
     return scalar rc_reghdfe = `rc_r'

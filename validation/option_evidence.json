@@ -871,6 +871,26 @@
           "anchor": "ctools update dispatch mocked status"
         }
       ]
+    },
+    "threads": {
+      "kind": "contract",
+      "reason": "The utility has no replacement command: session setting, per-command override, clamping, invalid values and clearing are asserted.",
+      "evidence": [
+        {
+          "path": "validation/validate_threads.do",
+          "anchor": "session setting stored"
+        }
+      ]
+    },
+    "permanently": {
+      "kind": "contract",
+      "reason": "The utility has no replacement command: the saved setting is written, becomes the default, and is removed; the developer's own setting is restored.",
+      "evidence": [
+        {
+          "path": "validation/validate_threads.do",
+          "anchor": "saved setting written"
+        }
+      ]
     }
   },
   "cencode": {

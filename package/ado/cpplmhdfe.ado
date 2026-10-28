@@ -156,24 +156,12 @@ program define cpplmhdfe, eclass
     }
     if "`d'" != "" _ctools_newvars `d'
 
-    * Parse independent absorbed-DF adjustments, matching reference semantics.
-    local dofmethods = lower(trim("`dofadjustments'"))
-    if inlist("`dofmethods'", "", "all") local dofmethods pairwise clusters continuous
-    if "`dofmethods'" == "none" local dofmethods
-    local allowed_dof firstpair pairwise clusters continuous
-    local invalid_dof : list dofmethods - allowed_dof
-    if "`invalid_dof'" != "" {
-        di as error "invalid dofadjustments(): `invalid_dof'"
-        exit 198
-    }
-    local dof_flags = 0
-    local bit = 1
-    foreach adjustment in pairwise firstpair clusters continuous {
-        local selected : list adjustment in dofmethods
-        if `selected' local dof_flags = `dof_flags' + `bit'
-        local bit = 2*`bit'
-    }
-    if mod(`dof_flags',4)==3 error 198
+    * Parse independent absorbed-DF adjustments, matching reference semantics
+    * (abbreviations included); all stands for pairwise clusters continuous.
+    local dof_lower = lower(`"`dofadjustments'"')
+    _ctools_hdfe_dof, `dof_lower'
+    local dof_flags = `s(flags)'
+    local dofmethods `s(methods)'
     local dof_adjust_type = cond(`dof_flags'==0,1,cond(mod(`dof_flags',4)==2,2,0))
 
     * Mark sample
@@ -342,6 +330,80 @@ program define cpplmhdfe, eclass
         local has_offset = 1
     }
 
+    * Parse VCE option (default: robust, matching ppmlhdfe). Its cluster
+    * variables are marked out before the factor variables are expanded, so
+    * that their levels come from the estimation sample.
+    local vcetype = 1
+    local clustervar ""
+    local clustervar_orig ""
+    local cluster_terms
+    local num_cluster_vars = 0
+    local num_cluster_terms = 0
+
+    if `"`vce'"' != "" {
+        _ctools_hdfe_vce, spec(`"`vce'"') touse(`touse') cmd(cpplmhdfe)
+        local vce_kind `r(kind)'
+        if "`vce_kind'" == "cluster" {
+            local vcetype = 2
+            local num_cluster_vars = r(ndims)
+            if `num_cluster_vars' == 0 {
+                di as error "cpplmhdfe: cluster variable required with vce(cluster)"
+                exit 198
+            }
+            if `num_cluster_vars' > 10 {
+                di as error "cpplmhdfe: at most ten cluster variables are supported"
+                exit 198
+            }
+            forvalues dim = 1/`num_cluster_vars' {
+                local cl_name_`dim' `r(name_`dim')'
+                local cl_vars_`dim' `r(vars_`dim')'
+                local cl_group_`dim' = r(group_`dim')
+            }
+            * A single numeric variable is passed as it is: the plugin numbers
+            * its values in ascending order, the partition and order egen
+            * group() gives. Strings and interactions are numbered the same
+            * way by _ctools_group.
+            local cluster_numeric
+            forvalues dim = 1/`num_cluster_vars' {
+                local clustervar_orig `clustervar_orig' `cl_name_`dim''
+                if `cl_group_`dim'' {
+                    tempvar cl_id_`dim'
+                    quietly _ctools_group `cl_vars_`dim'' if `touse', generate(`cl_id_`dim'')
+                    local cluster_numeric `cluster_numeric' `cl_id_`dim''
+                }
+                else local cluster_numeric `cluster_numeric' `cl_vars_`dim''
+            }
+            local clustervar `cluster_numeric'
+            * Each nonempty subset contributes an inclusion-exclusion term.
+            * _ctools_group preserves numeric and string cluster partitions exactly;
+            * a subset of one dimension is that dimension's variable.
+            local num_cluster_terms = 2^`num_cluster_vars' - 1
+            forvalues subset = 1/`num_cluster_terms' {
+                local members
+                forvalues dim = 1/`num_cluster_vars' {
+                    if mod(floor(`subset'/2^(`dim'-1)), 2) {
+                        local members `members' `: word `dim' of `clustervar''
+                    }
+                }
+                if `: word count `members'' == 1 {
+                    local cluster_id `members'
+                }
+                else {
+                    tempvar cluster_id
+                    quietly _ctools_group `members' if `touse', generate(`cluster_id')
+                }
+                local cluster_terms `cluster_terms' `cluster_id'
+            }
+        }
+        else if inlist("`vce_kind'", "robust", "unadjusted") {
+            local vcetype = 1
+        }
+        else {
+            di as error "cpplmhdfe: unrecognized vce() option"
+            exit 9
+        }
+    }
+
     * Parse variable list
     gettoken depvar indepvars : varlist
     local depvar_orig "`depvar'"
@@ -383,79 +445,6 @@ program define cpplmhdfe, eclass
 
     local nvars : word count `varlist_expanded'
     local nfe : word count `absorb'
-
-    * Parse VCE option (default: robust, matching ppmlhdfe)
-    local vcetype = 1
-    local clustervar ""
-    local clustervar_orig ""
-    local cluster_terms
-    local num_cluster_vars = 0
-    local num_cluster_terms = 0
-
-    if `"`vce'"' != "" {
-        _ctools_vce vce_kind clustervar : `vce'
-        if "`vce_kind'" == "cluster" {
-            local vcetype = 2
-            if "`clustervar'" == "" {
-                di as error "cpplmhdfe: cluster variable required with vce(cluster)"
-                exit 198
-            }
-            local clustervar_orig "`clustervar'"
-            local num_cluster_vars : word count `clustervar'
-            if `num_cluster_vars' > 10 {
-                di as error "cpplmhdfe: at most ten cluster variables are supported"
-                exit 198
-            }
-            local cluster_numeric
-            foreach cl of local clustervar {
-                local parts : subinstr local cl "#" " ", all
-                local parts : subinstr local parts "i." "", all
-                markout `touse' `parts', strok
-                * A single numeric variable is passed as it is: the plugin
-                * numbers its values in ascending order, the partition and
-                * order egen group() gives. Strings and interactions are
-                * numbered the same way by _ctools_group.
-                local cl_id
-                if `: word count `parts'' == 1 {
-                    capture confirm numeric variable `parts'
-                    if !_rc local cl_id `parts'
-                }
-                if "`cl_id'" == "" {
-                    tempvar cl_id
-                    quietly _ctools_group `parts' if `touse', generate(`cl_id')
-                }
-                local cluster_numeric `cluster_numeric' `cl_id'
-            }
-            local clustervar `cluster_numeric'
-            * Each nonempty subset contributes an inclusion-exclusion term.
-            * _ctools_group preserves numeric and string cluster partitions exactly;
-            * a subset of one dimension is that dimension's variable.
-            local num_cluster_terms = 2^`num_cluster_vars' - 1
-            forvalues subset = 1/`num_cluster_terms' {
-                local members
-                forvalues dim = 1/`num_cluster_vars' {
-                    if mod(floor(`subset'/2^(`dim'-1)), 2) {
-                        local members `members' `: word `dim' of `clustervar''
-                    }
-                }
-                if `: word count `members'' == 1 {
-                    local cluster_id `members'
-                }
-                else {
-                    tempvar cluster_id
-                    quietly _ctools_group `members' if `touse', generate(`cluster_id')
-                }
-                local cluster_terms `cluster_terms' `cluster_id'
-            }
-        }
-        else if inlist("`vce_kind'", "robust", "unadjusted") {
-            local vcetype = 1
-        }
-        else {
-            di as error "cpplmhdfe: unrecognized vce() option"
-            exit 9
-        }
-    }
 
     * Count observations
     qui count if `touse'
@@ -663,22 +652,11 @@ program define cpplmhdfe, eclass
     if !`has_absorb' local fe_name_1 _cons
     local df_a_nested = __cpplmhdfe_df_nested
     local df_a_adjusted = `df_a'
-    tempname dof_table
-    matrix `dof_table' = J(`nfe',5,0)
+    * The extended absorbed effects, one per plugin factor (e(dof_table) rows)
     local fe_names
     forvalues g=1/`nfe' {
-        local fe_levels_`g' = __cpplmhdfe_num_levels_`g'
-        local fe_nested_`g' = __cpplmhdfe_fe_nested_`g'
-        local red = __cpplmhdfe_fe_redundant_`g'
-        matrix `dof_table'[`g',1] = `fe_levels_`g''
-        matrix `dof_table'[`g',2] = `red'
-        matrix `dof_table'[`g',3] = `fe_levels_`g'' - `red'
-        matrix `dof_table'[`g',4] = 1 - __cpplmhdfe_fe_exact_`g'
-        matrix `dof_table'[`g',5] = `fe_nested_`g''
         local fe_names `fe_names' `fe_name_`g''
     }
-    matrix colnames `dof_table' = Categories Redundant Num_Coefs Exact Nested
-    matrix rownames `dof_table' = `fe_names'
 
     * Initialize model degrees of freedom; refine to joint-test rank below.
     local df_m = `K_keep'
@@ -763,35 +741,32 @@ program define cpplmhdfe, eclass
     ereturn local separation "`separation'"
     ereturn local properties "b V"
     ereturn local marginsok default
-    ereturn local dofmethod "`dofmethods'"
     ereturn scalar rank = `K_keep'
-    local nfe_original : word count `all_fe_keys'
-    ereturn scalar N_hdfe = `nfe_original'
     ereturn scalar num_singletons = `num_singletons'
     ereturn scalar num_separated = `num_separated'
     ereturn scalar ic = `irls_iters'
     ereturn scalar converged = `irls_converged'
     ereturn scalar df_a = `df_a_adjusted'
-    ereturn scalar df_a_initial = __cpplmhdfe_df_initial
-    ereturn scalar df_a_redundant = __cpplmhdfe_df_redundant
-    ereturn scalar N_hdfe_extended = `nfe'
     ereturn scalar N_full = `N_final' + `num_singletons' + `num_separated'
     ereturn scalar drop_singletons = ("`keepsingletons'" == "")
-    ereturn matrix dof_table = `dof_table'
-    ereturn local extended_absvars "`fe_names'"
     ereturn scalar df_a_nested = `df_a_nested'
 
+    * The absorbed effects, the absorbed degrees of freedom table, the
+    * covariance labels and the clusters, as reghdfe posts them
+    local nfe_original : word count `all_fe_keys'
+    local vcename = cond(`vcetype'==0, "unadjusted", cond(`vcetype'==1, "robust", "cluster"))
+    local cluster_post
     if `vcetype' == 2 {
-        ereturn scalar N_clust = __cpplmhdfe_N_clust
-        ereturn scalar N_clustervars = `num_cluster_vars'
+        local nclust
         forvalues dim = 1/`num_cluster_vars' {
-            ereturn scalar N_clust`dim' = __cpplmhdfe_N_clust_`dim'
+            local nclust `nclust' `=__cpplmhdfe_N_clust_`dim''
         }
-        ereturn local clustvar "`clustervar_orig'"
+        local cluster_post clustvars(`clustervar_orig') nclust(`nclust')
     }
+    _ctools_hdfe_post, stub(__cpplmhdfe) absvars(`absorb_orig') extended(`fe_names') ///
+        nhdfe(`nfe_original') vce(`vcename') dofmethod(`dofmethods') `cluster_post'
 
     ereturn local absorb "`absorb_orig'"
-    ereturn local absvars "`absorb_orig'"
     ereturn local d "`d'"
     ereturn local offset "`exposure'`offset'"
     ereturn local exposure "`exposure'"
@@ -800,7 +775,6 @@ program define cpplmhdfe, eclass
     ereturn local wtype "`weight'"
     ereturn local wexp "`exp'"
     ereturn local indepvars "`indepvars'"
-    ereturn local vce = cond(`vcetype'==0, "unadjusted", cond(`vcetype'==1, "robust", "cluster"))
     ereturn local predict "cpplmhdfe_p"
     ereturn local cmd "cpplmhdfe"
     ereturn local cmdline "cpplmhdfe `0'"
