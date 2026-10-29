@@ -1,13 +1,12 @@
 ```text
- ██████╗████████╗ ██████╗  ██████╗ ██╗     ███████╗
-██╔════╝╚══██╔══╝██╔═══██╗██╔═══██╗██║     ██╔════╝
-██║        ██║   ██║   ██║██║   ██║██║     ███████╗
-██║        ██║   ██║   ██║██║   ██║██║     ╚════██║
-╚██████╗   ██║   ╚██████╔╝╚██████╔╝███████╗███████║
- ╚═════╝   ╚═╝    ╚═════╝  ╚═════╝ ╚══════╝╚══════╝
-
- some really fast Stata programs
+ ███ ████  ██   ██  █     ███
+█     ██  █  █ █  █ █    █
+█     ██  █  █ █  █ █     ██
+█     ██  █  █ █  █ █       █
+ ███  ██   ██   ██  ████ ███
 ```
+
+some really fast Stata programs
 
 [![Build](https://github.com/mdroste/stata-ctools/actions/workflows/build.yml/badge.svg)](https://github.com/mdroste/stata-ctools/actions/workflows/build.yml)
 ![Version](https://img.shields.io/badge/version-1.1.0-blue)
