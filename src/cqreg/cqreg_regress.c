@@ -683,6 +683,8 @@ ST_retcode cqreg_full_regression(const char *args)
     /* Kernel method: kernel and invnormal(q+h) - invnormal(q-h) from Stata */
     ST_int kernel = read_scalar_int("__cqreg_kernel", CQREG_KERNEL_EPANECHNIKOV);
     ST_double kfactor = read_scalar("__cqreg_kfactor", -1.0);
+    /* The sample marker follows every other variable in place of an if */
+    ST_int touse = read_scalar_int("__cqreg_touse", 0);
 
     if (G > 0 || maxiter < 1) {
         ctools_error("cqreg", "absorb() is unsupported and maxiter must be positive");
@@ -736,12 +738,14 @@ ST_retcode cqreg_full_regression(const char *args)
     }
 
     /* Load data with if/in filtering using ctools_data_load.
-     * This handles SF_ifobs internally and returns only filtered observations.
-     * All vars (depvar, indepvars, cluster) are loaded in one parallel pass. */
+     * This selects rows by the sample marker (or SF_ifobs) and returns only
+     * filtered observations. All vars (depvar, indepvars, cluster) are loaded
+     * in one parallel pass. */
     ctools_filtered_data filtered;
     ctools_filtered_data_init(&filtered);
+    int load_flags = CTOOLS_LOAD_NO_SORT_ORDER | (touse ? CTOOLS_LOAD_MARKER : CTOOLS_LOAD_CHECK_IF);
     stata_retcode load_rc = ctools_data_load(&filtered, var_indices,
-                                                       (size_t)nvars_to_load, 0, 0, CTOOLS_LOAD_CHECK_IF | CTOOLS_LOAD_NO_SORT_ORDER);
+                                                       (size_t)nvars_to_load, 0, 0, load_flags);
     free(var_indices);
     var_indices = NULL;
 

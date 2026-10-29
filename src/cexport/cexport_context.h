@@ -59,6 +59,8 @@ typedef struct {
     cexport_io_backend_t io_backend;  /* PWRITE or MMAP */
     cexport_io_flags_t io_flags;      /* I/O flags (DIRECT, NOFSYNC, PREFAULT) */
     bool use_parallel_io;        /* True to use parallel offset writes */
+    bool skip_if;                /* No if condition: select the in-range */
+    bool touse;                  /* Last plugin variable is a sample marker */
 
     /* Adaptive sizing (computed at runtime) */
     size_t actual_avg_row_size;  /* Sampled average row size */

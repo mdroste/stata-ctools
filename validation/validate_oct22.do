@@ -3,7 +3,7 @@ version 16
 clear all
 set more off
 set seed 9854
-adopath ++ package/ado
+adopath ++ build
 local candidate : environment CTOOLS_TEST_PLUGIN_DIR
 if `"`candidate'"' != "" adopath ++ `"`candidate'"'
 args fixtures
@@ -182,7 +182,7 @@ gen time=_n
 tsset time
 gen double x=rnormal()
 gen double y=exp(.2*x+rnormal())
-quietly cpplmhdfe L.y x, noabsorb
+quietly cppmlhdfe L.y x, noabsorb
 predict double mu, mu
 foreach option in response scores pearson deviance anscombe working {
     predict double result, `option'

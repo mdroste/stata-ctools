@@ -15,13 +15,19 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[3]
 SRC = ROOT / "src"
 COMPANIONS = {
+    "cimport/cimport_impl.c": ["cimport/cimport_cache.c"],
     "civreghdfe/civreghdfe_impl.c": [
         "civreghdfe/civreghdfe_result.c",
         "civreghdfe/civreghdfe_input.c",
     ],
     "creghdfe/creghdfe_regress.c": ["creghdfe/creghdfe_result.c", "creghdfe/creghdfe_input.c"],
     "crangestat/crangestat_impl.c": ["crangestat/crangestat_kernels.c"],
-    "cpsmatch/cpsmatch_impl.c": ["cpsmatch/cpsmatch_kernels.c", "cpsmatch/cpsmatch_options.c"],
+    "cpsmatch/cpsmatch_impl.c": [
+        "cpsmatch/cpsmatch_kernels.c",
+        "cpsmatch/cpsmatch_options.c",
+        "cpsmatch/cpsmatch_stats.c",
+        "cpsmatch/cpsmatch_radius.c",
+    ],
     "ctools_data_io.c": ["ctools_transport.c", "ctools_data_plan.c", "ctools_data_store.c"],
     "ctools_types.c": ["ctools_platform.c"],
     "csort/csort_stream.c": ["ctools_platform.c"],
@@ -30,14 +36,14 @@ COMPANIONS = {
     "cexport/cexport_parse.c": ["formats/ctools_output.c"],
     "cexport/cexport_xlsx.c": ["ctools_text.c", "formats/excel_address.c"],
     "formats/xlsx_xml.c": ["formats/excel_address.c"],
-    "cpplmhdfe/cpplmhdfe_irls.c": [
-        "cpplmhdfe/cpplmhdfe_result.c",
-        "cpplmhdfe/cpplmhdfe_input.c",
-        "cpplmhdfe/cpplmhdfe_options.c",
-        "cpplmhdfe/cpplmhdfe_solvers.c",
-        "cpplmhdfe/cpplmhdfe_simplex.c",
-        "cpplmhdfe/cpplmhdfe_relu.c",
-        "cpplmhdfe/cpplmhdfe_moments.c",
+    "cppmlhdfe/cppmlhdfe_irls.c": [
+        "cppmlhdfe/cppmlhdfe_result.c",
+        "cppmlhdfe/cppmlhdfe_input.c",
+        "cppmlhdfe/cppmlhdfe_options.c",
+        "cppmlhdfe/cppmlhdfe_solvers.c",
+        "cppmlhdfe/cppmlhdfe_simplex.c",
+        "cppmlhdfe/cppmlhdfe_relu.c",
+        "cppmlhdfe/cppmlhdfe_moments.c",
     ],
     "io/cio.c": [
         "io/cio_context.c",

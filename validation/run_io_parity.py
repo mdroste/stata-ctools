@@ -1,9 +1,8 @@
 """Exact Stata differential regressions; Stata execution uses the stata shell alias."""
-from stata_runner import launch_driver
+from stata_runner import io_workspace, launch_driver
 from pathlib import Path
 import argparse
 import re
-import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -24,8 +23,7 @@ def multichunk():
         rows.append(','.join(row))
     return '\n'.join(rows) + '\n'
 
-def fixtures():
-    p = ROOT / 'temp/io_parity'
+def fixtures(p):
     p.mkdir(parents=True, exist_ok=True)
     cases = {
         'headers': 'First Name,1,,a-b,a b,a_b,UPPER,if,_all,über\n1,2,3,4,5,6,7,8,9,10\n11,12,13,14,15,16,17,18,19,20\n',
@@ -52,11 +50,16 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--plugin-path', default='')
     args = parser.parse_args()
-    p = fixtures()
-    log = p / 'regressions.log'
-    log.unlink(missing_ok=True)
-    driver = p / 'driver.do'
-    driver.write_text(f'''clear all
+    log = ROOT / 'temp/io_parity/regressions.log'
+    log.parent.mkdir(parents=True, exist_ok=True)
+    if args.plugin_path:
+        args.plugin_path = str(Path(args.plugin_path).resolve())
+    with io_workspace() as workspace:
+        p = workspace / 'temp/io_parity'
+        fixtures(p)
+        log.unlink(missing_ok=True)
+        driver = p / 'driver.do'
+        driver.write_text(f'''clear all
 capture log close _all
 log using "{log}", text replace
 capture noisily do "{ROOT}/validation/validate_io_parity.do" "{args.plugin_path}"
@@ -65,7 +68,7 @@ di "IO_PARITY_DRIVER_RC=`rc'"
 log close
 exit, clear
 ''')
-    launch_driver(driver, log)
+        launch_driver(driver, log, cwd=workspace)
     text = log.read_text()
     print('\n'.join(line for line in text.splitlines() if re.match(r'^(PASS:|FAIL:|METADATA:|REFERENCE FAILED:|IO_PARITY_)', line)))
     if not re.search(r'^IO_PARITY_DRIVER_RC=0$', text, re.M):

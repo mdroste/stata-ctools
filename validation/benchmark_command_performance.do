@@ -1,7 +1,8 @@
 * Repeated end-to-end benchmarks of one frozen build per Stata session.
 * Use prepare_command_performance.py; baseline/candidate sessions run ABBA.
 * A benchmark-only monotonic clock measures elapsed time.
-args buildpath label outdir cases
+args buildpath label outdir cases datadir
+if `"`datadir'"'=="" local datadir `"`outdir'"'
 clear all
 set more off
 set linesize 255
@@ -89,8 +90,8 @@ foreach case of local cases {
     }
     quietly save `base'
     quietly perf_run `case' 12 "`usingfile'" ""
-    if substr("`label'",1,1)=="b" quietly save "`outdir'/expected_`case'.dta", replace
-    else cf _all using "`outdir'/expected_`case'.dta"
+    if substr("`label'",1,1)=="b" quietly save "`datadir'/expected_`case'.dta", replace
+    else cf _all using "`datadir'/expected_`case'.dta"
     quietly use `base', clear
     di "PROFILE_BEGIN label=`label' case=`case'"
     perf_run `case' 12 "`usingfile'" verbose

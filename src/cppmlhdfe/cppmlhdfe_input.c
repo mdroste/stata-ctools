@@ -1,0 +1,127 @@
+#include "cppmlhdfe_input.h"
+#include <string.h>
+#include <stdio.h>
+
+/* A scalar the wrapper always sets: a missing one is a protocol error, not a
+ * value left over from the previous read. */
+static ST_retcode read_required(const char *name, ST_double *value)
+{
+    if (SF_scal_use((char *)name, value) == 0)
+        return 0;
+    char msg[96];
+    snprintf(msg, sizeof(msg), "cppmlhdfe: plugin scalar %s is not set\n", name);
+    SF_error(msg);
+    return 198;
+}
+
+ST_retcode cppmlhdfe_read_input(cppmlhdfe_input *input)
+{
+    ST_int K = 0;
+    ST_int G = 0;
+    ST_int verbose = 0;
+    ST_double val = 0;
+    ST_int g;
+    ST_retcode rc;
+    char scalar_name[64];
+    /* Read parameters */
+    if ((rc = read_required("__cppmlhdfe_K", &val)))
+        return rc;
+    K = (ST_int)val;
+    if ((rc = read_required("__cppmlhdfe_G", &val)))
+        return rc;
+    G = (ST_int)val;
+    if ((rc = read_required("__cppmlhdfe_verbose", &val)))
+        return rc;
+    verbose = (ST_int)val;
+
+    ST_int maxiter;
+    ST_double tolerance;
+    if ((rc = read_required("__cppmlhdfe_maxiter", &val)))
+        return rc;
+    maxiter = (ST_int)val;
+    if ((rc = read_required("__cppmlhdfe_tolerance", &val)))
+        return rc;
+    tolerance = val;
+
+    ST_int vcetype;
+    if ((rc = read_required("__cppmlhdfe_vce_type", &val)))
+        return rc;
+    vcetype = (ST_int)val;
+
+    ST_int cluster_terms = vcetype == 2 ? 1 : 0;
+    if (SF_scal_use("__cppmlhdfe_cluster_terms", &val) == 0)
+        cluster_terms = (ST_int)val;
+    if (vcetype == 2 && (cluster_terms < 1 || cluster_terms > 1023))
+        return 198;
+
+    ST_int has_weights = 0, weight_type = 0;
+    if (SF_scal_use("__cppmlhdfe_has_weights", &val) == 0)
+        has_weights = (ST_int)val;
+    if (SF_scal_use("__cppmlhdfe_weight_type", &val) == 0)
+        weight_type = (ST_int)val;
+
+    ST_int has_offset = 0;
+    if (SF_scal_use("__cppmlhdfe_has_offset", &val) == 0)
+        has_offset = (ST_int)val;
+
+    /* IRLS parameters */
+    ST_int irls_maxiter = 10000;
+    ST_double irls_tol = 1e-8;
+    if (SF_scal_use("__cppmlhdfe_irls_maxiter", &val) == 0)
+        irls_maxiter = (ST_int)val;
+    if (SF_scal_use("__cppmlhdfe_irls_tol", &val) == 0)
+        irls_tol = val;
+
+    /* DOF adjustment */
+    ST_int dof_adjust_type = 0;
+    if (SF_scal_use("__cppmlhdfe_dof_adjust_type", &val) == 0)
+        dof_adjust_type = (ST_int)val;
+
+    ST_int dof_flags = 13; /* pairwise=1, firstpair=2, clusters=4, continuous=8 */
+    if (SF_scal_use("__cppmlhdfe_dof_flags", &val) == 0)
+        dof_flags = (ST_int)val;
+
+    ST_int slope_only[10] = {0}, slope_idx[10] = {0};
+    ST_int keep_singletons = 0;
+    if (SF_scal_use("__cppmlhdfe_keepsingletons", &val) == 0)
+        keep_singletons = (ST_int)val;
+    for (g = 0; g < G && g < 10; g++)
+    {
+        snprintf(scalar_name, sizeof(scalar_name), "__cppmlhdfe_slope_%d", g + 1);
+        if (SF_scal_use(scalar_name, &val) == 0)
+            slope_idx[g] = (ST_int)val;
+        slope_only[g] = slope_idx[g] > 0;
+    }
+
+    ST_int check_fe = 1, check_relu = 1;
+    if (SF_scal_use("__cppmlhdfe_check_fe", &val) == 0)
+        check_fe = (ST_int)val;
+    if (SF_scal_use("__cppmlhdfe_check_relu", &val) == 0)
+        check_relu = (ST_int)val;
+    /* The sample marker follows every other variable in place of an if */
+    ST_int touse = 0;
+    if (SF_scal_use("__cppmlhdfe_touse", &val) == 0)
+        touse = val != 0;
+
+    input->K = K;
+    input->G = G;
+    input->verbose = verbose;
+    input->maxiter = maxiter;
+    input->vcetype = vcetype;
+    input->cluster_terms = cluster_terms;
+    input->has_weights = has_weights;
+    input->weight_type = weight_type;
+    input->has_offset = has_offset;
+    input->irls_maxiter = irls_maxiter;
+    input->dof_adjust_type = dof_adjust_type;
+    input->dof_flags = dof_flags;
+    input->keep_singletons = keep_singletons;
+    input->check_fe = check_fe;
+    input->check_relu = check_relu;
+    input->touse = touse;
+    input->tolerance = tolerance;
+    input->irls_tol = irls_tol;
+    memcpy(input->slope_only, slope_only, sizeof(slope_only));
+    memcpy(input->slope_idx, slope_idx, sizeof(slope_idx));
+    return 0;
+}

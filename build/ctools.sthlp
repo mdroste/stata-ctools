@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.0.2 20260920}{...}
+{* *! version 1.1.0 20261016}{...}
 {viewerjumpto "Syntax" "ctools##syntax"}{...}
 {viewerjumpto "Description" "ctools##description"}{...}
 {viewerjumpto "Options" "ctools##options"}{...}
@@ -9,7 +9,7 @@
 {title:Title}
 
 {phang}
-{bf:ctools} {hline 2} High-performance C-based tools for Stata
+{bf:ctools} {hline 2} C-accelerated tools for Stata
 
 
 {marker syntax}{...}
@@ -17,7 +17,7 @@
 
 {p 8 17 2}
 {cmdab:ctools}
-[{cmd:,} {opt env:ironment_check} {opt update}]
+[{cmd:,} {opt version} {opt env:ironment_check} {opt update}]
 
 {p 8 17 2}
 {cmdab:ctools}{cmd:,}
@@ -25,8 +25,27 @@
 [{opt perm:anently}]
 
 
+{marker description}{...}
+{title:Description}
+
+{pstd}
+{cmd:ctools} provides commands for data management, estimation, and binned
+scatter plots. Computation runs in C, with parallel processing where available.
+The commands and their help files are listed below.
+
+{pstd}
+Run {cmd:ctools} without options to list the commands. Use
+{cmd:ctools, version} to report the installed ado and plugin versions.
+The {opt verbose} option is accepted but does not change the output.
+
+
 {marker options}{...}
 {title:Options}
+
+{phang}
+{opt version} displays the ado and plugin versions and the plugin revision.
+It stores them in {cmd:r(version)}, {cmd:r(plugin_version)}, and
+{cmd:r(plugin_revision)}.
 
 {phang}
 {opt environment_check} loads the ctools C plugin and reports whether it was
@@ -53,34 +72,12 @@ shown by {cmd:ctools, environment_check}.
 You may need to restart Stata after updating for all changes to take effect.
 
 
-{marker description}{...}
-{title:Description}
-
-{pstd}
-{cmd:ctools} is a suite of high-performance C-accelerated Stata commands.
-These commands use optimized C plugins with OpenMP parallelization to provide
-significant speed improvements over native Stata commands and popular user-written
-packages for common data operations and statistical estimation.
-
-{pstd}
-Commands implement selected reference interfaces; options and inference differ.
-See the command help and the repository documentation in docs/COMPATIBILITY.md.
-Use {cmd:ctools, version} to report the installed ado and plugin versions.
-
-
-{pstd}
-The common {cmd:threads()} option accepts integers from 1 through 256.
-Sampling and range statistics may use fewer workers to limit scratch memory
-or when there are fewer groups to process.
-
 {marker threads}{...}
 {title:Threads}
 
 {pstd}
 By default, ctools uses one thread per CPU it is allowed to run on, but at most
-16. Most ctools work is limited by memory bandwidth, so more threads add little
-speed, and large servers are often shared with other users. The first of the
-following that is set determines the number of threads:
+16. The first of the following that is set determines the thread limit:
 
 {p 8 12 2}1. the {opt threads(#)} option of the command;{p_end}
 {p 8 12 2}2. the session setting, {cmd:ctools, threads(#)};{p_end}
@@ -114,34 +111,33 @@ a higher value with any of the methods above.
 {p2colset 5 20 22 2}{...}
 {p2col:{help cimport}}Import text, Excel, dBase, SAS, SPSS, and shapefiles{p_end}
 {p2col:{help cexport}}Export text, Excel, dBase, SAS, SPSS, and shapefiles{p_end}
-{p2col:{help csort}}Sort dataset (replaces {help sort}){p_end}
-{p2col:{help cmerge}}Merge (join) datasets (replaces {help merge}){p_end}
-{p2col:{help csample}}Resampling without replacement (replaces {help sample}){p_end}
-{p2col:{help cbsample}}Resampling with replacement (replaces {help bsample}){p_end}
-{p2col:{help cencode}}Recast string as labeled numeric (replaces {help encode}){p_end}
-{p2col:{help cdecode}}Recast labeled numeric as string (replaces {help decode}){p_end}
-{p2col:{help cdestring}}Recast string as numeric type (replaces {help destring}){p_end}
-{p2col:{help cwinsor}}Winsorize variables (replaces {browse "https://ideas.repec.org/c/boc/bocode/s457765.html":winsor2}/{help gstats winsor:gstats winsor}){p_end}
-{p2col:{help crangestat}}Range statistics of variables (replaces {browse "https://ideas.repec.org/c/boc/bocode/s458118.html":rangestat}){p_end}
+{p2col:{help csort}}Sort dataset{p_end}
+{p2col:{help cmerge}}Merge (join) datasets{p_end}
+{p2col:{help csample}}Resampling without replacement{p_end}
+{p2col:{help cbsample}}Resampling with replacement{p_end}
+{p2col:{help cencode}}Recast string as labeled numeric{p_end}
+{p2col:{help cdecode}}Recast labeled numeric as string{p_end}
+{p2col:{help cdestring}}Recast string as numeric type{p_end}
+{p2col:{help cwinsor}}Winsorize variables{p_end}
+{p2col:{help crangestat}}Range statistics of variables{p_end}
 
-{pstd}
-{p2col:{help cipolate}}Linear interpolation (replaces {help ipolate}){p_end}
-{p2col:{help csplit}}Split strings into fields (replaces {help split}){p_end}
-{p2col:{help crangejoin}}Inclusive interval joins (replaces {cmd:rangejoin}){p_end}
+{p2col:{help cipolate}}Linear interpolation{p_end}
+{p2col:{help csplit}}Split strings into fields{p_end}
+{p2col:{help crangejoin}}Inclusive interval joins{p_end}
 
 {pstd}
 {ul:Estimation}
 
-{p2col:{help creghdfe}}OLS with multi-way fixed effects (replaces {browse "https://github.com/sergiocorreia/reghdfe":reghdfe}){p_end}
-{p2col:{help civreghdfe}}2SLS/GMM with multi-way fixed effects (replaces {browse "https://github.com/sergiocorreia/ivreghdfe":ivreghdfe}){p_end}
-{p2col:{help cpplmhdfe}}PPML with multi-way fixed effects (selected {cmd:ppmlhdfe} options){p_end}
-{p2col:{help cqreg}}Quantile regression (replaces {help qreg}){p_end}
-{p2col:{help cpsmatch}}Propensity score matching (replaces {browse "https://ideas.repec.org/c/boc/bocode/s457730.html":psmatch2}){p_end}
+{p2col:{help creghdfe}}OLS with multi-way fixed effects{p_end}
+{p2col:{help civreghdfe}}2SLS/GMM with multi-way fixed effects{p_end}
+{p2col:{help cppmlhdfe}}PPML with multi-way fixed effects{p_end}
+{p2col:{help cqreg}}Quantile regression{p_end}
+{p2col:{help cpsmatch}}Propensity score matching{p_end}
 
 {pstd}
 {ul:Visualization}
 
-{p2col:{help cbinscatter}}Binned scatter plots (replaces {browse "https://github.com/michaelstepner/binscatter":binscatter}){p_end}
+{p2col:{help cbinscatter}}Binned scatter plots{p_end}
 {p2colreset}{...}
 
 
@@ -172,8 +168,7 @@ Michael Droste{break}
 {title:Acknowledgments}
 
 {pstd}
-Several commands in this package are inspired by excellent user-written packages.
-Thanks to:
+The package draws on the following commands and algorithms:
 
 {p 8 12 2}- Sergio Correia for {browse "https://github.com/sergiocorreia/ftools":ftools},
 {browse "https://github.com/sergiocorreia/reghdfe":reghdfe}, and
@@ -194,5 +189,6 @@ Thanks to:
 Online: {help cimport}, {help cexport}, {help csort}, {help cmerge}, {help cencode},
 {help cdecode}, {help cdestring}, {help csample}, {help cbsample}, {help cwinsor},
 {help crangestat}, {help creghdfe}, {help civreghdfe}, {help cqreg}, {help cpsmatch},
-{help cbinscatter}
+{help cbinscatter}, {help cppmlhdfe}, {help cipolate}, {help csplit},
+{help crangejoin}
 {p_end}

@@ -602,4 +602,3 @@ package: default
 .PHONY: package-sources
 package-sources:
 	@python3 scripts/sync_release.py
-	@python3 scripts/sync_package.py

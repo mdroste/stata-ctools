@@ -1,4 +1,4 @@
-*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools
+*! version 1.1.0 20261016 github.com/mdroste/stata-ctools
 
 * Hand one value label to the plugin as local __cd_map (format: see
 * src/cdecode/cdecode_impl.c). Sets __cd_ok to 0 when decode itself must do the
@@ -75,13 +75,39 @@ program define cdecode, rclass
         }
     }
 
-    * Several outputs share one sample: evaluate if/in once.
+    * Stata answers an if one observation at a time, so the plugin is passed
+    * the sample as a marker variable, last, and reads it in parallel. An if
+    * that names a numeric variable other than a source is that marker.
+    * Several outputs otherwise share one marked sample, evaluated once. A
+    * single output marks its if after its destination exists: the marker is
+    * then the last variable, and dropping it after the call is free. With
+    * in, which limits the range, a single output keeps any other if (marking
+    * covers every observation).
     local sample `"`if' `in'"'
+    local plugin_sample `"`sample'"'
     local ifflag = cond(`"`if'"' != "", "ifcond", "")
-    if `nvars' > 1 & `"`if'`in'"' != "" {
-        marksample touse, novarlist
-        local sample "if `touse'"
-        local ifflag "ifcond"
+    local touse ""
+    local mark_each = 0
+    if `"`if'"' != "" {
+        local touse = strtrim(substr(`"`if'"', 3, .))
+        capture confirm numeric variable `touse', exact
+        if _rc | wordcount(`"`touse'"') != 1 local touse ""
+        else if `: list touse in varlist' local touse ""
+        if "`touse'" != "" {
+            local plugin_sample `"`in'"'
+            local ifflag "ifcond touse"
+        }
+        else if `nvars' > 1 {
+            marksample touse, novarlist
+            local sample "if `touse'"
+            local plugin_sample ""
+            local ifflag "ifcond touse"
+        }
+        else if `"`in'"' == "" {
+            local mark_each = 1
+            local plugin_sample ""
+            local ifflag "ifcond touse"
+        }
     }
     * Without if/in the plugin writes every observation, so its destination
     * can be created without first being filled.
@@ -115,10 +141,17 @@ program define cdecode, rclass
         }
         if `__cd_ok' {
             mata: (void) st_addvar("str`__cd_width'", "`decoded'", "`fill'" != "")
-            capture plugin call ctools_plugin `v' `decoded' `sample', ///
+            local marker "`touse'"
+            if `mark_each' {
+                tempvar marker
+                mark `marker' `if'
+            }
+            capture plugin call ctools_plugin `v' `decoded' `marker' `plugin_sample', ///
                 "cdecode `threads_code' v2 maplen=`__cd_len' width=`__cd_width' `ifflag' `fill'"
-            if _rc == 1 exit 1
-            if _rc {
+            local plugin_rc = _rc
+            if `mark_each' drop `marker'
+            if `plugin_rc' == 1 exit 1
+            if `plugin_rc' {
                 drop `decoded'
             }
             else {

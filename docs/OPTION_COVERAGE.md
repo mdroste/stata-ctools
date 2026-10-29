@@ -211,71 +211,71 @@ This is finite option coverage, not an exhaustive Cartesian product of options o
 | `cmerge` | `threads` | New differential cases 275, 276, 277, 278, 279, 280, 281, 282, 283, 284, 285, 286, 287, 288, 289, 290, 291, 292, 293, 294, 295, 296, 297, 298, 299, 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324 |
 | `cmerge` | `snapshot` | contract: Every injected failure (before any change, after the schema changes, inside the plugin store, after the plugin, after keep()) and every join error is undone from a preserve snapshot: data, variable order, storage types, formats, labels, notes, characteristics, sort marker and c(changed) equal a copy saved before, with no record or frame left; successful merges match the default mode. [validate_cmerge.do](../validation/validate_cmerge.do), [validate_cmerge.do](../validation/validate_cmerge.do), [validate_cmerge.do](../validation/validate_cmerge.do) |
 | `cmerge` | `fast` | contract: Every injected failure and join error is reported with its return code (no undo is attempted); successful merges match the default mode and leave no record or frame; combining fast with snapshot is refused with r(198). [validate_cmerge.do](../validation/validate_cmerge.do), [validate_cmerge.do](../validation/validate_cmerge.do), [validate_cmerge.do](../validation/validate_cmerge.do) |
-| `cpplmhdfe` | `absorb` | New differential cases 196 |
-| `cpplmhdfe` | `vce` | New differential cases 197 |
-| `cpplmhdfe` | `verbose` | New differential cases 205 |
-| `cpplmhdfe` | `tolerance` | New differential cases 206 |
-| `cpplmhdfe` | `iterate` | New differential cases 206 |
-| `cpplmhdfe` | `threads` | New differential cases 205 |
-| `cpplmhdfe` | `exposure` | New differential cases 201 |
-| `cpplmhdfe` | `offset` | New differential cases 202 |
-| `cpplmhdfe` | `irlstolerance` | New differential cases 206 |
-| `cpplmhdfe` | `irlsmaxiter` | New differential cases 206 |
-| `cpplmhdfe` | `septolerance` | New differential cases 207 |
-| `cpplmhdfe` | `dofadjustments` | New differential cases 203 |
-| `cpplmhdfe` | `d` | New differential cases 415 |
-| `cpplmhdfe` | `d2` | New differential cases 416 |
-| `cpplmhdfe` | `noabsorb` | New differential cases 200 |
-| `cpplmhdfe` | `keepsingletons` | New differential cases 199 |
-| `cpplmhdfe` | `cluster` | New differential cases 198 |
-| `cpplmhdfe` | `maxiterations` | New differential cases 207 |
-| `cpplmhdfe` | `itolerance` | New differential cases 207 |
-| `cpplmhdfe` | `separation` | New differential cases 440, 441, 442, 443, 444 |
-| `cpplmhdfe` | `eform` | New differential cases 204 |
-| `cpplmhdfe` | `irr` | New differential cases 204 |
-| `cpplmhdfe` | `nolog` | New differential cases 204 |
-| `cpplmhdfe` | `timeit` | New differential cases 204 |
-| `cpplmhdfe` | `guess` | New differential cases 417, 418, 419 |
-| `cpplmhdfe` | `standardize_data` | New differential cases 420 |
-| `cpplmhdfe` | `min_ok` | New differential cases 421 |
-| `cpplmhdfe` | `use_exact_solver` | New differential cases 422 |
-| `cpplmhdfe` | `use_exact_partial` | New differential cases 423 |
-| `cpplmhdfe` | `use_heuristic_tol` | New differential cases 424 |
-| `cpplmhdfe` | `start_inner_tol` | New differential cases 425 |
-| `cpplmhdfe` | `remove_collinear_variables` | New differential cases 426 |
-| `cpplmhdfe` | `use_step_halving` | New differential cases 427 |
-| `cpplmhdfe` | `step_halving_memory` | New differential cases 427 |
-| `cpplmhdfe` | `max_step_halving` | New differential cases 427 |
-| `cpplmhdfe` | `mu_tol` | New differential cases 428 |
-| `cpplmhdfe` | `relu_tol` | New differential cases 429 |
-| `cpplmhdfe` | `relu_zero_tol` | New differential cases 429 |
-| `cpplmhdfe` | `relu_maxiter` | New differential cases 429 |
-| `cpplmhdfe` | `relu_strict` | New differential cases 429 |
-| `cpplmhdfe` | `relu_accelerate` | New differential cases 429 |
-| `cpplmhdfe` | `simplex_tol` | New differential cases 430 |
-| `cpplmhdfe` | `simplex_maxiter` | New differential cases 430 |
-| `cpplmhdfe` | `tagsep` | differential: Separated-row tags and certificate signs/missingness are checked against native PPML and independent separation constraints. [cpplmhdfe_advanced_cases.do](../validation/cpplmhdfe_advanced_cases.do) |
-| `cpplmhdfe` | `zvarname` | differential: Separated-row tags and certificate signs/missingness are checked against native PPML and independent separation constraints. [cpplmhdfe_advanced_cases.do](../validation/cpplmhdfe_advanced_cases.do) |
-| `cpplmhdfe` | `acceleration` | New differential cases 431, 432, 433, 434, 435, 436 |
-| `cpplmhdfe` | `transform` | New differential cases 437, 438 |
-| `cpplmhdfe` | `poolsize` | New differential cases 439 |
-| `cpplmhdfe` | `btol` | New differential cases 436 |
-| `cpplmhdfe` | `conlim` | New differential cases 436 |
-| `cpplmhdfe_p` | `scores` | New differential cases 415, 416 |
-| `cpplmhdfe_p` | `xb` | New differential cases 196, 197, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207, 415, 416, 417, 418, 419, 420, 421, 422, 423, 424, 425, 426, 427, 428, 429, 430, 431, 432, 433, 434, 435, 436, 437, 438, 439, 440, 441, 442, 443, 444 |
-| `cpplmhdfe_p` | `xbd` | New differential cases 415, 416 |
-| `cpplmhdfe_p` | `d` | New differential cases 415, 416 |
-| `cpplmhdfe_p` | `mu` | New differential cases 415, 416 |
-| `cpplmhdfe_p` | `eta` | New differential cases 415, 416 |
-| `cpplmhdfe_p` | `stdp` | New differential cases 415, 416 |
-| `cpplmhdfe_p` | `anscombe` | New differential cases 415, 416 |
-| `cpplmhdfe_p` | `cooksd` | unsupported: These explicitly unimplemented predictions must fail without creating a destination. [validate_option_contracts.do](../validation/validate_option_contracts.do) |
-| `cpplmhdfe_p` | `deviance` | New differential cases 415, 416 |
-| `cpplmhdfe_p` | `hat` | unsupported: These explicitly unimplemented predictions must fail without creating a destination. [validate_option_contracts.do](../validation/validate_option_contracts.do) |
-| `cpplmhdfe_p` | `likelihood` | unsupported: These explicitly unimplemented predictions must fail without creating a destination. [validate_option_contracts.do](../validation/validate_option_contracts.do) |
-| `cpplmhdfe_p` | `pearson` | New differential cases 415, 416 |
-| `cpplmhdfe_p` | `response` | New differential cases 415, 416 |
-| `cpplmhdfe_p` | `working` | New differential cases 415, 416 |
+| `cppmlhdfe` | `absorb` | New differential cases 196 |
+| `cppmlhdfe` | `vce` | New differential cases 197 |
+| `cppmlhdfe` | `verbose` | New differential cases 205 |
+| `cppmlhdfe` | `tolerance` | New differential cases 206 |
+| `cppmlhdfe` | `iterate` | New differential cases 206 |
+| `cppmlhdfe` | `threads` | New differential cases 205 |
+| `cppmlhdfe` | `exposure` | New differential cases 201 |
+| `cppmlhdfe` | `offset` | New differential cases 202 |
+| `cppmlhdfe` | `irlstolerance` | New differential cases 206 |
+| `cppmlhdfe` | `irlsmaxiter` | New differential cases 206 |
+| `cppmlhdfe` | `septolerance` | New differential cases 207 |
+| `cppmlhdfe` | `dofadjustments` | New differential cases 203 |
+| `cppmlhdfe` | `d` | New differential cases 415 |
+| `cppmlhdfe` | `d2` | New differential cases 416 |
+| `cppmlhdfe` | `noabsorb` | New differential cases 200 |
+| `cppmlhdfe` | `keepsingletons` | New differential cases 199 |
+| `cppmlhdfe` | `cluster` | New differential cases 198 |
+| `cppmlhdfe` | `maxiterations` | New differential cases 207 |
+| `cppmlhdfe` | `itolerance` | New differential cases 207 |
+| `cppmlhdfe` | `separation` | New differential cases 440, 441, 442, 443, 444 |
+| `cppmlhdfe` | `eform` | New differential cases 204 |
+| `cppmlhdfe` | `irr` | New differential cases 204 |
+| `cppmlhdfe` | `nolog` | New differential cases 204 |
+| `cppmlhdfe` | `timeit` | New differential cases 204 |
+| `cppmlhdfe` | `guess` | New differential cases 417, 418, 419 |
+| `cppmlhdfe` | `standardize_data` | New differential cases 420 |
+| `cppmlhdfe` | `min_ok` | New differential cases 421 |
+| `cppmlhdfe` | `use_exact_solver` | New differential cases 422 |
+| `cppmlhdfe` | `use_exact_partial` | New differential cases 423 |
+| `cppmlhdfe` | `use_heuristic_tol` | New differential cases 424 |
+| `cppmlhdfe` | `start_inner_tol` | New differential cases 425 |
+| `cppmlhdfe` | `remove_collinear_variables` | New differential cases 426 |
+| `cppmlhdfe` | `use_step_halving` | New differential cases 427 |
+| `cppmlhdfe` | `step_halving_memory` | New differential cases 427 |
+| `cppmlhdfe` | `max_step_halving` | New differential cases 427 |
+| `cppmlhdfe` | `mu_tol` | New differential cases 428 |
+| `cppmlhdfe` | `relu_tol` | New differential cases 429 |
+| `cppmlhdfe` | `relu_zero_tol` | New differential cases 429 |
+| `cppmlhdfe` | `relu_maxiter` | New differential cases 429 |
+| `cppmlhdfe` | `relu_strict` | New differential cases 429 |
+| `cppmlhdfe` | `relu_accelerate` | New differential cases 429 |
+| `cppmlhdfe` | `simplex_tol` | New differential cases 430 |
+| `cppmlhdfe` | `simplex_maxiter` | New differential cases 430 |
+| `cppmlhdfe` | `tagsep` | differential: Separated-row tags and certificate signs/missingness are checked against native PPML and independent separation constraints. [cppmlhdfe_advanced_cases.do](../validation/cppmlhdfe_advanced_cases.do) |
+| `cppmlhdfe` | `zvarname` | differential: Separated-row tags and certificate signs/missingness are checked against native PPML and independent separation constraints. [cppmlhdfe_advanced_cases.do](../validation/cppmlhdfe_advanced_cases.do) |
+| `cppmlhdfe` | `acceleration` | New differential cases 431, 432, 433, 434, 435, 436 |
+| `cppmlhdfe` | `transform` | New differential cases 437, 438 |
+| `cppmlhdfe` | `poolsize` | New differential cases 439 |
+| `cppmlhdfe` | `btol` | New differential cases 436 |
+| `cppmlhdfe` | `conlim` | New differential cases 436 |
+| `cppmlhdfe_p` | `scores` | New differential cases 415, 416 |
+| `cppmlhdfe_p` | `xb` | New differential cases 196, 197, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207, 415, 416, 417, 418, 419, 420, 421, 422, 423, 424, 425, 426, 427, 428, 429, 430, 431, 432, 433, 434, 435, 436, 437, 438, 439, 440, 441, 442, 443, 444 |
+| `cppmlhdfe_p` | `xbd` | New differential cases 415, 416 |
+| `cppmlhdfe_p` | `d` | New differential cases 415, 416 |
+| `cppmlhdfe_p` | `mu` | New differential cases 415, 416 |
+| `cppmlhdfe_p` | `eta` | New differential cases 415, 416 |
+| `cppmlhdfe_p` | `stdp` | New differential cases 415, 416 |
+| `cppmlhdfe_p` | `anscombe` | New differential cases 415, 416 |
+| `cppmlhdfe_p` | `cooksd` | unsupported: These explicitly unimplemented predictions must fail without creating a destination. [validate_option_contracts.do](../validation/validate_option_contracts.do) |
+| `cppmlhdfe_p` | `deviance` | New differential cases 415, 416 |
+| `cppmlhdfe_p` | `hat` | unsupported: These explicitly unimplemented predictions must fail without creating a destination. [validate_option_contracts.do](../validation/validate_option_contracts.do) |
+| `cppmlhdfe_p` | `likelihood` | unsupported: These explicitly unimplemented predictions must fail without creating a destination. [validate_option_contracts.do](../validation/validate_option_contracts.do) |
+| `cppmlhdfe_p` | `pearson` | New differential cases 415, 416 |
+| `cppmlhdfe_p` | `response` | New differential cases 415, 416 |
+| `cppmlhdfe_p` | `working` | New differential cases 415, 416 |
 | `cpsmatch` | `outcome` | New differential cases 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 459 |
 | `cpsmatch` | `pscore` | New differential cases 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 459 |
 | `cpsmatch` | `logit` | New differential cases 255 |

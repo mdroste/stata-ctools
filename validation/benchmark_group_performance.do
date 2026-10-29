@@ -1,5 +1,6 @@
 * One frozen plugin per process. Timers include the entire public command.
-args buildpath label outdir cases reps threadlist rows refreps
+args buildpath label outdir cases reps threadlist rows refreps datadir
+if `"`datadir'"'=="" local datadir `"`outdir'"'
 clear all
 set more off
 set linesize 255
@@ -76,8 +77,8 @@ foreach case of local cases {
                 di "PHASE,`label',`case',`threads',`rep'," %12.7f scalar(_cwinsor_time_load) "," %12.7f scalar(_cwinsor_time_sort) "," %12.7f scalar(_cwinsor_time_winsor) "," %12.7f scalar(_cwinsor_time_store)
             }
             if `rep' == 0 {
-                if "`label'" == "b1" quietly save "`outdir'/expected_`case'_`threads'.dta", replace
-                else cf _all using "`outdir'/expected_`case'_`threads'.dta"
+                if "`label'" == "b1" quietly save "`datadir'/expected_`case'_`threads'.dta", replace
+                else cf _all using "`datadir'/expected_`case'_`threads'.dta"
                 quietly keep id `results'
                 quietly save `expected', replace
                 quietly use `base', clear

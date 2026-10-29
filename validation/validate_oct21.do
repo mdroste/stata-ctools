@@ -109,7 +109,7 @@ clear
 set obs 100
 gen double x = _n/100
 gen double y = mod(_n,4)
-cpplmhdfe y x, d(dsum)
+cppmlhdfe y x, d(dsum)
 foreach opt in mu eta xbd response scores pearson deviance anscombe working xb d stdp {
     predict double all_`opt', `opt'
     predict double sub_`opt' if _n < 3 in 1/5, `opt'

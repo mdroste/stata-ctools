@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.0.1 07Feb2026}{...}
+{* *! version 1.1.0 20261016}{...}
 {viewerjumpto "Syntax" "cpsmatch##syntax"}{...}
 {viewerjumpto "Description" "cpsmatch##description"}{...}
 {viewerjumpto "Options" "cpsmatch##options"}{...}
@@ -49,7 +49,7 @@
 
 {syntab:Performance}
 {synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
-{synopt:{opt v:erbose}}display detailed progress information and timing breakdown{p_end}
+{synopt:{opt v:erbose}}display progress and elapsed times{p_end}
 {synoptline}
 
 
@@ -57,12 +57,12 @@
 {title:Description}
 
 {pstd}
-{cmd:cpsmatch} performs propensity score matching to estimate causal treatment
-effects in observational studies. It implements several matching methods:
+{cmd:cpsmatch} matches treated observations to controls using an estimated or
+supplied propensity score. With {opt outcome()}, it reports the average
+treatment effect on the treated (ATT) for the matched sample. The treatment
+variable must be coded 0/1, with both groups present. Supply covariates for
+score estimation or specify {opt pscore()}.
 
-{pstd}
-{cmd:cpsmatch} is a high-performance replacement for {cmd:psmatch2} (v4.0.12) by
-Edwin Leuven and Barbara Sianesi, available from SSC.
 
 {pstd}
 Matching methods:
@@ -82,7 +82,7 @@ based on their propensity score distance from the treated observation.{p_end}
 {p2colset 8 20 22 2}{...}
 {p2col:{bf:_pscore}}the propensity score{p_end}
 {p2col:{bf:_weight}}matching weights for each observation{p_end}
-{p2col:{bf:_id}}matched observation identifier{p_end}
+{p2col:{bf:_id}}original observation number of the first matched control{p_end}
 {p2col:{bf:_support}}common support indicator (1 = on support){p_end}
 {p2col:{bf:_treated}}copy of treatment indicator{p_end}
 {p2col:{bf:_nn}}number of neighbors used{p_end}
@@ -123,18 +123,20 @@ propensity score scale).
 {phang}
 {opt radius} specifies radius matching, where each treated observation is
 matched to all controls within the specified caliper distance. Equal weights
-are assigned to all matches.
+are assigned to all matches. The default radius is 0.25 when no positive
+{opt caliper()} is specified.
 
 {phang}
 {opt kernel} specifies kernel matching, where all control observations
 receive a weight based on a kernel function of their propensity score
-distance from the treated observation.
+distance from the treated observation. Compact-support kernels assign zero weight outside
+the bandwidth; the normal kernel has unbounded support.
 
 {phang}
 {opth kerneltype(string)} specifies the kernel function for kernel matching:
 
 {p 12 16 2}{bf:epan} - Epanechnikov kernel (default){p_end}
-{p 12 16 2}{bf:normal} or {bf:gaussian} - Gaussian/normal kernel{p_end}
+{p 12 16 2}{bf:normal} - Gaussian/normal kernel{p_end}
 {p 12 16 2}{bf:biweight} - Biweight kernel{p_end}
 {p 12 16 2}{bf:uniform} - Uniform kernel{p_end}
 {p 12 16 2}{bf:tricube} - Tricube kernel{p_end}
@@ -148,7 +150,8 @@ is 0.06. Larger bandwidths produce smoother estimates but may introduce bias.
 {phang}
 {opt common} imposes the common support restriction, excluding treated
 observations with propensity scores outside the range of control propensity
-scores (and vice versa).
+scores. Controls remain on support. Treated observations without an eligible
+match also receive {cmd:_support=0}.
 
 {phang}
 {opt noreplacement} specifies matching without replacement. Each control
@@ -176,31 +179,26 @@ the Average Treatment Effect on the Treated (ATT). If specified,
 {dlgtab:Performance}
 
 {phang}
-{opt threads(#)} specifies the maximum number of threads to use for parallel operations. By default, {cmd:cpsmatch} uses the {help ctools##threads:ctools thread setting}, which is at most 16 threads unless you change it.
+{opt threads(#)} sets the maximum number of threads, from 1 to 256.
+The default follows the {help ctools##threads:ctools thread setting}.
 
 {phang}
-{opt verbose} displays detailed progress information and timing breakdown.
+{opt verbose} displays progress and elapsed times.
 
 
 {marker remarks}{...}
 {title:Remarks}
 
 {pstd}
-{cmd:cpsmatch} uses a high-performance C plugin that parallelizes the
-matching process for significantly improved performance on large datasets.
+The matching sample excludes missing treatment, covariates, propensity scores,
+and, when specified, outcomes. Estimated scores also restrict matching to the
+score model's estimation sample.
 
 {pstd}
-The propensity score is the conditional probability of receiving treatment
-given observed covariates. Matching on the propensity score balances the
-distribution of covariates between treated and control groups, reducing
-confounding bias in treatment effect estimates.
+Each run replaces existing {cmd:_pscore}, {cmd:_weight}, {cmd:_id},
+{cmd:_support}, {cmd:_treated}, and {cmd:_nn} variables. These names cannot be
+used as inputs. Observation order is preserved.
 
-{pstd}
-Key differences from {help psmatch2:psmatch2}:
-
-{p 8 12 2}- Parallel matching using OpenMP for multi-core speedup{p_end}
-{p 8 12 2}- Optimized memory layout for cache efficiency{p_end}
-{p 8 12 2}- Automatic handling of large datasets{p_end}
 
 {pstd}
 The ATT (Average Treatment Effect on the Treated) is calculated as the
@@ -273,7 +271,7 @@ least-squares regression of the outcome on treatment, as in {cmd:psmatch2}.
 {synopt:{cmd:r(common_min)}}minimum propensity score in common support{p_end}
 {synopt:{cmd:r(common_max)}}maximum propensity score in common support{p_end}
 {synopt:{cmd:r(att)}}estimated ATT (if outcome specified){p_end}
-{synopt:{cmd:r(att_se)}}psmatch2-compatible SE of ATT (see Methods){p_end}
+{synopt:{cmd:r(att_se)}}approximate ATT standard error (see Remarks){p_end}
 {synopt:{cmd:r(seatt)}}alias for {cmd:r(att_se)}, as in {cmd:psmatch2}{p_end}
 {synopt:{cmd:r(att_t)}}t-statistic for ATT (if outcome specified){p_end}
 
@@ -289,10 +287,17 @@ least-squares regression of the outcome on treatment, as in {cmd:psmatch2}.
 {p2col 5 12 16 2: Variables}{p_end}
 {synopt:{cmd:_pscore}}estimated or provided propensity score{p_end}
 {synopt:{cmd:_weight}}matching weight for each observation{p_end}
-{synopt:{cmd:_id}}matched observation identifier (for treated: ID of matched control){p_end}
+{synopt:{cmd:_id}}original observation number of the first matched control (treated observations){p_end}
 {synopt:{cmd:_support}}common support indicator (1 = on support, 0 = off){p_end}
 {synopt:{cmd:_treated}}copy of treatment indicator{p_end}
 {synopt:{cmd:_nn}}number of neighbors used for matching{p_end}
+
+
+{pstd}
+{cmd:_nn} records the actual number of controls used for each treated observation.
+It includes ties; for radius/kernel matching it counts controls with positive
+matching weight. Unmatched treated observations have zero; controls and rows
+outside the matching sample have missing values.
 
 
 {title:Author}
@@ -307,9 +312,3 @@ Michael Droste{break}
 {psee}
 Online: {help psmatch2}, {help teffects psmatch}, {help logit}, {help probit}, {help ctools}
 {p_end}
-
-{pstd}
-{cmd:_nn} records the actual number of controls used for each treated observation.
-It includes ties; for radius/kernel matching it counts controls with positive
-matching weight. Unmatched treated observations have zero; controls and rows
-outside the matching sample have missing values.

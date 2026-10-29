@@ -3,7 +3,7 @@
 version 16
 clear all
 set more off
-adopath ++ package/ado
+adopath ++ build
 local candidate : environment CTOOLS_TEST_PLUGIN_DIR
 if `"`candidate'"' != "" adopath ++ `"`candidate'"'
 local reference : environment CTOOLS_TEST_REFERENCE_DIR

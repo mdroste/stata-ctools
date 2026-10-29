@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.0.1 07Feb2026}{...}
+{* *! version 1.1.0 20261016}{...}
 {viewerjumpto "Syntax" "cdestring##syntax"}{...}
 {viewerjumpto "Description" "cdestring##description"}{...}
 {viewerjumpto "Options" "cdestring##options"}{...}
@@ -43,9 +43,8 @@
 {title:Description}
 
 {pstd}
-{cmd:cdestring} is a high-performance drop-in replacement for Stata's {help destring:destring}
-command. It converts string variables containing numeric values to numeric variables,
-using parallel algorithms for significantly improved performance on large datasets.
+{cmd:cdestring} converts strings containing numbers to numeric variables.
+
 
 {pstd}
 If {it:varlist} is not specified, {cmd:cdestring} attempts to convert all string
@@ -54,8 +53,9 @@ variables in the dataset to numeric.
 {pstd}
 {cmd:cdestring} creates new numeric variables (when using {opt generate()}) or
 replaces the string variables with numeric ones (when using {opt replace}).
-By default, variables are created as type {cmd:double}; use {opt float} for
-single-precision floating point.
+Values are parsed in double precision, or float precision with {opt float}.
+The output is then compressed to the smallest storage type that retains those
+values.
 
 {pstd}
 As with {cmd:destring}, empty strings, strings containing only whitespace, and
@@ -106,7 +106,7 @@ variables are still converted, and the return code is 0, as with
 
 {phang}
 {opt float} generates the new numeric variables as type {cmd:float} rather than
-the default {cmd:double}. This uses less memory but has less precision.
+double precision before compression. This uses less memory but has less precision.
 
 {phang}
 {opt percent} handles percentage values. It removes any percent signs ({cmd:%})
@@ -123,39 +123,23 @@ nonnumeric. To convert values that use a period as the thousands separator,
 such as "1.234,56", also specify {cmd:ignore(".")}.
 
 {phang}
-{opt threads(#)} specifies the maximum number of threads to use for parallel
-operations. By default, {cmd:cdestring} uses the {help ctools##threads:ctools thread setting}, which is at most 16 threads unless you change it.
+{opt threads(#)} sets the maximum number of threads, from 1 to 256.
+The default follows the {help ctools##threads:ctools thread setting}.
 
 {phang}
-{opt verbose} displays detailed progress information and timing breakdown.
+{opt verbose} displays progress and elapsed times.
 
 
 {marker remarks}{...}
 {title:Remarks}
 
 {pstd}
-{cmd:cdestring} uses a high-performance C plugin that parallelizes the conversion
-process. The algorithm works as follows:
+Both fixed-width strings ({cmd:str#}) and long strings ({cmd:strL}) are supported.
+Only observations selected by {cmd:if}/{cmd:in} are converted. Generated
+variables are missing outside that sample. With {opt replace}, unselected
+observations also become numeric missing because the source variable changes
+from string to numeric. Already numeric variables are skipped.
 
-{p 8 12 2}1. {bf:Parallel processing:} Each observation is processed independently
-across multiple CPU cores using OpenMP.{p_end}
-
-{p 8 12 2}2. {bf:Character stripping:} If {opt ignore()} is specified, the
-specified characters are removed using an O(1) lookup table.{p_end}
-
-{p 8 12 2}3. {bf:Fast parsing:} A highly optimized numeric parser converts
-strings to doubles, handling integers, decimals, and scientific notation.{p_end}
-
-{p 8 12 2}4. {bf:Parallel storage:} Results are written back to Stata in
-parallel when the dataset is large enough.{p_end}
-
-{pstd}
-For large datasets (millions of observations), {cmd:cdestring} can be significantly
-faster than the native {cmd:destring} command.
-
-{pstd}
-{cmd:cdestring} supports both regular string variables ({cmd:str#}) and long strings
-({cmd:strL}).
 
 {pstd}
 {bf:Numeric formats recognized:}
@@ -178,15 +162,12 @@ faster than the native {cmd:destring} command.
 
 {pstd}Setup: create sample data with string numbers{p_end}
 {phang2}{cmd:. clear}{p_end}
-{phang2}{cmd:. set obs 1000000}{p_end}
+{phang2}{cmd:. set obs 100}{p_end}
 {phang2}{cmd:. gen str10 price_str = string(runiform()*1000, "%9.2f")}{p_end}
 {phang2}{cmd:. gen str10 qty_str = string(round(runiform()*100))}{p_end}
 
 {pstd}Basic conversion with generate:{p_end}
 {phang2}{cmd:. cdestring price_str qty_str, generate(price qty)}{p_end}
-
-{pstd}Replace the original string variables:{p_end}
-{phang2}{cmd:. cdestring price_str qty_str, replace}{p_end}
 
 {pstd}Handle currency formatting:{p_end}
 {phang2}{cmd:. gen str15 cost = "$" + string(runiform()*10000, "%10.2fc")}{p_end}
@@ -202,16 +183,16 @@ faster than the native {cmd:destring} command.
 
 {pstd}Force conversion of mixed data:{p_end}
 {phang2}{cmd:. replace price_str = "N/A" in 1/10}{p_end}
-{phang2}{cmd:. cdestring price_str, replace force}{p_end}
+{phang2}{cmd:. cdestring price_str, generate(price_forced) force}{p_end}
 
 {pstd}Convert with verbose timing output:{p_end}
-{phang2}{cmd:. cdestring price_str, replace verbose}{p_end}
+{phang2}{cmd:. cdestring qty_str, generate(qty_verbose) verbose}{p_end}
 
 {pstd}Limit to 4 threads:{p_end}
-{phang2}{cmd:. cdestring price_str qty_str, replace threads(4)}{p_end}
+{phang2}{cmd:. cdestring qty_str, generate(qty_parallel) threads(4)}{p_end}
 
 {pstd}Convert only for certain observations:{p_end}
-{phang2}{cmd:. cdestring price_str if qty > 50, generate(price_filtered)}{p_end}
+{phang2}{cmd:. cdestring price_str if qty > 50, generate(price_filtered) force}{p_end}
 
 
 {marker results}{...}

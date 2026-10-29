@@ -32,25 +32,39 @@ static int ctools_text_pack(ctools_string_arena *pack, char **entry, const char 
 
 ST_retcode ctools_load_text_data(ctools_filtered_data *fd, ST_int nvars, ctools_text_policy policy)
 {
-    size_t range = SF_in2() >= SF_in1() ? (size_t)(SF_in2() - SF_in1()) + 1 : 0;
     size_t n = 0;
-    for (int i = SF_in1(); i <= SF_in2(); i++)
-        if (SF_ifobs(i))
-            n++;
-    fd->data.nobs = n;
+    if (policy.select_flags & (CTOOLS_LOAD_SKIP_IF | CTOOLS_LOAD_MARKER))
+    {
+        /* Stata answers an if one observation at a time; the shared
+         * selection reads a sample marker in parallel instead. */
+        stata_retcode select_rc = ctools_data_select(fd, 0, 0, policy.select_flags);
+        if (select_rc != STATA_OK)
+            return ctools_stata_rc(select_rc);
+        n = fd->data.nobs;
+    }
+    else
+    {
+        size_t range = SF_in2() >= SF_in1() ? (size_t)(SF_in2() - SF_in1()) + 1 : 0;
+        for (int i = SF_in1(); i <= SF_in2(); i++)
+            if (SF_ifobs(i))
+                n++;
+        fd->data.nobs = n;
+        fd->n_range = range;
+        fd->was_filtered = n != range;
+        fd->obs_map = ctools_safe_cacheline_alloc2(n ? n : 1, sizeof(perm_idx_t));
+        if (!fd->obs_map)
+            return 920;
+        size_t at = 0;
+        for (int i = SF_in1(); i <= SF_in2(); i++)
+            if (SF_ifobs(i))
+                fd->obs_map[at++] = (perm_idx_t)i;
+    }
     fd->data.nvars = (size_t)nvars;
-    fd->n_range = range;
-    fd->was_filtered = n != range;
-    fd->obs_map = ctools_safe_cacheline_alloc2(n ? n : 1, sizeof(perm_idx_t));
     fd->data.vars = ctools_safe_cacheline_alloc2((size_t)nvars, sizeof(stata_variable));
     if (fd->data.vars)
         memset(fd->data.vars, 0, (size_t)nvars * sizeof(stata_variable));
-    if (!fd->obs_map || !fd->data.vars)
+    if (!fd->data.vars)
         return 920;
-    size_t at = 0;
-    for (int i = SF_in1(); i <= SF_in2(); i++)
-        if (SF_ifobs(i))
-            fd->obs_map[at++] = (perm_idx_t)i;
     char cell[2046]; /* str# values are at most 2045 bytes */
     for (int j = 0; j < nvars; j++)
     {

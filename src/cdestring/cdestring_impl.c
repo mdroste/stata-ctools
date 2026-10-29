@@ -56,6 +56,8 @@ typedef struct {
     int dpcomma;            /* 1 = first comma is the decimal point; any "." is nonnumeric */
     int float_out;          /* 1 = outputs are float (range check, percent rounding) */
     int verbose;            /* 1 = print timing info */
+    int selection;          /* CTOOLS_LOAD_SKIP_IF without an if condition,
+                               CTOOLS_LOAD_MARKER with a sample marker last */
 } cdestring_options;
 
 /*
@@ -300,6 +302,8 @@ static int parse_options(const char *args, cdestring_options *opts)
     opts->dpcomma = ctools_parse_bool_option(args, "dpcomma");
     opts->float_out = ctools_parse_bool_option(args, "float");
     opts->verbose = ctools_parse_bool_option(args, "verbose");
+    opts->selection = ctools_parse_bool_option(args, "skipif") ? CTOOLS_LOAD_SKIP_IF
+                    : ctools_parse_bool_option(args, "touse") ? CTOOLS_LOAD_MARKER : CTOOLS_LOAD_CHECK_IF;
     opts->strip = (opts->ignore_len > 0 || opts->percent);
 
     return 0;
@@ -361,8 +365,8 @@ ST_retcode cdestring_main(const char *args)
 
     ctools_filtered_data filtered;
     ctools_filtered_data_init(&filtered);
-    stata_retcode load_rc = ctools_data_load(&filtered, opts.src_indices,
-                                              (size_t)nvars, 0, 0, CTOOLS_LOAD_CHECK_IF | CTOOLS_LOAD_NO_SORT_ORDER);
+    stata_retcode load_rc = ctools_data_load(&filtered, opts.src_indices, (size_t)nvars, 0, 0,
+                                              opts.selection | CTOOLS_LOAD_NO_SORT_ORDER);
     if (load_rc != STATA_OK) {
         ctools_filtered_data_free(&filtered);
         free_options(&opts);

@@ -1,3 +1,4 @@
+*! version 1.1.0 20261016 github.com/mdroste/stata-ctools
 *! ctools: seconds since the previous lap of a caller-local wall clock
 * _ctools_lap <target> <clock> <clock value> stores the elapsed seconds in the
 * caller's local <target> and restarts the clock, a local the caller starts

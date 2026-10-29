@@ -47,7 +47,7 @@ def main():
         print("PASS standalone public headers", flush=True)
         # Header extraction must not preempt a translation unit's SPI mode.
         # Inspect actual production preprocessing under the release-mode flags.
-        for name in ("creghdfe/creghdfe_regress.c", "cpplmhdfe/cpplmhdfe_irls.c"):
+        for name in ("creghdfe/creghdfe_regress.c", "cppmlhdfe/cppmlhdfe_irls.c"):
             macros = subprocess.check_output(
                 [
                     CC,

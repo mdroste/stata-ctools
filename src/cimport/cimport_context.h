@@ -19,6 +19,7 @@
 #include "../ctools_arena.h"
 #include "cimport_parse.h"
 #include "cimport_encoding.h"
+#include "cimport_cache.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -77,6 +78,10 @@ typedef struct {
 
 typedef struct {
     CImportParsedRow **rows;
+    size_t file_start, file_end; /* Byte range for bounded-memory reparsing */
+    CImportCachedBlock *cache, *cache_tail;
+    size_t cached_rows;
+    uint64_t uncached_start; /* End of cached prefix; suffix is reparsed on load */
     size_t num_rows;
     size_t capacity;
     ctools_arena arena;
@@ -135,6 +140,9 @@ typedef struct CImportContext {
     char error_message[256];
     bool is_loaded;
     bool cache_ready;
+    bool stream_rows; /* Only the header is retained; data rows are reparsed on load */
+    bool compact_rows; /* Typed blocks, with a bounded uncached suffix per chunk */
+    CImportCacheBudget cache_budget;
     bool verbose;
     int max_fields_seen;
     double time_mmap;

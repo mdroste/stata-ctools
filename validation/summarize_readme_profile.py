@@ -31,6 +31,14 @@ COMMANDS = {
 SIZES = (1_000_000, 10_000_000, 25_000_000)
 
 
+def rounded(ratio):
+    """README precision: one decimal below 2x, whole numbers from 2x; halves round up."""
+    tenths = math.floor(ratio * 10 + 0.5)
+    if tenths < 20:
+        return f"{tenths / 10:.1f}"
+    return str(math.floor(ratio + 0.5))
+
+
 def summarize(path, sizes):
     rows = {}
     with path.open(newline="") as source:
@@ -64,7 +72,7 @@ def summarize(path, sizes):
                 result = "— (failed check/command or timer resolution)"
             output.append(f"| `{label}` | {n:,} | {times[0]:.3f} | {times[1]:.3f} | {result} |")
         if len(ratios) == len(sizes):
-            low, high = f"{min(ratios):.1f}", f"{max(ratios):.1f}"
+            low, high = rounded(min(ratios)), rounded(max(ratios))
             ranges[label] = f"{low}×" if low == high else f"{low}–{high}×"
         else:
             ranges[label] = "—"

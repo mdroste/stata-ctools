@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.0.1 07Feb2026}{...}
+{* *! version 1.1.0 20261016}{...}
 {viewerjumpto "Syntax" "cdecode##syntax"}{...}
 {viewerjumpto "Description" "cdecode##description"}{...}
 {viewerjumpto "Options" "cdecode##options"}{...}
@@ -8,7 +8,7 @@
 {title:Title}
 
 {phang}
-{bf:cdecode} {hline 2} Fast value-label decoding with multiple-variable and replace support
+{bf:cdecode} {hline 2} Decode value labels to string variables
 
 
 {marker syntax}{...}
@@ -18,7 +18,7 @@
 {cmdab:cdecode}
 {varlist}
 {ifin}
-{cmd:,} {opth gen:erate(newvarlist)} | {opt replace} [{it:options}]
+{cmd:,} {{opth gen:erate(newvarlist)} | {opt replace}} [{it:options}]
 
 {synoptset 24 tabbed}{...}
 {synopthdr}
@@ -39,7 +39,7 @@
 
 {pstd}
 {cmd:cdecode} extends Stata's {help decode:decode} command to multiple variables
-and transactional replacement. It converts numeric variables with value labels
+and in-place replacement. It converts numeric variables with value labels
 to string variables containing the label text, and produces the same values and
 storage types as {cmd:decode}, including literal text and labeled extended
 missing values.
@@ -55,21 +55,17 @@ decoded.
 {pstd}
 The source variables must be numeric and have value labels attached. For each
 observation, {cmd:cdecode} looks up the numeric value in the value label and
-writes the corresponding label text to the new string variable.
+writes the corresponding label text to the new string variable. Unlabeled
+values, including unlabeled missing values, produce empty strings.
 
 {pstd}
 This is the counterpart to {help cencode:cencode}, which converts string
 variables to labeled numeric variables.
 
 {pstd}
-{bf:ctools extensions:} Unlike Stata's built-in {cmd:decode}, {cmd:cdecode} supports:
-
-{p 8 12 2}{bf:varlist support:} Decode multiple numeric variables in a single command.
-When using {opt generate()}, you must provide the same number of new variable names
-as there are variables in {it:varlist}.{p_end}
-
-{p 8 12 2}{bf:replace option:} Replace the original numeric variables with their
-decoded string versions instead of creating new variables.{p_end}
+Observations outside {cmd:if}/{cmd:in} receive empty strings, including with
+{opt replace}. A failed multi-variable conversion restores the original
+variables.
 
 
 {marker options}{...}
@@ -83,10 +79,7 @@ label text. The number of names must match the number of variables in {it:varlis
 
 {phang}
 {opt replace} specifies that the variables in {it:varlist} should be replaced with their
-decoded string versions instead of creating new variables. This is a ctools-specific
-extension not available in Stata's built-in {cmd:decode}. When {opt replace}
-is specified, each original numeric variable is dropped and replaced with the
-new string variable using the same name.
+decoded string versions instead of creating new variables. The decoded variables keep the original names.
 
 {pstd}
 You must specify either {opt generate()} or {opt replace}, but not both.
@@ -101,7 +94,8 @@ labels to a specific length.
 
 {phang}
 {opt threads(#)} limits the number of threads the ctools plugin uses. The
-default is the {help ctools##threads:ctools thread setting}, at most 16 threads unless you change it. It has no effect on variables decoded by
+argument is an integer from 1 to 256. The default follows the
+{help ctools##threads:ctools thread setting}. It has no effect on variables decoded by
 {cmd:decode} itself.
 
 {phang}
@@ -114,7 +108,7 @@ by {cmd:decode}.
 
 {pstd}Setup: create sample data with value labels{p_end}
 {phang2}{cmd:. clear}{p_end}
-{phang2}{cmd:. set obs 1000000}{p_end}
+{phang2}{cmd:. set obs 100}{p_end}
 {phang2}{cmd:. gen region = ceil(runiform() * 4)}{p_end}
 {phang2}{cmd:. label define region_lbl 1 "North" 2 "South" 3 "East" 4 "West"}{p_end}
 {phang2}{cmd:. label values region region_lbl}{p_end}
@@ -131,14 +125,12 @@ by {cmd:decode}.
 {pstd}Decode only for certain observations:{p_end}
 {phang2}{cmd:. cdecode region if region <= 2, generate(region_ns)}{p_end}
 
-{pstd}Replace the original variable with the decoded version (ctools-specific):{p_end}
-{phang2}{cmd:. cdecode region, replace}{p_end}
+{pstd}Decode two variables in one call:{p_end}
+{phang2}{cmd:. clonevar region2 = region}{p_end}
+{phang2}{cmd:. cdecode region region2, generate(label1 label2)}{p_end}
 
-{pstd}Decode multiple variables at once (ctools-specific):{p_end}
-{phang2}{cmd:. cdecode var1 var2 var3, generate(var1_str var2_str var3_str)}{p_end}
-
-{pstd}Replace multiple variables at once (ctools-specific):{p_end}
-{phang2}{cmd:. cdecode var1 var2 var3, replace}{p_end}
+{pstd}Replace the source codes with strings:{p_end}
+{phang2}{cmd:. cdecode region region2, replace}{p_end}
 
 
 {marker results}{...}

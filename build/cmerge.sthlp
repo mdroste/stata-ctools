@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.0.1 07Feb2026}{...}
+{* *! version 1.1.0 20261016}{...}
 {viewerjumpto "Syntax" "cmerge##syntax"}{...}
 {viewerjumpto "Description" "cmerge##description"}{...}
 {viewerjumpto "Options" "cmerge##options"}{...}
@@ -30,7 +30,7 @@ where {it:merge_type} is one of
 {p2col :{opt 1:1}}one-to-one merge{p_end}
 {p2col :{opt m:1}}many-to-one merge{p_end}
 {p2col :{opt 1:m}}one-to-many merge{p_end}
-{p2col :{opt m:m}}many-to-many merge (not recommended){p_end}
+{p2col :{opt m:m}}match repeated keys sequentially within each key group{p_end}
 
 {synoptset 28 tabbed}{...}
 {synopthdr}
@@ -47,35 +47,37 @@ where {it:merge_type} is one of
 {synopt:{opt nolabel}}do not copy value labels from using data{p_end}
 {synopt:{opt nonotes}}do not copy variable notes from using data{p_end}
 {synopt:{opt update}}update missing values of same-named variables with using data{p_end}
-{synopt:{opt replace}}replace all values of same-named variables with using data{p_end}
+{synopt:{opt replace}}replace conflicting nonmissing values; requires {opt update}{p_end}
 {synopt:{opt preserve_order(#)}}preserve observation order from master dataset (0=no, 1=yes){p_end}
-{syntab:Failure handling}
-{synopt:{opt snap:shot}}{help preserve} the whole dataset, as {cmd:merge} users may expect; written to disk above {cmd:c(max_preservemem)}{p_end}
-{synopt:{opt fast}}keep no copy of the master; a failure or Break can leave the data partly merged{p_end}
+{syntab:Data recovery}
+{synopt:{opt snap:shot}}use {help preserve} to restore data after an error or interruption{p_end}
+{synopt:{opt fast}}skip data recovery after an error or interruption{p_end}
 {syntab:Reporting}
 {synopt:{opt norep:ort}}do not display result summary{p_end}
 {synopt:{opt verbose}}display detailed timing and progress information{p_end}
-{synopt:{opt time:it}}display timing breakdown{p_end}
 {synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
 {synoptline}
 
 {pstd}
-{it:results} is one or more of: {opt match}, {opt master}, {opt using}, {opt 1}, {opt 2}, {opt 3}
+{it:results} is one or more of: {opt match}, {opt master}, {opt using}, {opt match_update}, {opt match_conflict}, or codes {opt 1} through {opt 5}
 
 
 {marker description}{...}
 {title:Description}
 
-{pstd}
-{cmd:cmerge} is a high-performance drop-in replacement for Stata's {help merge:merge}
-command. It uses a C plugin with parallel data loading and optimized sorting
-to achieve significant speed improvements over the native command.
 
 {pstd}
 {cmd:cmerge} joins the dataset currently in memory (the master data) with
 {it:filename} (the using data), matching on the key variables specified in
 {it:varlist}. The result replaces the data in memory.
 
+
+{pstd}
+For an observation-by-observation merge, use
+{cmd:cmerge 1:1 _n using} {it:filename}. For a keyed merge, missing key values
+participate in matching. {cmd:m:m} pairs observations sequentially within each
+key group and repeats the last observation of the shorter group; it does not
+form every pair. Use {help joinby} for all combinations.
 
 {marker options}{...}
 {title:Options}
@@ -90,7 +92,8 @@ abbreviations; the last two arise only with {opt update}.
 {phang}
 {opt assert(results)} specifies assertions about the match results that should
 be verified; results are specified as in {opt keep()}. If any assertion fails,
-an error is raised (r(9)).
+an error is raised (r(9)) and the merged data remain in memory. The assertion
+is evaluated before {opt keep()} restricts the result.
 
 {phang}
 {opt generate(varname)} specifies the name of the variable to be created
@@ -117,39 +120,64 @@ missing. Key variables must have matching string/numeric types even with
 {p_end}
 
 {phang}
-{opt snapshot} restores the master after a failed or interrupted merge from a
-{help preserve} snapshot of the whole dataset, as earlier versions of
-{cmd:cmerge} did. Stata keeps the snapshot in memory up to
-{cmd:c(max_preservemem)} (1 GB by default) and writes it to disk above that, so
-large merges take longer and write the whole dataset once. By default
-{cmd:cmerge} writes no snapshot; see {help cmerge##failure:failure behavior}.
-{p_end}
+{opt nolabel} prevents copying value-label definitions from the using data.
+Without this option, labels are copied, but an existing master definition
+with the same name takes precedence.
 
 {phang}
-{opt fast} makes {cmd:cmerge} keep no copy of the master data at all, in the
-manner of {cmd:collapse, fast}. It saves memory, and time where a copy would
-otherwise be taken ({opt keep()} or {opt update} on data already in key order,
-strL variables, empty datasets). If the merge then fails after it has started
-changing the data, or Break is pressed, the error is reported but the data in
-memory are left partly merged, with variables added, observations reordered,
-or values replaced. Errors in the keys (unsorted data with {opt sorted},
-duplicate keys, mismatched key types) are still found before anything changes.
-{opt fast} may not be combined with {opt snapshot}.
-{p_end}
-{p 8 12 2}2. High-performance radix sort on key variables{p_end}
-{p 8 12 2}3. Single-pass sorted merge join{p_end}
-{p 8 12 2}4. Parallel output construction{p_end}
+{opt nonotes} prevents copying notes from the using data.
+
+{phang}
+{opt update} fills missing master values of shared non-key variables with
+nonmissing using values. Matched observations receive code 4 if any missing
+value was filled, or code 5 if any nonmissing values conflict; code 5 takes
+precedence. Other matched observations receive code 3.
+
+{phang}
+{opt replace}, with {opt update}, also replaces conflicting nonmissing master
+values with nonmissing using values. Missing using values do not replace
+nonmissing master values.
+
+{phang}
+{opt preserve_order(1)} retains master observation order, with using-only
+observations appended. The default is {cmd:preserve_order(0)}.
+
+{phang}
+{opt noreport} suppresses the table of merge results.
+
+{phang}
+{opt verbose} displays progress and elapsed times.
+
+{phang}
+{opt threads(#)} sets the maximum number of threads, from 1 to 256.
+The default follows the {help ctools##threads:ctools thread setting}.
+
+{phang}
+{opt snapshot} uses {help preserve} to copy the whole master dataset for
+recovery after an error or interruption. Stata may write the copy to disk
+when it exceeds {cmd:c(max_preservemem)}.
+
+{phang}
+{opt fast} skips recovery to reduce memory use. An error or interruption can
+leave a partially merged dataset. It cannot be combined with {opt snapshot}.
+
+{marker remarks}{...}
+{title:Remarks}
 
 {pstd}
-Runtime depends on dataset shape, options, and hardware. Benchmark comparisons
-should record the date, CPU/OS, Stata/reference versions, options, and dimensions.
+Shared numeric and fixed-width string variables are widened as needed to hold
+both inputs; a {cmd:long}/{cmd:float} combination uses {cmd:double}. New variables
+retain the using data's formats, labels, notes, and characteristics. If either
+dataset contains a retained {cmd:strL} variable, the merge uses Stata's
+{cmd:merge}; {opt preserve_order()} does not apply on this path.
 
+{marker failure}{...}
 {pstd}
-Due to the overhead of reading data from Stata into C memory and writing results
-back, the largest speedups occur when both the master and using datasets (or the
-variables specified in {opt keepusing()} if used) have relatively few variables
-and the dataset has many observations. For merges involving many variables,
-the data transfer overhead may reduce the relative performance advantage.
+By default, errors and interruptions restore the master data, except that a
+failed {opt assert()} leaves the merged data in memory. Recovery uses an
+in-memory copy; some merges use {help preserve} on Stata versions before 16.
+{opt snapshot} selects {cmd:preserve} for every merge. {opt fast} disables
+recovery.
 
 
 {marker examples}{...}
@@ -202,7 +230,9 @@ the data transfer overhead may reduce the relative performance advantage.
 {synopt:{cmd:r(N_1)}}number of observations only in master{p_end}
 {synopt:{cmd:r(N_2)}}number of observations only in using{p_end}
 {synopt:{cmd:r(N_3)}}number of matched observations{p_end}
-{synopt:{cmd:r(time)}}elapsed time in seconds{p_end}
+{synopt:{cmd:r(N_4)}}matches with missing values updated (with {opt update}){p_end}
+{synopt:{cmd:r(N_5)}}matches with conflicting nonmissing values (with {opt update}){p_end}
+{synopt:{cmd:r(time)}}elapsed time in seconds; missing on the native merge path{p_end}
 
 {p2col 5 20 24 2: Macros}{p_end}
 {synopt:{cmd:r(using)}}name of using file{p_end}
@@ -223,15 +253,4 @@ Manual: {bf:[D] merge}
 
 {psee}
 Online: {help merge}, {help joinby}, {help ctools}, {help csort}
-{p_end}
-
-{title:Validation and failure behavior}
-
-{pstd}
-Shared numeric and fixed-string variables are widened before updates or using-only rows are written. A long/float combination uses double to preserve both inputs. Key variables must have matching string/numeric types even with force. For incompatible non-key types, force retains the master type and treats the using-side values as missing. String writes retain the shared plugin limit of str2045. When the master or the using keys or kept variables include strL variables, {cmd:cmerge} runs {help merge} itself (with a note). With {opt update}, matched observations are coded 4 (missing master values updated) or 5 (nonmissing conflict), as with {help merge}. New variables keep the using data's formats, labels, notes, and characteristics; a value label already defined in the master keeps the master's definition. If {opt assert()} fails, the merged result stays in memory, as with {help merge}; any other failed or interrupted merge (including {help break:Break}) restores the master dataset.
-{p_end}
-
-{marker failure}{...}
-{pstd}
-By default {cmd:cmerge} restores the master without writing a snapshot to disk. Key, sortedness, and uniqueness errors are found before the master is changed. Before the plugin overwrites a master observation it keeps a copy of every master observation in memory (the copy the merged output is written from); after a failure it restores the observations from that copy, and {cmd:cmerge} removes the variables and observations it added and puts back storage types, formats, value labels, notes, characteristics, the sort order, and {cmd:c(changed)}. The few merges that cannot be undone that way (strL variables, which {help merge} runs; empty data with {opt keep()} or a 1:1 sort that would drop or reorder master observations) keep a snapshot in memory, in a {help frame} that {cmd:cmerge} drops when it finishes; such a merge fails with a memory error, before changing anything, if the copy does not fit. Before Stata 16, which has no frames, these merges use {help preserve}. Option {opt snapshot} uses {help preserve} for every merge instead, and option {opt fast} keeps no copy at all.
 {p_end}

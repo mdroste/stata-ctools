@@ -1,4 +1,4 @@
-*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools
+*! version 1.1.0 20261016 github.com/mdroste/stata-ctools
 
 program define cdestring
     version 14.1
@@ -255,14 +255,33 @@ program define cdestring
     * Set string width metadata for flat buffer optimization
     _ctools_strw `allvars'
 
+    * Stata answers an if one observation at a time. Without one the plugin
+    * skips the check; an if is marked first and passed last, as a sample
+    * marker the plugin reads in parallel, unless in limits the range
+    * (marking covers every observation). The marker is the last variable
+    * until it is dropped after the call, which is then free.
+    local select_code "skipif"
+    local marker ""
+    local ifcond ""
+    if `"`if'"' != "" & `"`in'"' == "" {
+        tempvar marker
+        mark `marker' `if'
+        local select_code "touse"
+    }
+    else if `"`if'"' != "" {
+        local select_code ""
+        local ifcond `"`if'"'
+    }
+
     * Call the C plugin with ALL variables (so indices match dataset positions).
     * ignore= goes last so its characters cannot be read as option keywords.
     * The plugin sets local cdestring_failed (nonnumeric count per variable).
     local cdestring_failed ""
-    plugin call ctools_plugin `allvars' `if' `in', ///
-        "cdestring `threads_code' `cmd_indices' nvars=`nvars' `force_code' `percent_code' `dpcomma_code' `float_code' `verbose_code' `ignore_code'"
+    plugin call ctools_plugin `allvars' `marker' `ifcond' `in', ///
+        "cdestring `threads_code' `cmd_indices' nvars=`nvars' `force_code' `percent_code' `dpcomma_code' `float_code' `verbose_code' `select_code' `ignore_code'"
 
     local plugin_rc = _rc
+    if "`marker'" != "" drop `marker'
 
     if `__do_timing' {
         quietly _ctools_clock __ct_now

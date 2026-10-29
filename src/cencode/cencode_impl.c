@@ -171,7 +171,8 @@ static void cencode_save_times(double parse, double load, double collect, double
     scalar _cencode_fallback is 1.
 */
 static ST_retcode cencode_stream(int var_idx, int gen_idx, const char *labelfile, int fill_all,
-                                 int has_if, size_t label_len, int noextend, double t_start)
+                                 int has_if, int touse, size_t label_len, int noextend,
+                                 double t_start)
 {
     double t_parse = ctools_timer_seconds();
     ST_int obs1 = SF_in1(), obs2 = SF_in2();
@@ -190,9 +191,19 @@ static ST_retcode cencode_stream(int var_idx, int gen_idx, const char *labelfile
     cencode_chunk *chunks = (cencode_chunk *)calloc(nchunks, sizeof(cencode_chunk));
     if ((nobs && !codes) || !chunks) rc = 920;
     if (!rc && has_if && nobs) {
-        selected = (uint8_t *)malloc(nobs);
+        selected = (uint8_t *)calloc(nobs, 1);
         if (!selected) rc = 920;
-        for (size_t i = 0; !rc && i < nobs; i++) selected[i] = SF_ifobs(obs1 + (ST_int)i) != 0;
+        if (!rc && touse) {
+            /* A sample marker follows the other variables in place of the if
+             * condition; the shared loader reads it in parallel. */
+            ctools_filtered_data marked;
+            stata_retcode select_rc = ctools_data_select(&marked, 0, 0, CTOOLS_LOAD_MARKER);
+            if (select_rc != STATA_OK) rc = ctools_stata_rc(select_rc);
+            for (size_t k = 0; !rc && k < marked.data.nobs; k++)
+                selected[marked.obs_map[k] - (perm_idx_t)obs1] = 1;
+            ctools_filtered_data_free(&marked);
+        }
+        for (size_t i = 0; !rc && !touse && i < nobs; i++) selected[i] = SF_ifobs(obs1 + (ST_int)i) != 0;
     }
     for (size_t c = 0; !rc && c < nchunks; c++) {
         size_t base = nobs / nchunks, extra = nobs % nchunks;
@@ -465,7 +476,8 @@ ST_retcode cencode_main(const char *args)
         }
         return cencode_stream(var_idx, gen_idx, labelfile,
                               ctools_parse_bool_option(args, "fillall"),
-                              ctools_parse_bool_option(args, "ifcond"), (size_t)label_len,
+                              ctools_parse_bool_option(args, "ifcond"),
+                              ctools_parse_bool_option(args, "touse"), (size_t)label_len,
                               ctools_parse_bool_option(args, "noextend"), t_start);
     }
 
@@ -480,7 +492,12 @@ ST_retcode cencode_main(const char *args)
     ctools_filtered_data filtered;
     ctools_filtered_data_init(&filtered);
     int load_var_idx = var_idx;
-    stata_retcode load_rc = ctools_data_load(&filtered, &load_var_idx, 1, 0, 0, CTOOLS_LOAD_CHECK_IF | CTOOLS_LOAD_NO_SORT_ORDER);
+    /* Without an if condition (no ifcond) every row of the in-range is
+     * selected; touse passes a sample marker last in place of the if */
+    int load_flags = CTOOLS_LOAD_NO_SORT_ORDER |
+                     (!ctools_parse_bool_option(args, "ifcond") ? CTOOLS_LOAD_SKIP_IF
+                      : ctools_parse_bool_option(args, "touse") ? CTOOLS_LOAD_MARKER : CTOOLS_LOAD_CHECK_IF);
+    stata_retcode load_rc = ctools_data_load(&filtered, &load_var_idx, 1, 0, 0, load_flags);
 
     if (load_rc != STATA_OK) {
         ctools_filtered_data_free(&filtered);

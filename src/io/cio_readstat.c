@@ -540,28 +540,34 @@ int cio_xport_names(int nvar, char (*names)[301], char (*sets)[301], int rename)
     return rc;
 }
 
-int cio_do_export(const char *kind)
+int cio_do_export(const char *kind, const char *selection)
 {
     if (!strcmp(kind, "shp"))
         return cio_shp_export();
     if (!strcmp(kind, "dbase"))
-        return cio_export_dbf();
+        return cio_export_dbf(selection);
     char path[4096], replace[10], label[1025];
     ctools_output companions[2] = {{0}};
     ctools_output output;
     memset(&output, 0, sizeof(output));
     cio_local_text("__cio_filename", path, sizeof(path));
     cio_local_text("__cio_replace", replace, sizeof(replace));
-    int nvar = SF_nvars(), rc = 0;
-    size_t nobs = 0;
+    int nvar = cio_export_nvar(selection), rc = 0;
     if (nvar < 1)
         return 102;
-    for (int i = SF_in1(); i <= SF_in2(); i++)
-        if (SF_ifobs(i))
-            nobs++;
+    cio_rows rows;
+    if ((rc = cio_export_rows(&rows, selection)))
+    {
+        cio_rows_free(&rows);
+        return rc;
+    }
+    size_t nobs = rows.n;
     readstat_writer_t *w = readstat_writer_init();
     if (!w)
+    {
+        cio_rows_free(&rows);
         return 909;
+    }
     char metacount[40];
     cio_local_text("__cio_nmeta", metacount, sizeof(metacount));
     int nmeta = atoi(metacount);
@@ -617,47 +623,47 @@ int cio_do_export(const char *kind)
         if (SF_var_is_strl(j + 1))
         {
             width = 1;
-            for (int i = SF_in1(); i <= SF_in2(); i++)
-                if (SF_ifobs(i))
+            for (size_t r = 0; r < rows.n; r++)
+            {
+                int i = cio_row(&rows, r);
+                if (SF_var_is_binary(j + 1, i))
                 {
-                    if (SF_var_is_binary(j + 1, i))
-                    {
-                        rc = 109;
-                        goto done;
-                    }
-                    int length = SF_sdatalen(j + 1, i);
-                    if (length < 0)
-                    {
-                        rc = 109;
-                        goto done;
-                    }
-                    size_t cap = (size_t)length + 1;
-                    if (cap > stringcap)
-                    {
-                        char *tmp = realloc(s, cap);
-                        if (!tmp)
-                        {
-                            rc = 909;
-                            goto done;
-                        }
-                        s = tmp;
-                        stringcap = cap;
-                    }
-                    if (SF_strldata(j + 1, i, s, (int)stringcap) != length)
-                    {
-                        rc = 609;
-                        goto done;
-                    }
-                    s[length] = 0;
-                    size_t logical = strlen(s) + (!strcmp(kind, "sasxport8") ? 1 : 0);
-                    if (logical > INT_MAX)
-                    {
-                        rc = 109;
-                        goto done;
-                    }
-                    if ((int)logical > width)
-                        width = (int)logical;
+                    rc = 109;
+                    goto done;
                 }
+                int length = SF_sdatalen(j + 1, i);
+                if (length < 0)
+                {
+                    rc = 109;
+                    goto done;
+                }
+                size_t cap = (size_t)length + 1;
+                if (cap > stringcap)
+                {
+                    char *tmp = realloc(s, cap);
+                    if (!tmp)
+                    {
+                        rc = 909;
+                        goto done;
+                    }
+                    s = tmp;
+                    stringcap = cap;
+                }
+                if (SF_strldata(j + 1, i, s, (int)stringcap) != length)
+                {
+                    rc = 609;
+                    goto done;
+                }
+                s[length] = 0;
+                size_t logical = strlen(s) + (!strcmp(kind, "sasxport8") ? 1 : 0);
+                if (logical > INT_MAX)
+                {
+                    rc = 109;
+                    goto done;
+                }
+                if ((int)logical > width)
+                    width = (int)logical;
+            }
         }
         vars[j] = readstat_add_variable(
             w, name, isstr ? READSTAT_TYPE_STRING : READSTAT_TYPE_DOUBLE, (size_t)width);
@@ -784,10 +790,9 @@ int cio_do_export(const char *kind)
         err = readstat_begin_writing_xport(w, fp, (long)nobs);
     if (err != READSTAT_OK)
         goto codec_error;
-    for (int i = SF_in1(); i <= SF_in2(); i++)
+    for (size_t r = 0; r < rows.n; r++)
     {
-        if (!SF_ifobs(i))
-            continue;
+        int i = cio_row(&rows, r);
         if ((i & 4095) == 0 && SF_poll())
         {
             rc = 1;
@@ -875,6 +880,8 @@ int cio_do_export(const char *kind)
     cio_local_text("__cio_sascode", sascode, sizeof(sascode));
     if (*sascode && (rc = cio_export_sascode(nmeta, sets, sascode, kind, !strcmp(replace, "1"), &companions[1])))
         goto done;
+    if ((rc = cio_local_number("__cio_N", nobs)))
+        goto done;
     ctools_output *outputs[3] = {&output};
     size_t count = 1;
     for (int i = 0; i < 2; i++) if (companions[i].temporary) outputs[count++] = &companions[i];
@@ -894,5 +901,6 @@ done:
     free(names);
     free(sets);
     readstat_writer_free(w);
+    cio_rows_free(&rows);
     return rc;
 }

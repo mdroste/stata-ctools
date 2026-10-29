@@ -116,7 +116,7 @@ capture noisily {
     creghdfe y x, absorb(g h) tolerance(1e-10)
     assert !missing(_b[x])
     replace y = rpoisson(exp(.3+.05*x+g/200+h/100))
-    capture cpplmhdfe y x, absorb(g h) irlsmaxiter(1)
+    capture cppmlhdfe y x, absorb(g h) irlsmaxiter(1)
     assert _rc == 430
 }
 if _rc test_fail "A04 exhausted solvers return errors" "r(`=_rc')"
@@ -171,7 +171,7 @@ capture noisily {
         ppmlhdfe y `vars', absorb(g) `vc'
         scalar reference_chi2 = e(chi2)
         scalar reference_df = e(df_m)
-        cpplmhdfe y `vars', absorb(g) `vc'
+        cppmlhdfe y `vars', absorb(g) `vc'
         assert e(df_m) == reference_df
         if missing(reference_chi2) assert missing(e(chi2))
         else assert reldif(e(chi2),reference_chi2) < 1e-6
@@ -254,6 +254,8 @@ capture noisily {
 }
 if _rc test_fail "A05/A06 dates, datetimes, literal export paths" "r(`=_rc')"
 else test_pass "A05/A06 dates, datetimes, literal export paths"
+capture erase "temp/space threads(2) name.csv"
+capture erase "temp/space threads(2) name.xlsx"
 
 capture noisily {
     clear
@@ -276,6 +278,8 @@ capture noisily {
 }
 if _rc test_fail "A13 complete wide export metadata" "r(`=_rc')"
 else test_pass "A13 complete wide export metadata"
+capture erase "temp/sep24_wide.csv"
+capture erase "temp/sep24_wide.xlsx"
 
 capture noisily {
     _ctools_load

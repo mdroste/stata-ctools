@@ -59,6 +59,55 @@ int cio_save_number(const char *key, size_t v)
     return cio_save((char *)key, s);
 }
 
+int cio_local_number(const char *key, size_t v)
+{
+    char name[128], s[40];
+    snprintf(name, sizeof(name), "_%s", key);
+    snprintf(s, sizeof(s), "%zu", v);
+    return SF_macro_save(name, s);
+}
+
+int cio_export_rows(cio_rows *rows, const char *selection)
+{
+    memset(rows, 0, sizeof(*rows));
+    if (!strcmp(selection, "touse"))
+    {
+        /* Stata answers an if one observation at a time; the shared
+           selection reads the sample marker in parallel instead. */
+        rows->marker = 1;
+        stata_retcode rc = ctools_data_select(&rows->marked, 0, 0, CTOOLS_LOAD_MARKER);
+        if (rc != STATA_OK)
+            return ctools_stata_rc(rc);
+        rows->map = rows->marked.obs_map;
+        rows->n = rows->marked.data.nobs;
+        return 0;
+    }
+    rows->first = SF_in1();
+    if (rows->first < 1 || SF_in2() < rows->first)
+        return 0;
+    rows->n = (size_t)(SF_in2() - rows->first) + 1;
+    if (!strcmp(selection, "skipif"))
+        return 0;
+    rows->checked = malloc(rows->n * sizeof(perm_idx_t));
+    if (!rows->checked)
+        return 909;
+    size_t n = 0;
+    for (int i = rows->first; i <= SF_in2(); i++)
+        if (SF_ifobs(i))
+            rows->checked[n++] = (perm_idx_t)i;
+    rows->map = rows->checked;
+    rows->n = n;
+    return 0;
+}
+
+void cio_rows_free(cio_rows *rows)
+{
+    if (rows->marker)
+        ctools_filtered_data_free(&rows->marked);
+    free(rows->checked);
+    memset(rows, 0, sizeof(*rows));
+}
+
 double cio_tagged_missing(char tag)
 {
     int n = tag >= 'A' && tag <= 'Z' ? tag - 'A' + 1 : tag >= 'a' && tag <= 'z' ? tag - 'a' + 1 : 0;

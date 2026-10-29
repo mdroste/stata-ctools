@@ -226,12 +226,12 @@ ST_retcode do_full_regression(int argc, char *argv[])
 
     /* Every variable position below follows the wrapper's layout: K data
      * vars, G FE vars, [cluster], [weight], [resid], [groupvar], [G savefe
-     * vars], final-sample flag. Refuse any other length rather than read or
-     * write the wrong variables. */
+     * vars], final-sample flag, [sample marker]. Refuse any other length
+     * rather than read or write the wrong variables. */
     {
         ST_int expected_nvars = K + G + (vcetype == 2) + (has_weights != 0) +
                                 (compute_resid != 0) + (compute_groupvar != 0) +
-                                (savefe ? G : 0) + 1;
+                                (savefe ? G : 0) + 1 + input.touse;
         if (SF_nvars() != expected_nvars) {
             char msg[160];
             snprintf(msg, sizeof(msg),
@@ -276,7 +276,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
     ctools_filtered_data filtered;
     ctools_filtered_data_init(&filtered);
 
-    stata_retcode load_rc = ctools_data_load(&filtered, var_indices, total_vars, 0, 0, CTOOLS_LOAD_CHECK_IF | CTOOLS_LOAD_NO_SORT_ORDER);
+    int load_flags = CTOOLS_LOAD_NO_SORT_ORDER | (input.touse ? CTOOLS_LOAD_MARKER : CTOOLS_LOAD_CHECK_IF);
+    stata_retcode load_rc = ctools_data_load(&filtered, var_indices, total_vars, 0, 0, load_flags);
     free(var_indices);
 
     if (load_rc != STATA_OK) {

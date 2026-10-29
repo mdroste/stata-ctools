@@ -80,6 +80,7 @@ ST_retcode csample_main(const char *args) {
     size_t *work_indices = NULL;
     ctools_filtered_data by_filtered;
     perm_idx_t *obs_map = NULL;
+    perm_idx_t *if_map = NULL;  /* obs_map when built here by SF_ifobs */
     ST_int obs_start = 0;  /* For null obs_map: first observation number */
     stata_retcode rc = STATA_OK;
     int num_threads = 1;
@@ -108,6 +109,11 @@ ST_retcode csample_main(const char *args) {
         return 198;
     }
     int skip_if = ctools_parse_bool_option(args, "skipif");
+    /* touse: the last plugin variable is the sample marker, in place of the
+     * if condition; the shared loader reads it in parallel. */
+    const int selection = skip_if ? CTOOLS_LOAD_SKIP_IF
+                        : ctools_parse_bool_option(args, "touse") ? CTOOLS_LOAD_MARKER
+                                                                  : CTOOLS_LOAD_CHECK_IF;
 
     /* Validate - must have either percent or count */
     if (config.percent < 0 && config.count == 0) {
@@ -168,7 +174,7 @@ ST_retcode csample_main(const char *args) {
 
     /* Load by-variables if specified using filtered loading */
     if (nby > 0) {
-        rc = ctools_data_load(&by_filtered, by_indices, nby, 0, 0, 0);
+        rc = ctools_data_load(&by_filtered, by_indices, nby, 0, 0, selection);
         if (rc != STATA_OK) {
             ctools_filtered_data_free(&by_filtered);
             free(by_indices);
@@ -187,6 +193,18 @@ ST_retcode csample_main(const char *args) {
             nobs = (size_t)(in2 - in1 + 1);
             obs_map = NULL;
             obs_start = in1;
+        } else if (selection == CTOOLS_LOAD_MARKER) {
+            /* The sample marker, loaded as the only column, selects the rows */
+            int marker = SF_nvars();
+            rc = ctools_data_load(&by_filtered, &marker, 1, 0, 0,
+                                  CTOOLS_LOAD_MARKER | CTOOLS_LOAD_NO_SORT_ORDER);
+            if (rc != STATA_OK) {
+                ctools_filtered_data_free(&by_filtered);
+                ctools_error(CSAMPLE_MODULE, "failed to load data");
+                return ctools_stata_rc(rc);
+            }
+            nobs = by_filtered.data.nobs;
+            obs_map = by_filtered.obs_map;
         } else {
             /* Has if/in: must check SF_ifobs */
             nobs = 0;
@@ -200,7 +218,7 @@ ST_retcode csample_main(const char *args) {
                 return 2000;
             }
 
-            obs_map = (perm_idx_t *)malloc(nobs * sizeof(perm_idx_t));
+            obs_map = if_map = (perm_idx_t *)malloc(nobs * sizeof(perm_idx_t));
             if (!obs_map) {
                 if (by_indices) free(by_indices);
                 ctools_error_alloc(CSAMPLE_MODULE);
@@ -217,8 +235,8 @@ ST_retcode csample_main(const char *args) {
     }
 
     if (nobs == 0) {
-        if (nby > 0) ctools_filtered_data_free(&by_filtered);
-        else if (obs_map) free(obs_map);
+        ctools_filtered_data_free(&by_filtered);
+        free(if_map);
         if (by_indices) free(by_indices);
         ctools_error(CSAMPLE_MODULE, "no observations");
         return 2000;
@@ -227,8 +245,8 @@ ST_retcode csample_main(const char *args) {
     /* Allocate keep flags */
     keep_flags = (uint8_t *)calloc(nobs, sizeof(uint8_t));
     if (!keep_flags) {
-        if (nby > 0) ctools_filtered_data_free(&by_filtered);
-        else if (obs_map) free(obs_map);
+        ctools_filtered_data_free(&by_filtered);
+        free(if_map);
         if (by_indices) free(by_indices);
         ctools_error_alloc(CSAMPLE_MODULE);
         return 920;
@@ -241,8 +259,8 @@ ST_retcode csample_main(const char *args) {
 
     groups = (ctools_group_range *)malloc((nobs + 1) * sizeof(ctools_group_range));
     if (!groups) {
-        if (nby > 0) ctools_filtered_data_free(&by_filtered);
-        else if (obs_map) free(obs_map);
+        ctools_filtered_data_free(&by_filtered);
+        free(if_map);
         free(keep_flags);
         if (by_indices) free(by_indices);
         ctools_error_alloc(CSAMPLE_MODULE);
@@ -428,11 +446,8 @@ cleanup:
     free(thread_rngs);
     if (sort_perm) free(sort_perm);
     free(groups);
-    if (nby > 0) {
-        ctools_filtered_data_free(&by_filtered);
-    } else if (obs_map) {
-        free(obs_map);
-    }
+    ctools_filtered_data_free(&by_filtered);
+    free(if_map);
     free(keep_flags);
     if (by_indices) free(by_indices);
 

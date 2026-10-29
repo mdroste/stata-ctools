@@ -1,4 +1,4 @@
-*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools
+*! version 1.1.0 20261016 github.com/mdroste/stata-ctools
 
 program define cwinsor
     version 14.1
@@ -232,7 +232,11 @@ program define _cwinsor_impl
 
     local plugin_varlist `target_varlist' `by'
     if `direct_outputs' local plugin_varlist `varlist' `by' `target_varlist'
-    plugin call ctools_plugin `plugin_varlist' if `touse', ///
+    * Pass the sample marker directly, avoiding serial SF_ifobs evaluation.
+    * Keep the same varlist for the deferred-bound application below.
+    local plugin_varlist `plugin_varlist' `touse'
+    local opts `opts' touse
+    plugin call ctools_plugin `plugin_varlist', ///
         "cwinsor `threads_opt' `nvars_target' `nby' `store_indices' `opts' `undo_opt'"
     global CTOOLS_cwinsor_plugin "`__ctools_plugin'"
     if strpos("`undo_opt'", "undo") {

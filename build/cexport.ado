@@ -1,4 +1,4 @@
-*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools
+*! version 1.1.0 20261016 github.com/mdroste/stata-ctools
 
 program define cexport, rclass
     version 14.1
@@ -275,13 +275,32 @@ program define cexport, rclass
     * Set string width metadata for flat buffer optimization
     _ctools_strw `export_varlist'
 
+    * Stata answers an if one observation at a time. Without one the plugin
+    * skips the check; an if is marked first and passed last, as a sample
+    * marker the plugin reads in parallel, unless in limits the range
+    * (marking covers every observation). The marker is the last variable
+    * until it is dropped after the call, which is then free.
+    local opt_select "skipif"
+    local marker ""
+    local ifcond `"`if'"'
+    if `"`if'"' != "" & `"`in'"' == "" {
+        tempvar marker
+        mark `marker' `if'
+        local opt_select "touse"
+        local ifcond ""
+    }
+    else if `"`if'"' != "" {
+        local opt_select ""
+    }
+
     * Call the C plugin
     * Plugin expects options only; paths/metadata are length-checked locals.
     * Use export_varlist (may contain decoded temp vars for value labels)
-    capture noisily plugin call ctools_plugin `export_varlist' `if' `in', ///
-        "cexport `threads_code' `plugin_delim' `opt_replace' `opt_noheader' `opt_quote' `opt_noquoteif' `opt_verbose' `opt_mmap' `opt_nofsync' `opt_direct' `opt_prefault' `opt_crlf' `opt_noparallel'"
+    capture noisily plugin call ctools_plugin `export_varlist' `marker' `ifcond' `in', ///
+        "cexport `threads_code' `plugin_delim' `opt_replace' `opt_noheader' `opt_quote' `opt_noquoteif' `opt_verbose' `opt_mmap' `opt_nofsync' `opt_direct' `opt_prefault' `opt_crlf' `opt_noparallel' `opt_select'"
 
     local export_rc = _rc
+    if "`marker'" != "" drop `marker'
 
     * Clean up global macros
 

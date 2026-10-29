@@ -15,4 +15,9 @@ stata_retcode ctools_order_stable(stata_data *data, const int *keys, size_t nkey
  * Returns the number of runs n (0 when d has no rows). */
 size_t ctools_group_starts(const stata_data *d, const perm_idx_t *order,
                            const int *keys, size_t nkeys, size_t *starts);
+
+/* Same ordered boundaries; parallel comparisons use one temporary byte per row.
+ * Small/serial calls and allocation failure use ctools_group_starts instead. */
+size_t ctools_group_starts_parallel(const stata_data *d, const perm_idx_t *order,
+                                  const int *keys, size_t nkeys, size_t *starts);
 #endif

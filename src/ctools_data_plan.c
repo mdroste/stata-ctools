@@ -1,5 +1,83 @@
 #include "ctools_transport_internal.h"
 
+#define IO_MARKER_BLOCK_ROWS 65536
+
+/* Observations of [obs1, obs1 + n_range) where the marker (the last plugin
+ * variable) is nonzero, as `if marker' selects them. Blocks of rows are read
+ * in parallel: the first pass records and counts each block's selections,
+ * the second writes each block's observations from its offset, so the map is
+ * in observation order. */
+static stata_retcode ctools_io_marker_obs_map(ST_int obs1, size_t n_range,
+                                              perm_idx_t **obs_map_out, size_t *n_filtered_out)
+{
+    const ST_int marker = SF_nvars();
+    if (marker < 1 || SF_var_is_string(marker))
+        return STATA_ERR_INVALID_INPUT;
+
+    const size_t nblocks = (n_range + IO_MARKER_BLOCK_ROWS - 1) / IO_MARKER_BLOCK_ROWS;
+    unsigned char *selected = (unsigned char *)malloc(n_range);
+    size_t *offset = (size_t *)calloc(nblocks + 1, sizeof(size_t));
+    if (selected == NULL || offset == NULL)
+    {
+        free(selected);
+        free(offset);
+        return STATA_ERR_MEMORY;
+    }
+
+    atomic_int error = 0;
+    const ST_IIIDp read_fn = IO_VDATA_FN;
+    #pragma omp parallel for schedule(static) if (n_range >= MIN_OBS_PER_THREAD * 2)
+    for (size_t b = 0; b < nblocks; b++)
+    {
+        const size_t i0 = b * IO_MARKER_BLOCK_ROWS;
+        const size_t i1 = n_range - i0 < IO_MARKER_BLOCK_ROWS ? n_range : i0 + IO_MARKER_BLOCK_ROWS;
+        size_t count = 0;
+        for (size_t i = i0; i < i1; i++)
+        {
+            double value = 0;
+            int io_rc = read_fn(marker, obs1 + (ST_int)i, &value);
+            if (io_rc)
+            {
+                ctools_io_record_io_error(&error, ctools_spi_status(io_rc, STATA_ERR_STATA_READ));
+                value = 0;
+            }
+            selected[i] = value != 0;
+            count += selected[i];
+        }
+        offset[b + 1] = count;
+    }
+    stata_retcode rc = (stata_retcode)atomic_load(&error);
+    for (size_t b = 0; b < nblocks; b++)
+        offset[b + 1] += offset[b];
+    const size_t n_filtered = offset[nblocks];
+
+    perm_idx_t *obs_map = NULL;
+    if (rc == STATA_OK && n_filtered > 0)
+    {
+        obs_map = (perm_idx_t *)ctools_safe_cacheline_alloc2(n_filtered, sizeof(perm_idx_t));
+        if (obs_map == NULL)
+            rc = STATA_ERR_MEMORY;
+    }
+    if (obs_map != NULL)
+    {
+        #pragma omp parallel for schedule(static) if (n_range >= MIN_OBS_PER_THREAD * 2)
+        for (size_t b = 0; b < nblocks; b++)
+        {
+            const size_t i0 = b * IO_MARKER_BLOCK_ROWS;
+            const size_t i1 = n_range - i0 < IO_MARKER_BLOCK_ROWS ? n_range : i0 + IO_MARKER_BLOCK_ROWS;
+            size_t idx = offset[b];
+            for (size_t i = i0; i < i1; i++)
+                if (selected[i])
+                    obs_map[idx++] = (perm_idx_t)(obs1 + (ST_int)i);
+        }
+    }
+    free(selected);
+    free(offset);
+    *obs_map_out = obs_map;
+    *n_filtered_out = rc == STATA_OK ? n_filtered : 0;
+    return rc;
+}
+
 stata_retcode ctools_io_build_obs_map(size_t obs_start, size_t obs_end, int flags,
                                       perm_idx_t **obs_map_out, size_t *n_filtered_out,
                                       size_t *n_range_out, int *was_filtered_out)
@@ -53,6 +131,19 @@ stata_retcode ctools_io_build_obs_map(size_t obs_start, size_t obs_end, int flag
         *n_filtered_out = n_filtered;
         *n_range_out = n_range;
         *was_filtered_out = 0;
+        return STATA_OK;
+    }
+
+    /* Sample marker in place of the if condition */
+    if (flags & CTOOLS_LOAD_MARKER)
+    {
+        stata_retcode rc = ctools_io_marker_obs_map(obs1, n_range, &obs_map, &n_filtered);
+        if (rc != STATA_OK)
+            return rc;
+        *obs_map_out = obs_map;
+        *n_filtered_out = n_filtered;
+        *n_range_out = n_range;
+        *was_filtered_out = n_filtered != n_range;
         return STATA_OK;
     }
 
@@ -227,10 +318,12 @@ stata_retcode ctools_io_plan_load(ctools_load_plan *plan, int *var_indices, size
     perm_idx_t *obs_map = NULL;
     int was_filtered = 0;
     int *auto_indices = NULL, *auto_str_widths = NULL;
-    /* "Load all variables" mode */
+    /* "Load all variables" mode, less a sample marker */
     if (var_indices == NULL)
     {
         nvars = (size_t)SF_nvars();
+        if ((flags & (CTOOLS_LOAD_MARKER | CTOOLS_LOAD_SKIP_IF)) == CTOOLS_LOAD_MARKER && nvars > 0)
+            nvars--;
         if (nvars == 0)
         {
             return STATA_OK;

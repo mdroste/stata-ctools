@@ -1,4 +1,5 @@
-*! Absorbed effects of creghdfe and civreghdfe; maintained in package/ado.
+*! version 1.1.0 20261016 github.com/mdroste/stata-ctools
+*! Absorbed effects of creghdfe and civreghdfe.
 * _ctools_hdfe_absorb terms, touse(varname) cmd(name)
 *
 * Each term of absorb() is a variable list (abbreviations, wildcards and

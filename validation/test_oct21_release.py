@@ -36,7 +36,7 @@ def workflow_contract():
     assert len(paths) == 2
     for block in paths:
         patterns = re.findall(r"'([^']+)'", block)
-        for name in ('package/ado/new.ado', 'package/help/cimport.sthlp', 'package/metadata/ctools.pkg'):
+        for name in ('build/new.ado', 'build/cimport.sthlp', 'build/ctools.pkg'):
             assert any(fnmatch.fnmatchcase(name, pattern) for pattern in patterns)
     assert 'platform: [mac_arm, mac_x86, windows, linux]' in source
     assert 'name: ctools_${{ matrix.platform }}' in source
@@ -56,7 +56,7 @@ def packages():
         assert not check_package(directory, integrity=True)
         info_path = directory/'BUILD_INFO.json'
         original = info_path.read_bytes()
-        for name in ('ctools_mac_arm.plugin', 'cpplmhdfe_p.ado'):
+        for name in ('ctools_mac_arm.plugin', 'cppmlhdfe_p.ado'):
             payload_path = directory/name
             payload = payload_path.read_bytes()
             payload_path.write_bytes(b'corrupt or truncated payload')
@@ -68,7 +68,7 @@ def packages():
             elif mutation == 'invalid': info_path.write_text('null')
             else:
                 if mutation == 'scope': info['platforms'] = ['linux']
-                if mutation == 'inventory': info['sha256'].pop('cpplmhdfe_p.ado')
+                if mutation == 'inventory': info['sha256'].pop('cppmlhdfe_p.ado')
                 if mutation == 'digest': info['sha256']['ctools.pkg'] = '0' * 64
                 if mutation == 'manifest': (directory/'ctools.pkg').write_text((directory/'ctools.pkg').read_text()+'d changed\n')
                 info_path.write_text(json.dumps(info))

@@ -753,7 +753,8 @@ ST_retcode cexport_main(const char *args)
     g_ctx.obs1 = (size_t)SF_in1();
     nobs = SF_in2() - SF_in1() + 1;
     g_ctx.nobs_loaded = nobs;
-    nvars = SF_nvars();
+    nvars = (size_t)SF_nvars();
+    if (g_ctx.touse && nvars > 0) nvars--; /* the sample marker is not exported */
 
     if (nvars == 0) {
         SF_error("cexport: no variables to export\n");
@@ -800,9 +801,12 @@ ST_retcode cexport_main(const char *args)
     g_ctx.stream = g_ctx.io_backend != CEXPORT_IO_MMAP && !longtext;
 
     ctools_filtered_data_init(&g_ctx.filtered);
-    rc = g_ctx.stream ? ctools_data_select(&g_ctx.filtered, 0, 0, CTOOLS_LOAD_CHECK_IF)
-       : longtext ? ctools_load_text_data(&g_ctx.filtered, SF_nvars(), (ctools_text_policy){0, 0})
-                  : ctools_data_load(&g_ctx.filtered, NULL, 0, 0, 0, CTOOLS_LOAD_CHECK_IF | CTOOLS_LOAD_NO_SORT_ORDER);
+    const int selection = g_ctx.skip_if ? CTOOLS_LOAD_SKIP_IF
+                        : g_ctx.touse ? CTOOLS_LOAD_MARKER : CTOOLS_LOAD_CHECK_IF;
+    rc = g_ctx.stream ? ctools_data_select(&g_ctx.filtered, 0, 0, selection)
+       : longtext ? ctools_load_text_data(&g_ctx.filtered, (ST_int)nvars,
+                                          (ctools_text_policy){.select_flags = selection})
+                  : ctools_data_load(&g_ctx.filtered, NULL, 0, 0, 0, selection | CTOOLS_LOAD_NO_SORT_ORDER);
     if (rc != STATA_OK) {
         snprintf(msg, sizeof(msg), "cexport: failed to load data (error %d)\n", rc);
         SF_error(msg);

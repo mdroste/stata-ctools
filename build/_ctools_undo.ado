@@ -1,5 +1,5 @@
+*! version 1.1.0 20261016 github.com/mdroste/stata-ctools
 *! Exact undo of a ctools wrapper's changes without a dataset snapshot.
-*! Maintained in package/ado.
 * The wrappers that use it only add observations and variables at the end of
 * the dataset, add value labels and _dta characteristics or notes, change
 * variable labels they name, and lose the sort marker; the plugin restores any

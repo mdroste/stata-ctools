@@ -4,6 +4,7 @@
 #include "formats/ctools_output.h"
 #include "formats/excel_address.h"
 #include "ctools_config.h"
+#include "ctools_data_io.h"
 #include "ctools_runtime.h"
 #include "ctools_types.h"
 #include "vendor/readstat/readstat.h"
@@ -51,6 +52,28 @@ typedef struct
     FILE *fp;
     readstat_off_t begin, end, pos;
 } cio_xport_view;
+/* Observations an export writes, resolved once for all of its passes. The
+ * selection token is "touse" (a sample marker follows the exported variables),
+ * "skipif" (every observation in range) or empty (the plugin call's if). */
+typedef struct
+{
+    ctools_filtered_data marked; /* "touse": the marker's observations */
+    perm_idx_t *checked;         /* plain if: observations SF_ifobs selects */
+    const perm_idx_t *map;       /* NULL: the range from first */
+    size_t n;
+    int first, marker;
+} cio_rows;
+static inline int cio_row(const cio_rows *rows, size_t r)
+{
+    return rows->map ? (int)rows->map[r] : rows->first + (int)r;
+}
+static inline int cio_export_nvar(const char *selection)
+{
+    return SF_nvars() - !strcmp(selection, "touse");
+}
+int cio_export_rows(cio_rows *rows, const char *selection);
+void cio_rows_free(cio_rows *rows);
+int cio_local_number(const char *key, size_t v);
 
 uint32_t cio_shp_be32(const unsigned char *p);
 void cio_shp_putbe32(unsigned char *p, uint32_t v);
@@ -118,14 +141,14 @@ int cio_read_xpf(cio_dataset *dataset, const char *path);
 int cio_scan(cio_dataset *dataset, const char *kind);
 ssize_t cio_write_cb(const void *data, size_t len, void *ctx);
 int cio_xport_names(int nvar, char (*names)[301], char (*sets)[301], int rename);
-int cio_do_export(const char *kind);
+int cio_do_export(const char *kind, const char *selection);
 unsigned cio_dbf_u16(const unsigned char *p);
 uint32_t cio_dbf_u32(const unsigned char *p);
 void cio_dbf_p16(unsigned char *p, unsigned v);
 void cio_dbf_p32(unsigned char *p, uint32_t v);
 int cio_scan_dbf(cio_dataset *dataset, const char *path);
 void cio_dbf_number(double x, int width, char *out, size_t cap);
-int cio_export_dbf(void);
+int cio_export_dbf(const char *selection);
 const char *cio_storage(cio_dataset *dataset, cio_column *c, char *out, size_t len);
 int cio_column_info(cio_dataset *dataset, int index);
 int cio_label_info(cio_dataset *dataset, int index);

@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.0.1 07Feb2026}{...}
+{* *! version 1.1.0 20261016}{...}
 {viewerjumpto "Syntax" "csample##syntax"}{...}
 {viewerjumpto "Description" "csample##description"}{...}
 {viewerjumpto "Options" "csample##options"}{...}
@@ -31,7 +31,7 @@
 {synopthdr}
 {synoptline}
 {syntab:Main}
-{synopt:{opt count(#)}}draw exactly {it:#} observations{p_end}
+{synopt:{opt count(#)}}draw up to {it:#} observations{p_end}
 {synopt:{opt by(varlist)}}sample within groups defined by {it:varlist}{p_end}
 {synoptline}
 {syntab:Advanced}
@@ -44,21 +44,20 @@
 {title:Description}
 
 {pstd}
-{cmd:csample} is a high-performance drop-in replacement for Stata's {help sample:sample}
-command. It draws a random sample without replacement from the dataset in memory,
-dropping observations not selected.
+{cmd:csample} draws a random sample without replacement. Within the observations
+selected by {cmd:if} and {cmd:in}, it drops those not drawn. Observations outside
+that selection remain in the dataset.
 
 {pstd}
-{cmd:csample} {it:#} draws a {it:#}% pseudorandom sample of the data, where
-0 <= {it:#} <= 100. Observations not in the sample are dropped.
+The positional {it:#} specifies a percentage from 0 to 100. The number drawn
+is rounded to the nearest integer, separately within each {opt by()} group.
+Use {opt count(#)} to specify a positive integer count instead. If a group has
+fewer than {it:#} observations, all its observations are kept.
 
 {pstd}
-{cmd:csample, count(}{it:#}{cmd:)} draws a sample of {it:#} observations.
-When combined with {opt by()}, {it:#} observations are drawn from each group.
-
-{pstd}
-{cmd:csample} respects Stata's {help set seed:set seed} for reproducibility.
-Setting the same seed before calling {cmd:csample} will produce identical samples.
+Use {help set seed} to reproduce a draw with the same data, observation order,
+and options. {cmd:csample} and {cmd:sample} use different random-number generators
+and need not select the same observations from the same seed.
 
 
 {marker options}{...}
@@ -69,7 +68,7 @@ Setting the same seed before calling {cmd:csample} will produce identical sample
 {phang}
 {opt count(#)} specifies the number of observations to draw. This may not be
 combined with the {it:#} percent syntax. When used with {opt by()}, {it:#}
-observations are drawn from each group.
+observations are drawn from each group, or all observations if the group is smaller.
 
 {phang}
 {opt by(varlist)} specifies that sampling should be performed separately within
@@ -79,25 +78,21 @@ percentage or count of observations sampled.
 {dlgtab:Advanced}
 
 {phang}
-{opt threads(#)} specifies the maximum number of threads to use for parallel
-operations. By default, {cmd:csample} uses the {help ctools##threads:ctools thread setting}, which is at most 16 threads unless you change it.
+{opt threads(#)} sets the maximum number of threads, from 1 to 256.
+The default follows the {help ctools##threads:ctools thread setting}.
 
 {phang}
-{opt verbose} displays detailed progress information and timing breakdown.
+{opt verbose} displays progress and elapsed times.
 
 
 {marker remarks}{...}
 {title:Remarks}
 
 {pstd}
-{cmd:csample} uses a high-quality xoshiro256** pseudorandom number generator
-and Fisher-Yates partial shuffle algorithm for statistically reliable sampling.
-
-{pstd}
-When using {opt by()}, groups are processed in parallel for improved performance.
-
-{pstd}
-Unlike {help sample:sample}, {cmd:csample} does not support frequency weights.
+Sampling uses the xoshiro256** generator, seeded from Stata's random-number
+state, and a partial Fisher-Yates shuffle. Numeric and string grouping variables
+are allowed; missing group values form groups. The retained observations keep
+their original order. Weights are not accepted.
 
 
 {marker examples}{...}
@@ -134,8 +129,9 @@ Unlike {help sample:sample}, {cmd:csample} does not support frequency weights.
 
 {synoptset 24 tabbed}{...}
 {p2col 5 24 28 2: Scalars}{p_end}
-{synopt:{cmd:_csample_kept}}number of observations kept{p_end}
-{synopt:{cmd:_csample_dropped}}number of observations dropped{p_end}
+{synopt:{cmd:_csample_nobs}}number of observations eligible for sampling{p_end}
+{synopt:{cmd:_csample_kept}}number of eligible observations kept{p_end}
+{synopt:{cmd:_csample_dropped}}number of eligible observations dropped{p_end}
 {synopt:{cmd:_csample_ngroups}}number of groups{p_end}
 {synopt:{cmd:_csample_threads}}number of threads used{p_end}
 

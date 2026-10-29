@@ -54,6 +54,8 @@ static void cbinscatter_config_init(BinscatterConfig *config) {
     config->method = 0;  /* 0=classic, 1=binsreg */
     config->maxiter = 10000;
     config->tolerance = 1e-8;
+    config->touse_mode = 0;
+    config->check_weights = 0;
 }
 
 static void cbinscatter_results_init(BinscatterResults *results) {
@@ -136,6 +138,12 @@ static ST_retcode read_config(BinscatterConfig *config) {
     if (SF_scal_use("__cbinscatter_tolerance", &val) == 0) {
         config->tolerance = val;
     }
+    if (SF_scal_use("__cbinscatter_touse_mode", &val) == 0) {
+        config->touse_mode = (ST_int)val;
+    }
+    if (SF_scal_use("__cbinscatter_check_weights", &val) == 0) {
+        config->check_weights = (ST_int)val;
+    }
 
     return CBINSCATTER_OK;
 }
@@ -175,6 +183,7 @@ static ST_retcode load_data(
     num_vars_to_load += config->has_absorb ? config->num_absorb : 0;
     num_vars_to_load += config->has_by ? 1 : 0;
     num_vars_to_load += config->has_weights ? 1 : 0;
+    num_vars_to_load += (config->touse_mode == 1) ? 1 : 0;
 
     /* Build array of variable indices for all variables */
     int *var_indices = (int *)ctools_safe_malloc2(num_vars_to_load, sizeof(int));
@@ -217,12 +226,23 @@ static ST_retcode load_data(
         var_indices[vidx++] = w_var;
     }
 
-    /* Load all variables with if/in filtering using ctools_data_load().
-     * This eliminates the need to call SF_ifobs() during the validation loop. */
+    /* The sample marker follows every other variable */
+    int touse_data_idx = -1;
+    if (config->touse_mode == 1) {
+        touse_data_idx = vidx;
+        var_indices[vidx] = vidx + 1;
+        vidx++;
+    }
+
+    /* Load all variables. With a marker variable (or no if/in) the rows are
+     * selected below rather than by SF_ifobs(), which costs one serial SPI
+     * call per observation. */
     ctools_filtered_data filtered;
     ctools_filtered_data_init(&filtered);
+    int load_flags = CTOOLS_LOAD_NO_SORT_ORDER |
+                     (config->touse_mode > 0 ? CTOOLS_LOAD_SKIP_IF : CTOOLS_LOAD_CHECK_IF);
     stata_retcode load_rc = ctools_data_load(&filtered, var_indices,
-                                                       num_vars_to_load, 0, 0, CTOOLS_LOAD_CHECK_IF | CTOOLS_LOAD_NO_SORT_ORDER);
+                                                       num_vars_to_load, 0, 0, load_flags);
     free(var_indices);
 
     if (load_rc != STATA_OK) {
@@ -234,6 +254,11 @@ static ST_retcode load_data(
 
     if (N == 0) {
         ctools_filtered_data_free(&filtered);
+        if (config->touse_mode > 0) {
+            SF_error("no observations\n");
+            SF_scal_save("__cbinscatter_reported", 1.0);
+            return 3301;
+        }
         *y_out = NULL;
         *x_out = NULL;
         *controls_out = NULL;
@@ -328,18 +353,20 @@ static ST_retcode load_data(
         memcpy(weights, filtered.data.vars[weights_data_idx].data.dbl, N * sizeof(ST_double));
     }
 
-    /* Done with filtered data */
-    ctools_filtered_data_free(&filtered);
-
     /* Allocate valid_idx array */
     valid_idx = (ST_int *)ctools_safe_malloc2((size_t)N, sizeof(ST_int));
     if (!valid_idx) {
         free(y); free(x); free(controls); free(fe_vars); free(fe_codes); free(by_groups); free(weights);
+        ctools_filtered_data_free(&filtered);
         return CBINSCATTER_ERR_MEMORY;
     }
 
     /* Build valid index array - check for missing values in variables.
-     * Note: SF_ifobs is already handled by ctools_data_load(). */
+     * The requested sample is the loaded rows (if condition), the rows
+     * marked by the marker variable, or every row with a usable weight. */
+    const ST_double *touse = touse_data_idx >= 0 ? filtered.data.vars[touse_data_idx].data.dbl : NULL;
+    int64_t N_requested = 0;
+    int negative_weight = 0, fractional_fweight = 0;
     N_valid = 0;
     {
         /* Flags first, one column at a time over blocks of rows (sequential
@@ -350,7 +377,8 @@ static ST_retcode load_data(
         const ST_int block = 16384;
         const ST_int num_blocks = N / block + (N % block != 0); /* no N + block overflow */
         ST_int blk;
-        #pragma omp parallel for schedule(static) private(j) if (N > 100000)
+        #pragma omp parallel for schedule(static) private(j) \
+            reduction(| : negative_weight, fractional_fweight) reduction(+ : N_requested) if (N > 100000)
         for (blk = 0; blk < num_blocks; blk++) {
             const ST_int i0 = blk * block;
             const ST_int i1 = (N - i0 < block) ? N : i0 + block;
@@ -376,10 +404,44 @@ static ST_retcode load_data(
             if (weights) {
                 for (r = i0; r < i1; r++) if (!(weights[r] < missval) || weights[r] <= 0) valid_idx[r] = 0;
             }
+            /* Requested rows; their weights must be positive (missing and zero
+             * weights are excluded, as marksample does) */
+            int64_t requested = 0;
+            for (r = i0; r < i1; r++) {
+                int req = touse ? (touse[r] != 0 && touse[r] < missval)
+                        : (config->touse_mode == 2 && weights) ? (weights[r] < missval && weights[r] != 0)
+                        : 1;
+                if (!req) valid_idx[r] = 0;
+                requested += req;
+                if (req && config->check_weights && weights[r] < missval) {
+                    if (weights[r] < 0) negative_weight |= 1;
+                    if (config->weight_type == 2 && weights[r] != floor(weights[r])) fractional_fweight |= 1;
+                }
+            }
+            N_requested += requested;
         }
         for (i = 0; i < N; i++) {
             if (valid_idx[i]) valid_idx[N_valid++] = i;
         }
+    }
+
+    /* Done with filtered data */
+    ctools_filtered_data_free(&filtered);
+
+    if (negative_weight || fractional_fweight || N_requested == 0) {
+        free(y); free(x); free(controls); free(fe_vars); free(fe_codes); free(by_groups); free(weights);
+        free(valid_idx);
+        SF_scal_save("__cbinscatter_reported", 1.0);
+        if (negative_weight) {
+            SF_error("ctools: weights must be positive\n");
+            return 198;
+        }
+        if (fractional_fweight) {
+            SF_error("frequency weights must be integers\n");
+            return 401;
+        }
+        SF_error("no observations\n");
+        return 3301;
     }
 
     /* Compact data using valid indices (streaming compaction).
@@ -444,7 +506,7 @@ static ST_retcode load_data(
     *fe_vars_out = fe_vars;
     *by_groups_out = by_groups;
     *weights_out = weights;
-    *N_out = N;
+    *N_out = (ST_int)N_requested;
     *N_valid_out = N_valid;
 
     return CBINSCATTER_OK;
@@ -498,6 +560,88 @@ static ST_retcode store_results(
 }
 
 /* ========================================================================
+ * Rows in by-group order
+ * ======================================================================== */
+
+/*
+ * Reorder the N rows of y, x, *w, the K control columns, the F FE columns
+ * and by (each column N long) by group: groups 1..G in order, rows with any
+ * other id last, row order kept within each group. Blocks of rows are counted
+ * and then scattered in parallel. start[g] (g = 0..G) is group g + 1's first
+ * row and start[G] the end of the groups.
+ */
+static ST_retcode partition_by_group(ST_double **y, ST_double **x, ST_double **w,
+                                     ST_double **ctrl, ST_int K, ST_int **fe, ST_int F,
+                                     ST_int **by, ST_int N, ST_int G, ST_int *start)
+{
+    const ST_int num_blocks = cbs_num_blocks(N);
+    const ST_int nb = G + 1;  /* bucket G: ids outside 1..G */
+    ST_int *offsets = (ST_int *)calloc((size_t)num_blocks * nb, sizeof(ST_int));
+    ST_double *ny = (ST_double *)ctools_safe_malloc2((size_t)N, sizeof(ST_double));
+    ST_double *nx = (ST_double *)ctools_safe_malloc2((size_t)N, sizeof(ST_double));
+    ST_double *nw = *w ? (ST_double *)ctools_safe_malloc2((size_t)N, sizeof(ST_double)) : NULL;
+    ST_double *nc = (*ctrl && K > 0) ? (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)K, sizeof(ST_double)) : NULL;
+    ST_int *nf = (*fe && F > 0) ? (ST_int *)ctools_safe_malloc3((size_t)N, (size_t)F, sizeof(ST_int)) : NULL;
+    ST_int *nby = (ST_int *)ctools_safe_malloc2((size_t)N, sizeof(ST_int));
+    if (!offsets || !ny || !nx || (*w && !nw) || (*ctrl && K > 0 && !nc) ||
+        (*fe && F > 0 && !nf) || !nby) {
+        free(offsets); free(ny); free(nx); free(nw); free(nc); free(nf); free(nby);
+        return CBINSCATTER_ERR_MEMORY;
+    }
+    const ST_int *b_in = *by;
+    ST_int blk;
+
+    #pragma omp parallel for schedule(static) if (num_blocks > 1)
+    for (blk = 0; blk < num_blocks; blk++) {
+        ST_int i0, i1;
+        cbs_block_range(blk, N, &i0, &i1);
+        ST_int *cnt = offsets + (size_t)blk * nb;
+        for (ST_int i = i0; i < i1; i++) {
+            ST_int b = b_in[i] - 1;
+            cnt[(b >= 0 && b < G) ? b : G]++;
+        }
+    }
+    /* Bucket by bucket, blocks in order: each block's first row per bucket */
+    ST_int run = 0;
+    for (ST_int b = 0; b < nb; b++) {
+        start[b] = run;
+        for (blk = 0; blk < num_blocks; blk++) {
+            ST_int c = offsets[(size_t)blk * nb + b];
+            offsets[(size_t)blk * nb + b] = run;
+            run += c;
+        }
+    }
+
+    const ST_double *y_in = *y, *x_in = *x, *w_in = *w, *c_in = *ctrl;
+    const ST_int *f_in = *fe;
+    #pragma omp parallel for schedule(static) if (num_blocks > 1)
+    for (blk = 0; blk < num_blocks; blk++) {
+        ST_int i0, i1;
+        cbs_block_range(blk, N, &i0, &i1);
+        ST_int *pos = offsets + (size_t)blk * nb;
+        for (ST_int i = i0; i < i1; i++) {
+            ST_int b = b_in[i] - 1;
+            ST_int at = pos[(b >= 0 && b < G) ? b : G]++;
+            ny[at] = y_in[i];
+            nx[at] = x_in[i];
+            if (nw) nw[at] = w_in[i];
+            for (ST_int k = 0; nc && k < K; k++) nc[(size_t)k * N + at] = c_in[(size_t)k * N + i];
+            for (ST_int k = 0; nf && k < F; k++) nf[(size_t)k * N + at] = f_in[(size_t)k * N + i];
+            nby[at] = b_in[i];
+        }
+    }
+
+    free(offsets);
+    free(*y); *y = ny;
+    free(*x); *x = nx;
+    if (nw) { free(*w); *w = nw; }
+    if (nc) { free(*ctrl); *ctrl = nc; }
+    if (nf) { free(*fe); *fe = nf; }
+    free(*by); *by = nby;
+    return CBINSCATTER_OK;
+}
+
+/* ========================================================================
  * Main Computation Function
  * ======================================================================== */
 
@@ -513,6 +657,7 @@ static ST_retcode do_compute_bins(void) {
     ST_int *by_groups = NULL;
     ST_double *weights = NULL;
     ST_int *group_sizes = NULL;
+    ST_int *group_start = NULL;
     ST_double *pooled_cutpoints = NULL;
     ST_int pooled_nq = 0;
     ST_int N, N_valid;
@@ -533,6 +678,9 @@ static ST_retcode do_compute_bins(void) {
     if (rc != CBINSCATTER_OK) goto cleanup;
 
     t_load = ctools_timer_seconds();
+
+    /* The requested sample, before incomplete observations are excluded */
+    SF_scal_save("__cbinscatter_N_touse", (ST_double)N);
 
     if (N_valid < 2) {
         SF_error("cbinscatter: insufficient valid observations\n");
@@ -691,6 +839,19 @@ static ST_retcode do_compute_bins(void) {
         group_sizes[0] = N_valid;
     }
 
+    /* With by(), each group becomes one contiguous range of rows */
+    if (config.has_by) {
+        group_start = (ST_int *)calloc((size_t)num_groups + 1, sizeof(ST_int));
+        if (!group_start) {
+            rc = CBINSCATTER_ERR_MEMORY;
+            goto cleanup;
+        }
+        rc = partition_by_group(&y, &x, &weights, &controls, config.num_controls,
+                                &fe_vars, config.num_absorb, &by_groups, N_valid,
+                                num_groups, group_start);
+        if (rc != CBINSCATTER_OK) goto cleanup;
+    }
+
     /* Binsreg method with controls/absorb fits each group's line jointly with
      * them (inside the loop); otherwise lines are fit after binning */
     int binsreg_joint_fit = (config.method == 1 &&
@@ -729,16 +890,13 @@ static ST_retcode do_compute_bins(void) {
             continue;
         }
 
-        /* Allocate and extract group data */
-        ST_double *y_group = (ST_double *)malloc(n_group * sizeof(ST_double));
-        ST_double *x_group = (ST_double *)malloc(n_group * sizeof(ST_double));
-        ST_double *w_group = NULL;
+        /* The group's rows (contiguous after partition_by_group) */
+        const ST_int first = config.has_by ? group_start[g] : 0;
+        ST_double *y_group = y + first;
+        ST_double *x_group = x + first;
+        ST_double *w_group = weights ? weights + first : NULL;
         ST_double *c_group = NULL;  /* Controls for this group */
         ST_int *fe_group = NULL;    /* FE vars for this group */
-
-        if (weights) {
-            w_group = (ST_double *)malloc(n_group * sizeof(ST_double));
-        }
 
         /* For binsreg method with controls or absorb, we need group controls/FE */
         int use_binsreg_ctrl = (config.method == 1 && config.has_controls && config.num_controls > 0);
@@ -753,31 +911,25 @@ static ST_retcode do_compute_bins(void) {
             fe_group = (ST_int *)ctools_safe_malloc3((size_t)n_group, (size_t)config.num_absorb, sizeof(ST_int));
         }
 
-        if (!y_group || !x_group || (weights && !w_group) ||
-            (use_binsreg_ctrl && config.has_controls && !c_group) ||
+        if ((use_binsreg_ctrl && config.has_controls && !c_group) ||
             (use_binsreg_hdfe && config.num_absorb > 0 && !fe_group)) {
-            free(y_group); free(x_group); free(w_group); free(c_group); free(fe_group);
+            free(c_group); free(fe_group);
             rc = CBINSCATTER_ERR_MEMORY;
             goto cleanup;
         }
 
-        ST_int j = 0;
-        for (ST_int i = 0; i < N_valid; i++) {
-            if (!config.has_by || by_groups[i] == g + 1) {
-                y_group[j] = y[i];
-                x_group[j] = x[i];
-                if (w_group) w_group[j] = weights[i];
-                if (c_group) {
-                    for (ST_int k = 0; k < config.num_controls; k++) {
-                        c_group[(size_t)k * n_group + j] = controls[(size_t)k * N_valid + i];
-                    }
-                }
-                if (fe_group) {
-                    for (ST_int k = 0; k < config.num_absorb; k++) {
-                        fe_group[(size_t)k * n_group + j] = fe_vars[(size_t)k * N_valid + i];
-                    }
-                }
-                j++;
+        /* The binsreg adjustments take the group's controls and FE columns
+         * contiguously */
+        if (c_group) {
+            for (ST_int k = 0; k < config.num_controls; k++) {
+                memcpy(&c_group[(size_t)k * n_group], &controls[(size_t)k * N_valid + first],
+                       (size_t)n_group * sizeof(ST_double));
+            }
+        }
+        if (fe_group) {
+            for (ST_int k = 0; k < config.num_absorb; k++) {
+                memcpy(&fe_group[(size_t)k * n_group], &fe_vars[(size_t)k * N_valid + first],
+                       (size_t)n_group * sizeof(ST_int));
             }
         }
 
@@ -786,7 +938,7 @@ static ST_retcode do_compute_bins(void) {
         if (use_binsreg_ctrl || use_binsreg_hdfe) {
             bin_ids = (ST_int *)malloc((size_t)n_group * sizeof(ST_int));
             if (!bin_ids) {
-                free(y_group); free(x_group); free(w_group); free(c_group); free(fe_group);
+                free(c_group); free(fe_group);
                 rc = CBINSCATTER_ERR_MEMORY;
                 goto cleanup;
             }
@@ -846,9 +998,6 @@ static ST_retcode do_compute_bins(void) {
                 rc = CBINSCATTER_OK;
         }
 
-        free(y_group);
-        free(x_group);
-        free(w_group);
         free(c_group);
         free(fe_group);
 
@@ -866,7 +1015,7 @@ static ST_retcode do_compute_bins(void) {
      * method with controls/absorb, as binscatter does) */
     t_fit = t_bins;
     if (config.linetype > 0 && !binsreg_joint_fit) {
-        rc = fit_all_groups(y, x, by_groups, weights, N_valid, &config, &results);
+        rc = fit_all_groups(y, x, group_start, weights, N_valid, &config, &results);
         if (rc != CBINSCATTER_OK) goto cleanup;
 
         t_fit = ctools_timer_seconds();
@@ -899,6 +1048,7 @@ cleanup:
     free(by_groups);
     free(weights);
     free(group_sizes);
+    free(group_start);
     free(pooled_cutpoints);
     cbinscatter_results_free(&results);
 

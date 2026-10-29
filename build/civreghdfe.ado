@@ -1,4 +1,4 @@
-*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools
+*! version 1.1.0 20261016 github.com/mdroste/stata-ctools
 
 program define civreghdfe, eclass
     version 14.1
@@ -851,6 +851,11 @@ program define civreghdfe, eclass
     local resid_idx : word count `plugin_vars'
     scalar __civreghdfe_resid_idx = `resid_idx'
 
+    * The sample marker goes last, in place of if `touse': the plugin reads
+    * it in parallel, where Stata answers an if one observation at a time
+    local plugin_vars `plugin_vars' `touse'
+    scalar __civreghdfe_touse = 1
+
     * Build threads option string
     local threads_code ""
     if `threads' > 0 {
@@ -862,7 +867,7 @@ program define civreghdfe, eclass
 
     * Call the C plugin
     quietly _ctools_clock __ct_lap99
-    capture noisily plugin call ctools_plugin `plugin_vars' if `touse', "civreghdfe `threads_code' iv_regression"
+    capture noisily plugin call ctools_plugin `plugin_vars', "civreghdfe `threads_code' iv_regression"
     if _rc {
         local __rc = _rc
         * A variable named in orthog()/endogtest()/redundant() was dropped
@@ -1039,15 +1044,16 @@ program define civreghdfe, eclass
 
     * Compute Wald F-statistic BEFORE posting (b' * V^{-1} * b / K)
     tempname Vinv b_col wald_temp wald_stat
-    tempname slope_b slope_V omitted
+    * Not `omitted': that local holds the omitted display option
+    tempname slope_b slope_V omit_flags
     _ms_omit_info `b_temp'
-    matrix `omitted' = r(omit)
+    matrix `omit_flags' = r(omit)
     local slope_indices
     local names : colnames `b_temp'
     local j = 0
     foreach name of local names {
         local ++j
-        if "`name'" != "_cons" & !`omitted'[1,`j'] local slope_indices `slope_indices' `j'
+        if "`name'" != "_cons" & !`omit_flags'[1,`j'] local slope_indices `slope_indices' `j'
     }
     local model_df = 0
     local F_wald = .

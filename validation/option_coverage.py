@@ -13,7 +13,7 @@ ROOT=Path(__file__).resolve().parents[1]
 
 def inventory(root=ROOT):
     found={}
-    for path in sorted((root/'package/ado').glob('c*.ado')):
+    for path in sorted((root/'build').glob('c*.ado')):
         text=re.sub(r'/\*.*?\*/','',path.read_text(),flags=re.S)
         text=re.sub(r'///[^\n]*\n\s*',' ',text)
         program=None
@@ -39,12 +39,12 @@ def inventory(root=ROOT):
         found[path.stem]=opts
     # Statistical-format dispatch options are composed in private adapters.
     for cmd,helper in [('cimport','_cio_import'),('cexport','_cio_export')]:
-        for line in (root/f'package/ado/{helper}.ado').read_text().splitlines():
+        for line in (root/f'build/{helper}.ado').read_text().splitlines():
             if 'local options' not in line: continue
             for token in re.findall(r'\b([A-Z][A-Za-z]*(?:\([^)]*\))?)',line):
                 word=token.split('(')[0]
                 if word!='CLEAR': found[cmd][word.lower()]=word
-    shp=(root/'package/ado/_cio_shp_export.ado').read_text()
+    shp=(root/'build/_cio_shp_export.ado').read_text()
     for line in shp.splitlines():
         if not re.match(r'\s*syntax\b',line): continue
         args=re.sub(r'\([^()]*\)','',line.split(',',1)[1])

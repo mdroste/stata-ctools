@@ -1,3 +1,4 @@
+*! version 1.1.0 20261016 github.com/mdroste/stata-ctools
 *! ctools output-name validation
 program define _ctools_newvars
     version 14.1

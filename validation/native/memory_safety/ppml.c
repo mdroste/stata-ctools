@@ -13,27 +13,27 @@ static ST_int obs(void) { return 12; }
 static ST_int nvars(void) { return 4 + clustered + weighted; }
 static ST_retcode scalar(char *k, double *v) {
     *v = 0;
-    if (!strcmp(k, "__cpplmhdfe_K"))
+    if (!strcmp(k, "__cppmlhdfe_K"))
         *v = 2;
-    else if (!strcmp(k, "__cpplmhdfe_G"))
+    else if (!strcmp(k, "__cppmlhdfe_G"))
         *v = 1;
-    else if (!strcmp(k, "__cpplmhdfe_maxiter"))
+    else if (!strcmp(k, "__cppmlhdfe_maxiter"))
         *v = 10000;
-    else if (!strcmp(k, "__cpplmhdfe_tolerance"))
+    else if (!strcmp(k, "__cppmlhdfe_tolerance"))
         *v = 1e-10;
-    else if (!strcmp(k, "__cpplmhdfe_standardize"))
+    else if (!strcmp(k, "__cppmlhdfe_standardize"))
         *v = 1;
-    else if (!strcmp(k, "__cpplmhdfe_vce_type"))
+    else if (!strcmp(k, "__cppmlhdfe_vce_type"))
         *v = clustered ? 2 : 0;
-    else if (!strcmp(k, "__cpplmhdfe_cluster_terms"))
+    else if (!strcmp(k, "__cppmlhdfe_cluster_terms"))
         *v = clustered;
-    else if (!strcmp(k, "__cpplmhdfe_irls_maxiter"))
+    else if (!strcmp(k, "__cppmlhdfe_irls_maxiter"))
         *v = 100;
-    else if (!strcmp(k, "__cpplmhdfe_irls_tol"))
+    else if (!strcmp(k, "__cppmlhdfe_irls_tol"))
         *v = 1e-8;
-    else if (!strcmp(k, "__cpplmhdfe_has_weights"))
+    else if (!strcmp(k, "__cppmlhdfe_has_weights"))
         *v = weighted;
-    else if (!strcmp(k, "__cpplmhdfe_weight_type"))
+    else if (!strcmp(k, "__cppmlhdfe_weight_type"))
         *v = 1;
     return 0;
 }
@@ -89,8 +89,8 @@ stata_retcode ctools_data_load(ctools_filtered_data *d, int *v, size_t n, size_t
     }
     return STATA_OK;
 }
-#include "cpplmhdfe/cpplmhdfe_irls.c"
-#include "cpplmhdfe/cpplmhdfe_separation.c"
+#include "cppmlhdfe/cppmlhdfe_irls.c"
+#include "cppmlhdfe/cppmlhdfe_separation.c"
 #include "creghdfe/creghdfe_hdfe.c"
 #include "hdfe/hdfe_solver.c"
 #include "hdfe/hdfe_remap.c"

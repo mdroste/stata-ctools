@@ -4,6 +4,7 @@ Stata batch exit status alone does not report do-file failure. Each driver must
 save _rc before logging/cleanup; a nonce rejects stale or interrupted output.
 """
 from pathlib import Path
+from contextlib import contextmanager
 import re
 import os
 import shlex
@@ -12,6 +13,29 @@ import tempfile
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@contextmanager
+def benchmark_data(out, *, keep=False):
+    """Share generated data across benchmark sessions, then remove it even on failure."""
+    if keep:
+        yield Path(out)
+    else:
+        with tempfile.TemporaryDirectory(prefix='data-', dir=out) as tmp:
+            yield Path(tmp)
+
+
+@contextmanager
+def io_workspace():
+    """Give legacy relative-path I/O tests disposable data, retaining external logs."""
+    with tempfile.TemporaryDirectory(prefix='ctools-io-') as tmp:
+        workspace = Path(tmp)
+        for name in ('build', 'validation'):
+            (workspace / name).symlink_to(ROOT / name, target_is_directory=True)
+        # cio_export_test shares these output paths across the option suites.
+        for name in ('native', 'result'):
+            (workspace / 'temp/io_allformats' / name).mkdir(parents=True)
+        yield workspace
 
 
 def stata_command(driver):

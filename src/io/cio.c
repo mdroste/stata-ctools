@@ -40,7 +40,10 @@ ST_retcode cio_main(const char *args) {
     return cio_label_info(&cache, atoi(kind));
   if (!strcmp(op, "load"))
     return cio_load(&cache);
-  if (!strcmp(op, "export"))
-    return cio_do_export(kind);
+  if (!strcmp(op, "export")) {
+    char selection[16] = "";
+    sscanf(args, "%*s %*s %15s", selection);
+    return cio_do_export(kind, selection);
+  }
   return 198;
 }

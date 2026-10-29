@@ -1,5 +1,5 @@
 """Offline differential tests for binary formats; invoke Stata through the stata shell alias."""
-from stata_runner import launch_driver
+from stata_runner import io_workspace, launch_driver
 import argparse
 import os
 import platform
@@ -91,17 +91,21 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--plugin-path', default='')
     args = parser.parse_args()
-    directory = ROOT / 'temp/io_allformats'
-    directory.mkdir(parents=True, exist_ok=True)
-    for sub in ('native', 'result'):
-        (directory / sub).mkdir(exist_ok=True)
-    shapefiles(directory)
-    codec_fixtures(directory)
-    failure_fixtures(directory)
-    log = directory / 'regressions.log'
-    log.unlink(missing_ok=True)
-    driver = directory / 'driver.do'
-    driver.write_text(f'''clear all
+    log = ROOT / 'temp/io_allformats/regressions.log'
+    log.parent.mkdir(parents=True, exist_ok=True)
+    if args.plugin_path:
+        args.plugin_path = str(Path(args.plugin_path).resolve())
+    with io_workspace() as workspace:
+        directory = workspace / 'temp/io_allformats'
+        directory.mkdir(parents=True, exist_ok=True)
+        for sub in ('native', 'result'):
+            (directory / sub).mkdir(exist_ok=True)
+        shapefiles(directory)
+        codec_fixtures(directory)
+        failure_fixtures(directory)
+        log.unlink(missing_ok=True)
+        driver = directory / 'driver.do'
+        driver.write_text(f'''clear all
 capture log close _all
 log using "{log}", text replace
 capture noisily do "{ROOT}/validation/validate_io_formats.do" "{args.plugin_path}"
@@ -110,7 +114,7 @@ di "IO_FORMATS_DRIVER_RC=`rc'"
 log close
 exit, clear
 ''')
-    launch_driver(driver, log)
+        launch_driver(driver, log, cwd=workspace)
     output = log.read_text()
     print('\n'.join(line for line in output.splitlines()
                     if re.match(r'^(PASS:|FAIL:|KNOWN GAP:|DETAIL:|REFERENCE FAILED:|IO_FORMATS_)', line)))

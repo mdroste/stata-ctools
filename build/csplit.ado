@@ -1,3 +1,4 @@
+*! version 1.1.0 20261016 github.com/mdroste/stata-ctools
 *! C-accelerated string splitting (ctools)
 program define csplit, rclass
     version 14.1

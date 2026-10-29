@@ -107,7 +107,7 @@ ppmlopts=['absorb(g h)','absorb(g h) vce(robust)','absorb(g h) cluster(g)',
     'absorb(g h) tolerance(1e-10) iterate(2000) irlstolerance(1e-10) irlsmaxiter(2000)',
     'absorb(g h) septolerance(1e-10) maxiterations(2000) itolerance(1e-10)']
 ppmlrefs=[o.replace('threads(2)','').replace('irlstolerance(1e-10)','').replace('irlsmaxiter(2000)','').replace('septolerance(1e-10)','').replace('maxiterations(2000)','maxiter(2000)').replace('iterate(2000)','maxiter(2000)').replace('itolerance(1e-10)','itol(1e-10)') for o in ppmlopts]
-estimate('cpplmhdfe','ppmlhdfe','count_y x z',ppmlopts,ppmlrefs,
+estimate('cppmlhdfe','ppmlhdfe','count_y x z',ppmlopts,ppmlrefs,
     ['absorb','vce','cluster','keepsingletons','noabsorb','exposure','offset','dofadjustments',
      'eform irr nolog timeit','verbose threads','tolerance iterate irlstolerance irlsmaxiter',
      'septolerance maxiterations itolerance'],predict='xb',scalars='df_m ll deviance')
@@ -226,7 +226,7 @@ for residual in ['residuals(saved_resid)', 'residuals2']:
              ['absorb(g) '+residual],['absorb(g) residuals(saved_resid)'],
              [residual.split('(')[0]],predict='residuals xbd')
 for dopt in ['d(saved_d)', 'd2']:
-    estimate('cpplmhdfe','ppmlhdfe','count_y x z',['absorb(g h) '+dopt],
+    estimate('cppmlhdfe','ppmlhdfe','count_y x z',['absorb(g h) '+dopt],
              ['absorb(g h) d(saved_d)'],[dopt.split('(')[0]],
              predict='xb xbd d mu eta stdp anscombe deviance pearson response scores working')
 # Solver controls must converge to the same independent native solution.
@@ -243,9 +243,9 @@ ppml_controls=['guess(simple)','guess(ols)','guess(variable w)','standardize_dat
     'separation(fe simplex relu mu)']
 for opt in ppml_controls:
     names=' '.join(__import__('re').findall(r'([a-z_]+)\(',opt))
-    case('cpplmhdfe','PPML control '+opt,names,
+    case('cppmlhdfe','PPML control '+opt,names,
          'ppmlhdfe count_y x z, absorb(g h) tol(1e-12) use_exact_solver(1) use_exact_partial(1) min_ok(3)',
-         'cpplmhdfe count_y x z, absorb(g h) tol(1e-12) '+opt,'estimate',predict='xb',scalars='df_m ll deviance')
+         'cppmlhdfe count_y x z, absorb(g h) tol(1e-12) '+opt,'estimate',predict='xb',scalars='df_m ll deviance')
 # Initialization must not change CUE's converged result.
 case('civreghdfe','CUE starting values','b0 cue',
      'ivreghdfe y x (endog=z z2), absorb(g) cue robust',

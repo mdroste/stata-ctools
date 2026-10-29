@@ -56,8 +56,14 @@ ST_retcode cgroup_main(const char *args)
     }
     const int out = ctools_parse_bool_option(args, "out");
     const int want_reps = ctools_parse_bool_option(args, "reps");
+    /* Without an if condition (skipif), or with a sample marker after the
+     * other variables in its place (touse), rows are selected without one
+     * SF_ifobs() call per observation. */
+    const int touse = ctools_parse_bool_option(args, "touse");
+    const int load_flags = ctools_parse_bool_option(args, "skipif") ? CTOOLS_LOAD_SKIP_IF
+                         : touse ? CTOOLS_LOAD_MARKER : CTOOLS_LOAD_CHECK_IF;
     const ST_int dest = (ST_int)nkeys + 1;
-    if (SF_nvars() != nkeys + (out ? 1 : 0) || (out && SF_var_is_string(dest))) {
+    if (SF_nvars() != nkeys + (out ? 1 : 0) + (touse ? 1 : 0) || (out && SF_var_is_string(dest))) {
         SF_error("group: expected the key variables and a numeric destination\n");
         return 198;
     }
@@ -68,8 +74,7 @@ ST_retcode cgroup_main(const char *args)
 
     ctools_filtered_data fd;
     ctools_filtered_data_init(&fd);
-    stata_retcode load_rc = ctools_data_load(&fd, key_vars, (size_t)nkeys, 0, 0,
-                                             CTOOLS_LOAD_CHECK_IF);
+    stata_retcode load_rc = ctools_data_load(&fd, key_vars, (size_t)nkeys, 0, 0, load_flags);
     if (load_rc != STATA_OK) {
         free(key_vars);
         ctools_filtered_data_free(&fd);

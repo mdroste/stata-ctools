@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.0.1 07Feb2026}{...}
+{* *! version 1.1.0 20261016}{...}
 {viewerjumpto "Syntax" "crangestat##syntax"}{...}
 {viewerjumpto "Description" "crangestat##description"}{...}
 {viewerjumpto "Options" "crangestat##options"}{...}
@@ -45,9 +45,9 @@ matching {cmd:rangestat}; for example, {cmd:(mean) price} creates {cmd:price_mea
 {synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
 {synopt:{opt v:erbose}}display timing breakdown{p_end}
 
-{syntab:Failure handling}
-{synopt:{opt snap:shot}}{help preserve} the whole dataset, as earlier versions did; written to disk above {cmd:c(max_preservemem)}{p_end}
-{synopt:{opt fast}}undo nothing; a failure or Break can leave the result variables behind{p_end}
+{syntab:Data recovery}
+{synopt:{opt snap:shot}}use {help preserve} to restore data after an error or interruption{p_end}
+{synopt:{opt fast}}skip data recovery after an error or interruption{p_end}
 {synoptline}
 
 
@@ -57,9 +57,8 @@ matching {cmd:rangestat}; for example, {cmd:(mean) price} creates {cmd:price_mea
 {pstd}
 {cmd:crangestat} calculates statistics for each observation using all observations
 where a numeric key variable is within the low and high bounds defined for the
-current observation. It is designed as a drop-in replacement for {cmd:rangestat} (v1.1.1) by Robert Picard, Nicholas J. Cox, and Roberto Ferrer, available from SSC,
-with significantly better performance through C acceleration and parallel
-processing.
+current observation. The result variables are added to the current dataset; observation order is
+preserved.
 
 {pstd}
 For each observation, {cmd:crangestat} finds all observations where:
@@ -86,7 +85,8 @@ This is particularly useful for:
 
 {phang}
 {opt interval(keyvar low high)} specifies the key variable and the interval
-bounds. The key variable must be numeric. For each observation, other
+bounds. The key variable must be numeric. Bounds must be numeric constants
+or {cmd:.}; variable bounds are not accepted. For each observation, other
 observations are included in the calculation if their key value falls within
 [current_key + low, current_key + high].
 
@@ -108,32 +108,25 @@ from its own calculation. This is useful for computing leave-one-out
 statistics like the mean of all {it:other} observations in the range.
 
 {phang}
-{opt threads(#)} specifies the maximum number of threads to use for parallel
-operations. By default, {cmd:crangestat} uses the {help ctools##threads:ctools thread setting}, which is at most 16 threads unless you change it.
+{opt threads(#)} sets the maximum number of threads, from 1 to 256.
+The default follows the {help ctools##threads:ctools thread setting}.
 
 {phang}
-{opt verbose} displays detailed progress information and timing breakdown.
+{opt verbose} displays progress and elapsed times.
 
-{dlgtab:Failure handling}
+{dlgtab:Data recovery}
 
 {pstd}
-By default a failed or interrupted {cmd:crangestat} leaves the data as they were
-without writing a snapshot of the dataset: it only adds its result variables,
-so after a failure or Break it drops them again and resets {cmd:c(changed)}.
+By default, the command removes new result variables after an error or
+interruption.
 
 {phang}
-{opt snapshot} restores the data after a failed or interrupted call from a
-{help preserve} snapshot of the whole dataset instead, as earlier versions of
-{cmd:crangestat} did. Stata keeps the snapshot in memory up to
-{cmd:c(max_preservemem)} (1 GB by default) and writes it to disk above that, so
-large datasets take longer and write the whole dataset once.
-{p_end}
+{opt snapshot} uses {help preserve} to copy the whole dataset for recovery.
+Stata may write this copy to disk when it exceeds {cmd:c(max_preservemem)}.
 
 {phang}
-{opt fast} undoes nothing: if the call fails after creating the result
-variables, or Break is pressed, the error is reported but the new variables
-stay in the data. {opt fast} may not be combined with {opt snapshot}.
-{p_end}
+{opt fast} skips recovery. An error or interruption can leave partially filled
+result variables. It cannot be combined with {opt snapshot}.
 
 
 {marker statistics}{...}
@@ -167,7 +160,7 @@ The following statistics are available:
 {p2col :{opt p95}}95th percentile{p_end}
 {p2col :{opt p99}}99th percentile{p_end}
 {p2col :{opt skewness}}skewness{p_end}
-{p2col :{opt kurtosis}}excess kurtosis{p_end}
+{p2col :{opt kurtosis}}kurtosis (fourth standardized moment; normal distribution = 3){p_end}
 {p2line}
 
 
@@ -175,26 +168,23 @@ The following statistics are available:
 {title:Remarks}
 
 {pstd}
-{cmd:crangestat} achieves high performance through several optimizations:
-
-{p 8 12 2}1. {bf:Sorted-window computation}: Data is sorted by the key variable,
-enabling efficient binary search to find observation windows in O(log n) time
-instead of O(n) linear search.{p_end}
-
-{p 8 12 2}2. {bf:Parallel processing}: Observations within each group are
-processed in parallel using OpenMP.{p_end}
-
-{p 8 12 2}3. {bf:Efficient memory access}: Cache-friendly data layout and
-SIMD-optimized operations for maximum throughput.{p_end}
+Each statistic specification accepts one numeric source variable. Repeat the
+parenthesized statistic for additional variables. Output names must be distinct
+new variable names. The command does not accept {cmd:if}, {cmd:in}, or weights.
 
 {pstd}
-Runtime depends on dataset shape, options, and hardware. Benchmark comparisons
-should record the date, CPU/OS, Stata/reference versions, options, and dimensions.
+Missing interval keys are excluded from all windows and receive missing
+results. Missing source values are excluded except for {opt first} and
+{opt last}. These two statistics use key order, with ties in original
+observation order. {opt excludeself} removes only the current observation,
+not other observations with the same key.
 
 {pstd}
-{bf:Missing values} are handled correctly: observations with missing key
-values are skipped, and missing values in source variables are excluded
-from statistics calculations.
+A window containing no observations produces missing results. In a nonempty
+window with no nonmissing source values after exclusions, {opt count} and
+{opt sum} return zero. Standard
+deviation and variance require two nonmissing values. Skewness and kurtosis
+use population moments and are missing when the variance is zero.
 
 
 {marker examples}{...}
@@ -226,7 +216,7 @@ from statistics calculations.
 {phang2}{cmd:. crangestat (mean) future_mean=invest, interval(year 0 2) by(company)}{p_end}
 
 {pstd}With verbose timing output:{p_end}
-{phang2}{cmd:. crangestat (mean) price_ma=price, interval(obs -5 5) verbose}{p_end}
+{phang2}{cmd:. crangestat (mean) invest_recent=invest, interval(year -5 0) by(company) verbose}{p_end}
 
 
 {marker results}{...}
@@ -250,23 +240,6 @@ following in global scalars:
 {synopt:{cmd:_crangestat_threads}}number of threads used{p_end}
 
 
-{title:Comparison with rangestat}
-
-{pstd}
-{cmd:crangestat} provides the same core functionality as {cmd:rangestat} with
-better performance:
-
-{p2colset 5 25 27 2}{...}
-{p2col :{it:Feature}}{it:crangestat}{space 6}{it:rangestat}{p_end}
-{p2line}
-{p2col :Parallel processing}Yes{space 10}No{p_end}
-{p2col :Window search}O(log n) binary{space 2}O(n) linear{p_end}
-{p2col :Multiple statistics}Yes{space 10}Yes{p_end}
-{p2col :By-group support}Yes{space 10}Yes{p_end}
-{p2col :excludeself}Yes{space 10}Yes{p_end}
-{p2line}
-
-
 {title:Author}
 
 {pstd}
@@ -279,8 +252,7 @@ Michael Droste{break}
 {pstd}
 This command is inspired by {cmd:rangestat} by Robert Picard, Nicholas J. Cox,
 and Roberto Ferrer. The original {cmd:rangestat} package is available from SSC:
-{browse "https://ideas.repec.org/c/boc/bocode/s458161.html"}. We thank the
-original authors for their excellent contribution to the Stata community.
+{browse "https://ideas.repec.org/c/boc/bocode/s458161.html"}.
 
 
 {title:Also see}
@@ -288,10 +260,4 @@ original authors for their excellent contribution to the Stata community.
 {psee}
 Online: {browse "https://ideas.repec.org/c/boc/bocode/s458161.html":rangestat} (if installed),
 {help summarize}, {help egen}, {help tsegen}, {help ctools}
-{p_end}
-
-{title:Validation and failure behavior}
-
-{pstd}
-Output targets must be distinct new variable names, including when a target aliases a source or interval key. Failed operations restore the dataset. Missing interval keys are excluded from the population used to compute statistics, including unbounded windows and excludeself, on both sides of the parallel execution threshold.
 {p_end}

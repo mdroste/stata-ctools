@@ -20,7 +20,8 @@
  * Parameters:
  *   y           - y values (full dataset)
  *   x           - x values (full dataset)
- *   by_groups   - by-group assignments (NULL if no by)
+ *   group_start - first row of each by-group and the end of the last
+ *                 (rows ordered by group); NULL if no by
  *   weights     - weights (NULL if unweighted)
  *   N           - total observations
  *   config      - binscatter configuration
@@ -32,7 +33,7 @@
 ST_retcode fit_all_groups(
     const ST_double *y,
     const ST_double *x,
-    const ST_int *by_groups,
+    const ST_int *group_start,   /* num_by_groups + 1 row offsets, NULL without by() */
     const ST_double *weights,
     ST_int N,
     const BinscatterConfig *config,

@@ -23,7 +23,7 @@ by the package and validation inventories.
 | `cbsample` | `CTOOLS_CMD_CBSAMPLE` | `cbsample_main` | `NULL` |
 | `crangestat` | `CTOOLS_CMD_CRANGESTAT` | `crangestat_main` | `NULL` |
 | `cpsmatch` | `CTOOLS_CMD_CPSMATCH` | `cpsmatch_main` | `NULL` |
-| `cpplmhdfe` | `CTOOLS_CMD_CPPLMHDFE` | `cpplmhdfe_main` | `cpplmhdfe_cleanup_state` |
+| `cppmlhdfe` | `CTOOLS_CMD_CPPMLHDFE` | `cppmlhdfe_main` | `cppmlhdfe_cleanup_state` |
 | `cipolate` | `CTOOLS_CMD_CIPOLATE` | `cipolate_main` | `NULL` |
 | `csplit` | `CTOOLS_CMD_CSPLIT` | `csplit_main` | `csplit_cleanup_cache` |
 | `crangejoin` | `CTOOLS_CMD_CRANGEJOIN` | `crangejoin_main` | `crangejoin_cleanup_cache` |

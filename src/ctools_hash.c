@@ -34,7 +34,9 @@ int ctools_str_hash_init(ctools_str_hash_table *ht, size_t initial_capacity)
 {
     if (!ht) return -1;
 
-    ht->capacity = initial_capacity;
+    /* capacity stays 0 until both allocations succeed: callers test it to
+       decide whether the table is initialised. */
+    ht->capacity = 0;
     ht->count = 0;
     ht->entries = calloc(initial_capacity, sizeof(ctools_str_hash_entry));
     if (!ht->entries) return -1;
@@ -47,6 +49,7 @@ int ctools_str_hash_init(ctools_str_hash_table *ht, size_t initial_capacity)
         return -1;
     }
 
+    ht->capacity = initial_capacity;
     return 0;
 }
 

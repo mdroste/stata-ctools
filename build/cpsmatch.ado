@@ -1,4 +1,4 @@
-*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools
+*! version 1.1.0 20261016 github.com/mdroste/stata-ctools
 
 program define cpsmatch, rclass sortpreserve
     version 14.1
@@ -193,7 +193,7 @@ program define cpsmatch, rclass sortpreserve
     quietly gen long _nn = .
 
     * Pass only the matching inputs and outputs in a fixed, one-based order.
-    local allvars "`depvar' _pscore _weight _id _support `outcome' _nn"
+    local allvars "`depvar' _pscore _weight _id _support `outcome' _nn _treated"
     local treat_idx = 1
     local pscore_idx = 2
     local weight_idx = 3
@@ -235,8 +235,10 @@ program define cpsmatch, rclass sortpreserve
     local args "`args' `nobs' `method' `neighbor' `caliper' `common_support'"
     local args "`args' `kernelcode' `bwidth' `with_replace' `handle_ties' `desc_order'"
 
-    * Call plugin with ALL variables (like cencode does)
-    plugin call ctools_plugin `allvars' if `touse', "cpsmatch `threads_code' `args'"
+    * Call plugin with ALL variables (like cencode does). The sample marker
+    * goes last, in place of if `touse': the plugin reads it in parallel,
+    * where Stata answers an if one observation at a time.
+    plugin call ctools_plugin `allvars' `touse', "cpsmatch `threads_code' `args' touse stats"
 
     if `__do_timing' {
         quietly _ctools_clock __ct_now
@@ -264,15 +266,14 @@ program define cpsmatch, rclass sortpreserve
     local att_t = .
 
     if "`outcome'" != "" {
-        * Calculate weighted mean difference
-        quietly summarize `outcome' if _treated == 1 & _support == 1
-        local y1_bar = r(mean)
-        local n1 = r(N)
-        local var1 = r(Var)
-
-        quietly summarize `outcome' if _treated == 0 & _support == 1 [aw=_weight]
-        local y0_bar = r(mean)
-        local n0 = r(N)
+        * C computes the sufficient statistics on the loaded matching sample.
+        * Keep scalar expressions and numeric-local expansion here so the
+        * existing ATT, inference and display rounding remain unchanged.
+        local y1_bar = scalar(_cpsmatch_y1)
+        local n1 = scalar(_cpsmatch_n1)
+        local var1 = scalar(_cpsmatch_var1)
+        local y0_bar = scalar(_cpsmatch_y0)
+        local n0 = scalar(_cpsmatch_n0)
 
         if `n1' > 0 & `n0' > 0 {
             local att = `y1_bar' - `y0_bar'
@@ -281,12 +282,8 @@ program define cpsmatch, rclass sortpreserve
             * with squared match-frequency weights for reused controls.
             * cpsmatch stores unused controls with zero weight; psmatch2
             * stores them as missing. Exclude both representations.
-            quietly summarize `outcome' if _treated == 0 & _weight > 0 & _weight < .
-            local var0 = r(Var)
-            tempvar weight_squared
-            quietly generate double `weight_squared' = _weight^2 if _treated == 0
-            quietly summarize `weight_squared', meanonly
-            local sum_weight_squared = r(sum)
+            local var0 = scalar(_cpsmatch_var0)
+            local sum_weight_squared = scalar(_cpsmatch_w2)
             local att_se = sqrt(`var1'/`n1' + `var0'*`sum_weight_squared'/`n1'^2)
             if `att_se' > 0 {
                 local att_t = `att' / `att_se'
@@ -301,19 +298,15 @@ program define cpsmatch, rclass sortpreserve
     * ATT results table (psmatch2 format)
     if "`outcome'" != "" & `att' != . {
         * Calculate unmatched difference
-        quietly summarize `outcome' if _treated == 1, meanonly
-        local y1_unmatched = r(mean)
-        quietly summarize `outcome' if _treated == 0, meanonly
-        local y0_unmatched = r(mean)
+        local y1_unmatched = scalar(_cpsmatch_y1_u)
+        local y0_unmatched = scalar(_cpsmatch_y0_u)
         local unmatched_diff = `y1_unmatched' - `y0_unmatched'
 
         * Calculate unmatched SE and t-stat
-        quietly summarize `outcome' if _treated == 1
-        local var1_u = r(Var)
-        local n1_u = r(N)
-        quietly summarize `outcome' if _treated == 0
-        local var0_u = r(Var)
-        local n0_u = r(N)
+        local var1_u = scalar(_cpsmatch_var1_u)
+        local n1_u = scalar(_cpsmatch_n1_u)
+        local var0_u = scalar(_cpsmatch_var0_u)
+        local n0_u = scalar(_cpsmatch_n0_u)
         * psmatch2 displays the OLS SE from regressing outcome on treatment.
         * Use its pooled residual variance; a singleton group contributes zero SSE.
         local sse1_u = cond(`n1_u' > 1, (`n1_u'-1)*`var1_u', 0)
@@ -338,14 +331,10 @@ program define cpsmatch, rclass sortpreserve
 
     * Treatment assignment table (psmatch2 format)
     di as text ""
-    quietly count if _treated == 0 & _support == 1
-    local n_untreated_on = r(N)
-    quietly count if _treated == 0 & _support == 0
-    local n_untreated_off = r(N)
-    quietly count if _treated == 1 & _support == 1
-    local n_treated_on = r(N)
-    quietly count if _treated == 1 & _support == 0
-    local n_treated_off = r(N)
+    local n_untreated_on = scalar(_cpsmatch_n0_on)
+    local n_untreated_off = scalar(_cpsmatch_n0_off)
+    local n_treated_on = scalar(_cpsmatch_n1_on)
+    local n_treated_off = scalar(_cpsmatch_n1_off)
     local n_untreated_total = `n_untreated_on' + `n_untreated_off'
     local n_treated_total = `n_treated_on' + `n_treated_off'
     local n_on_total = `n_untreated_on' + `n_treated_on'
@@ -399,6 +388,7 @@ program define cpsmatch, rclass sortpreserve
         di as text "    Group separation:       " as result %8.4f _cpsmatch_time_setup " sec"
         di as text "    Sort/index build:       " as result %8.4f _cpsmatch_time_sort " sec"
         di as text "    Matching:               " as result %8.4f _cpsmatch_time_match " sec"
+        di as text "    Outcome statistics:     " as result %8.4f _cpsmatch_time_stats " sec"
         di as text "    Store results:          " as result %8.4f _cpsmatch_time_store " sec"
         di as text "  {hline 53}"
         di as text "    C plugin total:         " as result %8.4f _cpsmatch_time_total " sec"

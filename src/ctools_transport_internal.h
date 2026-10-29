@@ -51,8 +51,7 @@ enum
 };
 
 /* Row tiles benefit wide fixed-string transfers, but can slow narrow/numeric
- * data. Keep the column scheduler below this conservative width/size gate.
- * See docs/PERFORMANCE_TRANSPORT.md for the measured cases and tile sweep. */
+ * data. Keep the column scheduler below this conservative width/size gate. */
 #define IO_MIN_TILED_VARS 4
 #define IO_MIN_TILED_STRING_BYTES 256
 #define IO_LOAD_TILE_ROWS 512
@@ -60,7 +59,7 @@ enum
 
 /* Numeric tiling needs both enough columns and enough selected rows. Compact
  * byte columns and short, wide inputs favor column scheduling even with many
- * cells. See docs/PERFORMANCE_TRANSPORT_ADAPTIVE.md for the measured gate. */
+ * cells. Re-measure the tile sweep before changing these thresholds. */
 #define IO_NUMERIC_TILE_MIN_VARS 128
 #define IO_NUMERIC_TILE_MIN_ROWS 50000
 #define IO_SERIAL_BASE_WORK 16384

@@ -37,7 +37,7 @@ foreach command in "cqreg y x, absorb(g)" ///
     cf _all using `before'
     test_pass "unsupported interface rejected: `command'"
 }
-cpplmhdfe count_y x z, absorb(g) d(saved_d)
+cppmlhdfe count_y x z, absorb(g) d(saved_d)
 foreach option in cooksd hat likelihood {
     capture predict double unsupported, `option'
     assert _rc==198
@@ -201,7 +201,7 @@ test_pass "ctools version and environment identity"
    local net stub intercepts dispatch before invoking the update branch. */
 tempfile update_copy
 tempname source_file target_file
-file open `source_file' using "package/ado/ctools.ado", read text
+file open `source_file' using "build/ctools.ado", read text
 file open `target_file' using "`update_copy'", write text replace
 file read `source_file' line
 local substitutions=0

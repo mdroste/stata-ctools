@@ -1,4 +1,4 @@
-*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools
+*! version 1.1.0 20261016 github.com/mdroste/stata-ctools
 
 program define csample
     version 14.1
@@ -83,8 +83,11 @@ program define csample
     tempvar __keep
     quietly gen double `__keep' = 0
 
-    * Get ALL variables and find indices (cencode pattern)
+    * Get ALL variables and find indices (cencode pattern). The sample
+    * marker goes last, in place of an if: Stata answers an if one
+    * observation at a time, while the plugin reads the marker in parallel.
     unab allvars : *
+    local allvars : list allvars - touse
     local keep_idx = 0
     local idx = 1
     foreach v of local allvars {
@@ -121,6 +124,7 @@ program define csample
     local opts "`opts' seedhi=`seed_hi' seedlo=`seed_lo'"
     if "`verbose'" != "" local opts "`opts' verbose"
     if `"`if'"' == "" & `"`in'"' == "" local opts "`opts' skipif"
+    else local opts "`opts' touse"
 
     local threads_opt ""
     if `threads' > 0 {
@@ -137,7 +141,7 @@ program define csample
 
     * Call plugin with ALL variables (cencode pattern)
     * Pass keep_idx so C code knows which variable to write to
-    plugin call ctools_plugin `allvars' if `touse', ///
+    plugin call ctools_plugin `allvars' `touse', ///
         "csample `threads_opt' `keep_idx' `nby' `by_indices' `opts'"
 
     * Drop observations where __keep == 0

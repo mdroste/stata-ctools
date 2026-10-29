@@ -207,7 +207,19 @@ int cpsmatch_parse_options(const char *args, cpsmatch_options *opts)
         if (endptr != p)
         {
             opts->verbose = val;
+            p = endptr;
         }
+    }
+
+    /* Optional wire flags. The stored _treated column (stats) precedes the
+     * sample marker, which always remains the final plugin variable. */
+    while (*p)
+    {
+        while (*p == ' ') p++;
+        size_t length = strcspn(p, " ");
+        if (length == 5 && !strncmp(p, "touse", 5)) opts->touse = 1;
+        if (length == 5 && !strncmp(p, "stats", 5)) opts->statistics = 1;
+        p += length;
     }
 
     return 0;

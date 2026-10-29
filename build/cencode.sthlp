@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.0.1 07Feb2026}{...}
+{* *! version 1.1.0 20261016}{...}
 {viewerjumpto "Syntax" "cencode##syntax"}{...}
 {viewerjumpto "Description" "cencode##description"}{...}
 {viewerjumpto "Options" "cencode##options"}{...}
@@ -19,7 +19,7 @@
 {cmdab:cencode}
 {varlist}
 {ifin}
-{cmd:,} {opth gen:erate(newvarlist)} | {opt replace} [{it:options}]
+{cmd:,} {{opth gen:erate(newvarlist)} | {opt replace}} [{it:options}]
 
 {synoptset 24 tabbed}{...}
 {synopthdr}
@@ -40,31 +40,17 @@
 {title:Description}
 
 {pstd}
-{cmd:cencode} is a high-performance drop-in replacement for Stata's {help encode:encode}
-command. It converts string variables to numeric variables with corresponding
-value labels, using parallel algorithms for significantly improved performance
-on large datasets.
+{cmd:cencode} converts string variables to numeric codes with value labels.
+It accepts one or more source variables. Specify {opt generate()} with one new
+name per source, or {opt replace} to keep the source names.
 
 {pstd}
-{cmd:cencode} creates new variables of type {cmd:long} that contain
-integer codes for each unique string value in the source variables. Integer codes are assigned
-in alphabetical order of the string values (1, 2, 3, ...). Value labels with the
-same names as the new variables (or specified by {opt label()}) are created that map
-integer codes back to the original string values.
-
-{pstd}
-Missing values (empty strings and extended missing values) in the source variables become
-system missing values in the new variables.
-
-{pstd}
-{bf:ctools extensions:} Unlike Stata's built-in {cmd:encode}, {cmd:cencode} supports:
-
-{p 8 12 2}{bf:varlist support:} Encode multiple string variables in a single command.
-When using {opt generate()}, you must provide the same number of new variable names
-as there are variables in {it:varlist}.{p_end}
-
-{p 8 12 2}{bf:replace option:} Replace the original string variables with their
-encoded numeric versions instead of creating new variables.{p_end}
+For a new value label, nonempty strings are sorted in byte order and assigned
+codes 1, 2, 3, and so on. Existing labels retain their codes; new strings receive
+codes above the largest existing value. If several codes have the same label
+text, the smallest is used. Empty strings and observations outside
+{cmd:if}/{cmd:in} receive numeric missing values, including with {opt replace}.
+Strings such as {cmd:"."} and {cmd:".a"} are encoded as text.
 
 
 {marker options}{...}
@@ -91,91 +77,56 @@ You must specify either {opt generate()} or {opt replace}, but not both.
 {phang}
 {opth label(name)} specifies the name of the value label to be created or
 extended. If not specified, the value label is named the same as the new variable.
-When encoding multiple variables, this option applies to all variables (each
-variable will have a separate value label with this base name).
+With multiple source variables, {opt label()} uses and extends the same value
+label for each variable in order.
 
 {phang}
 {opt noextend} specifies that if the value label already exists, it should not
-be extended with additional values. By default, {cmd:cencode} adds new string
-values to existing labels.
+be extended with additional values. An unlabeled nonempty string causes an
+error. By default, new strings are added to the existing label.
 
 {phang}
-{opt threads(#)} specifies the maximum number of threads to use for parallel
-operations. By default, {cmd:cencode} uses the {help ctools##threads:ctools thread setting}, which is at most 16 threads unless you change it.
+{opt threads(#)} sets the maximum number of threads, from 1 to 256.
+The default follows the {help ctools##threads:ctools thread setting}.
 
 {phang}
-{opt verbose} displays detailed progress information and timing breakdown.
+{opt verbose} displays progress and elapsed times.
 
 
 {marker remarks}{...}
 {title:Remarks}
 
 {pstd}
-{cmd:cencode} uses a high-performance C plugin that parallelizes the encoding
-process. The algorithm works as follows:
-
-{p 8 12 2}1. {bf:Parallel coding:} Each thread reads its share of the observations
-directly from Stata and records each string in its own hash table. Only the
-distinct strings are kept in memory.{p_end}
-
-{p 8 12 2}2. {bf:Alphabetical numbering:} The threads' distinct strings are
-merged and sorted bytewise, and numbered 1, 2, 3, ... as {cmd:encode} does. When
-the value label already exists, strings it labels keep their values (the
-smallest, if a text appears more than once) and new strings are numbered after
-its largest value.{p_end}
-
-{p 8 12 2}3. {bf:Parallel writing:} Each thread writes the codes for its
-observations to the new variable.{p_end}
-
-{p 8 12 2}4. {bf:Value label creation:} The new string-to-integer mappings are
-passed to Stata to create or extend the value label.{p_end}
+Numeric output uses {cmd:long} storage on the C path. {cmd:encode} handles
+{cmd:strL} inputs and existing labels that require long text, extended missing
+codes, or codes outside the {cmd:long} range. The value-label limit is 65,536
+entries.
 
 {pstd}
-{cmd:encode} itself is used for strL variables, for {opt noextend} when a string
-is not already labeled, and for existing labels that map extended missing
-values, contain text longer than 2,045 bytes, or would need codes beyond the
-range of a {cmd:long}.{p_end}
-
-{pstd}
-For large datasets (millions of observations), {cmd:cencode} can be significantly
-faster than the native {cmd:encode} command.
-
-{pstd}
-{cmd:cencode} supports both regular string variables ({cmd:str#}) and long strings
-({cmd:strL}). The maximum number of unique values is 65,536.
+Output names must be distinct new variables. If a multi-variable conversion
+fails, the original variables and value labels are restored.
 
 
 {marker examples}{...}
 {title:Examples}
 
-{pstd}Basic encoding of a string variable:{p_end}
+{pstd}Encode a string variable and inspect its value label:{p_end}
 {phang2}{cmd:. sysuse auto, clear}{p_end}
 {phang2}{cmd:. cencode make, generate(make_code)}{p_end}
-
-{pstd}View the created variable and its labels:{p_end}
-{phang2}{cmd:. tabulate make_code}{p_end}
 {phang2}{cmd:. label list make_code}{p_end}
 
-{pstd}Encode with a custom label name:{p_end}
+{pstd}Use a custom value-label name:{p_end}
 {phang2}{cmd:. cencode make, generate(make_num) label(car_makes)}{p_end}
 
-{pstd}Encode with verbose timing output:{p_end}
-{phang2}{cmd:. cencode make, generate(make_code) verbose}{p_end}
-
-{pstd}Limit to 4 threads:{p_end}
-{phang2}{cmd:. cencode make, generate(make_code) threads(4)}{p_end}
-
-{pstd}Encode only for certain observations:{p_end}
+{pstd}Encode selected observations:{p_end}
 {phang2}{cmd:. cencode make if foreign == 1, generate(foreign_make)}{p_end}
 
-{pstd}Replace the original variable with the encoded version (ctools-specific):{p_end}
-{phang2}{cmd:. cencode make, replace}{p_end}
+{pstd}Encode two variables in one call:{p_end}
+{phang2}{cmd:. generate str8 origin = cond(foreign, "Foreign", "Domestic")}{p_end}
+{phang2}{cmd:. cencode make origin, generate(make_id origin_id) threads(4) verbose}{p_end}
 
-{pstd}Encode multiple variables at once (ctools-specific):{p_end}
-{phang2}{cmd:. cencode var1 var2 var3, generate(var1_code var2_code var3_code)}{p_end}
-
-{pstd}Replace multiple variables at once (ctools-specific):{p_end}
-{phang2}{cmd:. cencode var1 var2 var3, replace}{p_end}
+{pstd}Replace the source strings with labeled numeric codes:{p_end}
+{phang2}{cmd:. cencode make origin, replace}{p_end}
 
 
 {marker results}{...}
@@ -204,10 +155,4 @@ Manual: {bf:[D] encode}
 
 {psee}
 Online: {help encode}, {help decode}, {help cdecode}, {help label}, {help ctools}
-{p_end}
-
-{title:Validation and failure behavior}
-
-{pstd}
-The complete source and output specification is validated even with zero observations. Generated targets must be distinct new names. A failed multi-variable operation restores source variables, outputs, and value labels; successful replace commits all requested variables together.
 {p_end}

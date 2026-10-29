@@ -23,13 +23,13 @@ d   cipolate    - Linear interpolation
 d   csplit      - String splitting
 d   crangejoin  - Interval joins
 d   cpsmatch    - Propensity score matching (ATT)
-d   cpplmhdfe   - PPML with high-dimensional fixed effects
+d   cppmlhdfe   - PPML with high-dimensional fixed effects
 d
-d Version: 1.0.2
+d Version: 1.1.0
 d
 d Requires: Stata 14.1 or later
 d
-d Distribution-Date: 20260920
+d Distribution-Date: 20261016
 
 f ctools.ado
 f ctools.sthlp
@@ -68,9 +68,9 @@ f cdestring.sthlp
 f cencode.ado
 f cencode.sthlp
 f civreghdfe_p.ado
-f cpplmhdfe.ado
-f cpplmhdfe_p.ado
-f cpplmhdfe.sthlp
+f cppmlhdfe.ado
+f cppmlhdfe_p.ado
+f cppmlhdfe.sthlp
 f cpsmatch.ado
 f cpsmatch.sthlp
 f crangestat.ado
@@ -113,4 +113,4 @@ f _cmerge_native.ado
 f _cmerge_results.ado
 f _cmerge_table.ado
 f _cmerge_template.ado
-f _cpplmhdfe_abs_options.ado
+f _cppmlhdfe_abs_options.ado

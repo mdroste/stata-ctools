@@ -1,4 +1,4 @@
-*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools
+*! version 1.1.0 20261016 github.com/mdroste/stata-ctools
 
 program define csort, rclass
     version 14.1
@@ -118,14 +118,8 @@ program define csort, rclass
     local sortkeys : list uniq varlist
     local var_indices ""
     foreach sortvar of local sortkeys {
-        local idx = 1
-        foreach v of local allvars {
-            if ("`v'" == "`sortvar'") {
-                local var_indices "`var_indices' `idx'"
-                continue, break
-            }
-            local ++idx
-        }
+        local idx : list posof "`sortvar'" in allvars
+        local var_indices "`var_indices' `idx'"
     }
 
     * Set string width metadata for flat buffer optimization
@@ -326,12 +320,8 @@ program define csort, rclass
     capture local __openmp_enabled = _csort_openmp_enabled
     if _rc != 0 local __openmp_enabled = .
 
-    * Count observations in sample
-    quietly count `if' `in'
-    local __nobs = r(N)
-
     * Post r() results
-    return scalar N = `__nobs'
+    return scalar N = _N
     return scalar time_load = `__time_load'
     return scalar time_sort = `__time_sort'
     return scalar time_permute = `__time_permute'

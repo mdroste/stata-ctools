@@ -1,14 +1,14 @@
 {
-  "date": "2026-10-22",
+  "date": "2026-10-29",
   "timezone": "America/Los_Angeles",
-  "cpu": "Apple M4",
-  "logical_processors": 10,
-  "physical_processors": 10,
-  "memory_bytes": 17179869184,
-  "os": "macOS 27.0 (26A428)",
-  "stata": "StataNow/MP 19.5 for Unix (Apple Silicon), revision 21 May 2025",
+  "cpu": "Apple M4 Pro",
+  "logical_processors": 12,
+  "physical_processors": 12,
+  "memory_bytes": 51539607552,
+  "os": "macOS 26.7.1 (25G241)",
+  "stata": "StataNow/MP 19.5 for Unix (Apple Silicon), revision 12 Aug 2026",
   "stata_processors": 4,
-  "ctools_threads": 10,
+  "ctools_threads": 12,
   "seed": 95183,
   "sortseed": 95183,
   "observations": [
@@ -24,359 +24,635 @@
     "ctools"
   ],
   "timer": "Stata timer around complete command; preparation/reloads/checks excluded",
-  "git_head_context": "661a073bfb75aabb932e1d89fca369a8783b6987",
-  "source_tree_sha256": "2f38452896c08ee05a703b40f4dc6c906a3e88270359ccfda54b83db0bfbe928",
-  "build_note": "Fresh Mac ARM OpenMP build with BUILD_REVISION=winsor-exact; frozen plugin and wrappers selected using CTOOLS_TEST_PLUGIN_DIR. Git HEAD is context only: cutoff-rounding fixes are uncommitted at measurement time. Actual measured artifact hashes are recorded below.",
+  "git_head_context": "35ef9723ce9c8d3dab9428ea71dfe7eae6df7dcd",
+  "source_identity": "working tree on top of HEAD 35ef9723ce9c8d3dab9428ea71dfe7eae6df7dcd, including uncommitted changes; the measured plugin and wrappers are identified by the hashes below",
+  "build_note": "Mac ARM OpenMP plugin built with scripts/build_plugin.py using the `make macos-arm` flags, CTOOLS_BUILD_REVISION=readme-20261028 and the repo-local libomp archive; build/*.ado and *.sthlp copied beside it. Stata ran from that frozen directory with CTOOLS_TEST_PLUGIN_DIR pointing at it, so the repository's build/ was not used.",
+  "execution_note": "Each pair ran at each size in its own batch Stata session (export and import share one session because import reads the reference export). Before each session the machine had to be quiet for one minute (other processes below 80% CPU in total, sampled every 15 s); a session in which other processes exceeded 150% CPU (sampled every 5 s) was killed and rerun. Earlier whole-profile attempts on 2026-10-28/29 were discarded because other sessions' builds and scripts ran concurrently.",
+  "cells": {
+    "cell_binscatter_1000000": {
+      "samples": 1,
+      "max_other_cpu_percent": 5
+    },
+    "cell_binscatter_10000000": {
+      "samples": 5,
+      "max_other_cpu_percent": 9
+    },
+    "cell_binscatter_25000000": {
+      "samples": 12,
+      "max_other_cpu_percent": 39
+    },
+    "cell_bsample_1000000": {
+      "samples": 2,
+      "max_other_cpu_percent": 47
+    },
+    "cell_bsample_10000000": {
+      "samples": 5,
+      "max_other_cpu_percent": 41
+    },
+    "cell_bsample_25000000": {
+      "samples": 10,
+      "max_other_cpu_percent": 18
+    },
+    "cell_decode_1000000": {
+      "samples": 1,
+      "max_other_cpu_percent": 21
+    },
+    "cell_decode_10000000": {
+      "samples": 4,
+      "max_other_cpu_percent": 20
+    },
+    "cell_decode_25000000": {
+      "samples": 9,
+      "max_other_cpu_percent": 108
+    },
+    "cell_destring_1000000": {
+      "samples": 2,
+      "max_other_cpu_percent": 21
+    },
+    "cell_destring_10000000": {
+      "samples": 5,
+      "max_other_cpu_percent": 117
+    },
+    "cell_destring_25000000": {
+      "samples": 11,
+      "max_other_cpu_percent": 22
+    },
+    "cell_encode_1000000": {
+      "samples": 1,
+      "max_other_cpu_percent": 17
+    },
+    "cell_encode_10000000": {
+      "samples": 4,
+      "max_other_cpu_percent": 21
+    },
+    "cell_encode_25000000": {
+      "samples": 10,
+      "max_other_cpu_percent": 71
+    },
+    "cell_export+import_1000000": {
+      "samples": 3,
+      "max_other_cpu_percent": 9
+    },
+    "cell_export+import_10000000": {
+      "samples": 18,
+      "max_other_cpu_percent": 40
+    },
+    "cell_export+import_25000000": {
+      "samples": 45,
+      "max_other_cpu_percent": 21
+    },
+    "cell_ipolate_1000000": {
+      "samples": 2,
+      "max_other_cpu_percent": 27
+    },
+    "cell_ipolate_10000000": {
+      "samples": 6,
+      "max_other_cpu_percent": 27
+    },
+    "cell_ipolate_25000000": {
+      "samples": 15,
+      "max_other_cpu_percent": 20
+    },
+    "cell_ivreghdfe_1000000": {
+      "samples": 2,
+      "max_other_cpu_percent": 5
+    },
+    "cell_ivreghdfe_10000000": {
+      "samples": 8,
+      "max_other_cpu_percent": 19
+    },
+    "cell_ivreghdfe_25000000": {
+      "samples": 19,
+      "max_other_cpu_percent": 96
+    },
+    "cell_merge_1000000": {
+      "samples": 1,
+      "max_other_cpu_percent": 25
+    },
+    "cell_merge_10000000": {
+      "samples": 4,
+      "max_other_cpu_percent": 4
+    },
+    "cell_merge_25000000": {
+      "samples": 10,
+      "max_other_cpu_percent": 23
+    },
+    "cell_ppmlhdfe_1000000": {
+      "samples": 2,
+      "max_other_cpu_percent": 7
+    },
+    "cell_ppmlhdfe_10000000": {
+      "samples": 16,
+      "max_other_cpu_percent": 43
+    },
+    "cell_ppmlhdfe_25000000": {
+      "samples": 38,
+      "max_other_cpu_percent": 37
+    },
+    "cell_psmatch2_1000000": {
+      "samples": 2,
+      "max_other_cpu_percent": 10
+    },
+    "cell_psmatch2_10000000": {
+      "samples": 9,
+      "max_other_cpu_percent": 39
+    },
+    "cell_psmatch2_25000000": {
+      "samples": 21,
+      "max_other_cpu_percent": 26
+    },
+    "cell_qreg_1000000": {
+      "samples": 2,
+      "max_other_cpu_percent": 11
+    },
+    "cell_qreg_10000000": {
+      "samples": 17,
+      "max_other_cpu_percent": 24
+    },
+    "cell_qreg_25000000": {
+      "samples": 45,
+      "max_other_cpu_percent": 49
+    },
+    "cell_rangejoin_1000000": {
+      "samples": 2,
+      "max_other_cpu_percent": 10
+    },
+    "cell_rangejoin_10000000": {
+      "samples": 12,
+      "max_other_cpu_percent": 101
+    },
+    "cell_rangejoin_25000000": {
+      "samples": 29,
+      "max_other_cpu_percent": 24
+    },
+    "cell_rangestat_1000000": {
+      "samples": 2,
+      "max_other_cpu_percent": 10
+    },
+    "cell_rangestat_10000000": {
+      "samples": 8,
+      "max_other_cpu_percent": 5
+    },
+    "cell_rangestat_25000000": {
+      "samples": 20,
+      "max_other_cpu_percent": 17
+    },
+    "cell_reghdfe_1000000": {
+      "samples": 2,
+      "max_other_cpu_percent": 9
+    },
+    "cell_reghdfe_10000000": {
+      "samples": 6,
+      "max_other_cpu_percent": 2
+    },
+    "cell_reghdfe_25000000": {
+      "samples": 14,
+      "max_other_cpu_percent": 4
+    },
+    "cell_sample_1000000": {
+      "samples": 1,
+      "max_other_cpu_percent": 8
+    },
+    "cell_sample_10000000": {
+      "samples": 5,
+      "max_other_cpu_percent": 3
+    },
+    "cell_sample_25000000": {
+      "samples": 10,
+      "max_other_cpu_percent": 49
+    },
+    "cell_sort_1000000": {
+      "samples": 1,
+      "max_other_cpu_percent": 4
+    },
+    "cell_sort_10000000": {
+      "samples": 4,
+      "max_other_cpu_percent": 28
+    },
+    "cell_sort_25000000": {
+      "samples": 10,
+      "max_other_cpu_percent": 22
+    },
+    "cell_split_1000000": {
+      "samples": 2,
+      "max_other_cpu_percent": 56
+    },
+    "cell_split_10000000": {
+      "samples": 7,
+      "max_other_cpu_percent": 16
+    },
+    "cell_split_25000000": {
+      "samples": 15,
+      "max_other_cpu_percent": 39
+    },
+    "cell_winsor_1000000": {
+      "samples": 2,
+      "max_other_cpu_percent": 8
+    },
+    "cell_winsor_10000000": {
+      "samples": 4,
+      "max_other_cpu_percent": 3
+    },
+    "cell_winsor_25000000": {
+      "samples": 9,
+      "max_other_cpu_percent": 19
+    }
+  },
   "files": {
-    "/tmp/ctools-winsor-exact/candidate-build/_cio_export.ado": {
-      "sha256": "4b962c0541f2b5572c11599e2efcbb17aec45c4e2e3ea9b01bd85370b6930a48",
+    "frozen-build/_cio_export.ado": {
+      "sha256": "e7dcdff4330a96e0ac412e0b5d3c46c7798e90879996f0996e355842ec94c52d",
       "version_comments": [
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
         "*! Binary statistical writers; serialization is provided by C."
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/_cio_import.ado": {
-      "sha256": "f0c46727fbecf612e8a451d46c7bdf8eba6dcb4ea3ceffafb98f8390a8d226ad",
+    "frozen-build/_cio_import.ado": {
+      "sha256": "67ea0c9a451bfbebdaec1857b68c735d846f0bb349e3ff7d630667f4fb9eda60",
       "version_comments": [
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
         "*! Binary statistical readers; parsing and values are provided by C."
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/_cio_shp_export.ado": {
-      "sha256": "d1a3d19294b5897c4b7f2ae9e86a6932362e278ea9e442a7670cb5ffc3d442ca",
-      "version_comments": []
-    },
-    "/tmp/ctools-winsor-exact/candidate-build/_civreghdfe_fvstrip.ado": {
-      "sha256": "5fa5bafe01d884dc1ec060094976d3a07aa9a2294f32c85981c27c7ae401879c",
+    "frozen-build/_cio_shp_export.ado": {
+      "sha256": "0795aa1c121f68dd68397430a88afa21db0b060fea682d1034fa03218a44d14c",
       "version_comments": [
-        "*! Private helper for civreghdfe; maintained in package/ado."
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/_civreghdfe_optflags.ado": {
-      "sha256": "4780d784a7ed0bfd773b89108e6a29d6f530fb0713d6cb847d68c54e934f52f9",
+    "frozen-build/_civreghdfe_fvstrip.ado": {
+      "sha256": "c564aaeacef8c1b67b8f66ba912c4ddd058eee1a2f7206a2e41d07cb2b8994b5",
       "version_comments": [
-        "*! Private helper for civreghdfe; maintained in package/ado."
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! Private helper for civreghdfe."
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/_cmerge_assert.ado": {
-      "sha256": "c93069a83759788da7aa91a259a0c62a5cd145a6018cc8e738a1fe27425e5071",
+    "frozen-build/_civreghdfe_optflags.ado": {
+      "sha256": "3aa3e0f364d09e2bba289ad2b3d0e434ba10201903b374b8ad796ed686738295",
       "version_comments": [
-        "*! Private helper for cmerge; maintained in package/ado."
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! Private helper for civreghdfe."
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/_cmerge_clear_sortedby.ado": {
-      "sha256": "b2a80b30c0cc8a2ebeadb9fea42b09dbe8d096c887aacbdead1781be06597903",
+    "frozen-build/_cmerge_assert.ado": {
+      "sha256": "eca4f6a71cc6fd1eba50e49ec0f4a8bc812e04ab83873349de1d2cff1509b1be",
       "version_comments": [
-        "*! Private helper for cmerge; maintained in package/ado."
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! Private helper for cmerge."
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/_cmerge_keys_sorted.ado": {
-      "sha256": "060ee0dedd258a4ab0eaa9b83f1cde3dd8326dca34611d0ed77e99ad589603d5",
+    "frozen-build/_cmerge_clear_sortedby.ado": {
+      "sha256": "d6f5839df47622d11f46f24ce772b01aa938c47c02ddd438c97aca6f1f3328a4",
       "version_comments": [
-        "*! Private helper for cmerge; maintained in package/ado."
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! Private helper for cmerge."
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/_cmerge_label_mergevar.ado": {
-      "sha256": "fed55726efc6126ad3f5140fe7d625c88b30cd8e84b28c78b0be05859b949880",
+    "frozen-build/_cmerge_keys_sorted.ado": {
+      "sha256": "767f0e2a44aafe190b87608f09d2b9a49e684c5602847d7566c3e514cdbd0ad9",
       "version_comments": [
-        "*! Private helper for cmerge; maintained in package/ado."
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! Private helper for cmerge."
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/_cmerge_native.ado": {
-      "sha256": "e14ab1ff9441f70c289104415b7f99ead495e3f7da2790e7d2f024f79f24b6d0",
+    "frozen-build/_cmerge_label_mergevar.ado": {
+      "sha256": "68ca2fcd0b57d2481f49e57849d98d4b716bd077729ac1d08b4d700e4b70ebac",
       "version_comments": [
-        "*! Private helper for cmerge; maintained in package/ado."
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! Private helper for cmerge."
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/_cmerge_results.ado": {
-      "sha256": "548e687d5685c0494128360adf433f0f6a3c77f932aae5874c617911b7031bc1",
+    "frozen-build/_cmerge_native.ado": {
+      "sha256": "ee972a4ed7b10dd18a8ee09cc4e59cb215727d6fc52f90d85ef96edbd01a2c16",
       "version_comments": [
-        "*! Private helper for cmerge; maintained in package/ado."
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! Private helper for cmerge."
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/_cmerge_table.ado": {
-      "sha256": "43dde44b4d923185f661252b69f12d3cd83c2f0543ef78e74058de2aac501da7",
+    "frozen-build/_cmerge_results.ado": {
+      "sha256": "4d844737eb72e58d7198dfad2aba506d69e003e6595201d93165ecae29d82d37",
       "version_comments": [
-        "*! Private helper for cmerge; maintained in package/ado."
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! Private helper for cmerge."
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/_cmerge_template.ado": {
-      "sha256": "bffcc68575ecd76c4f4a69c1718e78d00faf3a75e0f71539aeb895935cd2643f",
+    "frozen-build/_cmerge_table.ado": {
+      "sha256": "3b117af4db91340663188d9849b169d8510b61606015c4edb877e4a8198f8568",
       "version_comments": [
-        "*! Private helper for cmerge; maintained in package/ado."
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! Private helper for cmerge."
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/_cpplmhdfe_abs_options.ado": {
-      "sha256": "6b9c2975c191b7e875f8642d966b7800a45dd7443edfeab7fa3e42d664c6fd08",
+    "frozen-build/_cmerge_template.ado": {
+      "sha256": "d9fb8bdc2cadd07a80abcb9f0722ad612ea92c791bcf4d3bc040b62dc6460683",
       "version_comments": [
-        "*! Private helper for cpplmhdfe; maintained in package/ado."
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! Private helper for cmerge."
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/_ctools_cleanup.ado": {
-      "sha256": "b3d41fb21acf68c1643a9c5c0831a33dfdd1b5d5b615f520f78e3efded2e20b2",
+    "frozen-build/_cppmlhdfe_abs_options.ado": {
+      "sha256": "64977129c24570095f0b2514c05c35ad0d746c465811a6e741174dbf559d59a2",
       "version_comments": [
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! Private helper for cppmlhdfe."
+      ]
+    },
+    "frozen-build/_ctools_cleanup.ado": {
+      "sha256": "5fb322e24eeae6371b9f61e5cce3d7544e9301220ea011382c012a5e0f6b9e39",
+      "version_comments": [
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
         "*! ctools: drop the scalars and matrices a command and its plugin leave behind"
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/_ctools_clock.ado": {
-      "sha256": "69c1d2be9d1872629345fbc5b1e607fa47e4e86e7430056900bcbcc87cdff1d3",
+    "frozen-build/_ctools_clock.ado": {
+      "sha256": "e101ee03b2d3476cabda2afb986f37123daf46d5bc3aa3d020fc88c247d55e4f",
       "version_comments": [
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
         "*! Private monotonic timestamp in seconds; no public Stata timer IDs."
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/_ctools_ebv.ado": {
-      "sha256": "a21770f4fc1521f07a85b561dff0bb356a9b385a4ea23f1b668f398d5eac959d",
+    "frozen-build/_ctools_ebv.ado": {
+      "sha256": "af3a977acfbe6ec81cdb9c1320b0bccc11cc571d2eec9342cd109941baaa5697",
       "version_comments": [
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
         "*! ctools: e(b) and e(V) from a plugin's compact results"
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/_ctools_fvsplit.ado": {
-      "sha256": "1005d78498a8af196c60b0ae9b6fce1f823006c50174630b963beb1ca798abc1",
+    "frozen-build/_ctools_fvsplit.ado": {
+      "sha256": "614c100c56e62afe2944c3da49dbaac8f2b1a428068dd67f993e6933d7f21ef5",
       "version_comments": [
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
         "*! ctools: estimated terms and base/omitted placeholders of an fvexpand-ed list"
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/_ctools_group.ado": {
-      "sha256": "f8ab63c05ad9a116527537fd87d6764a02748f964fb6e27aeda3fd5a55ab00d8",
+    "frozen-build/_ctools_group.ado": {
+      "sha256": "2e3b784d9b2d18bae8e0af9a2532fc9fff2fc22ac955272757d66badcdb6a85d",
       "version_comments": [
-        "*! _ctools_group \u2014 group identifiers from the ctools plugin, in place of egen group()",
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! _ctools_group — group identifiers from the ctools plugin, in place of egen group()",
         "*!",
         "*! Usage:  _ctools_group varlist [if] [in], generate(newvar) [label]",
         "*!         _ctools_group varlist [if] [in], count",
         "*!",
         "*! Numbers the distinct values of varlist 1, 2, ... in sort order, as",
-        "*! egen group() does: observations excluded by if/in, or with a missing value",
-        "*! in any variable of varlist (string \"\" counts as missing), get missing. The"
+        "*! egen group() does: observations excluded by if/in, or with a missing value"
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/_ctools_lap.ado": {
-      "sha256": "6fa79e3a607771db9c808f3d65da893cae55c75bba07737c38748b35d243738d",
+    "frozen-build/_ctools_hdfe_absorb.ado": {
+      "sha256": "15753d309c10890d25a75787063b0d5276f57e60ec2863bd9ffa798444dd4cca",
       "version_comments": [
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! Absorbed effects of creghdfe and civreghdfe."
+      ]
+    },
+    "frozen-build/_ctools_hdfe_dof.ado": {
+      "sha256": "120641ed77b148e90049db4202a799ae45325e2a02495ca68102e9a4c1b39994",
+      "version_comments": [
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! dofadjustments() of the HDFE estimators."
+      ]
+    },
+    "frozen-build/_ctools_hdfe_post.ado": {
+      "sha256": "7dc6c506c19abe72c924ee8d83e9894170e54724781b0b4347f348750b4026d7",
+      "version_comments": [
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! e() results shared by creghdfe and cppmlhdfe."
+      ]
+    },
+    "frozen-build/_ctools_hdfe_vce.ado": {
+      "sha256": "595e1c2b27d5d95bb658cf0125a1e09021d1103bd64fb1d0482bcba4518e9e7a",
+      "version_comments": [
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! vce() of the HDFE estimators."
+      ]
+    },
+    "frozen-build/_ctools_lap.ado": {
+      "sha256": "f055a8590455413c323d9381601526b6b51ffa8d2e1d3c45c572882cc7c8135f",
+      "version_comments": [
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
         "*! ctools: seconds since the previous lap of a caller-local wall clock"
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/_ctools_load.ado": {
-      "sha256": "48025766b138e7890be00c49b5ccf5b96e060c5d76a2e130502a9ecadd0eafaa",
+    "frozen-build/_ctools_load.ado": {
+      "sha256": "f59897bf300044e8fc30fd8617186d569a40f7d1cb7b0adff4ba4665d687fa90",
       "version_comments": [
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
         "*! Shared plugin loader and identity contract"
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/_ctools_mode.ado": {
-      "sha256": "b0338005f39b9ff7e3c338ab89099d597840b488325d72f3e7dd83ef77de1ce5",
+    "frozen-build/_ctools_mode.ado": {
+      "sha256": "88a025694805f9960cf298f5ae0741683f2e3558e8fcfe18e137fcc916e84fed",
       "version_comments": [
-        "*! Failure-handling mode in a ctools wrapper's options; maintained in package/ado."
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! Failure-handling mode in a ctools wrapper's options."
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/_ctools_newvars.ado": {
-      "sha256": "1daf4e28a684f242c6c6e28356d72e01760c16a25365cbea70b893af189423f1",
+    "frozen-build/_ctools_newvars.ado": {
+      "sha256": "2fbdd4c1376098543b5fe5aeec5869dc22ee8b512bc6817ddbc0b0d58b30e707",
       "version_comments": [
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
         "*! ctools output-name validation"
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/_ctools_strw.ado": {
-      "sha256": "2f8e63a34301d8bb0fd3b750171cc31a0c784d7c0a62f07da803b5bc0bfd20dd",
+    "frozen-build/_ctools_strw.ado": {
+      "sha256": "e058c1d65c266f37a144908b5889827390026d72454792361619acb0ee3471c7",
       "version_comments": [
-        "*! _ctools_strw \u2014 set string width metadata for ctools flat buffer optimization",
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! _ctools_strw — set string width metadata for ctools flat buffer optimization",
         "*!",
         "*! Usage:  _ctools_strw varlist",
         "*!",
         "*! Sets local __ctools_strw in CALLER's scope containing comma-separated",
         "*! string variable widths (0 = numeric, >0 = str width e.g. 17 for str17).",
-        "*! The ctools C plugin reads this local automatically via SF_macro_use",
-        "*! to enable flat buffer string I/O (eliminates per-string strlen, memcpy,"
+        "*! The ctools C plugin reads this local automatically via SF_macro_use"
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/_ctools_undo.ado": {
-      "sha256": "9095d428a84ac80734db343ee1ecd6c4512853a80b281cf25a6dee9fd0549f7a",
+    "frozen-build/_ctools_undo.ado": {
+      "sha256": "fd9f79c9c475d542875a639543881fb7ee40afe52a2e30cdde1796b9afcf1373",
       "version_comments": [
-        "*! Exact undo of a ctools wrapper's changes without a dataset snapshot.",
-        "*! Maintained in package/ado."
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! Exact undo of a ctools wrapper's changes without a dataset snapshot."
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/_ctools_vce.ado": {
-      "sha256": "d9354f7b5941172914ef03098fcae3b01e15b65b2392f33340d386018c3e9ea0",
+    "frozen-build/_ctools_vce.ado": {
+      "sha256": "2221e5b155d2ccb7890952c6f31a9da1f45bfe8b3d3d0c65af0ad66b6ec9e9c7",
       "version_comments": [
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
         "*! ctools: classify a vce() specification"
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/_ctools_weight.ado": {
-      "sha256": "f6d868d00af858bb6c1b979f60057abb8525248bba28e27f66def7193602099d",
+    "frozen-build/_ctools_weight.ado": {
+      "sha256": "6d0673b554ee8df071a810a4ed57fbe09b0ae94cf89294655e7d276992f60a5c",
       "version_comments": [
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
         "*! ctools weight-expression staging; caller owns generate() tempvar"
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/cbinscatter.ado": {
-      "sha256": "cfd390c0199730d9127876b1bdb807964c2f543ed3ffc48f5fb1d8c7b38a111c",
+    "frozen-build/cbinscatter.ado": {
+      "sha256": "fcc35f5191b73024286d88940825987565397f81d0c984dd270ad04dda1362c0",
       "version_comments": [
-        "*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools"
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/cbsample.ado": {
-      "sha256": "db0dfe1e5d81e88e268ed69a02f8db06b03d2be110332fa2572ce662e0168ede",
+    "frozen-build/cbsample.ado": {
+      "sha256": "9723c8942919f781a8e8f99b5e23e645cf741d08d01a9fa239a6da29211e5294",
       "version_comments": [
-        "*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools"
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/cdecode.ado": {
-      "sha256": "6b97dd19fb26b4df637d360902a87ba75c9aea65561766bcfb780b51a36e7bf9",
+    "frozen-build/cdecode.ado": {
+      "sha256": "741908b407a08fb8b6634deebfeafe9e09bea74e1a66f6e5e05f1f51f34033c0",
       "version_comments": [
-        "*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools"
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/cdestring.ado": {
-      "sha256": "52c2f5581aab2c550b6cb0c169e595e7aeb812bff62260adb52b7de5de12be54",
+    "frozen-build/cdestring.ado": {
+      "sha256": "b587973d6d274dcf2eb8f96c9d3d5f7c3d6a356bbee5f566d03d41bb39608de5",
       "version_comments": [
-        "*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools"
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/cencode.ado": {
-      "sha256": "aae4ebb73f6cbdc27e02f9340928b3cf7711f3f3121a19e1cbf3214b7126a43c",
+    "frozen-build/cencode.ado": {
+      "sha256": "52a1c656718d92fab87feee46147e829366d9aad288346b6b1b7f907aa7925c1",
       "version_comments": [
-        "*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools"
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/cexport.ado": {
-      "sha256": "5341a5a51c1b18991efddf532fa6ec7233cd7480677a39889b891bef961b4a44",
+    "frozen-build/cexport.ado": {
+      "sha256": "9b41ada6b867c7ea19ac1ebc14df8a88170c76a29a8264f85c091406a222a109",
       "version_comments": [
-        "*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools"
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/cimport.ado": {
-      "sha256": "3b1b3b90bc858cb56d9d86fb2d79f9aafa0972db19c13f367629a86aa7966a98",
+    "frozen-build/cimport.ado": {
+      "sha256": "77e4c9aee40d07b40324e2f4d2a6efa9cdf20eb97efa663a808e15bb1a08e223",
       "version_comments": [
-        "*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools"
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/cipolate.ado": {
-      "sha256": "a33ec5736fdfcc410415067a80cd1d1a0bbf8c64622c09f39bd7a0db6539a09a",
+    "frozen-build/cipolate.ado": {
+      "sha256": "cba9f5110c97235155267cf8bac9904c46f5b2a53904bf3679391b8b1403c9dd",
       "version_comments": [
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
         "*! C-accelerated linear interpolation (ctools)"
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/civreghdfe.ado": {
-      "sha256": "3d2457816aa61b9133c9258851a9024f3c54cd2bc6db75b7eedf41670cd73507",
+    "frozen-build/civreghdfe.ado": {
+      "sha256": "5d65ff104aa46bcdca8855df11f93de62ef85ba371ed10ab1eb8a8e89f738af3",
       "version_comments": [
-        "*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools"
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/civreghdfe_p.ado": {
-      "sha256": "5912fc494af312f57e16a677c2f7ce802659a7291e1f298fce33d2102dedba05",
+    "frozen-build/civreghdfe_p.ado": {
+      "sha256": "0753632b0cf2a9239bfdcdfbdae0e1fb71c0ceb7890dab8ad37cf70a2ad809c1",
       "version_comments": [
-        "*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools"
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/cmerge.ado": {
-      "sha256": "505d45fc563492c6ee2e77db3e4e92f015a41a89a009cb3f0ffd61bc52d0e03d",
+    "frozen-build/cmerge.ado": {
+      "sha256": "1062238959e81795c2503e25853432d2eefbd46b9e3f5cdb5dd84c50571880d1",
       "version_comments": [
-        "*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools"
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/cpplmhdfe.ado": {
-      "sha256": "a6ef247e1612a2c8c1cccb5cea95b01deba2e306be8e527331a5d5f9ba457c30",
+    "frozen-build/cppmlhdfe.ado": {
+      "sha256": "597565c78bb994d36067becac9222df2c03f8cdad826f834ab978111033cd7da",
       "version_comments": [
-        "*! version 1.1.0 25sep2026 github.com/mdroste/stata-ctools"
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/cpplmhdfe_p.ado": {
-      "sha256": "68cfd4023787c087644031376c0be875f103f6d0f9b3fa05c8148532c7bc5057",
+    "frozen-build/cppmlhdfe_p.ado": {
+      "sha256": "ca310d595f078247ca19d81c3fc493427313c82fe4da550b5fa2e8c8cc52cc91",
       "version_comments": [
-        "*! version 1.1.0 25sep2026 github.com/mdroste/stata-ctools"
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/cpsmatch.ado": {
-      "sha256": "8cbe8d571f8607a4b74f2ad6100e2deeb27c9e105753b192a53fc389e41f6fb3",
+    "frozen-build/cpsmatch.ado": {
+      "sha256": "c47d752c123fa58aab48579b92bcb4a585c979beb57828d3051275b78d3c7dab",
       "version_comments": [
-        "*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools"
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/cqreg.ado": {
-      "sha256": "bd00676d44b6d6054c03687cd38783cabca2a10ab0d338c75497b3e040c4451c",
+    "frozen-build/cqreg.ado": {
+      "sha256": "01b0baf10ffc85c9498988c37463f2955305a1b96152ab8862efd6663d6dc148",
       "version_comments": [
-        "*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools"
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/crangejoin.ado": {
-      "sha256": "810c1a6947dff6d659deadb19414c09d1b058b8b9d06bd0937cf563c2807d1fe",
+    "frozen-build/crangejoin.ado": {
+      "sha256": "956c50df34f9c42385170f8a21d9e94f9d42ed73cdc1bacd75c6063e437c4bf1",
       "version_comments": [
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
         "*! C-accelerated interval joins (ctools)"
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/crangestat.ado": {
-      "sha256": "b307c7ed437258229eada83c4abc49796a10826a429bc81c7b23eaa414f23600",
+    "frozen-build/crangestat.ado": {
+      "sha256": "d70e86365daa9b07789a9e398f8d0bca577ec5000b4ed45b136406179eb9b0ea",
       "version_comments": [
-        "*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools"
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/creghdfe.ado": {
-      "sha256": "3038b3a3e67b215fd1c12c3a5fda4fda51d046b5de1c32234f133d40edbd256e",
+    "frozen-build/creghdfe.ado": {
+      "sha256": "56c311e196d81e129c785c77a35cacbe9c70ed2a5468b559993dcc5917c465ea",
       "version_comments": [
-        "*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools"
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/creghdfe_p.ado": {
-      "sha256": "e55bb708c5acb62e2907507f545cfea7a7ef4fd2c84ec24cf778ca4edb424a80",
+    "frozen-build/creghdfe_p.ado": {
+      "sha256": "e23c28dcedd7d55fb82ef69a6eb05de9ea2207974dd0bab9c75beb55a997e5c7",
       "version_comments": [
-        "*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools"
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/csample.ado": {
-      "sha256": "635886f0867eba1bf6b48064d857eef2d8516bca36fa27967a298e49ccd6d4b3",
+    "frozen-build/csample.ado": {
+      "sha256": "7cab8b40c66869feb65bce593f2d105c2e284034346af06d8276597474bd883b",
       "version_comments": [
-        "*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools"
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/csort.ado": {
-      "sha256": "c0d7ad2f847824d8f511a84ac801d3d4f76110b51e72410e57c0ff4a047033be",
+    "frozen-build/csort.ado": {
+      "sha256": "4a18cee70a96f32d05fef99c1c6ebbd18becfbe44104ecafc4fd54f249ab120d",
       "version_comments": [
-        "*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools"
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/csplit.ado": {
-      "sha256": "7db6b5027271551be556f6b14f6e0c11b79074b21a6ae5d7a75133c96852a5a8",
+    "frozen-build/csplit.ado": {
+      "sha256": "a0d2f144f06f2a3c904c1a1f415ee51974862b389d0eabdeaba849e9e25713d9",
       "version_comments": [
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
         "*! C-accelerated string splitting (ctools)"
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/ctools.ado": {
-      "sha256": "6fb3e9587c4e2d0409d6734e07a596a2148e4c0b3ad784213ba5a093e0c4832d",
+    "frozen-build/ctools.ado": {
+      "sha256": "ead7ebc9d92d18931bf9a16c0126ee38fb72bedaadeaf9c00258deb4ea738c26",
       "version_comments": [
-        "*! version 1.0.2 20260920 github.com/mdroste/stata-ctools"
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
       ]
     },
-    "/tmp/ctools-winsor-exact/candidate-build/ctools_mac_arm.plugin": {
-      "sha256": "bff49b59247ec4b2b004b6c956471de69a22fcb55e61ba6d5b6dae3a2d1b74a5"
-    },
-    "/tmp/ctools-winsor-exact/candidate-build/cwinsor.ado": {
-      "sha256": "bd9918a1ca9759b2046b895b2a2f7aa931814757bd52ae1ad6687dd160310c81",
+    "frozen-build/cwinsor.ado": {
+      "sha256": "8e66ccc0e934342a348a3f209afc90f49d5b0cd5a347750a8358dd1bf502aa5b",
       "version_comments": [
-        "*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools"
+        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
       ]
+    },
+    "frozen-build/ctools_mac_arm.plugin": {
+      "sha256": "07a4ad699d561cf69441589a3d652cfa41688d868edb70cc544747d962a6a61d"
     },
     "validation/profile_readme.do": {
-      "sha256": "ab5b9dc79046b2d7dc050068e296f1faa20b3ba38f544cc100408f85dcd1328d",
-      "version_comments": []
+      "sha256": "e4ccdfc31a1a398c4ffe12e9ee264886dc23d9fa44c0162cc49890e3d5927390"
     },
     "validation/summarize_readme_profile.py": {
-      "sha256": "31d05602a43e875d833150fedd040b7ebdd9cc3b4356a27df7978db7935bb87b"
-    },
-    "Makefile": {
-      "sha256": "18a79d74313c869aa55972ed3e494c4050a99e3ad67968697b5d70ffd6eb24c7"
-    },
-    "src/cwinsor/cwinsor_impl.c": {
-      "sha256": "6d6a84ed37b00aa80d480e4ba795b1287beda332248737d9e42d883bd78e7f84"
-    },
-    "src/ctools_runtime.c": {
-      "sha256": "6cdbe62ba6410c5d9cb4fbb4ae72e8abe87bef0f545dfe2a5f54749668c0b482"
+      "sha256": "c1160eea14915edd276ea479e966973ae7ab28d887d00076449edcdc2e8488d8"
     }
   },
   "reference_files": {
-    "/tmp/ctools-fixes-oct22/reference/rangejoin.ado": {
+    "/Users/Mike/Library/Application Support/Stata/ado/plus/r/rangejoin.ado": {
       "sha256": "7b646bb7f9f3c93a13806666f6637f830c1706a67eb247aa2d7de86dac626111",
       "version_comments": [
         "*! version 1.1.3, 13apr2021, Robert Picard, robertpicard@gmail.com",
-        "*! requires -rangestat- version 1.1.0, available from SSC",
-        "*! uses local copy of -sidebyside- version 1.0.0  12mar2016 Robert Picard"
+        "*! requires -rangestat- version 1.1.0, available from SSC"
       ]
     },
-    "/tmp/ctools-fixes-oct22/reference/rangestat.ado": {
+    "/Users/Mike/Library/Application Support/Stata/ado/plus/r/rangestat.ado": {
       "sha256": "7bde60817b53fd3897ac2c626b82086b98de7ba45e54a895b8619346c778d552",
       "version_comments": [
         "*! 1.1.1\t\t\t09may2017",
@@ -387,32 +663,32 @@
         "*! Roberto Ferrer   refp16@gmail.com"
       ]
     },
-    "/Users/mike/Library/Application Support/Stata/ado/plus/g/gstats.ado": {
+    "/Users/Mike/Library/Application Support/Stata/ado/plus/g/gstats.ado": {
       "sha256": "2bff86fa8036d0fdb282c0ba1437076dc2338d648cc153d384b00ee6205e7611",
       "version_comments": [
         "*! version 0.5.0 11Jun2019 Mauricio Caceres Bravo, mauricio.caceres.bravo@gmail.com",
         "*! Implementation of several statistical functions and transformations"
       ]
     },
-    "/tmp/ctools-fixes-oct22/reference/psmatch2.ado": {
-      "sha256": "c698c5c715d740370c2fdeee30dbcb4ce2c9c8d11c0ec1be93e4413e7b41e960",
+    "/Users/Mike/Library/Application Support/Stata/ado/plus/p/psmatch2.ado": {
+      "sha256": "d8ea98dbd1a6c8514dc8086d32aaa8f0f5af3842657a88ad91de60547d125ed5",
       "version_comments": [
         "*! version 4.0.12 30jan2016 E. Leuven, B. Sianesi"
       ]
     },
-    "/tmp/ctools-fixes-oct22/reference/binscatter.ado": {
+    "/Users/Mike/Library/Application Support/Stata/ado/plus/b/binscatter.ado": {
       "sha256": "22fdea36d927459d3b0a470a088479986040ed31c63fb1b7813f9227582d0496",
       "version_comments": [
         "*! version 7.02  24nov2013  Michael Stepner, stepner@mit.edu"
       ]
     },
-    "/Users/mike/Library/Application Support/Stata/ado/plus/r/reghdfe.ado": {
+    "/Users/Mike/Library/Application Support/Stata/ado/plus/r/reghdfe.ado": {
       "sha256": "0c700ea38de4ed110d0cbb57acd3e24351a5ab68b61dd84fcb0e5bc8f02d941a",
       "version_comments": [
         "*! version 6.13.1 10Jan2026"
       ]
     },
-    "/tmp/ctools-fixes-oct22/reference/ivreghdfe.ado": {
+    "/Users/Mike/Library/Application Support/Stata/ado/plus/i/ivreghdfe.ado": {
       "sha256": "d1605318c15d3b7975b28a365e2176cd885fbf6b9378a60feaf97458c32d966e",
       "version_comments": [
         "*! ivreghdfe 1.1.4  29nov2025 (bugfix for github issue #61)",
@@ -425,119 +701,39 @@
         "*! see end of file for version comments"
       ]
     },
-    "/tmp/ctools-fixes-oct22/reference/ppmlhdfe.ado": {
-      "sha256": "634177e7002345eb6b17f2e42a1f4c1685ea59e3f9839dbb316452876cab8b5c",
+    "/Users/Mike/Library/Application Support/Stata/ado/plus/p/ppmlhdfe.ado": {
+      "sha256": "92888a6e4e67213c71e09a50f9ec043c0320828105b553757d6cee01ca5a0b82",
       "version_comments": [
         "*! version 2.3.3 02nov2025",
-        "*! Authors: Sergio Correia, Paulo Guimar\u00e3es, Thomas Zylkin",
+        "*! Authors: Sergio Correia, Paulo Guimarães, Thomas Zylkin",
         "*! URL: https://github.com/sergiocorreia/ppmlhdfe"
       ]
     },
-    "/Users/mike/Library/Application Support/Stata/ado/plus/f/ftools.ado": {
+    "/Users/Mike/Library/Application Support/Stata/ado/plus/f/ftools.ado": {
       "sha256": "c7eba3272b5fcd1dfa157e65c37840a051c6e2bf327d5ee31d42df65cf330b00",
       "version_comments": [
         "*! version 2.50.0 09jan2026"
       ]
     },
-    "/Users/mike/Library/Application Support/Stata/ado/plus/i/ivreg2.ado": {
+    "/Users/Mike/Library/Application Support/Stata/ado/plus/i/ivreg2.ado": {
       "sha256": "0e93b020dcd4d9b2806db9e4bb432fa0381756ec2c64dc50275957ad58ef3fb4",
       "version_comments": [
         "*! ivreg2 4.1.12  14aug2024",
         "*! authors cfb & mes",
         "*! see end of file for version comments"
       ]
-    },
-    "/tmp/ctools-fixes-oct22/reference/ranktest11.ado": {
-      "sha256": "fa75c3dcb817da094e7415aea2039a542f71ddb33012232a7d29c587385b6720",
-      "version_comments": [
-        "*! ranktest11 1.4.01 based on ranktest 1.4.01 of 18aug2015",
-        "*! author mes, based on code by fk",
-        "*! see end of file for version comments"
-      ]
-    },
-    "/tmp/ctools-fixes-oct22/reference/ppmlhdfe_separation_simplex.mata": {
-      "sha256": "7fdeaed348aaac664062805817e0eaa3792708f4aff643f943fe9c448a6613fa"
-    },
-    "/tmp/ctools-fixes-oct22/reference/require.ado": {
-      "sha256": "31422eec5fdbea49b2830abab1c971cf8f08b1cc901f18916bd7686dcac5145b",
-      "version_comments": [
-        "*! version 1.3.1 19sep2023"
-      ]
-    },
-    "/tmp/ctools-fixes-oct22/reference/binsreg_pctile.ado": {
-      "sha256": "89e4c3d78e8aa35c1af88acd0fc8edde734011364acce7af8f9968e38368bef9",
-      "version_comments": [
-        "*! version 2.2 20-AUG-2026"
-      ]
-    },
-    "/tmp/ctools-fixes-oct22/reference/lbinsreg.mlib": {
-      "sha256": "45f4754f9a9bb935f2e69f02ea8555e216128cd6331c90e81879c6516fc21199"
-    },
-    "/tmp/ctools-fixes-oct22/reference/ppmlhdfe_separation_relu.mata": {
-      "sha256": "a37caab8eeacda3ae2e278d5088c6f467df195f4c19bba8812794cf25ebfbd91"
-    },
-    "/tmp/ctools-fixes-oct22/reference/binsreg.ado": {
-      "sha256": "21a4a5c9015b32bf84e8bf8603b79a5ec0e93086d4a54af292282cf863498e6a",
-      "version_comments": [
-        "*! version 2.2 20-AUG-2026"
-      ]
-    },
-    "/tmp/ctools-fixes-oct22/reference/binsregselect.ado": {
-      "sha256": "b5a5429ce18d84641496b7166662b57832d44360b90aff95f0f3e965a217c616",
-      "version_comments": [
-        "*! version 2.2 20-AUG-2026"
-      ]
-    },
-    "/tmp/ctools-fixes-oct22/reference/binsreg_irecode.ado": {
-      "sha256": "3aefcf3344b5c58cb8bc7347c6a420e24e41d0c7df891f71ddd140029cca7dfd",
-      "version_comments": [
-        "*! version 2.2 20-AUG-2026"
-      ]
-    },
-    "/tmp/ctools-fixes-oct22/reference/rangestat_run.ado": {
-      "sha256": "96bec1b87e385097922773eb570b00d7b3dfc96c31a4246bb825b2578ad28a48",
-      "version_comments": [
-        "*! version 1.0.0  22mar2017 Robert Picard, picard@netbox.com"
-      ]
-    },
-    "/tmp/ctools-fixes-oct22/reference/ppmlhdfe_header.ado": {
-      "sha256": "2fb9c4856eae61ca1a436238f62600ac392b9134694c3432ac1728d1fa2bed5a",
-      "version_comments": []
-    },
-    "/tmp/ctools-fixes-oct22/reference/ranktest.ado": {
-      "sha256": "197ad146f8937e562c2e04b55a2f78d43f293ea90c5886a6d08069c8c77e6657",
-      "version_comments": [
-        "*! ranktest 2.0.04  21sept2020",
-        "*! authors mes & fw; KP stat based on code by fk",
-        "*! see end of file for version comments"
-      ]
-    },
-    "/tmp/ctools-fixes-oct22/reference/ppmlhdfe_p.ado": {
-      "sha256": "057b1ac88963626adabea8c7080de49f71637aa34ddbd674608c4b805da20301",
-      "version_comments": []
-    },
-    "/tmp/ctools-fixes-oct22/reference/ppmlhdfe.mata": {
-      "sha256": "3e9987ae37cf0fad7a4b3d3a4dd2daed2737dc2f9b2601e3239fdb1ebbb2a42b"
-    },
-    "/tmp/ctools-fixes-oct22/reference/ppmlhdfe_functions.mata": {
-      "sha256": "5595e6b70651627a8e3f4c3705178eef77de47fc13e643af3f52c7289cc7b75b"
-    },
-    "/tmp/ctools-fixes-oct22/reference/reghdfe5.mata": {
-      "sha256": "cd11248ed61604b99d04ce95108c1ac48fb67401adcb773e87472539b0c18fc7"
-    },
-    "/Users/mike/Library/Application Support/Stata/ado/plus/_/_gtools_internal.ado": {
-      "sha256": "8127e53809c75435fcecf4d9ab2c52cdcbeca85399bf09b99a5ca0a8ec33ad9d",
-      "version_comments": [
-        "*! version 1.10.1 05Dec2022 Mauricio Caceres Bravo, mauricio.caceres.bravo@gmail.com",
-        "*! gtools function internals"
-      ]
-    },
-    "/Users/mike/Library/Application Support/Stata/ado/plus/f/ftools.mata": {
-      "sha256": "4af859bca19614684d3dd45566e13e17c6cf44df951ecca538bda5a44ebd1744"
-    },
-    "/Users/mike/Library/Application Support/Stata/ado/plus/r/reghdfe.mata": {
-      "sha256": "903eb887abf948a23f4640f4e3ec0d06965b2413fcfae0342e6c4d4ef6ead4c4"
     }
   },
-  "ctools_threads_note": "ctools uses its default of all 10 logical CPUs. Stata references use set processors 4, the license limit."
+  "completed_calls": 120,
+  "command_failures": 0,
+  "basic_check_failures": 0,
+  "result_files": {
+    "timings.csv": {
+      "sha256": "276305ca49f949ce2d7a4e33250902ed92d86b3465b7237b47573eed2498ab57"
+    },
+    "results.md": {
+      "sha256": "d368a858161280f20a24f27115af375000afbac257e204d5f5483b56674c2f91"
+    }
+  },
+  "ctools_threads_note": "ctools commands ran without threads(); the thread policy resolved to 12 (usable CPUs, at most 16). Stata references used set processors 4, the license limit."
 }

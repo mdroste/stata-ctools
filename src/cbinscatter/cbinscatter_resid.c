@@ -13,6 +13,8 @@
 #include "cbinscatter_resid.h"
 #include "../ctools_config.h"
 #include "../ctools_ols.h"
+#include "../hdfe/hdfe_sample.h"
+#include "../hdfe/hdfe_solver.h"
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -340,7 +342,8 @@ cleanup:
 /* ========================================================================
  * HDFE Residualization
  *
- * Simplified implementation using Gauss-Seidel/Kaczmarz method
+ * One absorbed factor is a single exact projection (blocks of rows in
+ * parallel); several use the shared conjugate-gradient solver of src/hdfe.
  * ======================================================================== */
 
 /* Structure for FE factor */
@@ -425,177 +428,211 @@ static ST_retcode build_factors(
     return CBINSCATTER_OK;
 }
 
-/* Project vector onto one FE (demean within groups); means is a scratch
- * buffer of at least f->num_levels values */
-static void project_one_fe(
-    ST_double *y,
+/* Per-block level sums of demean_one_factor() may use at most this much memory */
+#define CBS_BLOCKED_DEMEAN_MAX_BYTES ((size_t)256 << 20)
+
+/*
+ * Demean ncols columns within the levels of one factor: a single exact
+ * projection, in parallel over blocks of rows. Each level's sums are formed
+ * per block and added in block order, so results do not depend on the thread
+ * count. Returns CBINSCATTER_OK, CBINSCATTER_ERR_MEMORY, or -1 when the
+ * per-block sums would need too much memory (the caller falls back).
+ */
+static ST_retcode demean_one_factor(
+    ST_double **cols,
+    ST_int ncols,
     const FE_Factor_Simple *f,
     const ST_double *weights,
-    ST_int N,
-    ST_double *means
+    ST_int N
 ) {
-    ST_int i, level;
-    ST_double w;
-
-    /* Zero out means */
-    memset(means, 0, f->num_levels * sizeof(ST_double));
-
-    /* Accumulate weighted sums */
-    for (i = 0; i < N; i++) {
-        level = f->levels[i];
-        w = (weights != NULL) ? weights[i] : 1.0;
-        means[level] += w * y[i];
+    const ST_int num_blocks = cbs_num_blocks(N);
+    const ST_int L = f->num_levels;
+    const size_t per_block = (size_t)ncols * (size_t)L;
+    size_t cells;
+    if (ncols < 1 || L < 1) return CBINSCATTER_OK;
+    if (ctools_safe_mul_size((size_t)num_blocks, per_block, &cells) != 0 ||
+        cells > CBS_BLOCKED_DEMEAN_MAX_BYTES / sizeof(ST_double)) {
+        return -1;
     }
-
-    /* Divide by weighted counts to get means */
-    for (level = 0; level < f->num_levels; level++) {
-        if (f->weighted_counts[level] > 0) {
-            means[level] /= f->weighted_counts[level];
-        }
+    ST_double *block_sums = (ST_double *)malloc(cells * sizeof(ST_double));
+    ST_double *means = (ST_double *)malloc(per_block * sizeof(ST_double));
+    if (!block_sums || !means) {
+        free(block_sums); free(means);
+        return CBINSCATTER_ERR_MEMORY;
     }
+    ST_int blk, lev;
 
-    /* Subtract means */
-    for (i = 0; i < N; i++) {
-        level = f->levels[i];
-        y[i] -= means[level];
-    }
-}
-
-/* Kaczmarz sweep (one pass through all FEs) */
-static void kaczmarz_sweep(
-    ST_double *y,
-    const FE_Factor_Simple *factors,
-    ST_int G,
-    const ST_double *weights,
-    ST_int N,
-    ST_int forward,
-    ST_double *means
-) {
-    ST_int g;
-
-    if (forward) {
-        for (g = 0; g < G; g++) {
-            project_one_fe(y, &factors[g], weights, N, means);
-        }
-    } else {
-        for (g = G - 1; g >= 0; g--) {
-            project_one_fe(y, &factors[g], weights, N, means);
-        }
-    }
-}
-
-/* Compute norm of vector */
-static ST_double vec_norm(const ST_double *y, ST_int N) {
-    ST_double sum = 0.0;
-    ST_int i;
-    for (i = 0; i < N; i++) {
-        sum += y[i] * y[i];
-    }
-    return sqrt(sum);
-}
-
-/* One iteration on one column: `sweeps` symmetric (forward, backward)
- * Kaczmarz sweeps, and the relative change of the column over them.
- * prev (N values) and means (max_levels values) are scratch. */
-static ST_double demean_iteration(
-    ST_double *col,
-    const FE_Factor_Simple *factors,
-    ST_int G,
-    const ST_double *weights,
-    ST_int N,
-    ST_int sweeps,
-    ST_double *prev,
-    ST_double *means
-) {
-    memcpy(prev, col, N * sizeof(ST_double));
-    ST_double norm_prev = vec_norm(col, N);
-
-    for (ST_int s = 0; s < sweeps; s++) {
-        kaczmarz_sweep(col, factors, G, weights, N, 1, means);  /* Forward */
-        kaczmarz_sweep(col, factors, G, weights, N, 0, means);  /* Backward */
-    }
-
-    if (!(norm_prev > 0)) return 0.0;
-    ST_double diff = 0.0;
-    for (ST_int i = 0; i < N; i++) {
-        ST_double d = col[i] - prev[i];
-        diff += d * d;
-    }
-    return sqrt(diff) / norm_prev;
-}
-
-/* Iterative demeaning (Gauss-Seidel / alternating projections) of one
- * column that is swept twice per iteration: what the y = x call of the
- * pairwise routine below does to it. Returns CBINSCATTER_ERR_HDFE when the
- * iteration limit is reached. */
-static ST_retcode demean_column_twice(
-    ST_double *col,
-    const FE_Factor_Simple *factors,
-    ST_int G,
-    const ST_double *weights,
-    ST_int N,
-    ST_int maxiter,
-    ST_double tolerance,
-    ST_double *prev,
-    ST_double *means
-) {
-    for (ST_int iter = 0; iter < maxiter; iter++) {
-        if (demean_iteration(col, factors, G, weights, N, 2, prev, means) < tolerance)
-            return CBINSCATTER_OK;
-    }
-    return CBINSCATTER_ERR_HDFE;
-}
-
-/* y and x demeaned together: both are swept until both have converged.
- * scratch holds 2 * N + 2 * max_levels values. */
-static ST_retcode demean_pair(
-    ST_double *y,
-    ST_double *x,
-    const FE_Factor_Simple *factors,
-    ST_int G,
-    const ST_double *weights,
-    ST_int N,
-    ST_int max_levels,
-    ST_int maxiter,
-    ST_double tolerance,
-    ST_int verbose,
-    ST_double *scratch
-) {
-    ST_double *y_prev = scratch, *x_prev = scratch + N;
-    ST_double *y_means = scratch + 2 * (size_t)N, *x_means = y_means + max_levels;
-    ST_int iter;
-
-    for (iter = 0; iter < maxiter; iter++) {
-        ST_double change_y = 0.0, change_x = 0.0;
-
-        /* The two columns are independent within an iteration */
-        #pragma omp parallel sections if (N > 100000)
-        {
-            #pragma omp section
-            change_y = demean_iteration(y, factors, G, weights, N, 1, y_prev, y_means);
-            #pragma omp section
-            change_x = demean_iteration(x, factors, G, weights, N, 1, x_prev, x_means);
-        }
-
-        if (verbose && (iter % 100 == 0 || iter < 10)) {
-            char msg[256];
-            snprintf(msg, sizeof(msg), "cbinscatter HDFE iter %d: change_y=%.2e change_x=%.2e\n",
-                     iter, change_y, change_x);
-            SF_display(msg);
-        }
-
-        if (change_y < tolerance && change_x < tolerance) {
-            if (verbose) {
-                char msg[256];
-                snprintf(msg, sizeof(msg), "cbinscatter HDFE converged in %d iterations\n", iter + 1);
-                SF_display(msg);
+    /* Level sums per block */
+    #pragma omp parallel for schedule(static) if (num_blocks > 1)
+    for (blk = 0; blk < num_blocks; blk++) {
+        ST_int i0, i1;
+        cbs_block_range(blk, N, &i0, &i1);
+        for (ST_int c = 0; c < ncols; c++) {
+            ST_double *sc = block_sums + (size_t)blk * per_block + (size_t)c * L;
+            const ST_double *col = cols[c];
+            memset(sc, 0, (size_t)L * sizeof(ST_double));
+            if (weights) {
+                for (ST_int i = i0; i < i1; i++) sc[f->levels[i]] += weights[i] * col[i];
+            } else {
+                for (ST_int i = i0; i < i1; i++) sc[f->levels[i]] += col[i];
             }
-            return CBINSCATTER_OK;
         }
     }
 
-    if (verbose) SF_display("cbinscatter HDFE: max iterations reached\n");
-    return CBINSCATTER_ERR_HDFE;
+    /* Level means: block sums added in block order */
+    #pragma omp parallel for schedule(static) if ((size_t)L * ncols * num_blocks > 1000000)
+    for (lev = 0; lev < L; lev++) {
+        for (ST_int c = 0; c < ncols; c++) {
+            ST_double sum = 0.0;
+            for (ST_int bb = 0; bb < num_blocks; bb++)
+                sum += block_sums[(size_t)bb * per_block + (size_t)c * L + lev];
+            if (f->weighted_counts[lev] > 0) sum /= f->weighted_counts[lev];
+            means[(size_t)c * L + lev] = sum;
+        }
+    }
+
+    /* Subtract the means */
+    #pragma omp parallel for schedule(static) if (num_blocks > 1)
+    for (blk = 0; blk < num_blocks; blk++) {
+        ST_int i0, i1;
+        cbs_block_range(blk, N, &i0, &i1);
+        for (ST_int c = 0; c < ncols; c++) {
+            const ST_double *mc = means + (size_t)c * L;
+            ST_double *col = cols[c];
+            for (ST_int i = i0; i < i1; i++) col[i] -= mc[f->levels[i]];
+        }
+    }
+
+    free(block_sums);
+    free(means);
+    return CBINSCATTER_OK;
+}
+
+/* The shared solver's per-thread buffers (three columns each) may use at
+ * most this much memory */
+#define CBS_CG_BUFFER_MAX_BYTES ((size_t)1 << 30)
+
+/*
+ * Partial G >= 2 absorbed factors out of ncols columns with the shared
+ * conjugate-gradient solver (symmetric Kaczmarz preconditioning) that
+ * creghdfe uses. Columns run in parallel and each is solved serially, so
+ * results do not depend on the thread count. fe_vars is G x N column-major
+ * with levels 1..L. Returns CBINSCATTER_OK, CBINSCATTER_ERR_HDFE when a
+ * column does not converge within maxiter iterations, or
+ * CBINSCATTER_ERR_MEMORY.
+ */
+static ST_retcode partial_out_shared(
+    ST_double **cols,
+    ST_int ncols,
+    const ST_int *fe_vars,
+    ST_int N,
+    ST_int G,
+    const ST_double *weights,
+    ST_int maxiter,
+    ST_double tolerance,
+    ST_int verbose
+) {
+    HDFE_State S;
+    ST_retcode rc = CBINSCATTER_OK;
+    ST_int **levels = NULL, *level_max = NULL;
+
+    memset(&S, 0, sizeof(S));
+    if (ncols < 1 || G < 1) return CBINSCATTER_OK;
+    /* Without iterations the solver would leave the columns as they are */
+    if (maxiter < 1) return CBINSCATTER_ERR_HDFE;
+    levels = (ST_int **)malloc((size_t)G * sizeof(ST_int *));
+    level_max = (ST_int *)calloc((size_t)G, sizeof(ST_int));
+    if (!levels || !level_max) {
+        rc = CBINSCATTER_ERR_MEMORY;
+        goto done;
+    }
+    for (ST_int g = 0; g < G; g++) {
+        const ST_int *col = &fe_vars[(size_t)g * N];
+        ST_int mx = 0;
+        for (ST_int i = 0; i < N; i++) if (col[i] > mx) mx = col[i];
+        levels[g] = (ST_int *)col;
+        level_max[g] = mx;
+    }
+    ST_retcode build_rc = hdfe_build_factors(&S, G, levels, level_max, N, NULL, N, weights, 0);
+    if (build_rc != 0) {
+        rc = (build_rc == 920) ? CBINSCATTER_ERR_MEMORY : CBINSCATTER_ERR_INVALID;
+        goto done;
+    }
+    S.has_weights = (weights != NULL);
+    S.weights = (ST_double *)weights;
+    S.maxiter = maxiter;
+    S.tolerance = tolerance;
+    S.verbose = verbose;
+    S.factors_initialized = 1;
+    {
+        /* One thread per column, within the memory cap */
+        int nt = resid_threads();
+        size_t per_thread = 3 * (size_t)N * sizeof(ST_double);
+        size_t cap = per_thread ? CBS_CG_BUFFER_MAX_BYTES / per_thread : (size_t)nt;
+        if (cap < 1) cap = 1;
+        if ((size_t)nt > cap) nt = (int)cap;
+        S.num_threads = nt;
+    }
+    if (ctools_hdfe_alloc_buffers(&S, 0, ncols) != 0) {
+        rc = CBINSCATTER_ERR_MEMORY;
+        goto done;
+    }
+
+    int failed = 0;
+    ST_int max_iters = 0, c;
+    #pragma omp parallel for num_threads(S.num_threads) schedule(dynamic) \
+        reduction(| : failed) reduction(max : max_iters) if (S.num_threads > 1)
+    for (c = 0; c < ncols; c++) {
+        ST_int iters = cg_solve_column_threaded(&S, cols[c], resid_thread_id());
+        if (iters < 0) {
+            failed |= 1;
+            iters = -iters;
+        }
+        if (iters > max_iters) max_iters = iters;
+    }
+    if (verbose) {
+        char msg[256];
+        if (failed) snprintf(msg, sizeof(msg), "cbinscatter HDFE: max iterations reached\n");
+        else snprintf(msg, sizeof(msg), "cbinscatter HDFE converged in %d iterations\n", max_iters);
+        SF_display(msg);
+    }
+    if (failed) rc = CBINSCATTER_ERR_HDFE;
+
+done:
+    S.weights = NULL;  /* owned by the caller */
+    ctools_hdfe_state_cleanup(&S);
+    free(levels);
+    free(level_max);
+    return rc;
+}
+
+/*
+ * Partial the G absorbed factors out of ncols columns: one factor by a single
+ * block-parallel projection (or by the shared solver when its per-block sums
+ * would be too large), several by the shared solver.
+ */
+static ST_retcode partial_out_factors(
+    ST_double **cols,
+    ST_int ncols,
+    const ST_int *fe_vars,
+    ST_int N,
+    ST_int G,
+    const ST_double *weights,
+    ST_int maxiter,
+    ST_double tolerance,
+    ST_int verbose
+) {
+    if (ncols < 1 || G < 1) return CBINSCATTER_OK;
+    if (G == 1) {
+        FE_Factor_Simple *factors = NULL;
+        ST_int max_levels = 0;
+        ST_retcode rc = build_factors(&factors, fe_vars, weights, N, 1, &max_levels);
+        if (rc != CBINSCATTER_OK) return rc;
+        rc = demean_one_factor(cols, ncols, &factors[0], weights, N);
+        free_factors(factors, 1);
+        if (rc != -1) return rc;
+    }
+    return partial_out_shared(cols, ncols, fe_vars, N, G, weights, maxiter, tolerance, verbose);
 }
 
 ST_retcode hdfe_residualize(
@@ -611,33 +648,13 @@ ST_retcode hdfe_residualize(
     ST_int verbose,
     ST_int *dropped
 ) {
-    FE_Factor_Simple *factors = NULL;
-    ST_double *scratch = NULL;
-    ST_int max_levels = 0;
-    ST_retcode rc;
+    ST_double *cols[2] = {y, x};
 
     (void)weight_type;  /* Currently unused */
     *dropped = 0;
 
-    rc = build_factors(&factors, fe_vars, weights, N, G, &max_levels);
-    if (rc != CBINSCATTER_OK) return rc;
-
-    scratch = (ST_double *)ctools_safe_malloc2(2 * ((size_t)N + (size_t)max_levels) + 1, sizeof(ST_double));
-    if (!scratch) {
-        rc = CBINSCATTER_ERR_MEMORY;
-    } else if (y == x) {
-        rc = demean_column_twice(y, factors, G, weights, N, maxiter, tolerance,
-                                 scratch, scratch + N);
-        if (rc == CBINSCATTER_ERR_HDFE && verbose)
-            SF_display("cbinscatter HDFE: max iterations reached\n");
-    } else {
-        rc = demean_pair(y, x, factors, G, weights, N, max_levels, maxiter, tolerance,
-                         verbose, scratch);
-    }
-
-    free(scratch);
-    free_factors(factors, G);
-    return rc;
+    return partial_out_factors(cols, (y == x) ? 1 : 2, fe_vars, N, G, weights, maxiter,
+                               tolerance, verbose);
 }
 
 /* ========================================================================
@@ -668,116 +685,29 @@ ST_retcode combined_residualize(
     ST_int *dropped
 ) {
     ST_retcode rc;
-    FE_Factor_Simple *factors = NULL;
-    ST_double *scratch = NULL;
-    ST_int max_levels = 0;
 
-    (void)weight_type;
     *dropped = 0;
 
-    /* Strategy: First HDFE residualize everything, then OLS on residuals.
-     * The factors are built once and shared by every column. */
-    rc = build_factors(&factors, fe_vars, weights, N, G, &max_levels);
+    /* Strategy: first partial the absorbed effects out of y, x and every
+     * control together, then OLS on the residuals (FWL) */
+    ST_double **cols = (ST_double **)malloc(((size_t)K_ctrl + 2) * sizeof(ST_double *));
+    if (!cols) return CBINSCATTER_ERR_MEMORY;
+    cols[0] = y;
+    cols[1] = x;
+    for (ST_int k = 0; k < K_ctrl; k++) cols[2 + k] = &controls[(size_t)k * N];
+    rc = partial_out_factors(cols, K_ctrl + 2, fe_vars, N, G, weights, maxiter, tolerance, verbose);
+    free(cols);
     if (rc != CBINSCATTER_OK) return rc;
 
-    /* Step 1: HDFE residualize y and x */
-    scratch = (ST_double *)ctools_safe_malloc2(2 * ((size_t)N + (size_t)max_levels) + 1, sizeof(ST_double));
-    if (!scratch) {
-        free_factors(factors, G);
-        return CBINSCATTER_ERR_MEMORY;
-    }
-    rc = demean_pair(y, x, factors, G, weights, N, max_levels, maxiter, tolerance, verbose, scratch);
-    free(scratch);
-    if (rc != CBINSCATTER_OK) {
-        free_factors(factors, G);
-        return rc;
-    }
-
-    /* Step 2: HDFE residualize each control variable. The controls are
-     * independent of one another, so they run one per thread, each with its
-     * own scratch (N + max_levels values). */
-    if (K_ctrl > 0) {
-        int nt = resid_threads();
-        if (nt > K_ctrl) nt = K_ctrl;
-        const size_t per = (size_t)N + (size_t)max_levels + 1;
-        ST_double *ctrl_scratch = (ST_double *)ctools_safe_malloc3((size_t)nt, per, sizeof(ST_double));
-        while (!ctrl_scratch && nt > 1) {
-            /* fewer threads need less scratch */
-            nt = nt / 2;
-            ctrl_scratch = (ST_double *)ctools_safe_malloc3((size_t)nt, per, sizeof(ST_double));
-        }
-        if (!ctrl_scratch) {
-            free_factors(factors, G);
-            return CBINSCATTER_ERR_MEMORY;
-        }
-        int failed = 0;
-        ST_int k;
-        #pragma omp parallel for num_threads(nt) schedule(dynamic) reduction(| : failed) if (nt > 1)
-        for (k = 0; k < K_ctrl; k++) {
-            ST_double *buf = ctrl_scratch + (size_t)resid_thread_id() * per;
-            if (demean_column_twice(&controls[(size_t)k * N], factors, G, weights, N, maxiter,
-                                    tolerance, buf, buf + N) != CBINSCATTER_OK)
-                failed |= 1;
-        }
-        free(ctrl_scratch);
-        if (failed) {
-            free_factors(factors, G);
-            return CBINSCATTER_ERR_HDFE;
-        }
-    }
-    free_factors(factors, G);
-
-    /* Step 3: OLS residualize partialled y,x on partialled controls */
-    rc = ols_residualize(y, x, controls, N, K_ctrl, weights, weight_type);
-
-    return rc;
+    /* OLS residualize partialled y,x on partialled controls */
+    return ols_residualize(y, x, controls, N, K_ctrl, weights, weight_type);
 }
 
 /* ========================================================================
  * Batch HDFE Residualization
  *
- * Residualizes multiple variables simultaneously with shared FE structure.
- * Instead of K separate iteration loops (each doing 2*G*N accesses to
- * FE level arrays), this does a single iteration loop where each sweep
- * demeanes all K variables together, reducing FE level array accesses
- * from K * iters * 2 * G * N to iters * 2 * G * N.
+ * Residualizes multiple variables with the same absorbed factors.
  * ======================================================================== */
-
-/* Demean one variable within the groups of one FE, adding the squared
- * weighted norm of the projection to *change_ss. means is a scratch buffer
- * of at least f->num_levels values. */
-static void project_one_fe_tracked(
-    ST_double *var,
-    const FE_Factor_Simple *f,
-    const ST_double *weights,
-    ST_int N,
-    ST_double *means,
-    ST_double *change_ss
-) {
-    ST_int L = f->num_levels;
-
-    memset(means, 0, (size_t)L * sizeof(ST_double));
-
-    /* Accumulate weighted sums */
-    for (ST_int i = 0; i < N; i++) {
-        ST_double w = (weights != NULL) ? weights[i] : 1.0;
-        means[f->levels[i]] += w * var[i];
-    }
-
-    /* Divide by weighted counts to get means */
-    for (ST_int level = 0; level < L; level++) {
-        if (f->weighted_counts[level] > 0) {
-            ST_double inv_w = 1.0 / f->weighted_counts[level];
-            means[level] *= inv_w;
-            *change_ss += f->weighted_counts[level] * means[level] * means[level];
-        }
-    }
-
-    /* Subtract means */
-    for (ST_int i = 0; i < N; i++) {
-        var[i] -= means[f->levels[i]];
-    }
-}
 
 ST_retcode hdfe_residualize_batch(
     ST_double **vars,         /* K_vars pointers to N-length arrays to residualize */
@@ -792,101 +722,11 @@ ST_retcode hdfe_residualize_batch(
     ST_int verbose,
     ST_int *dropped
 ) {
-    FE_Factor_Simple *factors = NULL;
-    ST_double *change_ss = NULL;
-    ST_double *norms = NULL;
-    ST_double *means_buf = NULL;
-    ST_retcode rc = CBINSCATTER_OK;
-    ST_int g, iter, v;
-    ST_int max_levels = 0;
-
     (void)weight_type;
     *dropped = 0;
 
     if (K_vars == 0) return CBINSCATTER_OK;
-
-    rc = build_factors(&factors, fe_vars, weights, N, G, &max_levels);
-    if (rc != CBINSCATTER_OK) return rc;
-
-    /* The variables are demeaned independently, one per thread, each thread
-     * with its own buffer of group means. All of them keep iterating until
-     * every one has converged, as when they were swept together. */
-    int nt = resid_threads();
-    if (nt > K_vars) nt = K_vars;
-    const size_t per = (size_t)max_levels + 1;
-    means_buf = (ST_double *)ctools_safe_malloc3((size_t)nt, per, sizeof(ST_double));
-    /* Every column must converge, including bin indicators and controls when
-     * the outcome is already orthogonal to the FEs. Keep the original scales
-     * so columns fully explained by the FEs can converge to zero as well. */
-    change_ss = (ST_double *)ctools_safe_calloc2((size_t)K_vars, sizeof(ST_double));
-    norms = (ST_double *)ctools_safe_calloc2((size_t)K_vars, sizeof(ST_double));
-    if (!means_buf || !change_ss || !norms) {
-        rc = CBINSCATTER_ERR_MEMORY;
-        goto cleanup;
-    }
-    #pragma omp parallel for num_threads(nt) schedule(static) if (nt > 1 && (size_t)N * (size_t)K_vars > 200000)
-    for (v = 0; v < K_vars; v++) {
-        ST_double ss = 0.0;
-        for (ST_int i = 0; i < N; i++) {
-            ST_double w = weights ? weights[i] : 1.0;
-            ss += w * vars[v][i] * vars[v][i];
-        }
-        norms[v] = sqrt(ss);
-    }
-
-    /* Iterative demeaning */
-    for (iter = 0; iter < maxiter; iter++) {
-        /* Forward then backward sweep over the FEs for each variable; the
-         * squared norms of its projections are accumulated in that order */
-        #pragma omp parallel for num_threads(nt) schedule(dynamic) private(g) if (nt > 1 && (size_t)N * (size_t)K_vars > 200000)
-        for (v = 0; v < K_vars; v++) {
-            ST_double *means = means_buf + (size_t)resid_thread_id() * per;
-            ST_double ss = 0.0;
-            for (g = 0; g < G; g++) {
-                project_one_fe_tracked(vars[v], &factors[g], weights, N, means, &ss);
-            }
-            for (g = G - 1; g >= 0; g--) {
-                project_one_fe_tracked(vars[v], &factors[g], weights, N, means, &ss);
-            }
-            change_ss[v] = ss;
-        }
-
-        /* For each column the update is the sum of 2*G projections. By
-         * Cauchy-Schwarz its squared weighted norm is at most 2*G times the
-         * sum of their squared norms. Accumulating those norms from the group
-         * means avoids an N*K_vars copy and cancellation in norm differences. */
-        int converged = 1;
-        for (v = 0; v < K_vars; v++) {
-            ST_double diff = 2.0 * G * change_ss[v];
-            if (!isfinite(diff) || !isfinite(norms[v]) ||
-                (norms[v] > 0 ? sqrt(diff) / norms[v] >= tolerance : diff > 0)) {
-                converged = 0;
-            }
-        }
-
-        if (converged) {
-            if (verbose) {
-                char msg[256];
-                snprintf(msg, sizeof(msg), "cbinscatter HDFE (batch, %d vars) converged in %d iterations\n",
-                         K_vars, iter + 1);
-                SF_display(msg);
-            }
-            break;
-        }
-    }
-
-    if (iter == maxiter) {
-        if (verbose) SF_display("cbinscatter HDFE (batch): max iterations reached\n");
-        rc = CBINSCATTER_ERR_HDFE;
-    }
-
-cleanup:
-    free_factors(factors, G);
-    free(change_ss);
-    free(norms);
-    free(means_buf);
-
-    return rc;
+    return partial_out_factors(vars, K_vars, fe_vars, N, G, weights, maxiter, tolerance, verbose);
 }
 
 /* ========================================================================

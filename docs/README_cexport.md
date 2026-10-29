@@ -1,8 +1,8 @@
 # cexport
 
 C writers for delimited text, Excel (.xls/.xlsx), dBase, SAS7BDAT, SAS XPORT5/8,
-SPSS SAV, and ESRI shapefiles. Full native parity is not yet established; see
-[the compatibility audit](IO_PARITY.md).
+SPSS SAV, and ESRI shapefiles. See
+[import and export formats](IO_PARITY.md) for what's supported and how it differs from `export`.
 
 ## Other file formats
 
@@ -184,6 +184,6 @@ quarterly, weekly, half-yearly, and yearly dates use the first day of the period
 
 `keepcellfmt` only copies an existing style-definition table. It does not retain worksheet cell-style assignments or other sheets; existing date style indices may be incompatible with newly written date cells. It is not a formatted-template update facility.
 
-## Parity audit
+## More details
 
-Excel export now writes data in the first row by default, matching Stata. Use `firstrow(variables)` for variable names or `firstrow(varlabels)` for labels. See [the full import/export audit](IO_PARITY.md) for exact regression coverage and remaining gaps.
+Excel export now writes data in the first row by default, matching Stata. Use `firstrow(variables)` for variable names or `firstrow(varlabels)` for labels. See [import and export formats](IO_PARITY.md) for supported formats, differences from `export`, and testing.

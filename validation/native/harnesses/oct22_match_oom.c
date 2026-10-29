@@ -6,6 +6,8 @@ static void *probe_realloc(void *p,size_t n) {if(fail_growth) return NULL; retur
 #include "cpsmatch/cpsmatch_kernels.c"
 #undef realloc
 #include "cpsmatch/cpsmatch_options.c"
+#include "cpsmatch/cpsmatch_stats.c"
+#include "cpsmatch/cpsmatch_radius.c"
 #include "cpsmatch/cpsmatch_impl.c"
 static ST_plugin mock;
 ST_plugin *_stata_=&mock;

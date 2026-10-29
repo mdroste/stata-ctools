@@ -2580,12 +2580,12 @@ program define benchmark_reghdfe_dof
 end
 
 /*******************************************************************************
- * benchmark_ppmlhdfe - Compare cpplmhdfe vs ppmlhdfe
+ * benchmark_ppmlhdfe - Compare cppmlhdfe vs ppmlhdfe
  *
- * Runs ppmlhdfe and cpplmhdfe with the same options and compares e() results.
+ * Runs ppmlhdfe and cppmlhdfe with the same options and compares e() results.
  * Compares: N, N_clust (exact), ll, r2_p (sigfigs), e(b), e(V) (sigfigs).
- * Handles _cons column: ppmlhdfe may include _cons in e(b) while cpplmhdfe
- * absorbs it; comparison uses cpplmhdfe's dimension.
+ * Handles _cons column: ppmlhdfe may include _cons in e(b) while cppmlhdfe
+ * absorbs it; comparison uses cppmlhdfe's dimension.
  *
  * Syntax: benchmark_ppmlhdfe depvar indepvars [weight], absorb(varlist)
  *         [vce(string) exposure(varname) offset(varname) testname(string) minsf(real)]
@@ -2635,13 +2635,13 @@ program define benchmark_ppmlhdfe
     local ppml_r2_p = e(r2_p)
     local ppml_N_clust = e(N_clust)
 
-    * Run cpplmhdfe
-    capture quietly cpplmhdfe `depvar' `indepvars' `wtexp' `if' `in', absorb(`absorb') `vceopt' `expopt' `offopt' tolerance(`tolerance')
+    * Run cppmlhdfe
+    capture quietly cppmlhdfe `depvar' `indepvars' `wtexp' `if' `in', absorb(`absorb') `vceopt' `expopt' `offopt' tolerance(`tolerance')
     local cppml_rc = _rc
 
     if `cppml_rc' != 0 {
         restore
-        test_fail "`testname'" "cpplmhdfe returned error `cppml_rc'"
+        test_fail "`testname'" "cppmlhdfe returned error `cppml_rc'"
         exit
     }
 

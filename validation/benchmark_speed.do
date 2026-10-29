@@ -254,7 +254,7 @@ noi di as text "  Running ppmlhdfe benchmarks"
 capture which ppmlhdfe
 local ppmlhdfe_installed = (_rc == 0)
 
-* ppmlhdfe vs cpplmhdfe (1-way FE)
+* ppmlhdfe vs cppmlhdfe (1-way FE)
 if `ppmlhdfe_installed' {
     use `main', clear
     timer clear
@@ -271,12 +271,12 @@ else {
 use `main', clear
 timer clear
 timer on 1
-cpplmhdfe y_count x1 x2 x3, absorb(g1) verbose
+cppmlhdfe y_count x1 x2 x3, absorb(g1) verbose
 timer off 1
 quietly timer list 1
-local t_cpplmhdfe = r(t1)
+local t_cppmlhdfe = r(t1)
 
-* ppmlhdfe vs cpplmhdfe (2-way FE)
+* ppmlhdfe vs cppmlhdfe (2-way FE)
 if `ppmlhdfe_installed' {
     use `main', clear
     timer clear
@@ -292,10 +292,10 @@ else {
 use `main', clear
 timer clear
 timer on 1
-cpplmhdfe y_count x1 x2 x3, absorb(g1 g2) verbose
+cppmlhdfe y_count x1 x2 x3, absorb(g1 g2) verbose
 timer off 1
 quietly timer list 1
-local t_cpplmhdfe_2fe = r(t1)
+local t_cppmlhdfe_2fe = r(t1)
 
 *===============================================================================
 * BINSCATTER BENCHMARKS
@@ -760,16 +760,16 @@ noi di as text "  ivreghdfe (2-way FE)      " %8.2f `t_ivreghdfe_2fe' "    " %8.
 noi di as text ""
 noi di as text "PPML (N=`N'):"
 if `t_ppmlhdfe' != . {
-    noi di as text "  ppmlhdfe (1-way FE)       " %8.2f `t_ppmlhdfe' "    " %8.2f `t_cpplmhdfe' "    " %5.1f (`t_ppmlhdfe'/`t_cpplmhdfe') "x"
+    noi di as text "  ppmlhdfe (1-way FE)       " %8.2f `t_ppmlhdfe' "    " %8.2f `t_cppmlhdfe' "    " %5.1f (`t_ppmlhdfe'/`t_cppmlhdfe') "x"
 }
 else {
-    noi di as text "  ppmlhdfe (1-way FE)            N/A    " %8.2f `t_cpplmhdfe' "       N/A"
+    noi di as text "  ppmlhdfe (1-way FE)            N/A    " %8.2f `t_cppmlhdfe' "       N/A"
 }
 if `t_ppmlhdfe_2fe' != . {
-    noi di as text "  ppmlhdfe (2-way FE)       " %8.2f `t_ppmlhdfe_2fe' "    " %8.2f `t_cpplmhdfe_2fe' "    " %5.1f (`t_ppmlhdfe_2fe'/`t_cpplmhdfe_2fe') "x"
+    noi di as text "  ppmlhdfe (2-way FE)       " %8.2f `t_ppmlhdfe_2fe' "    " %8.2f `t_cppmlhdfe_2fe' "    " %5.1f (`t_ppmlhdfe_2fe'/`t_cppmlhdfe_2fe') "x"
 }
 else {
-    noi di as text "  ppmlhdfe (2-way FE)            N/A    " %8.2f `t_cpplmhdfe_2fe' "       N/A"
+    noi di as text "  ppmlhdfe (2-way FE)            N/A    " %8.2f `t_cppmlhdfe_2fe' "       N/A"
 }
 noi di as text ""
 noi di as text "QREG (N=`N'):"

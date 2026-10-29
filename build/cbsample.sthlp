@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.0.1 07Feb2026}{...}
+{* *! version 1.1.0 20261016}{...}
 {viewerjumpto "Syntax" "cbsample##syntax"}{...}
 {viewerjumpto "Description" "cbsample##description"}{...}
 {viewerjumpto "Options" "cbsample##options"}{...}
@@ -40,24 +40,25 @@
 {title:Description}
 
 {pstd}
-{cmd:cbsample} is a high-performance replacement for Stata's {help bsample:bsample}
-command. It draws a bootstrap sample (with replacement) from the dataset in memory.
+{cmd:cbsample} draws a sample with replacement. A sampling unit is an observation,
+or a cluster when {opt cluster()} is specified. By default, the number of draws
+in each stratum equals its original number of sampling units.
 
 {pstd}
-By default, {cmd:cbsample} replaces the data in memory with a bootstrap sample
-using the original number of sampling units in each stratum. A sampling unit is
-an observation, or a cluster when {opt cluster()} is specified. Selected rows
-are physically replicated with {cmd:expand}; unselected rows are dropped.
-With unequal cluster sizes, the expanded row count can differ from the original.
+The sample replaces the data in memory. Selected observations are replicated
+according to their draw counts; unselected observations, including those outside
+{cmd:if}/{cmd:in} or with missing strata, are dropped. With unequal cluster
+sizes, the resulting number of observations can differ from the original.
 
 {pstd}
-With {opt weight()}, {cmd:cbsample} keeps all observations and stores
-frequency weights indicating how many times each observation was selected.
-This is useful for bootstrap estimation where weights are preferred over
-physical replication of observations.
+With {opt weight()}, all observations remain in memory and an existing numeric
+variable receives each observation's draw count. Observations outside the
+sampling sample receive zero.
 
 {pstd}
-{cmd:cbsample} respects Stata's {help set seed:set seed} for reproducibility.
+Use {help set seed} to reproduce a draw with the same data, observation order,
+and options. {cmd:cbsample} and {cmd:bsample} need not produce the same sample
+from the same seed.
 
 
 {marker options}{...}
@@ -71,7 +72,6 @@ The positional {it:#} specifies draws within each stratum. For example,
 adding {cmd:cluster(c)} draws two clusters from every stratum. Omitting the
 count uses each stratum's original number of sampling units. An explicit count
 must be a positive integer no greater than the available units in any stratum.
-The {cmd:n()} option is not accepted.
 
 {phang}
 {opt cluster(varlist)} specifies the variables that identify resampling clusters.
@@ -93,32 +93,20 @@ for bootstrap estimation.
 {dlgtab:Advanced}
 
 {phang}
-{opt threads(#)} specifies the maximum number of threads to use for parallel
-operations. By default, {cmd:cbsample} uses the {help ctools##threads:ctools thread setting}, which is at most 16 threads unless you change it.
+{opt threads(#)} sets the maximum number of threads, from 1 to 256.
+The default follows the {help ctools##threads:ctools thread setting}.
 
 {phang}
-{opt verbose} displays detailed progress information and timing breakdown.
+{opt verbose} displays progress and elapsed times.
 
 
 {marker remarks}{...}
 {title:Remarks}
 
 {pstd}
-{cmd:cbsample} uses a high-quality xoshiro256** pseudorandom number generator
-for statistically reliable bootstrap sampling.
-
-{pstd}
-When neither {opt cluster()} nor {opt strata()} is specified, simple random
-sampling with replacement is performed.
-
-{pstd}
-With {opt cluster()}, the cluster bootstrap resamples clusters rather than
-observations. This is appropriate when observations within clusters are not
-independent.
-
-{pstd}
-With {opt strata()}, stratified bootstrap sampling maintains the stratum
-structure of the original data.
+The command uses the xoshiro256** generator seeded from Stata's random-number
+state. With {opt cluster()}, all eligible observations in a cluster receive
+the same draw count. With {opt strata()}, draws are independent across strata.
 
 
 {marker examples}{...}
@@ -163,7 +151,10 @@ structure of the original data.
 
 {synoptset 28 tabbed}{...}
 {p2col 5 28 32 2: Scalars}{p_end}
-{synopt:{cmd:_cbsample_n_selected}}number of observations in bootstrap sample{p_end}
+{synopt:{cmd:_cbsample_n_selected}}number of distinct observations selected at least once{p_end}
+{synopt:{cmd:_cbsample_total_weight}}sum of draw counts across observations; size of the expanded sample{p_end}
+{synopt:{cmd:_cbsample_nobs}}number of eligible observations{p_end}
+{synopt:{cmd:_cbsample_threads}}number of threads used{p_end}
 {synopt:{cmd:_cbsample_nclusters}}number of clusters (if {opt cluster()} specified){p_end}
 {synopt:{cmd:_cbsample_nstrata}}number of strata (if {opt strata()} specified){p_end}
 

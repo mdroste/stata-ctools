@@ -114,6 +114,11 @@ ST_retcode civreghdfe_read_input(civreghdfe_input *input)
         return rc;
     center = (ST_int)dval;
 
+    /* The sample marker follows every other variable in place of an if */
+    ST_int touse = 0;
+    if (SF_scal_use("__civreghdfe_touse", &dval) == 0)
+        touse = dval != 0;
+
     input->K_endog = K_endog;
     input->K_exog = K_exog;
     input->K_iv = K_iv;
@@ -135,6 +140,7 @@ ST_retcode civreghdfe_read_input(civreghdfe_input *input)
     input->sdofminus_opt = sdofminus_opt;
     input->nopartialsmall = nopartialsmall;
     input->center = center;
+    input->touse = touse;
     input->tolerance = tolerance;
     input->kclass_user = kclass_user;
     input->fuller_alpha = fuller_alpha;

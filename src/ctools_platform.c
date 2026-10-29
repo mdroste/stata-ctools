@@ -4,7 +4,28 @@
 #include <sys/sysctl.h>
 #elif defined(__linux__)
 #include <unistd.h>
+#elif defined(_WIN32)
+#include <windows.h>
 #endif
+
+uint64_t ctools_physical_memory_bytes(void)
+{
+#if defined(__APPLE__)
+    uint64_t bytes = 0;
+    size_t size = sizeof(bytes);
+    return sysctlbyname("hw.memsize", &bytes, &size, NULL, 0) == 0 ? bytes : 0;
+#elif defined(_WIN32)
+    MEMORYSTATUSEX status = {0};
+    status.dwLength = sizeof(status);
+    return GlobalMemoryStatusEx(&status) ? status.ullTotalPhys : 0;
+#elif defined(__linux__)
+    long pages = sysconf(_SC_PHYS_PAGES);
+    long page_size = sysconf(_SC_PAGESIZE);
+    if (pages > 0 && page_size > 0 && (uint64_t)pages <= UINT64_MAX / (uint64_t)page_size)
+        return (uint64_t)pages * (uint64_t)page_size;
+#endif
+    return 0;
+}
 
 ctools_cache_info ctools_detect_cache_sizes(void)
 {

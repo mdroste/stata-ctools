@@ -1,4 +1,5 @@
-*! Private helper for cmerge; maintained in package/ado.
+*! version 1.1.0 20261016 github.com/mdroste/stata-ctools
+*! Private helper for cmerge.
 program define _cmerge_clear_sortedby
     local marked : sortedby
     if "`marked'" == "" | _N == 0 exit

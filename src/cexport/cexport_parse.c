@@ -141,6 +141,12 @@ int cexport_parse_args(cexport_context *ctx, const char *args)
             } else if (strcmp(token, "noparallel") == 0) {
                 /* Disable parallel I/O (for debugging/comparison) */
                 ctx->use_parallel_io = false;
+            } else if (strcmp(token, "skipif") == 0) {
+                /* No if condition: SF_ifobs() would select every row */
+                ctx->skip_if = true;
+            } else if (strcmp(token, "touse") == 0) {
+                /* A sample marker follows the exported variables */
+                ctx->touse = true;
             } else if (strcmp(token, "nofsync") == 0) {
                 /* Skip final fsync for faster but less durable writes */
                 ctx->io_flags |= CEXPORT_IO_FLAG_NOFSYNC;
@@ -210,7 +216,7 @@ ST_retcode cexport_column_metadata(size_t column, char **name, int *type, int *d
 
 int cexport_load_varnames(cexport_context *ctx)
 {
-    ctx->nvars = SF_nvars();
+    ctx->nvars = (size_t)SF_nvars() - (ctx->touse ? 1 : 0);
     ctx->varnames = ctools_safe_calloc2(ctx->nvars, sizeof(char *));
     ctx->vartypes = ctools_safe_malloc2(ctx->nvars, sizeof(vartype_t));
     if (!ctx->varnames || !ctx->vartypes) return 920;

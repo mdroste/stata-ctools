@@ -4,6 +4,8 @@ Uses the repository Stata launcher (interactive login zsh's stata alias), a
 monotonic plugin clock, and fresh completion nonces. Summaries exclude warmups.
 CSV output bytes and decompressed XLSX parts must match between both builds;
 Stata's cf checks imported values on the same input files.
+With --run, generated data are disposable; logs, manifests and timing tables
+remain in --output. Use --keep-data to retain data for later --summarize-only.
 """
 import argparse
 import csv
@@ -16,13 +18,15 @@ import shutil
 import statistics
 import subprocess
 import zipfile
-from stata_runner import launch_driver, stata_command
+from stata_runner import benchmark_data, launch_driver, stata_command
 
 ROOT = Path(__file__).resolve().parents[1]
 LABELS = ('b1', 'c1', 'c2', 'b2')
 
 
-def summarize(out):
+def summarize(out, data=None):
+    data = out if data is None else data
+    (out/'comparisons.txt').unlink(missing_ok=True)
     measurements = {}
     records = []
     for label in LABELS:
@@ -64,9 +68,9 @@ def summarize(out):
         if not op.startswith('export_'):
             continue
         ext = 'csv' if op == 'export_csv' else 'xlsx'
-        expected = out/f'b1_{case}_{threads}.{ext}'
+        expected = data/f'b1_{case}_{threads}.{ext}'
         for label in ('c1','c2','b2'):
-            actual = out/f'{label}_{case}_{threads}.{ext}'
+            actual = data/f'{label}_{case}_{threads}.{ext}'
             if ext == 'csv':
                 if hashlib.sha256(expected.read_bytes()).digest() != hashlib.sha256(actual.read_bytes()).digest():
                     raise ValueError('CSV bytes differ: ' + str(actual))
@@ -78,7 +82,9 @@ def summarize(out):
                         if b.read(name) != c.read(name):
                             raise ValueError(f'XLSX part differs: {actual}: {name}')
             checked += 1
-    print(f'PASS {checked} exact export comparisons; imported values checked by Stata cf')
+    result = f'PASS {checked} exact export comparisons; imported values checked by Stata cf'
+    (out/'comparisons.txt').write_text(result+'\n')
+    print(result)
     for row in summary:
         print(f"{row['case']:8} {row['operation']:12} t={row['threads']:2} "
               f"{row['baseline_seconds']:.6f} -> {row['candidate_seconds']:.6f} s "
@@ -96,11 +102,14 @@ def main():
     p.add_argument('--reps',type=int,default=3)
     p.add_argument('--run',action='store_true')
     p.add_argument('--summarize-only',action='store_true')
+    p.add_argument('--keep-data',action='store_true',
+                   help='retain generated data after --run for debugging or --summarize-only')
     a = p.parse_args(); out=a.output.resolve();out.mkdir(parents=True,exist_ok=True)
     if a.summarize_only:
         summarize(out);return
     if a.baseline is None or a.candidate is None or a.reps < 1:
         p.error('provide --baseline, --candidate, and positive --reps')
+    (out/'comparisons.txt').unlink(missing_ok=True)
     mac=platform.system()=='Darwin'
     plugin=('ctools_mac_arm.plugin' if platform.machine()=='arm64' else 'ctools_mac_x86.plugin') if mac else 'ctools_linux.plugin'
     builds={'b':a.baseline.resolve(),'c':a.candidate.resolve()}
@@ -113,27 +122,29 @@ def main():
     subprocess.run(['cc',*flags,str(ROOT/'validation/benchmark_clock.c'),str(ROOT/'src/stplugin.c'),'-o',str(out/'clock.plugin')],check=True)
     shutil.copy2(ROOT/'validation/benchmark_io_performance.do',out/'benchmark.do')
     (out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
-    for label in LABELS:
-        driver=out/(label+'.do')
-        driver.write_text(f'''clear all
+    # Prepared-only drivers keep stable paths; executed runs own a scratch directory.
+    with benchmark_data(out, keep=not a.run or a.keep_data) as data:
+        for label in LABELS:
+            driver=out/(label+'.do')
+            driver.write_text(f'''clear all
 set more off
 log using "{out}/{label}.log", text replace
-capture noisily do "{out}/benchmark.do" "{builds[label[0]]}" {label} "{out}" "{' '.join(a.cases)}" {a.reps}
+capture noisily do "{out}/benchmark.do" "{builds[label[0]]}" {label} "{out}" "{' '.join(a.cases)}" {a.reps} "{data}"
 local rc=_rc
 di "IO_BENCHMARK_RC=`rc'"
 log close
 exit, clear
 ''')
+            if a.run:
+                for path, digest in manifest[label[0]].items():
+                    if hashlib.sha256(Path(path).read_bytes()).hexdigest()!=digest:
+                        raise ValueError('frozen build changed: '+path)
+                print('Running '+label,flush=True)
+                launch_driver(driver,out/(label+'.log'))
+            else:
+                print(shlex.join(stata_command(driver)))
         if a.run:
-            for path, digest in manifest[label[0]].items():
-                if hashlib.sha256(Path(path).read_bytes()).hexdigest()!=digest:
-                    raise ValueError('frozen build changed: '+path)
-            print('Running '+label,flush=True)
-            launch_driver(driver,out/(label+'.log'))
-        else:
-            print(shlex.join(stata_command(driver)))
-    if a.run:
-        summarize(out)
+            summarize(out, data)
 
 
 if __name__=='__main__':

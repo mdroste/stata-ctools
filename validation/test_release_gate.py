@@ -35,7 +35,7 @@ def logs():
     assert runner.validate_log(log, nonce) == (2000, 0)
     for bad in (
         log.replace(nonce, 'stale-run'),
-        log.replace('COMPLETE=cpplmhdfe', 'COMPLETE='),
+        log.replace('COMPLETE=cppmlhdfe', 'COMPLETE='),
         log.replace('cmerge RC=0', 'cmerge RC=679'),
         log.replace('FAILED=0', 'FAILED=1'),
         log.replace('SKIPPED=0 EXPECTED', 'SKIPPED=1 EXPECTED'),
@@ -70,14 +70,14 @@ def packages():
             staged = packaging.stage(source, directory / ('stage-' + targets[0] + str(len(targets))),
                                      targets, 'test-only')
             assert not packaging.check_package(staged)
-            assert (staged / 'cpplmhdfe_p.ado').is_file()
+            assert (staged / 'cppmlhdfe_p.ado').is_file()
             assert {p.name for p in staged.glob('*.plugin')} == {f'ctools_{p}.plugin' for p in targets}
-            (staged / 'cpplmhdfe_p.ado').unlink()
+            (staged / 'cppmlhdfe_p.ado').unlink()
             assert packaging.check_package(staged)
         (source / 'ctools_linux.plugin').unlink()
         must_reject(lambda: packaging.stage(source, directory / 'bad', list(packaging.PLATFORMS), 'test-only'))
         assert not (directory / 'bad').exists()
-        (source / 'cpplmhdfe_p.ado').unlink()
+        (source / 'cppmlhdfe_p.ado').unlink()
         must_reject(lambda: packaging.stage(source, directory / 'bad-helper', ['mac_arm'], 'test-only'))
     print('PASS single/all-platform manifests, helper completeness, and atomic staging')
 

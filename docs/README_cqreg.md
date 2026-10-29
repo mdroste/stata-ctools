@@ -75,9 +75,6 @@ cqreg price mpg weight, verbose
 
 ## Performance
 
-See [bounded performance checks](cqreg-performance.md) for measured selection
-speedups, workspace savings, and small regression tests.
-
 `cqreg` achieves its speed through:
 
 ### Speedup Tricks

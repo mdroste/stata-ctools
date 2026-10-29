@@ -1,3 +1,4 @@
+*! version 1.1.0 20261016 github.com/mdroste/stata-ctools
 *! ctools: classify a vce() specification
 * _ctools_vce <kind> <rest> : <specification> sets two locals of the caller:
 * <kind> is cluster (any word starting with cl), robust (robust, r),

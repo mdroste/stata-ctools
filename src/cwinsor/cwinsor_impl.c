@@ -484,6 +484,7 @@ ST_retcode cwinsor_main(const char *args)
     ctools_filtered_data_init(&target_filtered);
     int load_flags = nby ? 0 : CTOOLS_LOAD_NO_SORT_ORDER;
     if (ctools_parse_bool_option(args, "skipif")) load_flags |= CTOOLS_LOAD_SKIP_IF;
+    else if (ctools_parse_bool_option(args, "touse")) load_flags |= CTOOLS_LOAD_MARKER;
     stata_retcode load_rc = ctools_data_load(&target_filtered, load_indices,
                                               nload, 0, 0, load_flags);
     if (load_rc != STATA_OK) {
@@ -613,9 +614,18 @@ ST_retcode cwinsor_main(const char *args)
     }
 
     if (nby > 0) {
-        for (size_t b = 0; b < nby; b++) group_keys[b] = (int)(nvars + b);
-        ngroups = ctools_group_starts(&target_filtered.data, target_filtered.data.sort_order,
-                                      group_keys, nby, group_starts);
+        int string_groups = 0;
+        for (size_t b = 0; b < nby; b++) {
+            group_keys[b] = (int)(nvars + b);
+            string_groups |= target_filtered.data.vars[nvars + b].type == STATA_TYPE_STRING;
+        }
+        /* String comparisons amortize the parallel boundary pass; cheap numeric
+         * keys retain the original single-pass grouping path. */
+        ngroups = string_groups
+            ? ctools_group_starts_parallel(&target_filtered.data, target_filtered.data.sort_order,
+                                           group_keys, nby, group_starts)
+            : ctools_group_starts(&target_filtered.data, target_filtered.data.sort_order,
+                                  group_keys, nby, group_starts);
         for (size_t g = 0; g < ngroups; g++) {
             groups[g].start = group_starts[g];
             groups[g].count = group_starts[g + 1] - group_starts[g];

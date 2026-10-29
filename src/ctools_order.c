@@ -32,6 +32,35 @@ size_t ctools_group_starts(const stata_data *d, const perm_idx_t *order,
     return ngroups;
 }
 
+size_t ctools_group_starts_parallel(const stata_data *d, const perm_idx_t *order,
+                                  const int *keys, size_t nkeys, size_t *starts)
+{
+    size_t n = d->nobs;
+    int threads = ctools_get_max_threads();
+    if (n < 32768 || threads <= 1)
+        return ctools_group_starts(d, order, keys, nkeys, starts);
+
+    unsigned char *boundary = malloc(n);
+    if (!boundary)
+        return ctools_group_starts(d, order, keys, nkeys, starts);
+
+    /* Each comparison reads the preceding row, including at worker boundaries.
+     * No host callbacks or shared writes occur in this loop. */
+    #pragma omp parallel for schedule(static) num_threads(threads)
+    for (size_t i = 0; i < n; i++)
+    {
+        boundary[i] = i == 0 || ctools_compare_rows(d, order ? order[i - 1] : i - 1,
+                                                   keys, d, order ? order[i] : i,
+                                                   keys, nkeys) != 0;
+    }
+    size_t ngroups = 0;
+    for (size_t i = 0; i < n; i++)
+        if (boundary[i]) starts[ngroups++] = i;
+    starts[ngroups] = n;
+    free(boundary);
+    return ngroups;
+}
+
 
 static stata_retcode numeric_order(stata_data *d, const int *keys, size_t nk,
                                   perm_idx_t *tmp)

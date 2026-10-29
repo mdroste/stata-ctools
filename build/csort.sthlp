@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.0.1 07Feb2026}{...}
+{* *! version 1.1.0 20261016}{...}
 {viewerjumpto "Syntax" "csort##syntax"}{...}
 {viewerjumpto "Description" "csort##description"}{...}
 {viewerjumpto "Options" "csort##options"}{...}
@@ -41,10 +41,6 @@ where {it:name} is one of: {opt auto} (default), {opt counting}, {opt lsd}, {opt
 {marker description}{...}
 {title:Description}
 
-{pstd}
-{cmd:csort} is a high-performance drop-in replacement for Stata's {help sort:sort}
-command. It uses a C plugin with parallel algorithms to achieve significant
-speed improvements over the native command, especially for large datasets.
 
 {pstd}
 {cmd:csort} sorts the observations of the current dataset by the values of the
@@ -61,12 +57,11 @@ strings are supported; {cmd:strL} variables are rejected.
 
 {phang}
 {opt algorithm(name)} specifies which sorting algorithm to use. The default is
-{opt auto}, which intelligently selects the optimal algorithm based on your data:
+{opt auto}, which selects an algorithm from the key types and ranges:
 numeric variables use counting sort (with automatic fallback to LSD radix for
 large ranges), string variables of up to 16 bytes, alone or with numeric
 variables, use LSD radix sort, and wider string variables use MSD radix sort.
-This provides excellent
-performance for common Stata workloads without manual tuning. See
+See
 {help csort##algorithms:Algorithms} for details on manual algorithm selection.
 
 {phang}
@@ -90,8 +85,8 @@ memory usage. Use {opt nostream} to force all variables to be loaded into C
 memory simultaneously.
 
 {phang}
-{opt threads(#)} specifies the maximum number of threads to use for parallel
-operations. By default, {cmd:csort} uses the {help ctools##threads:ctools thread setting}, which is at most 16 threads unless you change it.
+{opt threads(#)} sets the maximum number of threads, from 1 to 256.
+The default follows the {help ctools##threads:ctools thread setting}.
 
 {phang}
 {opt nosortedby} prevents {cmd:csort} from setting Stata's internal {it:sortedby}
@@ -103,21 +98,19 @@ so commands that rely on Stata's {it:sortedby} attribute (like {cmd:by:}) will
 not treat the data as sorted.
 
 {phang}
-{opt verbose} displays detailed progress information and timing breakdown.
+{opt verbose} displays progress and elapsed times.
 
 
 {marker algorithms}{...}
 {title:Algorithms}
 
 {pstd}
-By default, {cmd:csort} automatically selects the optimal sorting algorithm based
-on your data characteristics. This usually provides the best performance without
-manual tuning. You can override the default with the {opt algorithm()} option.
+Use {opt algorithm()} to select an algorithm. The default is {opt auto}.
 
 {dlgtab:Auto (default)}
 
 {pstd}
-{opt algorithm(auto)} intelligently selects the best algorithm:
+{opt algorithm(auto)} uses the following rules:
 
 {p 8 12 2}- {bf:Numeric variables}: Uses counting sort for O(n+k) performance when
 the value range is small (common for dates, years, categories). Automatically
@@ -145,26 +138,15 @@ For specialized use cases, you can manually select an algorithm:
 Falls back to LSD radix if range is too large.{p_end}
 {p2col :{opt lsd}}Numeric data and strings of up to 16 bytes. Processes bytes from least to most significant.{p_end}
 {p2col :{opt msd}}Long string data. Processes from most significant byte, can skip trailing bytes.{p_end}
-{p2col :{opt ips4o}}General-purpose parallel samplesort. Good default for mixed workloads.{p_end}
-{p2col :{opt timsort}}Partially sorted data. O(n) for nearly sorted, O(n log n) worst case.{p_end}
-{p2col :{opt sample}}Very large datasets with many cores. Near-linear parallel scaling.{p_end}
+{p2col :{opt ips4o}}General-purpose parallel samplesort.{p_end}
+{p2col :{opt timsort}}Comparison sort that uses existing ordered runs; O(n log n) worst case.{p_end}
+{p2col :{opt sample}}Parallel sample sort.{p_end}
 {p2col :{opt merge}}Guaranteed stable O(n log n). Predictable performance.{p_end}
 
 
 {marker remarks}{...}
 {title:Remarks}
 
-{pstd}
-{cmd:csort} performs all operations in C using parallelized algorithms. The
-implementation uses:
-
-{p 8 12 2}1. Parallel data loading with OpenMP{p_end}
-{p 8 12 2}2. Optimized sort algorithm (selected via {opt algorithm()} option){p_end}
-{p 8 12 2}3. Parallel data storing back to Stata{p_end}
-
-{pstd}
-Runtime depends on dataset shape, options, and hardware. Benchmark comparisons
-should record the date, CPU/OS, Stata/reference versions, options, and dimensions.
 
 {pstd}
 {cmd:csort} supports sorting on multiple variables. When sorting on multiple
@@ -174,7 +156,8 @@ variable is the secondary key, and so forth.
 {pstd}
 Both numeric and string variables are supported. Numeric variables are sorted
 in ascending numerical order. String variables are sorted in ascending
-lexicographic (ASCII) order.
+byte order. Numeric missing values sort after finite numbers, in the order
+{cmd:.}, {cmd:.a}, ..., {cmd:.z}; empty strings sort first.
 
 {pstd}
 {bf:Limitations:} {cmd:csort} does not support datasets exceeding 2^31 - 1
@@ -198,18 +181,18 @@ lexicographic (ASCII) order.
 {phang2}{cmd:. csort price, verbose}{p_end}
 
 {pstd}Force a specific algorithm (normally not needed):{p_end}
-{phang2}{cmd:. csort year, algorithm(counting)}{p_end}
+{phang2}{cmd:. csort rep78, algorithm(counting)}{p_end}
 {phang2}{cmd:. csort make, algorithm(msd)}{p_end}
-{phang2}{cmd:. csort idcode, algorithm(ips4o)}{p_end}
+{phang2}{cmd:. csort make, algorithm(ips4o)}{p_end}
 
 {pstd}Sort with detailed progress information:{p_end}
 {phang2}{cmd:. csort price mpg, verbose}{p_end}
 
 {pstd}Use streaming mode for wide datasets with limited memory:{p_end}
-{phang2}{cmd:. csort idcode, stream(1)}{p_end}
+{phang2}{cmd:. csort make, stream(1)}{p_end}
 
 {pstd}Use streaming mode with 4 variables processed at a time:{p_end}
-{phang2}{cmd:. csort idcode, stream(4)}{p_end}
+{phang2}{cmd:. csort make, stream(4)}{p_end}
 
 {pstd}Limit parallelism to 4 threads:{p_end}
 {phang2}{cmd:. sysuse auto, clear}{p_end}
@@ -240,7 +223,7 @@ lexicographic (ASCII) order.
 {synopt:{cmd:r(openmp_enabled)}}1 if OpenMP is enabled, 0 otherwise{p_end}
 
 {p2col 5 24 28 2: Macros}{p_end}
-{synopt:{cmd:r(algorithm)}}sorting algorithm used (auto, counting, lsd, msd, ips4o, timsort, sample, or merge){p_end}
+{synopt:{cmd:r(algorithm)}}requested algorithm (auto, counting, lsd, msd, ips4o, timsort, sample, or merge){p_end}
 {synopt:{cmd:r(sortvars)}}variables used for sorting{p_end}
 {synopt:{cmd:r(cmd)}}{cmd:csort}{p_end}
 

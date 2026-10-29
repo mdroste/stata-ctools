@@ -3,6 +3,10 @@
 #include "stplugin.h"
 #include <math.h>
 #include "cbinscatter/cbinscatter_resid.c"
+#include "hdfe/hdfe_solver.c"
+#include "hdfe/hdfe_remap.c"
+#include "hdfe/hdfe_sample.c"
+#include "ctools_hdfe_utils.c"
 #include "ctools_ols.c"
 
 static ST_plugin host;

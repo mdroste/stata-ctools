@@ -1,7 +1,8 @@
 * One-shot README profiler. Run from the repository root; see docs/README_BENCHMARK.md.
-* Arguments: output directory, quoted observation counts, Stata/MP processors.
-* ctools commands take no threads() option, so they use the ctools default.
-args outdir sizes threads
+* Arguments: output directory, quoted observation counts, Stata/MP processors,
+* quoted subset of pairs (default all). ctools commands take no threads()
+* option, so they use the ctools default.
+args outdir sizes threads pairs
 clear all
 set more off
 set linesize 255
@@ -9,21 +10,24 @@ set graphics off
 if `"`outdir'"' == "" local outdir "docs/benchmarks/readme_profile"
 if `"`sizes'"' == "" local sizes "1000000 10000000 25000000"
 if "`threads'" == "" local threads = c(processors)
+local allpairs "export import sort merge sample bsample encode decode destring ipolate split rangejoin winsor rangestat binscatter reghdfe ivreghdfe ppmlhdfe psmatch2 qreg"
+if `"`pairs'"' == "" local pairs "`allpairs'"
 capture mkdir "`outdir'"
 log using "`outdir'/profile.log", text replace name(profile)
 
 program define profile_readme
-    args outdir sizes threads
+    args outdir sizes threads pairs allpairs
     set processors `threads'
+    if `"`: list pairs - allpairs'"' != "" | `"`: list dups pairs'"' != "" error 198
     adopath ++ "build"
     local candidate : environment CTOOLS_TEST_PLUGIN_DIR
     if `"`candidate'"' != "" adopath ++ `"`candidate'"'
     about
     ctools, version
-    di "PROFILE_SETTINGS sizes=`sizes' variables=20 processors=`threads' seed=95183"
+    di "PROFILE_SETTINGS sizes=`sizes' variables=20 processors=`threads' seed=95183 pairs=`pairs'"
     foreach cmd in cimport cexport csort cmerge csample cbsample cencode cdecode ///
         cdestring cipolate csplit crangejoin cqreg cwinsor crangestat cpsmatch ///
-        cbinscatter creghdfe civreghdfe cpplmhdfe rangejoin rangestat gstats ///
+        cbinscatter creghdfe civreghdfe cppmlhdfe rangejoin rangestat gstats ///
         psmatch2 binscatter reghdfe ivreghdfe ppmlhdfe ftools ivreg2 {
         capture noisily which `cmd'
     }
@@ -110,16 +114,14 @@ program define profile_readme
         local c_psmatch2 "cpsmatch treat x1 x2, outcome(y) logit neighbor(1)"
         local ref_binscatter "binscatter y x1, nquantiles(20)"
         local c_binscatter "cbinscatter y x1, nquantiles(20)"
-        local ref_reghdfe "reghdfe y x1 x2 x3, absorb(firm group) tolerance(1e-8)"
-        local c_reghdfe "creghdfe y x1 x2 x3, absorb(firm group) tolerance(1e-8)"
-        local ref_ivreghdfe "ivreghdfe y x2 x3 (x1=z), absorb(firm group) tolerance(1e-8)"
-        local c_ivreghdfe "civreghdfe y x2 x3 (x1=z), absorb(firm group) tolerance(1e-8)"
-        local ref_ppmlhdfe "ppmlhdfe count x1 x2 x3, absorb(firm group) tolerance(1e-8)"
-        local c_ppmlhdfe "cpplmhdfe count x1 x2 x3, absorb(firm group) tolerance(1e-8)"
+        local ref_reghdfe "reghdfe y x1 x2, absorb(firm group) tolerance(1e-8)"
+        local c_reghdfe "creghdfe y x1 x2, absorb(firm group) tolerance(1e-8)"
+        local ref_ivreghdfe "ivreghdfe y x2 (x1=z), absorb(firm group) tolerance(1e-8)"
+        local c_ivreghdfe "civreghdfe y x2 (x1=z), absorb(firm group) tolerance(1e-8)"
+        local ref_ppmlhdfe "ppmlhdfe count x1 x2, absorb(firm group) tolerance(1e-8)"
+        local c_ppmlhdfe "cppmlhdfe count x1 x2, absorb(firm group) tolerance(1e-8)"
 
-        foreach cmd in export import sort merge sample bsample encode decode destring ///
-            ipolate split rangejoin winsor rangestat binscatter reghdfe ivreghdfe ///
-            ppmlhdfe psmatch2 qreg {
+        foreach cmd of local pairs {
             foreach method in ref c {
                 quietly use `base', clear
                 set seed 95183
@@ -162,7 +164,7 @@ program define profile_readme
     file close `results'
     di "PROFILE_COMPLETE"
 end
-capture noisily profile_readme `"`outdir'"' `"`sizes'"' `threads'
+capture noisily profile_readme `"`outdir'"' `"`sizes'"' `threads' `"`pairs'"' `"`allpairs'"'
 local rc = _rc
 di "PROFILE_EXIT rc=`rc'"
 log close profile

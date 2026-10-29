@@ -1,3 +1,4 @@
+*! version 1.1.0 20261016 github.com/mdroste/stata-ctools
 *! Binary statistical writers; serialization is provided by C.
 program define _cio_export, rclass
     version 14.1
@@ -102,14 +103,21 @@ program define _cio_export, rclass
         }
         local exportvars `exportvars' `formatted'
     }
-    marksample touse, novarlist
+    * Stata answers an if one observation at a time. Without one the plugin
+    * takes every observation in range; an if is marked and passed last, as a
+    * sample marker the plugin reads in parallel. The plugin reports the count.
+    local touse ""
+    local __cio_select "skipif"
+    if `"`if'"' != "" {
+        marksample touse, novarlist
+        local __cio_select "touse"
+    }
     _ctools_load
     capture program ctools_plugin, plugin using("`__ctools_plugin'")
     if _rc != 0 & _rc != 110 exit 601
-    plugin call ctools_plugin `exportvars' if `touse', "cio export `kind'"
+    plugin call ctools_plugin `exportvars' `touse' `in', "cio export `kind' `__cio_select'"
     return local filename `"`using'"'
-    quietly count if `touse'
-    return scalar N = r(N)
+    return scalar N = `__cio_N'
     return scalar k = `__cio_nvar'
     di as text `"file `using' saved"'
 end

@@ -1,8 +1,0 @@
-clear all
-set more off
-log using "/Users/Mike/Documents/GitHub/stata-ctools/temp/encode_performance_20261002/winsor_1m/b2.log", text replace
-capture noisily do "/Users/Mike/Documents/GitHub/stata-ctools/temp/encode_performance_20261002/winsor_1m/benchmark.do" "/Users/Mike/Documents/GitHub/stata-ctools/temp/encode_performance_20261002/baseline" b2 "/Users/Mike/Documents/GitHub/stata-ctools/temp/encode_performance_20261002/winsor_1m" "w20 w200 w1000 w_single w_wide rs1000" 4 "1 8" 1000000 "2"
-local rc=_rc
-di "GROUP_BENCHMARK_RC=`rc'"
-log close
-exit, clear

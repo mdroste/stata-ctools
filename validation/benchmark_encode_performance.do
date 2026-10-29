@@ -1,5 +1,6 @@
 * Frozen public commands; setup, comparisons and disk reads are outside timers.
-args buildpath label outdir cases reps threadlist rows refreps
+args buildpath label outdir cases reps threadlist rows refreps datadir
+if `"`datadir'"'=="" local datadir `"`outdir'"'
 clear all
 set more off
 set linesize 255
@@ -58,8 +59,8 @@ foreach case of local cases {
             if `rep' == 0 {
                 quietly decode y, gen(text)
                 quietly keep id y text
-                if "`label'" == "b1" quietly save "`outdir'/expected_`case'_`threads'.dta", replace
-                else cf _all using "`outdir'/expected_`case'_`threads'.dta"
+                if "`label'" == "b1" quietly save "`datadir'/expected_`case'_`threads'.dta", replace
+                else cf _all using "`datadir'/expected_`case'_`threads'.dta"
                 quietly save `expected', replace
                 quietly use `base', clear
                 quietly `reference'

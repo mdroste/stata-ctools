@@ -88,8 +88,8 @@ csort id, stream(4)
 
 The command family reads and writes delimited text, XLS/XLSX, dBase, SAS7BDAT,
 SAS XPORT5/8, SPSS and ESRI shapefiles through C engines. Catalog and ZSAV import
-are supported. FRED/Haver engines and some options remain unimplemented; see
-[the I/O parity audit](docs/IO_PARITY.md) for the verified scope.
+are supported; FRED, Haver, and Parquet are not. See
+[import and export formats](docs/IO_PARITY.md) for details.
 
 **ctools adds:**
 

@@ -1,3 +1,4 @@
+*! version 1.1.0 20261016 github.com/mdroste/stata-ctools
 *! _ctools_group — group identifiers from the ctools plugin, in place of egen group()
 *!
 *! Usage:  _ctools_group varlist [if] [in], generate(newvar) [label]
@@ -51,10 +52,41 @@ program define _ctools_group, rclass
             local out "out"
         }
         local reps = cond("`label'" != "", "reps", "")
+        * Stata answers an if one observation at a time. Without one the
+        * plugin skips the check; an if that names a numeric variable (the
+        * callers' touse) passes that variable last, as a sample marker the
+        * plugin reads in parallel. Any other if is marked first, unless in
+        * limits the range (marking covers every observation); that marker is
+        * the last variable until it is dropped, which is then free.
+        local select "skipif"
+        local marker ""
+        local marked ""
+        local ifcond ""
+        if `"`if'"' != "" {
+            local select "touse"
+            local marker = strtrim(substr(`"`if'"', 3, .))
+            capture confirm numeric variable `marker', exact
+            if _rc | wordcount(`"`marker'"') != 1 {
+                local marker ""
+                if `"`in'"' == "" {
+                    tempvar marker
+                    capture mark `marker' `if'
+                    local rc = _rc
+                    local marked `marker'
+                }
+                else {
+                    local select ""
+                    local ifcond `"`if'"'
+                }
+            }
+        }
         local ctools_group_reps ""
-        capture plugin call ctools_plugin `varlist' `generate' `if' `in', ///
-            "group nkeys=`nkeys' `out' `reps'"
-        local rc = _rc
+        if !`rc' {
+            capture plugin call ctools_plugin `varlist' `generate' `marker' `ifcond' `in', ///
+                "group nkeys=`nkeys' `out' `reps' `select'"
+            local rc = _rc
+        }
+        if "`marked'" != "" capture drop `marked'
         if `rc' == 1 exit 1
         if `rc' == 134 {
             di as error "too many values for {bf:label define}"

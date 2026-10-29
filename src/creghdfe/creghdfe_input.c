@@ -134,6 +134,13 @@ ST_retcode creghdfe_read_input(creghdfe_input *input)
         use_quad = (ST_int)val;
     }
 
+    /* The sample marker follows every other variable in place of an if */
+    ST_int touse = 0;
+    if (SF_scal_use("__creghdfe_touse", &val) == 0)
+    {
+        touse = val != 0;
+    }
+
     input->K = K;
     input->G = G;
     input->drop_singletons = drop_singletons;
@@ -153,6 +160,7 @@ ST_retcode creghdfe_read_input(creghdfe_input *input)
     input->compute_resid = compute_resid;
     input->resid_var_idx = resid_var_idx;
     input->use_quad = use_quad;
+    input->touse = touse;
     input->tolerance = tolerance;
     input->df_a_nested = df_a_nested;
     return 0;

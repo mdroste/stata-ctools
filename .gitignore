@@ -1,8 +1,4 @@
 *.csv
-!docs/benchmarks/bigdata_*.csv
-!docs/benchmarks/transport_*.csv
-!docs/benchmarks/command_optimization_*.csv
-!docs/benchmarks/readme_commands_*.csv
 *.dta
 *.log
 .claude/
@@ -16,6 +12,8 @@ CLAUDE.md
 __pycache__/
 
 /temp/
+# Agent-written audits and reports stay local; see CLAUDE.md.
+/reports/
 /build/*.build.json
 /build/*.tmp
 !validation/fixtures/**/*.csv
@@ -24,12 +22,7 @@ __pycache__/
 # Downloaded examples are a cache, pinned by fixtures/manifest.json.
 /validation/fixtures/data/
 
-!docs/benchmarks/command_performance_20261002/**/*.csv
-
-!docs/benchmarks/encode_winsor_20261002/**/*.csv
-
 !docs/benchmarks/hdfe_datasets_*.csv
 
 !docs/benchmarks/readme_profile/timings.csv
 
-!docs/benchmarks/performance_audit_20261022/**/*.csv

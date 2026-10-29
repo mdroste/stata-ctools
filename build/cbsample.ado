@@ -1,4 +1,4 @@
-*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools
+*! version 1.1.0 20261016 github.com/mdroste/stata-ctools
 
 program define cbsample
     version 14.1
@@ -81,8 +81,11 @@ program define cbsample
     tempvar __cbsample_weight__
     quietly gen double `__cbsample_weight__' = 0
 
-    * Get ALL variables and find indices
+    * Get ALL variables and find indices. The sample marker goes last, in
+    * place of an if: Stata answers an if one observation at a time, while
+    * the plugin reads the marker in parallel.
     unab allvars : *
+    local allvars : list allvars - touse
     local freq_idx = 0
     local idx = 1
     foreach v of local allvars {
@@ -127,6 +130,7 @@ program define cbsample
     local opts "n=`n_s' seedhi=`seed_hi' seedlo=`seed_lo'"
     if "`verbose'" != "" local opts "`opts' verbose"
     if `nobs_sample' == _N local opts "`opts' skipif"
+    else local opts "`opts' touse"
 
     local threads_opt ""
     if `threads' > 0 {
@@ -142,7 +146,7 @@ program define cbsample
     quietly _ctools_clock __ct_start90
 
     * Call plugin with ALL variables
-    plugin call ctools_plugin `allvars' if `touse', ///
+    plugin call ctools_plugin `allvars' `touse', ///
         "cbsample `threads_opt' `freq_idx' `ncluster' `nstrata' `cluster_indices' `strata_indices' `opts'"
 
     * Record post-plugin time

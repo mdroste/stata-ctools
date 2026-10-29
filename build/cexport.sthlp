@@ -1,9 +1,11 @@
 {smcl}
-{* *! version 1.0.1 07Feb2026}{...}
+{* *! version 1.1.0 20261016}{...}
 {viewerjumpto "Syntax" "cexport##syntax"}{...}
 {viewerjumpto "Description" "cexport##description"}{...}
 {viewerjumpto "Options" "cexport##options"}{...}
 {viewerjumpto "Options for excel" "cexport##exceloptions"}{...}
+{viewerjumpto "Other formats" "cexport##formats"}{...}
+{viewerjumpto "Remarks" "cexport##remarks"}{...}
 {viewerjumpto "Examples" "cexport##examples"}{...}
 {viewerjumpto "Stored results" "cexport##results"}{...}
 {title:Title}
@@ -53,23 +55,23 @@
 {synopt:{opt datestring(fmt)}}custom format for date/time variables{p_end}
 
 {syntab:Reporting}
-{synopt:{opt verbose}}display detailed progress information and timing breakdown{p_end}
+{synopt:{opt verbose}}display progress and elapsed times{p_end}
 {synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
 
-{syntab:Advanced Performance}
+{syntab:I/O options}
 {synopt:{opt mmap}}use memory-mapped I/O (zero-copy formatting){p_end}
-{synopt:{opt nofsync}}skip final fsync for faster writes (less durable){p_end}
-{synopt:{opt direct}}use direct I/O bypassing OS cache (for very large files){p_end}
+{synopt:{opt nofsync}}skip the final disk synchronization{p_end}
+{synopt:{opt direct}}request direct I/O where supported{p_end}
 {synopt:{opt prefault}}pre-fault mmap pages to avoid stalls{p_end}
 {synopt:{opt crlf}}use Windows-style CRLF line endings{p_end}
-{synopt:{opt noparallel}}disable parallel I/O (for debugging){p_end}
+{synopt:{opt noparallel}}disable parallel I/O{p_end}
 {synoptline}
 
 {synoptset 24 tabbed}{...}
 {synopthdr:excel options}
 {synoptline}
 {syntab:Main}
-{synopt:{opt sheet(name)}}worksheet name; default is "Sheet1"{p_end}
+{synopt:{opt sheet(name[, modify|replace])}}worksheet name and update mode; default is "Sheet1"{p_end}
 {synopt:{opt cell(start)}}starting cell for export; default is "A1"{p_end}
 {synopt:{opt replace}}overwrite existing file{p_end}
 
@@ -79,10 +81,11 @@
 {synopt:{opt datafmt}}export date/time variables using their display formats{p_end}
 {synopt:{opt datestring(fmt)}}custom format for date/time variables{p_end}
 {synopt:{opt missing(string)}}replacement value for missing data; default is empty cell{p_end}
-{synopt:{opt keepcellfmt}}copy existing workbook style definitions (limited support){p_end}
+{synopt:{opt keepcellfmt}}retain existing cell formats when modifying a worksheet{p_end}
 
 {syntab:Reporting}
 {synopt:{opt verbose}}display progress information{p_end}
+{synopt:{opt threads(#)}}maximum number of threads to use{p_end}
 {synoptline}
 
 
@@ -90,34 +93,12 @@
 {title:Description}
 
 {pstd}
-{cmd:cexport} provides high-performance data export using C plugins with parallel
-processing. It writes delimited text, Excel (.xls and .xlsx), dBase, SAS XPORT5/8,
-SPSS SAV, and ESRI shapefiles. A SAS7BDAT writer is also available, although
-native SAS export is unavailable here for parity testing. All file I/O and
-serialization run in C.
+{cmd:cexport} writes delimited text, Excel (.xls and .xlsx), dBase, SAS7BDAT,
+SAS XPORT5/8, SPSS SAV, and ESRI shapefiles. It uses C routines for file
+formatting and writing. Unless a variable list or {cmd:if}/{cmd:in} is specified,
+all variables and observations are exported. Shapefile export uses its own
+geometry schema, described below.
 
-{phang2}
-{cmd:cexport delimited} exports data to delimited text files (CSV, TSV, etc.).
-It is a high-performance replacement for {help export delimited:export delimited}.
-
-{phang2}
-{cmd:cexport excel} exports data to Excel (.xls and .xlsx) files. It is a high-performance
-replacement for {help export excel:export excel}.
-
-{pstd}
-Other file formats use {cmd:cexport dbase}, {cmd:cexport sas},
-{cmd:cexport sasxport5}, {cmd:cexport sasxport8}, {cmd:cexport spss}, and
-{cmd:cexport shp}. Statistical writers accept a variable list, if/in, using,
-and replace. SPSS accepts {cmd:novallabels}; XPORT5 accepts {cmd:rename} and
-{cmd:vallabfile(xpf|sascode|both|none)}; XPORT8 accepts {cmd:vallabfile};
-dBase accepts {cmd:datafmt} and {cmd:origdbfdate}; SHP accepts {cmd:id()} and
-{cmd:shx}. See the parity audit for incomplete options and native differences.
-
-{pstd}
-Excel {cmd:sheet(..., modify/replace)} updates or replaces a worksheet.
-Modification preserves cells outside the exported rectangle; {cmd:keepcellfmt}
-retains existing styles of overwritten cells. XLSX ZIP content and unrelated XLS
-OLE streams are retained. See the audit for complex-workbook validation limits.
 
 {marker options}{...}
 {title:Options for delimited}
@@ -151,11 +132,10 @@ contain the delimiter character.
 instead of their value labels.
 
 {phang}
-For delimited export, {opt datafmt} applies numeric and date/time display
-formats. For Excel, this extension renders date/time variables as strings using their
-display formats (e.g., {cmd:%td}, {cmd:%tc}, {cmd:%tw}). Without this option,
-date/time variables are exported as raw numeric values (days since 1960-01-01
-for daily dates, milliseconds since 1960-01-01 for datetimes, etc.).
+{opt datafmt} writes numeric and date/time values using their Stata display
+formats. Without it, delimited export writes numeric values without applying
+display formats.
+
 
 {phang}
 {opt datestring(fmt)} specifies a custom format to use for all date/time
@@ -169,13 +149,13 @@ variables. This overrides the variables' display formats. Common formats include
 {dlgtab:Reporting}
 
 {phang}
-{opt verbose} displays detailed progress information and timing breakdown.
+{opt verbose} displays progress and elapsed times.
 
 {phang}
-{opt threads(#)} specifies the maximum number of threads to use for parallel
-operations. By default, {cmd:cexport} uses the {help ctools##threads:ctools thread setting}, which is at most 16 threads unless you change it.
+{opt threads(#)} sets the maximum number of threads, from 1 to 256.
+The default follows the {help ctools##threads:ctools thread setting}.
 
-{dlgtab:Advanced Performance}
+{dlgtab:I/O options}
 
 {phang}
 {opt mmap} uses memory-mapped I/O for zero-copy formatting, which can improve
@@ -183,12 +163,10 @@ performance for large files.
 
 {phang}
 {opt nofsync} skips the final fsync system call for faster writes. The file
-may not be fully flushed to disk when the command returns. Use when speed
-matters more than durability.
+may not be fully flushed to disk when the command returns. The operating system may still have buffered data if the machine loses power.
 
 {phang}
-{opt direct} uses direct I/O, bypassing the OS page cache. Useful for
-very large files to avoid evicting other data from cache.
+{opt direct} requests direct I/O to bypass the operating system page cache. Support depends on the operating system and selected I/O backend.
 
 {phang}
 {opt prefault} pre-faults mmap pages to avoid page fault stalls during writing.
@@ -198,7 +176,7 @@ very large files to avoid evicting other data from cache.
 default Unix-style LF ({cmd:\n}).
 
 {phang}
-{opt noparallel} disables parallel I/O. Useful for debugging.
+{opt noparallel} disables parallel I/O.
 
 
 {marker exceloptions}{...}
@@ -208,7 +186,12 @@ default Unix-style LF ({cmd:\n}).
 
 {phang}
 {opt sheet(name)} specifies the worksheet name. The default is "Sheet1".
-The name is limited to 31 characters.
+The name is limited to 31 characters. With an existing workbook,
+{cmd:sheet(name, modify)} writes into that worksheet while retaining cells
+outside the exported rectangle. {cmd:sheet(name, replace)} replaces the entire
+worksheet and retains other sheets. The top-level options {opt sheetmodify}
+and {opt sheetreplace} select the same modes. Neither mode may be combined
+with {opt replace}, which replaces the entire workbook.
 
 {phang}
 {opt cell(start)} specifies the starting cell for the data export. The default
@@ -237,18 +220,89 @@ By default, missing values are exported as empty cells. For example,
 exports them as periods.
 
 {phang}
-{opt keepcellfmt} copies the existing workbook's style-definition table when
-{cmd:replace} is specified. It does not retain worksheet cell-style assignments,
-column widths, conditional formatting, or other sheets. It is not a formatted-
-template update facility, and existing style indices may differ from the indices
-used for newly exported date cells. Omit it when date-format fidelity is required.
-The option has no effect when creating a new file.
+{opt keepcellfmt} retains existing formats for cells overwritten by
+{cmd:sheet(name, modify)}. Without it, overwritten cells receive the export's
+formats. It has no effect on a new workbook. With whole-workbook {opt replace},
+it retains style definitions but not the old cells, their format assignments,
+or other worksheets; use sheet modification to retain an existing layout.
+
+{phang}
+{opt datafmt} writes date/time variables as strings in their Stata display
+formats. {opt datestring(fmt)} supplies a common date/time format instead.
+These options do not format ordinary numeric variables for Excel.
+Without them, dates are converted to Excel date values and assigned date
+formats; see {help cexport##remarks:Remarks}.
+
+{phang}
+{opt locale(name)} is accepted for compatibility and has no effect.
+
 
 {dlgtab:Reporting}
 
 {phang}
 {opt verbose} displays detailed progress information.
 
+
+{phang}
+{opt threads(#)} sets the maximum number of threads, from 1 to 256.
+The default follows the {help ctools##threads:ctools thread setting}.
+
+{marker formats}{...}
+{title:Other file formats}
+
+{p 8 12 2}
+{cmd:cexport} {it:format} [{varlist}] {ifin} {cmd:using} {it:filename}
+[{cmd:,} {opt replace} {it:format_options}]
+
+{synoptset 22}{...}
+{synopt:{cmd:dbase}}.dbf files; {opt version(3)}, {opt datafmt}, {opt origdbfdate}{p_end}
+{synopt:{cmd:sas}}.sas7bdat files{p_end}
+{synopt:{cmd:spss}}.sav files; {opt novallabels}{p_end}
+{synopt:{cmd:sasxport5}}.xpt files; {opt rename}, {opt vallabfile(xpf|sascode|both|none)}{p_end}
+{synopt:{cmd:sasxport8}}.v8xpt files; {opt vallabfile}{p_end}
+
+{pstd}
+{opt novallabels} omits SPSS value labels. XPORT5 uses {cmd:vallabfile(xpf)} by
+default, writing labels to {cmd:formats.xpf} in the destination directory.
+{cmd:sascode} writes a .sas program, {cmd:both} writes both files, and
+{cmd:none} writes neither. {opt rename} converts names to XPORT5's eight-character
+limit. XPORT8 {opt vallabfile} writes a .sas label program.
+
+{pstd}
+dBase export defaults to version IV; {cmd:version(3)} selects version III.
+{opt datafmt} applies numeric display formats. {opt origdbfdate} uses the date
+retained in dataset characteristics by a prior dBase import.
+
+{p 8 12 2}
+{cmd:cexport shp using} {it:filename}
+[{cmd:,} {opt replace} {opt shx} {opt id(varname)}]
+
+{pstd}
+Shapefile export requires the geometry variables and dataset characteristics
+from a shapefile import: {cmd:_ID}, {cmd:_X}, {cmd:_Y}, {cmd:rec_header}, and
+{cmd:_Z}/{cmd:_M} where used by the shape type. {opt id()} names an alternative
+numeric identifier. {opt shx} also writes the .shx index. This syntax exports
+the whole geometry dataset and does not accept a variable list or {cmd:if}/{cmd:in}.
+
+{marker remarks}{...}
+{title:Remarks}
+
+{pstd}
+Delimited and Excel exports write a temporary file and publish the destination
+after successful completion. Without {opt replace} or a sheet-update option,
+an existing destination is an error.
+
+{pstd}
+New Excel workbooks use the 1900 date system. Daily dates retain their calendar
+date; datetimes retain fractional days, including milliseconds. {cmd:%tC}
+values are converted with {cmd:cofC()} because Excel has no leap-second
+representation. Other Stata period dates use the first day of the period.
+
+{pstd}
+dBase numeric fields use widths of 3, 5, and 10 for {cmd:byte}, {cmd:int}, and
+{cmd:long}, widened by one when a negative value needs it. Other numeric
+variables use 20 columns with {cmd:%20.0g} formatting unless {opt datafmt}
+is specified.
 
 {marker examples}{...}
 {title:Examples}
@@ -287,8 +341,11 @@ The option has no effect when creating a new file.
 {pstd}Export with custom sheet name:{p_end}
 {phang2}{cmd:. cexport excel using auto.xlsx, sheet("AutoData") replace}{p_end}
 
-{pstd}Export without variable names in first row:{p_end}
-{phang2}{cmd:. cexport excel using auto.xlsx, firstrow(nonames) replace}{p_end}
+{pstd}Export variable names in the first row:{p_end}
+{phang2}{cmd:. cexport excel using auto.xlsx, firstrow(variables) replace}{p_end}
+
+{pstd}Update cells in an existing worksheet:{p_end}
+{phang2}{cmd:. cexport excel price mpg using auto.xlsx, sheet("Sheet1", modify) cell(B2) keepcellfmt}{p_end}
 
 {pstd}Export selected variables:{p_end}
 {phang2}{cmd:. cexport excel make price mpg weight using auto_subset.xlsx, replace}{p_end}
@@ -307,7 +364,7 @@ The option has no effect when creating a new file.
 {title:Stored results}
 
 {pstd}
-{cmd:cexport} stores the following in {cmd:r()}:
+{cmd:cexport delimited} and {cmd:cexport excel} store the following in {cmd:r()}:
 
 {synoptset 20 tabbed}{...}
 {p2col 5 20 24 2: Scalars}{p_end}
@@ -318,6 +375,10 @@ The option has no effect when creating a new file.
 {p2col 5 20 24 2: Macros}{p_end}
 {synopt:{cmd:r(filename)}}name of the output file{p_end}
 
+
+{pstd}
+Other statistical and dBase exports return {cmd:r(N)}, {cmd:r(k)}, and
+{cmd:r(filename)}. Shapefile export returns {cmd:r(filename)} only.
 
 {title:Author}
 
@@ -333,32 +394,4 @@ Manual: {bf:[D] export delimited}, {bf:[D] export excel}
 
 {psee}
 Online: {help export delimited}, {help export excel}, {help cimport}, {help ctools}
-{p_end}
-
-{title:File and date fidelity}
-
-{pstd}
-CSV and XLSX exports validate complete metadata, write a sibling temporary file,
-and publish the destination only after success. Without {opt replace}, publication
-refuses an existing destination. Filenames and sheet names may contain spaces
-or text such as threads(2). {opt threads(#)} is accepted for both formats.
-{p_end}
-
-{pstd}
-Excel uses the 1900 date system. Daily dates keep their calendar date; %tc values
-retain fractional days, including milliseconds. %tC is converted with cofC()
-because Excel cannot represent leap seconds. Other Stata period dates use the
-first day of the period. {opt datafmt} renders date/time display formats as text;
-it does not apply arbitrary numeric display formats.
-{p_end}
-
-{pstd}
-dBase numeric fields follow native {cmd:export dbase}: byte, int and long
-variables use 3-, 5- and 10-column fields, and other numbers use 20 columns
-with the text of Stata's %20.0g format (at most 18 significant digits, exponent
-form for very large or small values). Native truncates the most negative
-integers to the field width (bytes from -100 to -127 become -10 to -12, ints
-from -10000 and longs from -1000000000 lose their last digit);
-{cmd:cexport dbase} widens such a field by one column (to 4, 6 or 11) when
-those values are exported.
 {p_end}

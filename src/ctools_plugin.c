@@ -262,7 +262,7 @@ static ST_retcode thread_settings_call(const char *args)
 #include "cbsample/cbsample_impl.h"
 #include "crangestat/crangestat_impl.h"
 #include "cpsmatch/cpsmatch_impl.h"
-#include "cpplmhdfe/cpplmhdfe_impl.h"
+#include "cppmlhdfe/cppmlhdfe_impl.h"
 #include "cipolate/cipolate_impl.h"
 #include "csplit/csplit_impl.h"
 #include "crangejoin/crangejoin_impl.h"

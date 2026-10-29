@@ -500,7 +500,7 @@ static stata_retcode counting_sort_by_numeric_var(stata_data *data, int var_idx)
     num_threads = ctools_get_openmp_threads();
     if (num_threads > COUNTING_MAX_THREADS) num_threads = COUNTING_MAX_THREADS;
 
-    if (data->nobs < COUNTING_PARALLEL_THRESHOLD) {
+    if (data->nobs < COUNTING_PARALLEL_THRESHOLD || num_threads < 2) {
         return counting_sort_numeric_seq(data->sort_order, dbl_data, data->nobs);
     }
 
@@ -545,10 +545,12 @@ stata_retcode ctools_sort_counting_order_only(stata_data *data, int *sort_vars, 
         return STATA_ERR_INVALID_INPUT;
     }
 
-    /* Keys are sorted last to first, so a leading key that cannot be counted
-       would only be discovered after the others were sorted for nothing.
-       A few spread-out values of each earlier key settle most such cases. */
-    for (k = 0; k + 1 < (int)nsort; k++) {
+    /* Reject unsuitable keys before allocating histograms or sorting any
+       earlier key. Sampling every key also avoids a full parallel scan when
+       the only (or last) key is continuous or spans too wide a range. A
+       sampled range can only be narrower than the full range; keys that pass
+       this screen still receive the full validation in the counting pass. */
+    for (k = 0; k < (int)nsort; k++) {
         var_idx = sort_vars[k] - 1;
         if (var_idx < 0 || var_idx >= (int)data->nvars) {
             return STATA_ERR_INVALID_INPUT;
@@ -557,11 +559,23 @@ stata_retcode ctools_sort_counting_order_only(stata_data *data, int *sort_vars, 
             return STATA_ERR_UNSUPPORTED_TYPE;
         }
         const double *values = data->vars[var_idx].data.dbl;
+        double min_val = 0, max_val = 0;
+        int found_valid = 0;
         size_t step = data->nobs / 64 + 1;
         for (size_t i = 0; i < data->nobs; i += step) {
             double v = values[i];
-            if (v != SV_missval && (v > COUNTING_SORT_MAX_ABS || v < -COUNTING_SORT_MAX_ABS ||
-                                    v != floor(v))) {
+            if (v == SV_missval) continue;
+            if (v > COUNTING_SORT_MAX_ABS || v < -COUNTING_SORT_MAX_ABS || v != floor(v)) {
+                return STATA_ERR_UNSUPPORTED_TYPE;
+            }
+            if (!found_valid) {
+                min_val = max_val = v;
+                found_valid = 1;
+            } else {
+                if (v < min_val) min_val = v;
+                if (v > max_val) max_val = v;
+            }
+            if (!counting_range_ok(min_val, max_val)) {
                 return STATA_ERR_UNSUPPORTED_TYPE;
             }
         }

@@ -1,15 +1,15 @@
   ```
-   █████╗██████╗ █████╗  █████╗ ██╗   ██████╗
-  ██╔═══╝╚═██╔═╝██╔══██╗██╔══██╗██║   ██╔═══╝
-  ██║      ██║  ██║  ██║██║  ██║██║   ██████╗
-  ██║      ██║  ██║  ██║██║  ██║██║   ╚═══██║
-  ╚█████╗  ██║  ╚█████╔╝╚█████╔╝█████╗██████║
-   ╚════╝  ╚═╝   ╚════╝  ╚════╝ ╚════╝╚═════╝
-   some really fast Stata programs
+ ████╗██████╗█████╗  █████╗ ██╗  █████╗
+██╔══╝╚═██╔╝██╔══██╗██╔══██╗██║  ██╔══╝
+██║     ██║ ██║  ██║██║  ██║██║  █████╗
+██║     ██║ ██║  ██║██║  ██║██║  ╚══██╗
+╚████╗  ██║ ╚█████╔╝╚█████╔╝████╗█████║
+ ╚═══╝  ╚═╝  ╚════╝  ╚════╝ ╚═══╝╚════╝
+ some really fast Stata programs
   ```
 
 [![Build](https://github.com/mdroste/stata-ctools/actions/workflows/build.yml/badge.svg)](https://github.com/mdroste/stata-ctools/actions/workflows/build.yml)
-![Version](https://img.shields.io/badge/version-1.0.2-blue)
+![Version](https://img.shields.io/badge/version-1.1.0-blue)
 
 **This is an initial release. Please report problems/suggestions on [Issues](https://github.com/mdroste/stata-ctools/issues).**
 
@@ -19,28 +19,28 @@
 
 | Stata command | Replaced with | Description | Approx. speedup¹ |
 | --- | --- | --- | ---: |
-| `import` | `cimport` | Import text, Excel, dBase, SAS, SPSS, and shapefiles | 0.8–21.9× |
-| `export` | `cexport` | Export text, Excel, dBase, SAS, SPSS, and shapefiles | 34.2–37.5× |
-| `sort` | `csort` | Sort dataset | 0.8–1.2× |
-| `merge` | `cmerge` | Merge (join) datasets | 1.2–4.0× |
-| `sample` | `csample` | Resampling without replacement | 5.6–10.2× |
-| `bsample` | `cbsample` | Resampling with replacement | 2.6–4.3× |
-| `encode` | `cencode` | Recast string as labeled numeric | 20.9–35.9× |
-| `decode` | `cdecode` | Recast labeled numeric as string | 4.7–7.2× |
-| `destring` | `cdestring` | Recast string as numeric type | 20.7–38.1× |
-| `ipolate` | [`cipolate`](docs/USAGE.md#linear-interpolation-cipolate) | Linear interpolation and extrapolation | 8.2–46.3× |
-| `split` | [`csplit`](docs/USAGE.md#string-fields-csplit) | Split strings into fields | 21.4–69.3× |
-| `rangejoin` | [`crangejoin`](docs/USAGE.md#interval-joins-crangejoin) | Join observations within inclusive intervals | 8.3–12.6× |
-| `qreg` | `cqreg` | Quantile regression | 3.5–4.9× |
-| `gstats winsor` | `cwinsor` | Winsorize variables | 1.0–3.6× |
-| `rangestat` | `crangestat` | Range statistics of variables | 23.5–65.9× |
-| `psmatch2` | `cpsmatch` | Propensity score matching | 1.5–2.2× |
-| `binscatter` | `cbinscatter` | Binned scatter plots | 5.6–9.0× |
-| `reghdfe` | `creghdfe` | OLS with multi-way fixed effects | 4.8–7.7× |
-| `ivreghdfe` | `civreghdfe` | 2SLS/GMM with multi-way fixed effects | 3.8–10.7× |
-| `ppmlhdfe` | `cpplmhdfe` | PPML with multi-way fixed effects | 2.7–4.8× |
+| `import` | `cimport` | Import text, Excel, dBase, SAS, SPSS, and shapefiles | 48–57× |
+| `export` | `cexport` | Export text, Excel, dBase, SAS, SPSS, and shapefiles | 57–67× |
+| `sort` | `csort` | Sort dataset | 1.4–4× |
+| `merge` | `cmerge` | Merge (join) datasets | 2–6× |
+| `sample` | `csample` | Resampling without replacement | 5–9× |
+| `bsample` | `cbsample` | Resampling with replacement | 3–5× |
+| `encode` | `cencode` | Recast string as labeled numeric | 19–64× |
+| `decode` | `cdecode` | Recast labeled numeric as string | 3–10× |
+| `destring` | `cdestring` | Recast string as numeric type | 43–46× |
+| `ipolate` | [`cipolate`](docs/USAGE.md#linear-interpolation-cipolate) | Linear interpolation and extrapolation | 52–76× |
+| `split` | [`csplit`](docs/USAGE.md#string-fields-csplit) | Split strings into fields | 79–128× |
+| `rangejoin` | [`crangejoin`](docs/USAGE.md#interval-joins-crangejoin) | Join observations within inclusive intervals | 11–16× |
+| `qreg` | `cqreg` | Quantile regression | 5–6× |
+| `gstats winsor` | `cwinsor` | Winsorize variables | 2–4× |
+| `rangestat` | `crangestat` | Range statistics of variables | 80–105× |
+| `psmatch2` | `cpsmatch` | Propensity score matching | 3× |
+| `binscatter` | `cbinscatter` | Binned scatter plots | 9–55× |
+| `reghdfe` | `creghdfe` | OLS with multi-way fixed effects | 12–14× |
+| `ivreghdfe` | `civreghdfe` | 2SLS/GMM with multi-way fixed effects | 17× |
+| `ppmlhdfe` | `cppmlhdfe` | PPML with multi-way fixed effects | 5–6× |
 
-¹ Approximate speedups from three benchmarks with **1M, 10M, and 25M observations** and 20 mixed-type variables. Import/export timings use CSV. Values below 1× mean ctools was slower. Your mileage may vary. See [benchmark details and results](docs/README_BENCHMARK.md).
+¹ These are approximate speedups from a small number of benchmarks on data with **1M, 10M, and 25M observations** and 20 mixed-type variables. Values below 1× mean ctools was slower. Your machine's mileage may vary. See [benchmark details and results](docs/README_BENCHMARK.md).
 
 ## Installation
 
@@ -50,6 +50,8 @@ Requires Stata 14.1 or later. In Stata:
 net install ctools, from("https://raw.githubusercontent.com/mdroste/stata-ctools/main/build") replace
 ```
 
+You can also install ctools by copying the contents of the /build/ directory in this repository to your Stata installation's [ADOPATH](https://www.stata.com/support/faqs/programming/search-path-for-ado-files/). 
+
 ## Documentation
 
 - [Command features](FEATURES.md), [usage examples](docs/USAGE.md), and Stata's `help <command>`.
@@ -58,7 +60,7 @@ net install ctools, from("https://raw.githubusercontent.com/mdroste/stata-ctools
 
 ## Authorship
 
-99.9% of this code was written by LLMs. The early stuff was written in January 2026 by Claude Opus 4.5 and ChatGPT 5.2; recent bugfixes and improvements were written by Claude Fable 5.1, Claude Opus 5.5, and GPT 6.0 Astra/Sol. 
+99.9% of this code was written by large language models. The early stuff was written in January 2026 by Claude Opus 4.5 and ChatGPT 5.2, back when it was still surprising for programs to be written like this. More recent bugfixes and improvements were written by Claude Fable 5.1, Claude Opus 5.5, and GPT 6.0/6.1 Astra/Sol. 
 
 
 ## Thanks
@@ -68,7 +70,6 @@ net install ctools, from("https://raw.githubusercontent.com/mdroste/stata-ctools
 - [Christopher (Kit) Baum](https://www.bc.edu/bc-web/schools/morrissey/departments/economics/people/faculty-directory/christopher-baum.html), [Mark E Schaffer](https://www.hw.ac.uk/profiles/uk/school/ebs/faculty/mark-schaffer), and [Steven Stillman](https://www.unibz.it/en/faculties/economics-management/academic-staff/person/36390-steven-stillman) for [ivreg2](https://ideas.repec.org/c/boc/bocode/s425401.html)
 - [Robert Picard](https://ideas.repec.org/f/ppi320.html), [Nicholas J. Cox](https://ideas.repec.org/e/pco34.html), and Roberto Ferrer for [rangestat](https://ideas.repec.org/c/boc/bocode/s458161.html)
 - [Sascha Witt](https://github.com/SaschaWitt) for the [In-place Parallel Super Scalar Samplesort (IPS⁴o)](https://github.com/SaschaWitt/ips4o) sorting algorithm.
-- Claude Code
 
 
 ## License

@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.0.1 07Feb2026}{...}
+{* *! version 1.1.0 20261016}{...}
 {viewerjumpto "Syntax" "cbinscatter##syntax"}{...}
 {viewerjumpto "Description" "cbinscatter##description"}{...}
 {viewerjumpto "Options" "cbinscatter##options"}{...}
@@ -43,8 +43,8 @@
 {syntab:Graph Options}
 {synopt:{opt nog:raph}}suppress graph output{p_end}
 {synopt:{opt title(string)}}graph title{p_end}
-{synopt:{opt yt:itle(string)}}y-axis title (default: yvar name){p_end}
-{synopt:{opt xt:itle(string)}}x-axis title (default: xvar name){p_end}
+{synopt:{opt yti:tle(string)}}y-axis title (default: yvar name){p_end}
+{synopt:{opt xti:tle(string)}}x-axis title (default: xvar name){p_end}
 {synopt:{opt legend(string)}}legend options{p_end}
 {synopt:{opt colors(string)}}colors for series{p_end}
 {synopt:{opt msymbols(string)}}marker symbols for series{p_end}
@@ -53,7 +53,7 @@
 
 {syntab:Reporting}
 {synopt:{opt reportreg}}report underlying regression{p_end}
-{synopt:{opt v:erbose}}display detailed progress information and timing breakdown{p_end}
+{synopt:{opt v:erbose}}display progress and elapsed times{p_end}
 {synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
 {synoptline}
 {p2colreset}{...}
@@ -66,31 +66,15 @@ see {help weight}.
 {title:Description}
 
 {pstd}
-{cmd:cbinscatter} is a high-performance replacement for {cmd:binscatter} (v7.02) by Michael Stepner that uses
-a C plugin for all data computations. It creates binned scatter plots by dividing
-the x variable into equal-sized quantile bins and plotting the mean of y within
-each bin.
+{cmd:cbinscatter} divides x into quantile bins and plots the mean of y against
+the mean of x within each bin. It can adjust for controls and fixed effects,
+plot separate series by group, and overlay a polynomial fit. Computation runs
+in C; Stata draws the graph.
 
 {pstd}
-All heavy computation (data loading, residualization, bin computation, and line
-fitting) is performed in optimized C code with OpenMP parallelization. This makes
-{cmd:cbinscatter} substantially faster than pure Stata implementations, especially
-on large datasets.
-
-{pstd}
-Key features:
-
-{phang2}{bf:Residualization:} Control variables are partialled out using OLS. Fixed
-effects specified with {opt absorb()} are absorbed using the same HDFE algorithm
-as {cmd:creghdfe}.{p_end}
-
-{phang2}{bf:Exact quantile binning:} Sorts x with an O(N) radix sort and uses the
-same percentile cutpoints as {cmd:xtile}, so bins match {cmd:binscatter} at any
-sample size.{p_end}
-
-{phang2}{bf:Streaming line fitting:} Fits use powers of centered, scaled x and
-never build a design matrix (except to absorb fixed effects with
-{opt method(binsreg)}).{p_end}
+Tied x values stay in the same bin, so bins need not contain equal numbers of
+observations and some requested bins may be empty. Weights affect cutpoints,
+bin means, and fitted lines.
 
 
 {marker options}{...}
@@ -99,7 +83,7 @@ never build a design matrix (except to absorb fixed effects with
 {dlgtab:Main}
 
 {phang}
-{opt nquantiles(#)} specifies the number of equal-sized bins to create.
+{opt nquantiles(#)} specifies the requested number of quantile bins.
 The default is 20. Must be between 2 and 1000.
 
 {phang}
@@ -108,8 +92,7 @@ x and y before computing bins. The residualization is performed via OLS.
 
 {phang}
 {opt absorb(varlist)} specifies categorical variables representing fixed effects
-to absorb from both x and y. Uses the same iterative demeaning algorithm as
-{cmd:creghdfe}. Can be combined with {opt controls()}. The variables may be
+to absorb from both x and y. Can be combined with {opt controls()}. The variables may be
 numeric or string; their values only label groups, so negative, fractional and
 large codes are allowed.
 
@@ -131,20 +114,16 @@ binscatter approach.{p_end}
 
 {phang2}{opt binsreg} creates bins based on the raw (non-residualized) x values,
 then computes the conditional mean of y within each bin after partialling out
-controls/FE. This is the approach recommended by Cattaneo et al. and implemented
-in their {cmd:binsreg} package. It avoids potential distortions that can occur
-when the conditional expectation function is nonlinear.{p_end}
+controls/FE. Controls and fixed effects enter the regression jointly with bin indicators.{p_end}
 
 {pstd}
-When no controls or absorb variables are specified, both methods produce
-identical results.
+Without controls, fixed effects, or {opt by()}, both methods produce the
+same bin means.
 
 {pstd}
-With {opt method(binsreg)}, observations in singleton fixed-effect groups are
-retained in the bins and in the sample used to center adjusted means. To compare
-with {cmd:binsreg}, use the same bin partition and
-{opt reghdfeopt(keepsingletons)} there. Its default singleton removal can shift
-adjusted means even when bin contrasts agree.
+With {opt method(binsreg)}, singleton fixed-effect groups are retained in the
+bins and in the sample used to center adjusted means.
+
 
 {dlgtab:Line Fitting}
 
@@ -159,7 +138,7 @@ Options are:
 {phang2}{opt connect} - connect bin means with lines (no fit){p_end}
 
 {pstd}
-Fit lines are computed from the underlying microdata, not the bin means.
+Fit lines use the underlying observations.
 With {opt method(classic)} and {opt controls()} or {opt absorb()}, the line is
 fit to the residualized x and y after adding their sample means back, as
 {cmd:binscatter} does, so line and points share one scale and the coefficients
@@ -176,12 +155,9 @@ the bin means are adjusted for {opt controls()} and {opt absorb()} as with
 quantile bins.
 
 {phang}
-{opt genxq(varname)} is not implemented and returns error 198 before changing data.
-Use {opt savedata()} for the aggregate bin data.
-
-{phang}
 {opt savedata(filename)} saves the bin data (bin means, counts, etc.) to
-the specified Stata data file.
+the specified Stata data file, replacing an existing file of that name.
+Use this option for aggregate bin data; {opt genxq()} is not supported.
 
 {dlgtab:Graph Options}
 
@@ -214,18 +190,32 @@ labels containing spaces. {cmd:binscatter} has no equivalent option.
 {dlgtab:Reporting}
 
 {phang}
-{opt verbose} displays detailed progress information and timing breakdown.
+{opt reportreg} displays the fitted polynomial coefficients, R-squared, and
+number of observations for each group.
 
 {phang}
-{opt threads(#)} specifies the maximum number of threads to use for parallel
-operations. By default, {cmd:cbinscatter} uses the {help ctools##threads:ctools thread setting}, which is at most 16 threads unless you change it.
+{opt verbose} displays progress and elapsed times.
+
+{phang}
+{opt threads(#)} sets the maximum number of threads, from 1 to 256.
+The default follows the {help ctools##threads:ctools thread setting}.
+
+
+{title:Control and weight handling}
+
+{pstd}
+Weight expressions are evaluated once. Missing weights are excluded, selected
+weights must be positive, and fweights must be integers. Factor-variable controls
+and interactions are materialized before adjustment. Redundant control columns
+are omitted; a failed adjustment returns an error. Fixed effects are removed by iterative projection.
+{p_end}
 
 
 {marker examples}{...}
 {title:Examples}
 
 {pstd}Basic binned scatter plot:{p_end}
-{phang2}{cmd:. sysuse auto}{p_end}
+{phang2}{cmd:. sysuse auto, clear}{p_end}
 {phang2}{cmd:. cbinscatter price mpg}{p_end}
 
 {pstd}With 10 bins and no fit line:{p_end}
@@ -239,7 +229,7 @@ operations. By default, {cmd:cbinscatter} uses the {help ctools##threads:ctools 
 {phang2}{cmd:. cbinscatter ln_wage tenure, absorb(idcode year)}{p_end}
 
 {pstd}Separate series by group:{p_end}
-{phang2}{cmd:. sysuse auto}{p_end}
+{phang2}{cmd:. sysuse auto, clear}{p_end}
 {phang2}{cmd:. cbinscatter price mpg, by(foreign) nquantiles(10)}{p_end}
 
 {pstd}Quadratic fit with custom titles:{p_end}
@@ -269,7 +259,7 @@ operations. By default, {cmd:cbinscatter} uses the {help ctools##threads:ctools 
 {p2col 5 20 24 2: Scalars}{p_end}
 {synopt:{cmd:e(N)}}number of observations used{p_end}
 {synopt:{cmd:e(N_dropped)}}observations dropped due to missing values{p_end}
-{synopt:{cmd:e(nquantiles)}}number of bins{p_end}
+{synopt:{cmd:e(nquantiles)}}requested number of quantile bins{p_end}
 {synopt:{cmd:e(num_groups)}}number of by-groups{p_end}
 
 {synoptset 20 tabbed}{...}
@@ -286,25 +276,8 @@ operations. By default, {cmd:cbinscatter} uses the {help ctools##threads:ctools 
 {synoptset 20 tabbed}{...}
 {p2col 5 20 24 2: Matrices}{p_end}
 {synopt:{cmd:e(bindata)}}matrix of bin statistics: by_group, bin_id, x_mean, y_mean, n_obs{p_end}
-{synopt:{cmd:e(coefs)}}fit line coefficients, one row per by-group: constant, x, x^2, x^3 (if linetype specified){p_end}
+{synopt:{cmd:e(coefs)}}fit line coefficients, one row per by-group: constant, x, x^2, x^3 (for a polynomial fit){p_end}
 {synopt:{cmd:e(fit_stats)}}R-squared and number of observations of each fit{p_end}
-
-
-{title:Performance}
-
-{pstd}
-{cmd:cbinscatter} achieves significant speedups through:
-
-{phang2}1. {bf:Parallel data loading:} Data is loaded from Stata in parallel with 8-way loop unrolling.{p_end}
-
-{phang2}2. {bf:Radix-sort binning:} Instead of a comparison sort (O(N log N)), sorts x with an O(N) radix sort before taking exact quantile cutpoints.{p_end}
-
-{phang2}3. {bf:Streaming statistics:} Bin means are computed in a single pass and fit coefficients from cross-products accumulated in a few passes through the data.{p_end}
-
-{phang2}4. {bf:Minimal Stata overhead:} Graph generation uses optimized approaches to minimize overhead on large datasets.{p_end}
-
-{pstd}
-On a dataset with 25 million observations, {cmd:cbinscatter} completes in under 1 second including graph generation.
 
 
 {title:References}
@@ -313,11 +286,6 @@ On a dataset with 25 million observations, {cmd:cbinscatter} completes in under 
 Cattaneo, M. D., R. K. Crump, M. H. Farrell, and Y. Feng. 2024. On Binscatter.
 {it:American Economic Review} 114(5): 1488-1514.
 {browse "https://doi.org/10.1257/aer.20221576"}
-
-{pstd}
-The {opt method(binsreg)} option implements the approach recommended in this paper,
-which avoids potential distortions in the classic binscatter method when the
-conditional expectation function is nonlinear.
 
 
 {title:Author}
@@ -332,8 +300,7 @@ Michael Droste{break}
 {pstd}
 This command is inspired by and provides similar functionality to {cmd:binscatter}
 by Michael Stepner. The original {cmd:binscatter} package is available at
-{browse "https://github.com/michaelstepner/binscatter"}. We thank Michael Stepner
-for his pioneering work on binned scatter plot visualization in Stata.
+{browse "https://github.com/michaelstepner/binscatter"}.
 
 
 {title:Also see}
@@ -341,14 +308,4 @@ for his pioneering work on binned scatter plot visualization in Stata.
 {psee}
 Online: {browse "https://github.com/michaelstepner/binscatter":binscatter} (if installed),
 {help ctools}, {help creghdfe}, {help twoway}
-{p_end}
-
-{title:Control and weight handling}
-
-{pstd}
-Weight expressions are evaluated once. Missing weights are excluded, selected
-weights must be positive, and fweights must be integers. Factor-variable controls
-and interactions are materialized before adjustment. Redundant control columns
-are omitted; a failed adjustment returns an error. Fixed effects use iterative
-projection sweeps in cbinscatter_resid.c.
 {p_end}

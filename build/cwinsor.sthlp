@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.0.1 07Feb2026}{...}
+{* *! version 1.1.0 20261016}{...}
 {viewerjumpto "Syntax" "cwinsor##syntax"}{...}
 {viewerjumpto "Description" "cwinsor##description"}{...}
 {viewerjumpto "Options" "cwinsor##options"}{...}
@@ -40,9 +40,9 @@
 {synopt:{opt pre:fix(string)}}generate new variables with prefix{p_end}
 {synopt:{opt replace}}replace existing variables (default){p_end}
 
-{syntab:Failure handling}
-{synopt:{opt snap:shot}}{help preserve} the whole dataset, as earlier versions did; written to disk above {cmd:c(max_preservemem)}{p_end}
-{synopt:{opt fast}}keep no copy of the original values; a failure or Break can leave them changed{p_end}
+{syntab:Data recovery}
+{synopt:{opt snap:shot}}use {help preserve} to restore data after an error or interruption{p_end}
+{synopt:{opt fast}}skip data recovery after an error or interruption{p_end}
 
 {syntab:Performance options}
 {synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
@@ -54,26 +54,16 @@
 {title:Description}
 
 {pstd}
-{cmd:cwinsor} is a high-performance C-accelerated replacement for {cmd:winsor2} (v1.1) by Yujun Lian, available from SSC.
-It winsorizes or trims numeric variables at specified percentiles using parallel
-processing and an efficient O(n) percentile algorithm.
+{cmd:cwinsor} winsorizes numeric variables at specified percentiles. Values below
+the lower cutoff are replaced with that cutoff; values above the upper cutoff
+are replaced with the upper cutoff. With {opt trim}, those values become missing.
+The default cutoffs are the 1st and 99th percentiles.
 
 {pstd}
-Generated variables inherit the source variable label, or its name when unlabeled.
-As in {cmd:winsor2}, grouped winsorization creates results using Stata's default
-numeric storage type. Ungrouped trimming expands percentile bounds through Stata
-numeric local macros; this rounding can trim a value exactly at an unrounded
-percentile. It can therefore differ from {cmd:gstats winsor} at those boundaries.
-
-{pstd}
-{bf:Winsorization} limits extreme values by replacing observations below the lower
-percentile with the lower percentile value, and observations above the upper
-percentile with the upper percentile value. This is useful for reducing the
-influence of outliers in statistical analysis.
-
-{pstd}
-{bf:Trimming} (with the {opt trim} option) instead sets extreme values to missing,
-effectively removing them from subsequent analyses.
+Without {opt prefix()} or {opt suffix()}, the command changes the source
+variables. New variables inherit the source variable label, or its name when
+unlabeled. New variables are missing outside {cmd:if}/{cmd:in}; in-place changes
+leave observations outside that sample unchanged.
 
 
 {marker options}{...}
@@ -84,7 +74,9 @@ effectively removing them from subsequent analyses.
 {phang}
 {opt cuts(# #)} specifies the lower and upper percentile cutoffs as two numbers.
 For example, {cmd:cuts(5 95)} winsorizes at the 5th and 95th percentiles. This
-option takes precedence over {opt p()} and {opt q()}.
+option takes precedence over {opt p()} and {opt q()}. Cutoffs must lie between
+0 and 100, with the lower strictly less than the upper. Use 0 or 100 to leave
+that tail unchanged.
 
 {phang}
 {opt p(#)} specifies the lower percentile cutoff. The default is 1, meaning values
@@ -98,16 +90,14 @@ above the 99th percentile are winsorized.
 
 {phang}
 {opt trim} specifies that extreme values should be trimmed (set to missing) rather
-than winsorized (clamped to the percentile bounds). This is useful when you want
-to completely remove outliers from analysis rather than reduce their influence.
+than winsorized (clamped to the percentile bounds).
 
 {dlgtab:By-group options}
 
 {phang}
 {opt by(varlist)} specifies that winsorization should be performed separately
 within groups defined by the variables in {it:varlist}. Percentile cutoffs are
-computed independently for each group. This is essential when your data contains
-multiple categories or panels where the distribution differs across groups.
+computed independently for each group.
 
 {dlgtab:Output options}
 
@@ -126,71 +116,51 @@ variables w_{it:varname} containing the winsorized values.
 default behavior when neither {opt suffix()} nor {opt prefix()} is specified.
 Cannot be combined with {opt suffix()} or {opt prefix()}.
 
-{dlgtab:Failure handling}
+{dlgtab:Data recovery}
 
 {pstd}
-By default a failed or interrupted {cmd:cwinsor} leaves the data as they were
-without writing a snapshot of the dataset. Variables created with
-{opt suffix()} or {opt prefix()} are dropped again. When {cmd:cwinsor} changes
-variables in place, the plugin keeps a copy of their original values for the
-observations it rewrites (8 bytes per observation and variable) until the
-command finishes, and writes them back after a failure or Break; the variable
-labels, the sort order and {cmd:c(changed)} are restored too.
+By default, the command restores the data after an error or interruption.
+In-place operations retain a copy of the values being changed until completion.
 
 {phang}
-{opt snapshot} restores the data after a failed or interrupted call from a
-{help preserve} snapshot of the whole dataset instead, as earlier versions of
-{cmd:cwinsor} did. Stata keeps the snapshot in memory up to
-{cmd:c(max_preservemem)} (1 GB by default) and writes it to disk above that, so
-large datasets take longer and write the whole dataset once.
-{p_end}
+{opt snapshot} uses {help preserve} to copy the whole dataset for recovery.
+Stata may write this copy to disk when it exceeds {cmd:c(max_preservemem)}.
 
 {phang}
-{opt fast} keeps no copy of the original values and undoes nothing: it saves
-the memory of the copy, but if the call fails after the plugin started writing,
-or Break is pressed, the error is reported and the variables are left partly or
-wholly winsorized (or the new variables stay in the data). {opt fast} may not
-be combined with {opt snapshot}.
-{p_end}
+{opt fast} skips recovery to reduce memory use. An error or interruption can
+leave changed values or partially filled new variables. It cannot be combined
+with {opt snapshot}.
+
 
 {dlgtab:Performance options}
 
 {phang}
-{opt threads(#)} specifies the maximum number of threads to use for parallel
-operations. By default, {cmd:cwinsor} uses the {help ctools##threads:ctools thread setting}, which is at most 16 threads unless you change it.
+{opt threads(#)} sets the maximum number of threads, from 1 to 256.
+The default follows the {help ctools##threads:ctools thread setting}.
 
 {phang}
-{opt verbose} displays detailed progress information and timing breakdown.
+{opt verbose} displays progress and elapsed times.
 
 
 {marker remarks}{...}
 {title:Remarks}
 
 {pstd}
-{cmd:cwinsor} achieves high performance through several optimizations:
-
-{p 8 12 2}1. {bf:Parallel processing}: Multiple variables are winsorized
-simultaneously using OpenMP parallelization.{p_end}
-
-{p 8 12 2}2. {bf:O(n) percentile computation}: Uses the quickselect algorithm
-to compute percentiles in linear time on average, avoiding the O(n log n)
-cost of full sorting.{p_end}
-
-{p 8 12 2}3. {bf:Efficient memory access}: Cache-friendly data layout and
-SIMD-optimized loops for maximum throughput.{p_end}
+Percentiles are computed from nonmissing observations, separately for each
+variable and, with {opt by()}, each group. Groups with one or two nonmissing
+observations are included. Missing numeric or string group values form groups.
 
 {pstd}
-Runtime depends on dataset shape, options, and hardware. Benchmark comparisons
-should record the date, CPU/OS, Stata/reference versions, options, and dimensions.
+The percentile rule follows {cmd:winsor2}. For sorted nonmissing values
+x[1], ..., x[N] and p between 0 and 100, let h=N*p/100. If h is an integer,
+the cutoff is (x[h]+x[h+1])/2; otherwise it is x[ceil(h)]. The endpoints
+are the minimum and maximum. Ungrouped cutoffs pass through Stata numeric
+local macros, which can round values at a cutoff.
 
 {pstd}
-{bf:Missing values} are handled correctly: they are excluded from percentile
-calculations but preserved in the output (unless the observation is trimmed
-due to being an outlier).
-
-{pstd}
-{bf:Minimum observations}: Winsorization requires at least 3 non-missing
-observations in each group. Groups with fewer observations are left unchanged.
+New variables from grouped winsorization use Stata's default numeric storage
+type. Other outputs retain the source storage type. Missing source values do not
+enter percentile calculations; generated outputs use system missing for them.
 
 
 {marker examples}{...}
@@ -227,6 +197,7 @@ observations in each group. Groups with fewer observations are left unchanged.
 {phang2}{cmd:. cwinsor ln_wage, by(race) cuts(2.5 97.5)}{p_end}
 
 {pstd}Limit parallelism to 4 threads:{p_end}
+{phang2}{cmd:. sysuse auto, clear}{p_end}
 {phang2}{cmd:. cwinsor price, threads(4)}{p_end}
 
 {pstd}Winsorize multiple variables by group with new variable creation:{p_end}
@@ -244,36 +215,6 @@ When the {opt verbose} option is specified, timing information is displayed
 but not stored.
 
 
-{title:Comparison with winsor2}
-
-{pstd}
-{cmd:cwinsor} provides the same functionality as {cmd:winsor2} but with
-significantly better performance:
-
-{p2colset 5 25 27 2}{...}
-{p2col :{it:Feature}}{it:cwinsor}{space 8}{it:winsor2}{p_end}
-{p2line}
-{p2col :Parallel processing}Yes{space 10}No{p_end}
-{p2col :Percentile algorithm}O(n) quickselect{space 2}O(n log n) sort{p_end}
-{p2col :By-group support}Yes{space 10}Yes{p_end}
-{p2col :Trim option}Yes{space 10}Yes{p_end}
-{p2col :Generate new vars}Yes{space 10}Yes{p_end}
-
-
-{title:Technical details}
-
-{pstd}
-The quickselect algorithm used for percentile computation has O(n) average-case
-time complexity, compared to O(n log n) for sort-based approaches. This makes
-a significant difference when processing many variables or groups, as each
-percentile computation is much faster.
-
-{pstd}
-The implementation uses median-of-three pivot selection to avoid worst-case
-O(n^2) behavior, and switches to insertion sort for small subarrays for
-optimal performance.
-
-
 {title:Author}
 
 {pstd}
@@ -286,8 +227,7 @@ Michael Droste{break}
 {pstd}
 This command provides similar functionality to {cmd:winsor2} by Yujun Lian.
 The original {cmd:winsor2} package is available from SSC:
-{browse "https://ideas.repec.org/c/boc/bocode/s457765.html"}. We thank Yujun Lian
-for his useful contribution to the Stata community.
+{browse "https://ideas.repec.org/c/boc/bocode/s457765.html"}.
 
 
 {title:Also see}
@@ -296,8 +236,3 @@ for his useful contribution to the Stata community.
 Online: {browse "https://ideas.repec.org/c/boc/bocode/s457765.html":winsor2} (if installed),
 {help summarize}, {help centile}, {help pctile}, {help ctools}
 {p_end}
-
-{pstd}
-Generated outputs are missing outside the {cmd:if}/{cmd:in} sample. With
-{opt replace}, observations outside that sample retain their original values.
-A failed operation restores the dataset, including any partially generated outputs.

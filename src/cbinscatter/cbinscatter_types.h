@@ -38,6 +38,17 @@ typedef struct {
     /* HDFE parameters (if absorb specified) */
     ST_int maxiter;          /* CG solver max iterations */
     ST_double tolerance;     /* CG solver tolerance */
+    /*
+     * How the requested sample reaches the plugin:
+     * 0 = the plugin call's if condition (one SPI call per observation)
+     * 1 = a 0/1 marker variable, last in the varlist (no if condition)
+     * 2 = every observation (no if/in): rows with missing values, and with
+     *     missing or zero weights, are excluded here as marksample/markout do
+     */
+    ST_int touse_mode;
+    /* Validate the weights here (the ado passed the weight variable itself):
+     * negative weights are an error, as are non-integer fweights */
+    ST_int check_weights;
 } BinscatterConfig;
 
 /* ========================================================================
@@ -80,6 +91,28 @@ typedef struct {
     ST_int total_obs;        /* Total observations used */
     ST_int obs_dropped;      /* Observations dropped (missing, etc.) */
 } BinscatterResults;
+
+/* ========================================================================
+ * Row blocks of the parallel passes
+ *
+ * Sums over rows are formed per block of CBS_BLOCK_ROWS rows and then added
+ * in block order. The blocks do not depend on the thread count, so neither
+ * do the results.
+ * ======================================================================== */
+
+#define CBS_BLOCK_ROWS 65536
+
+static inline ST_int cbs_num_blocks(ST_int N)
+{
+    return N / CBS_BLOCK_ROWS + (N % CBS_BLOCK_ROWS != 0);
+}
+
+/* Rows [*i0, *i1) of block b */
+static inline void cbs_block_range(ST_int b, ST_int N, ST_int *i0, ST_int *i1)
+{
+    *i0 = b * CBS_BLOCK_ROWS;
+    *i1 = (N - *i0 < CBS_BLOCK_ROWS) ? N : *i0 + CBS_BLOCK_ROWS;
+}
 
 /* ========================================================================
  * Return codes

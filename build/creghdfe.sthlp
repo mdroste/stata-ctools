@@ -1,8 +1,9 @@
 {smcl}
-{* *! version 1.0.1 07Feb2026}{...}
+{* *! version 1.1.0 20261016}{...}
 {viewerjumpto "Syntax" "creghdfe##syntax"}{...}
 {viewerjumpto "Description" "creghdfe##description"}{...}
 {viewerjumpto "Options" "creghdfe##options"}{...}
+{viewerjumpto "Prediction" "creghdfe##prediction"}{...}
 {viewerjumpto "Examples" "creghdfe##examples"}{...}
 {viewerjumpto "Stored results" "creghdfe##results"}{...}
 {title:Title}
@@ -19,24 +20,23 @@
 {depvar}
 {indepvars}
 {ifin}
-{cmd:,}
-{opt a:bsorb(varlist)}
-[{it:options}]
+{weight}
+[{cmd:,} {opt a:bsorb(varlist)} {it:options}]
 
 {synoptset 28 tabbed}{...}
 {synopthdr}
 {synoptline}
 {syntab:Model}
-{synopt:{opt a:bsorb(varlist[, savefe])}}categorical variables representing fixed effects to absorb; required{p_end}
+{synopt:{opt a:bsorb(varlist[, savefe])}}categorical variables representing fixed effects to absorb; optional{p_end}
 {synopt:{opt dof:adjustments(doftype)}}degrees of freedom adjustment method{p_end}
 {synopt:{opt group:var(newvar)}}save mobility group identifier{p_end}
 
 {syntab:SE/Robust}
-{synopt:{opt vce(vcetype)}}variance estimator; {opt robust} or {opt cluster} {it:clustvar}{p_end}
+{synopt:{opt vce(vcetype)}}variance estimator; {opt unadjusted} (default), {opt robust}, or {opt cluster} {it:clustvar}{p_end}
 
 {syntab:Convergence}
 {synopt:{opt tol:erance(#)}}convergence tolerance; default is {cmd:1e-8}{p_end}
-{synopt:{opt iter:ate(#)}}maximum iterations; default is {cmd:10000}{p_end}
+{synopt:{opt iterate(#)}}maximum iterations; default is {cmd:10000}{p_end}
 {synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
 {synopt:{opt nostand:ardize}}do not standardize variables before iteration{p_end}
 
@@ -48,31 +48,32 @@
 {syntab:Advanced}
 {synopt:{opt quad}}use quad-precision accumulation in CG solver{p_end}
 
-{syntab:Failure handling}
-{synopt:{opt snap:shot}}{help preserve} the whole dataset, as earlier versions did; written to disk above {cmd:c(max_preservemem)}{p_end}
-{synopt:{opt fast}}undo nothing; a failure or Break can leave the new variables behind{p_end}
+{syntab:Data recovery}
+{synopt:{opt snap:shot}}use {help preserve} to restore data after an error or interruption{p_end}
+{synopt:{opt fast}}skip data recovery after an error or interruption{p_end}
 
 {syntab:Reporting}
 {synopt:{opt verbose}}display progress information and timing{p_end}
-{synopt:{opt time:it}}display timing breakdown{p_end}
 {synoptline}
 
 {pstd}
 {it:weight}s are allowed; {opt aweight}s, {opt fweight}s, and {opt pweight}s are supported.
-Note: {opt pweight}s automatically imply {opt vce(robust)}.
+{opt pweight}s imply {opt vce(robust)} unless clustering is specified.
 
 
 {marker description}{...}
 {title:Description}
 
 {pstd}
-{cmd:creghdfe} is a high-performance replacement for {cmd:reghdfe} (v6.13.1) by Sergio Correia ({browse "https://github.com/sergiocorreia/reghdfe"}) that uses a C plugin with optimized fixed effects absorption.
-It estimates linear regression models with multiple high-dimensional fixed effects.
+{cmd:creghdfe} estimates linear regressions with multiple categorical fixed
+effects. The fixed effects are removed by iterative projection in C. Without
+{opt absorb()}, the command estimates a linear regression with a constant.
+Factor-variable and time-series notation are allowed for the regressors.
 
 {pstd}
-The command uses iterative demeaning to absorb fixed effects, with the
-computation performed in C for maximum speed. This is particularly beneficial
-for models with many fixed effects or large datasets.
+Observations with missing model variables are excluded. Singleton fixed-effect
+groups are dropped repeatedly until none remain. Collinear regressors are
+omitted. {cmd:e(sample)} marks the observations retained for estimation.
 
 
 {marker options}{...}
@@ -82,13 +83,13 @@ for models with many fixed effects or large datasets.
 
 {phang}
 {opt absorb(varlist[, savefe])} specifies one or more categorical variables whose fixed
-effects are to be absorbed. This option is required. As in {cmd:reghdfe}, each term
+effects are to be absorbed. Each term
 is a numeric or string variable, an {cmd:i.}{it:var}, or an interaction
 {it:var1}{cmd:#}{it:var2} absorbed as one effect; heterogeneous slopes
 ({cmd:c.}{it:var}), {cmd:##} and {it:newvar}{cmd:=} terms are not supported. The optional {opt savefe}
 suboption creates variables {cmd:__hdfe1__}, {cmd:__hdfe2__}, etc. containing
-the estimated fixed effect for each observation. {bf:Note:} Variable value storage
-is currently a known limitation; the variables are created but may not contain values.
+the estimated fixed effect for each retained observation. The output names
+must be new. Individual fixed-effect levels depend on normalization.
 
 {phang}
 {opt dofadjustments(list)} selects how redundant fixed-effect coefficients are
@@ -104,9 +105,8 @@ aside before mobility groups are counted. {opt all} is {opt pairwise clusters}
 
 {phang}
 {opt groupvar(newvar)} creates a new variable containing the mobility group
-identifier for each observation. Mobility groups are connected components
-in the network of fixed effects. {bf:Note:} Variable value storage is currently
-a known limitation; the variable is created but may not contain values.
+identifier for each observation. Mobility groups are connected components in the network formed by the first
+two fixed effects. With one effect, all retained observations receive 1.
 
 {dlgtab:SE/Robust}
 
@@ -126,16 +126,16 @@ specified; {opt vce(unadjusted)} and {opt vce(ols)} are an error, as in {cmd:reg
 {dlgtab:Convergence}
 
 {phang}
-{opt tolerance(#)} specifies the convergence tolerance for the iterative
+{opt tolerance(#)} specifies a positive convergence tolerance for the iterative
 demeaning algorithm. The default is {cmd:1e-8}.
 
 {phang}
-{opt iterate(#)} specifies the maximum number of iterations for the
+{opt iterate(#)} specifies a positive maximum number of iterations for the
 demeaning algorithm. The default is {cmd:10000}.
 
 {phang}
-{opt threads(#)} specifies the maximum number of threads to use for parallel
-operations. By default, {cmd:creghdfe} uses the {help ctools##threads:ctools thread setting}, which is at most 16 threads unless you change it.
+{opt threads(#)} sets the maximum number of threads, from 1 to 256.
+The default follows the {help ctools##threads:ctools thread setting}.
 
 {phang}
 {opt nostandardize} specifies that variables should not be standardized
@@ -160,34 +160,44 @@ with ill-conditioned problems.
 {opt residuals(newvar)} is an alias for {opt resid2(newvar)}, provided for
 compatibility with {help reghdfe:reghdfe}.
 
-{dlgtab:Failure handling}
+{dlgtab:Data recovery}
 
 {pstd}
-By default a failed or interrupted {cmd:creghdfe} leaves the data as they were
-without writing a snapshot of the dataset: it only adds variables (the
-residuals, {opt groupvar()} and the {opt savefe} variables, which the plugin
-fills), so after a failure or Break it drops them again and resets
-{cmd:c(changed)}. Results in {cmd:e()} are cleared.
+By default, an error or interruption removes new output variables and clears
+{cmd:e()}. An exhausted projection solver returns error 430.
 
 {phang}
-{opt snapshot} restores the data after a failed or interrupted regression from a
-{help preserve} snapshot of the whole dataset instead, as earlier versions of
-{cmd:creghdfe} did. Stata keeps the snapshot in memory up to
-{cmd:c(max_preservemem)} (1 GB by default) and writes it to disk above that, so
-large datasets take longer and write the whole dataset once.
-{p_end}
+{opt snapshot} uses {help preserve} to copy the whole dataset for recovery.
+Stata may write the copy to disk when it exceeds {cmd:c(max_preservemem)}.
 
 {phang}
-{opt fast} undoes nothing: if the regression fails after creating its output
-variables, or Break is pressed, the error is reported but the new variables
-stay in the data. {opt fast} may not be combined with {opt snapshot}.
-{p_end}
+{opt fast} skips data recovery. An error or interruption can leave partially
+filled output variables. It cannot be combined with {opt snapshot}.
+
 
 {dlgtab:Reporting}
 
 {phang}
-{opt verbose} displays detailed progress information and timing breakdown.
+{opt verbose} displays progress and elapsed times.
 
+
+{marker prediction}{...}
+{title:Prediction}
+
+{pstd}
+{cmd:predict newvar} defaults to {opt xb}, the linear prediction excluding
+absorbed effects. {opt stdp} gives its standard error. Estimate with {opt resid},
+{opt resid2()}, or {opt residuals()} to use the following prediction options:
+
+{p 8 12 2}{opt residuals}: stored regression residuals.{p_end}
+{p 8 12 2}{opt d}: sum of absorbed effects, y - xb - residual.{p_end}
+{p 8 12 2}{opt xbd}: fitted values including absorbed effects, y - residual.{p_end}
+{p 8 12 2}{opt dresiduals}: absorbed effects plus residual, y - xb.{p_end}
+
+{pstd}
+Residual and fixed-effect output variables are missing outside the estimation
+sample. Their names, including those from {opt groupvar()} and {opt savefe},
+must be distinct new variables.
 
 {marker examples}{...}
 {title:Examples}
@@ -239,7 +249,7 @@ stay in the data. {opt fast} may not be combined with {opt snapshot}.
 {synopt:{cmd:e(df_a_redundant)}}redundant coefficients of the absorbed effects, nested ones included{p_end}
 {synopt:{cmd:e(df_a_nested)}}degrees of freedom from nested FEs{p_end}
 {synopt:{cmd:e(F)}}F-statistic{p_end}
-{synopt:{cmd:e(rank)}}rank of e(V){p_end}
+{synopt:{cmd:e(rank)}}number of retained slope coefficients{p_end}
 {synopt:{cmd:e(N_hdfe)}}number of absorbed FE groups{p_end}
 {synopt:{cmd:e(N_hdfe_extended)}}number of absorbed effects, as in {cmd:reghdfe} (the mobility groups are the second row's redundant count in {cmd:e(dof_table)}){p_end}
 {synopt:{cmd:e(num_singletons)}}number of singleton observations dropped{p_end}
@@ -290,8 +300,7 @@ Michael Droste{break}
 {pstd}
 This command provides similar functionality to {cmd:reghdfe} by Sergio Correia.
 The original {cmd:reghdfe} package is available at
-{browse "https://github.com/sergiocorreia/reghdfe"}. We thank Sergio Correia
-for his groundbreaking work on high-dimensional fixed effects estimation in Stata.
+{browse "https://github.com/sergiocorreia/reghdfe"}.
 
 {pstd}
 See also: Correia, S. 2016. "Linear Models with High-Dimensional Fixed Effects:
@@ -307,10 +316,4 @@ Manual: {bf:[R] areg}
 {psee}
 Online: {browse "https://github.com/sergiocorreia/reghdfe":reghdfe} (if installed),
 {help areg}, {help xtreg}, {help ctools}
-{p_end}
-
-{title:Validation and failure behavior}
-
-{pstd}
-residuals(), groupvar(), and savefe output names must be distinct new variables. Existing variables, including inputs and fixed-effect identifiers, are never replaced by these options. Failed operations restore the dataset. iterate() and tolerance() must be positive. Exhausting the fixed-effect solver returns error 430 instead of posting estimates.
 {p_end}

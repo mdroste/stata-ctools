@@ -234,6 +234,99 @@ static int *parse_string_widths(const char *args, size_t nvars)
     return widths;
 }
 
+/* An identity order leaves every Stata observation untouched. Random orders
+   usually differ at the first entry, so this scan adds no full pass unless
+   rows are already in order (or have a long unchanged prefix). */
+static int csort_order_is_identity(const perm_idx_t *order, size_t nobs)
+{
+    for (size_t i = 0; i < nobs; i++) {
+        if (order[i] != (perm_idx_t)i) return 0;
+    }
+    return 1;
+}
+
+/* sort_vars holds one-based columns. Compare adjacent pairs whose right row
+   lies in [start, end); start must be at least one. Every numeric comparison
+   uses the engines' sortable keys, including signed zero and extended missings.
+   strcmp supplies unsigned byte ordering for strings. */
+static int csort_key_range_is_ordered(const stata_data *data, const int *sort_vars,
+                                       size_t nsort, size_t start, size_t end)
+{
+    for (size_t i = start; i < end; i++) {
+        for (size_t k = 0; k < nsort; k++) {
+            const stata_variable *var = &data->vars[sort_vars[k] - 1];
+            int cmp;
+            if (var->type == STATA_TYPE_DOUBLE) {
+                uint64_t left = ctools_double_to_sortable(var->data.dbl[i - 1]);
+                uint64_t right = ctools_double_to_sortable(var->data.dbl[i]);
+                cmp = (left > right) - (left < right);
+            } else {
+                const char *left = var->data.str[i - 1];
+                const char *right = var->data.str[i];
+                cmp = strcmp(left ? left : "", right ? right : "");
+            }
+            if (cmp > 0) return 0;
+            if (cmp < 0) break;
+        }
+    }
+    return 1;
+}
+
+static int csort_keys_are_ordered(const stata_data *data, const int *sort_vars, size_t nsort)
+{
+    /* Reject ordinary shuffled data before waking workers. Large ordered or
+       nearly ordered inputs share the remaining pairs across the configured
+       team, with at least the sort policy's minimum observations per worker. */
+    const size_t prefix_end = data->nobs < 1025 ? data->nobs : 1025;
+    if (!csort_key_range_is_ordered(data, sort_vars, nsort, 1, prefix_end)) return 0;
+    if (prefix_end == data->nobs) return 1;
+
+    /* Appended observations often contain the only inversion. Screen the last
+       64 pairs before a full scan, excluding pairs the prefix already checked.
+       The middle scan below excludes this tail, so every ordered pair is still
+       checked exactly once even when the prefix and tail meet. */
+    const size_t tail_start = data->nobs - prefix_end > 64 ? data->nobs - 64 : prefix_end;
+    if (!csort_key_range_is_ordered(data, sort_vars, nsort, tail_start, data->nobs)) return 0;
+    if (tail_start == prefix_end) return 1;
+
+#ifdef _OPENMP
+    const size_t remaining = tail_start - prefix_end;
+    int threads = ctools_get_max_threads();
+    if (remaining / MIN_OBS_PER_THREAD < (size_t)threads)
+        threads = (int)(remaining / MIN_OBS_PER_THREAD);
+    if (threads > 1) {
+        int ordered = 1;
+        #pragma omp parallel num_threads(threads) reduction(&:ordered)
+        {
+            const size_t team = (size_t)omp_get_num_threads();
+            const size_t tid = (size_t)omp_get_thread_num();
+            const size_t base = remaining / team, extra = remaining % team;
+            const size_t start = prefix_end + tid * base + (tid < extra ? tid : extra);
+            const size_t end = start + base + (tid < extra);
+            /* Partition pair indices, rather than row ranges: the first pair
+               of each worker still compares against its preceding row. */
+            ordered &= csort_key_range_is_ordered(data, sort_vars, nsort, start, end);
+        }
+        return ordered;
+    }
+#endif
+    return csort_key_range_is_ordered(data, sort_vars, nsort, prefix_end, tail_start);
+}
+
+/* Both standard-mode loaders initialize sort_order to identity. Only auto
+   bypasses the requested engine when the input is already ordered. */
+static stata_retcode csort_compute_order(stata_data *data, int *sort_vars, size_t nsort,
+                                         sort_algorithm_t algorithm, int *identity)
+{
+    if (algorithm == SORT_ALG_AUTO && csort_keys_are_ordered(data, sort_vars, nsort)) {
+        *identity = 1;
+        return STATA_OK;
+    }
+    stata_retcode rc = ctools_sort_dispatch(data, sort_vars, nsort, algorithm);
+    *identity = rc == STATA_OK && csort_order_is_identity(data->sort_order, data->nobs);
+    return rc;
+}
+
 /*
     Sort through row-major staging: read every observation once, sort copies
     of the key columns, then write every observation once in sorted order.
@@ -251,6 +344,7 @@ static stata_retcode csort_rowstaged(const int *widths, const int *sort_vars, si
     ctools_rowstage staged;
     stata_data keys;
     stata_retcode rc = STATA_OK;
+    int identity = 0;
     int *all_vars = (int *)ctools_safe_malloc2(nvars, sizeof(int));
     int *key_vars = (int *)ctools_safe_malloc2(nsort, sizeof(int));
 
@@ -286,11 +380,11 @@ static stata_retcode csort_rowstaged(const int *widths, const int *sort_vars, si
 
     if (rc == STATA_OK) {
         timer->sort_time = ctools_timer_seconds();
-        rc = ctools_sort_dispatch(&keys, key_vars, nsort, algorithm);
+        rc = csort_compute_order(&keys, key_vars, nsort, algorithm, &identity);
         timer->sort_time = ctools_timer_seconds() - timer->sort_time;
     }
 
-    if (rc == STATA_OK) {
+    if (rc == STATA_OK && !identity) {
         timer->store_time = ctools_timer_seconds();
         *modified = 1;
         rc = ctools_rowstage_store(&staged, keys.sort_order, nobs, obs1);
@@ -518,7 +612,8 @@ ST_retcode csort_main(const char *args)
     double t_permute = 0.0;  /* Permutation time */
 
     /* Call unified sort dispatcher (computes sort_order only) */
-    rc = ctools_sort_dispatch(&filtered.data, sort_vars, nsort, algorithm);
+    int identity = 0;
+    rc = csort_compute_order(&filtered.data, sort_vars, nsort, algorithm, &identity);
 
     /* Record sort computation time */
     timer.sort_time = ctools_timer_seconds() - timer.sort_time;
@@ -537,11 +632,11 @@ ST_retcode csort_main(const char *args)
     /* ================================================================
        PHASE 3: Transfer sorted data back to Stata
        ================================================================ */
-    timer.store_time = ctools_timer_seconds();
-
-    rc = ctools_data_store_sorted(&filtered.data, obs1);
-
-    timer.store_time = ctools_timer_seconds() - timer.store_time;
+    if (!identity) {
+        timer.store_time = ctools_timer_seconds();
+        rc = ctools_data_store_sorted(&filtered.data, obs1);
+        timer.store_time = ctools_timer_seconds() - timer.store_time;
+    }
 
     if (rc != STATA_OK) {
         snprintf(msg, sizeof(msg), "csort: failed to store data (error %d)\n", rc);

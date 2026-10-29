@@ -46,8 +46,12 @@
 /* Threshold for switching to insertion sort */
 #define MSD_INSERTION_THRESHOLD 64
 
-/* Minimum bucket size for parallel recursion */
+/* Minimum input size for an OpenMP team. */
 #define MSD_PARALLEL_THRESHOLD 10000
+
+/* Independent buckets this large become tasks on that one team. Smaller
+   buckets run inline to keep task overhead bounded. */
+#define MSD_TASK_THRESHOLD 1024
 
 /* Minimum observations for parallel histogram/scatter */
 #define MSD_PARALLEL_HIST_THRESHOLD (MIN_OBS_PER_THREAD * 2)
@@ -615,44 +619,31 @@ static void msd_sort_numeric_recursive_impl(perm_idx_t *order_a, perm_idx_t *ord
     /* Result is now in temp_order, so flip the flag */
     int next_is_a = !a_is_current;
 
-    /* Recursively sort each bucket */
+    /* Every task owns a disjoint interval in both order buffers. Descendants
+       use the same outer team; its final barrier waits for the whole tree. */
+    for (b = 0; b < RADIX_SIZE; b++) {
+        if (counts[b] > 1) {
+            size_t bucket_start = bucket_starts[b];
+            size_t bucket_count = counts[b];
+            size_t bucket_end = bucket_start + bucket_count;
     #ifdef _OPENMP
-    #pragma omp parallel if(n >= MSD_PARALLEL_THRESHOLD)
-    {
-        #pragma omp single nowait
-        {
+            if (bucket_count >= MSD_TASK_THRESHOLD && omp_in_parallel()) {
+                #pragma omp task firstprivate(bucket_start, bucket_end, next_is_a, byte_pos, depth)
+                msd_sort_numeric_recursive_impl(order_a, order_b, keys,
+                                                bucket_start, bucket_end,
+                                                byte_pos - 1, next_is_a, depth + 1);
+            } else
     #endif
-            for (b = 0; b < RADIX_SIZE; b++) {
-                if (counts[b] > 1) {
-                    size_t bucket_start = bucket_starts[b];
-                    size_t bucket_count = counts[b];
-                    size_t bucket_end = bucket_start + bucket_count;
-    #ifdef _OPENMP
-                    if (bucket_count >= MSD_PARALLEL_THRESHOLD) {
-                        #pragma omp task firstprivate(bucket_start, bucket_end, next_is_a, byte_pos, depth)
-                        msd_sort_numeric_recursive_impl(order_a, order_b, keys,
-                                                        bucket_start, bucket_end,
-                                                        byte_pos - 1, next_is_a, depth + 1);
-                    } else {
-                        msd_sort_numeric_recursive_impl(order_a, order_b, keys,
-                                                        bucket_start, bucket_end,
-                                                        byte_pos - 1, next_is_a, depth + 1);
-                    }
-    #else
-                    msd_sort_numeric_recursive_impl(order_a, order_b, keys,
-                                                    bucket_start, bucket_end,
-                                                    byte_pos - 1, next_is_a, depth + 1);
-    #endif
-                } else if (counts[b] == 1 && !next_is_a) {
-                    /* Single element in wrong buffer - copy it */
-                    order_a[bucket_starts[b]] = order_b[bucket_starts[b]];
-                }
+            {
+                msd_sort_numeric_recursive_impl(order_a, order_b, keys,
+                                                bucket_start, bucket_end,
+                                                byte_pos - 1, next_is_a, depth + 1);
             }
-    #ifdef _OPENMP
+        } else if (counts[b] == 1 && !next_is_a) {
+            /* Single element in wrong buffer - copy it */
+            order_a[bucket_starts[b]] = order_b[bucket_starts[b]];
         }
-        #pragma omp taskwait
     }
-    #endif
 }
 
 /* Wrapper for backward compatibility */
@@ -661,8 +652,14 @@ static void msd_sort_numeric_recursive(perm_idx_t *order_a, perm_idx_t *order_b,
                                        size_t end, int byte_pos,
                                        int a_is_current)
 {
-    msd_sort_numeric_recursive_impl(order_a, order_b, keys, start, end,
-                                    byte_pos, a_is_current, 0);
+    const int threads = ctools_get_openmp_threads();
+    (void)threads;
+    #pragma omp parallel num_threads(threads) if(threads > 1 && end - start >= MSD_PARALLEL_THRESHOLD)
+    {
+        #pragma omp single nowait
+        msd_sort_numeric_recursive_impl(order_a, order_b, keys, start, end,
+                                        byte_pos, a_is_current, 0);
+    }
 }
 
 /*
@@ -746,7 +743,7 @@ static stata_retcode msd_sort_by_numeric_var(stata_data *data, int var_idx)
                             size_t bucket_count = counts[b];
                             size_t bucket_end = bucket_start + bucket_count;
             #ifdef _OPENMP
-                            if (bucket_count >= MSD_PARALLEL_THRESHOLD) {
+                            if (bucket_count >= MSD_TASK_THRESHOLD && omp_in_parallel()) {
                                 #pragma omp task firstprivate(bucket_start, bucket_end)
                                 msd_sort_numeric_recursive_impl(order_a, order_b, keys,
                                                                 bucket_start, bucket_end,
@@ -922,50 +919,37 @@ static void msd_sort_string_recursive_impl(perm_idx_t *order_a, perm_idx_t *orde
     /* Result is in temp_order, so flip the flag */
     int next_is_a = !a_is_current;
 
-    /* Recursively sort each bucket (skip bucket 0 - strings that ended) */
+    /* The outer team also executes descendant tasks. Each bucket owns the
+       same disjoint interval in both buffers; no parent reads it afterwards. */
+    for (b = 1; b < STRING_BUCKET_SIZE; b++) {
+        if (counts[b] > 1) {
+            size_t bucket_start = bucket_starts[b];
+            size_t bucket_count = counts[b];
+            size_t bucket_end = bucket_start + bucket_count;
     #ifdef _OPENMP
-    #pragma omp parallel if(n >= MSD_PARALLEL_THRESHOLD)
-    {
-        #pragma omp single nowait
-        {
+            if (bucket_count >= MSD_TASK_THRESHOLD && omp_in_parallel()) {
+                #pragma omp task firstprivate(bucket_start, bucket_end, char_pos, next_is_a, depth)
+                msd_sort_string_recursive_impl(order_a, order_b, strings, str_lengths,
+                                               bucket_start, bucket_end,
+                                               char_pos + 1, next_is_a, depth + 1);
+            } else
     #endif
-            for (b = 1; b < STRING_BUCKET_SIZE; b++) {
-                if (counts[b] > 1) {
-                    size_t bucket_start = bucket_starts[b];
-                    size_t bucket_count = counts[b];
-                    size_t bucket_end = bucket_start + bucket_count;
-    #ifdef _OPENMP
-                    if (bucket_count >= MSD_PARALLEL_THRESHOLD) {
-                        #pragma omp task firstprivate(bucket_start, bucket_end, char_pos, next_is_a, depth)
-                        msd_sort_string_recursive_impl(order_a, order_b, strings, str_lengths,
-                                                       bucket_start, bucket_end,
-                                                       char_pos + 1, next_is_a, depth + 1);
-                    } else {
-                        msd_sort_string_recursive_impl(order_a, order_b, strings, str_lengths,
-                                                       bucket_start, bucket_end,
-                                                       char_pos + 1, next_is_a, depth + 1);
-                    }
-    #else
-                    msd_sort_string_recursive_impl(order_a, order_b, strings, str_lengths,
-                                                   bucket_start, bucket_end,
-                                                   char_pos + 1, next_is_a, depth + 1);
-    #endif
-                } else if (counts[b] == 1 && !next_is_a) {
-                    /* Single element in wrong buffer */
-                    order_a[bucket_starts[b]] = order_b[bucket_starts[b]];
-                }
+            {
+                msd_sort_string_recursive_impl(order_a, order_b, strings, str_lengths,
+                                               bucket_start, bucket_end,
+                                               char_pos + 1, next_is_a, depth + 1);
             }
-            /* Handle bucket 0 (ended strings) */
-            if (counts[0] > 0 && !next_is_a) {
-                for (size_t j = bucket_starts[0]; j < bucket_starts[0] + counts[0]; j++) {
-                    order_a[j] = order_b[j];
-                }
-            }
-    #ifdef _OPENMP
+        } else if (counts[b] == 1 && !next_is_a) {
+            /* Single element in wrong buffer */
+            order_a[bucket_starts[b]] = order_b[bucket_starts[b]];
         }
-        #pragma omp taskwait
     }
-    #endif
+    /* Handle bucket 0 (ended strings). It is disjoint from every task. */
+    if (counts[0] > 0 && !next_is_a) {
+        for (size_t j = bucket_starts[0]; j < bucket_starts[0] + counts[0]; j++) {
+            order_a[j] = order_b[j];
+        }
+    }
 }
 
 /* Wrapper for backward compatibility */
@@ -974,8 +958,14 @@ static void msd_sort_string_recursive(perm_idx_t *order_a, perm_idx_t *order_b,
                                       size_t start, size_t end, size_t char_pos,
                                       int a_is_current)
 {
-    msd_sort_string_recursive_impl(order_a, order_b, strings, str_lengths,
-                                   start, end, char_pos, a_is_current, 0);
+    const int threads = ctools_get_openmp_threads();
+    (void)threads;
+    #pragma omp parallel num_threads(threads) if(threads > 1 && end - start >= MSD_PARALLEL_THRESHOLD)
+    {
+        #pragma omp single nowait
+        msd_sort_string_recursive_impl(order_a, order_b, strings, str_lengths,
+                                       start, end, char_pos, a_is_current, 0);
+    }
 }
 
 /*

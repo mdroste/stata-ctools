@@ -21,7 +21,7 @@ static void release(void *p) { if (p) live--; free(p); }
 #define calloc zero
 #define free release
 #include "ctools_hdfe_utils.c"
-#include "cpplmhdfe/cpplmhdfe_separation.c"
+#include "cppmlhdfe/cppmlhdfe_separation.c"
 int main(void) {
     mock.missval = 8.98846567431158e307;
     mock.ismissing = ismissing;

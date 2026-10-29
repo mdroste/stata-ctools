@@ -1,4 +1,5 @@
-*! Failure-handling mode in a ctools wrapper's options; maintained in package/ado.
+*! version 1.1.0 20261016 github.com/mdroste/stata-ctools
+*! Failure-handling mode in a ctools wrapper's options.
 * Sets local mode in the caller to snapshot, fast or empty (the default: an
 * exact undo without a snapshot of the dataset). Options are parsed after the
 * first comma outside parentheses and quotes, so if-expressions such as

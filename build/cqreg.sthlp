@@ -1,10 +1,11 @@
 {smcl}
-{* *! version 1.0.1 07Feb2026}{...}
+{* *! version 1.1.0 20261016}{...}
 {vieweralsosee "[R] qreg" "help qreg"}{...}
 {vieweralsosee "ctools" "help ctools"}{...}
 {viewerjumpto "Syntax" "cqreg##syntax"}{...}
 {viewerjumpto "Description" "cqreg##description"}{...}
 {viewerjumpto "Options" "cqreg##options"}{...}
+{viewerjumpto "Prediction" "cqreg##prediction"}{...}
 {viewerjumpto "Examples" "cqreg##examples"}{...}
 {viewerjumpto "Stored results" "cqreg##results"}{...}
 {viewerjumpto "Methods" "cqreg##methods"}{...}
@@ -30,7 +31,6 @@
 {synoptline}
 {syntab:Model}
 {synopt:{opt q:uantile(#)}}estimate {it:#} quantile; default is {cmd:quantile(0.5)}{p_end}
-{synopt:{opt abs:orb(varlist)}}currently unsupported; use explicit indicators{p_end}
 
 {syntab:SE/Robust}
 {synopt:{opt vce(vcetype)}}variance estimation method; {it:vcetype} may be
@@ -39,7 +39,7 @@
 {synopt:{opt bwmethod(method)}}bandwidth selection: {opt hsheather}, {opt bofinger}, or {opt chamberlain}{p_end}
 
 {syntab:Reporting}
-{synopt:{opt v:erbose}}display detailed progress information and timing breakdown{p_end}
+{synopt:{opt v:erbose}}display progress and elapsed times{p_end}
 {synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
 
 {syntab:Optimization}
@@ -53,26 +53,14 @@
 {title:Description}
 
 {pstd}
-{cmd:cqreg} fits quantile regression models using a high-performance C implementation
-with an Interior Point Method (IPM) solver. It implements selected
-{help qreg:qreg} syntax. Weight expressions and {opt absorb()} are unsupported.
-Its solver and density estimates can produce different coefficients or VCEs;
-nonconvergence returns an error. Prediction supports xb, residuals, and stdp.
+{cmd:cqreg} estimates a conditional quantile of the dependent variable by
+minimizing the quantile loss. The default is median regression. It uses a
+primal-dual interior-point solver in C.
 
 {pstd}
-Key features:
-
-{phang2}1. {bf:Interior Point Method solver} - Primal-dual IPM with Mehrotra predictor-corrector
-for fast convergence, especially on large datasets (N > 100,000).{p_end}
-
-{phang2}2. {bf:Fixed effects} - {opt absorb()} is currently unavailable. Use explicit
-factor-variable indicators to jointly estimate fixed effects and slopes.{p_end}
-
-{phang2}3. {bf:Parallel computation} - Uses OpenMP for parallel linear algebra operations
-when available.{p_end}
-
-{phang2}4. {bf:Multiple VCE options} - Supports IID (default), robust, and clustered
-standard errors.{p_end}
+Factor-variable notation is allowed. Include explicit indicators for fixed
+effects, for example {cmd:cqreg y x i.group}. Weights and {opt absorb()} are
+not accepted.
 
 
 {marker options}{...}
@@ -85,10 +73,6 @@ standard errors.{p_end}
 a number strictly between 0 and 1. The default is {cmd:quantile(0.5)}, which
 corresponds to the median.
 
-{phang}
-{opt absorb(varlist)} is currently rejected. Least-squares partialling does not preserve the
-quantile-regression objective. Use explicit indicators, for example
-{cmd:cqreg y x i.group}, when the number of groups permits it.
 
 {dlgtab:SE/Robust}
 
@@ -105,7 +89,7 @@ method in {opt denmethod()}.
 Powell sandwich estimator.
 
 {phang2}
-{opt vce(cluster} {it:clustvar}{opt )} computes cluster-robust standard errors
+{cmd:vce(cluster} {it:clustvar}{cmd:)} computes cluster-robust standard errors
 clustered on {it:clustvar}.
 
 {phang}
@@ -146,10 +130,11 @@ density estimation used in computing standard errors.
 {dlgtab:Reporting}
 
 {phang}
-{opt verbose} displays detailed progress information and timing breakdown.
+{opt verbose} displays progress and elapsed times.
 
 {phang}
-{opt threads(#)} specifies the maximum number of threads to use for parallel operations. By default, {cmd:cqreg} uses the {help ctools##threads:ctools thread setting}, which is at most 16 threads unless you change it.
+{opt threads(#)} sets the maximum number of threads, from 1 to 256.
+The default follows the {help ctools##threads:ctools thread setting}.
 
 {dlgtab:Optimization}
 
@@ -164,10 +149,16 @@ breakdown, or produces nonfinite results, {cmd:cqreg} returns error 430 and does
 not post new estimates.
 
 {phang}
-{opt nopreprocess(#)} is accepted for backward compatibility and has no effect:
-{cmd:cqreg} always uses the direct Frisch-Newton solver. The experimental
-preprocessing solver that {cmd:nopreprocess(-1)} used to select has been
-removed, and {cmd:nopreprocess(-1)} returns error 198.
+{opt nopreprocess(#)} accepts nonnegative integers for compatibility and has
+no effect on the solver.
+
+{marker prediction}{...}
+{title:Prediction}
+
+{pstd}
+{cmd:predict newvar} defaults to {opt xb}, the fitted conditional quantile.
+{opt residuals} returns y - xb, and {opt stdp} returns the standard error of
+the linear prediction. {cmd:if} and {cmd:in} may restrict the predictions.
 
 
 {marker examples}{...}
@@ -189,11 +180,11 @@ removed, and {cmd:nopreprocess(-1)} returns error 198.
 {phang2}{cmd:. cqreg price mpg weight, vce(robust) denmethod(kernel(biweight))}{p_end}
 
 {pstd}Quantile regression with fixed effects:{p_end}
-{phang2}{cmd:. webuse nlswork, clear}{p_end}
-{phang2}{cmd:. cqreg ln_wage age ttl_exp tenure i.idcode}{p_end}
+{phang2}{cmd:. webuse grunfeld, clear}{p_end}
+{phang2}{cmd:. cqreg invest mvalue kstock i.company}{p_end}
 
 {pstd}Two-way fixed effects with clustering:{p_end}
-{phang2}{cmd:. cqreg ln_wage age ttl_exp tenure i.idcode i.year, vce(cluster idcode)}{p_end}
+{phang2}{cmd:. cqreg invest mvalue kstock i.company i.year, vce(cluster company)}{p_end}
 
 
 {marker results}{...}
@@ -206,7 +197,12 @@ removed, and {cmd:nopreprocess(-1)} returns error 198.
 {p2col 5 20 24 2: Scalars}{p_end}
 {synopt:{cmd:e(N)}}number of observations{p_end}
 {synopt:{cmd:e(q)}}quantile{p_end}
-{synopt:{cmd:e(sum_adev)}}sum of absolute deviations{p_end}
+{synopt:{cmd:e(sum_adev)}}minimized quantile loss, sum of q*u + (1-q)*v{p_end}
+{synopt:{cmd:e(sum_rdev)}}quantile loss from the intercept-only model{p_end}
+{synopt:{cmd:e(r2_p)}}1 - e(sum_adev)/e(sum_rdev){p_end}
+{synopt:{cmd:e(q_v)}}unconditional sample quantile of the dependent variable{p_end}
+{synopt:{cmd:e(f_r)}}estimated density, 1/e(sparsity){p_end}
+{synopt:{cmd:e(sum_w)}}number of observations (weights are not accepted){p_end}
 {synopt:{cmd:e(sparsity)}}estimated sparsity (1/f(0)); missing for the kernel
 method with {cmd:vce(robust)} or {cmd:vce(cluster)}, as in {cmd:qreg}{p_end}
 {synopt:{cmd:e(bwidth)}}bandwidth used for sparsity estimation{p_end}
@@ -256,10 +252,7 @@ where {it:q} is the quantile, {it:u_i} represents positive deviations, and
 {it:v_i} represents negative deviations.
 
 {pstd}
-The Interior Point Method solves this linear program using a primal-dual
-approach with Mehrotra predictor-corrector steps. This provides O(sqrt(N))
-convergence, which is significantly faster than the simplex method used by
-native {cmd:qreg} for large datasets.
+The solver uses primal-dual iterations with Mehrotra predictor-corrector steps.
 
 {pstd}
 Standard errors follow {cmd:qreg}. The IID variance formula is:

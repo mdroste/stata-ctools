@@ -21,7 +21,7 @@ void csplit_cleanup_cache(void) { freed[CTOOLS_CMD_CSPLIT]++; }
 void crangejoin_cleanup_cache(void) { freed[CTOOLS_CMD_CRANGEJOIN]++; }
 void creghdfe_cleanup_state(void) { freed[CTOOLS_CMD_CREGHDFE]++; }
 void civreghdfe_cleanup_state(void) { freed[CTOOLS_CMD_CIVREGHDFE]++; }
-void cpplmhdfe_cleanup_state(void) { freed[CTOOLS_CMD_CPPLMHDFE]++; }
+void cppmlhdfe_cleanup_state(void) { freed[CTOOLS_CMD_CPPMLHDFE]++; }
 void cexport_cleanup_state(void) { freed[CTOOLS_CMD_CEXPORT]++; }
 void cwinsor_cleanup_state(void) { freed[CTOOLS_CMD_CWINSOR]++; }
 static const ctools_command_descriptor merge={"cmerge",CTOOLS_CMD_CMERGE,NULL,cmerge_cleanup_cache};

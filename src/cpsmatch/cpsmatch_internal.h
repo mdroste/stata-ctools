@@ -84,6 +84,8 @@ typedef struct
     int ties;              /* Handle ties (use all tied matches) */
     int descending;        /* Process in descending pscore order */
     int verbose;           /* Verbose output */
+    int touse;             /* Last plugin variable is the sample marker */
+    int statistics;        /* Stored _treated follows _nn, before the marker */
 } cpsmatch_options;
 
 /* Match result for a single observation */
@@ -197,6 +199,14 @@ int cpsmatch_compare_by_pscore_desc(const void *a, const void *b);
 size_t cpsmatch_binary_search_left(const sorted_control_t *sorted, size_t n, double target);
 size_t cpsmatch_binary_search_right(const sorted_control_t *sorted, size_t n, double target);
 int cpsmatch_parse_options(const char *args, cpsmatch_options *opts);
+/* Radius outputs use filtered-row indices; controls and endpoints are sorted.
+ * No host callbacks occur here. Allocation failures return 920 before writes. */
+int cpsmatch_match_radius(const sorted_control_t *controls, size_t n_controls,
+                         const double *treated_pscore, const size_t *treated_idx, size_t n_treated,
+                         const size_t *control_idx, const perm_idx_t *obs_map,
+                         double radius, int common, double common_min, double common_max,
+                         double *out_weight, double *out_match, double *out_nn, double *out_support,
+                         int *n_matched, int *n_off);
 int cpsmatch_find_nearest_neighbors_fast(double pscore_treated,
                                          const sorted_control_t *sorted_controls,
                                          size_t *control_indices, size_t n_controls,

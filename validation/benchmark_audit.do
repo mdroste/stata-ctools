@@ -81,7 +81,7 @@ foreach N of local sizes {
         local c_binscatter "cbinscatter y x1, nquantiles(20)"
         local c_reghdfe "creghdfe y x1 x2 x3, absorb(firm group) tolerance(1e-8)"
         local c_ivreghdfe "civreghdfe y x2 x3 (x1=z), absorb(firm group) tolerance(1e-8)"
-        local c_ppmlhdfe "cpplmhdfe count x1 x2 x3, absorb(firm group) tolerance(1e-8)"
+        local c_ppmlhdfe "cppmlhdfe count x1 x2 x3, absorb(firm group) tolerance(1e-8)"
         local c_group_numeric "_ctools_group firm, generate(result)"
         local c_group_mixed "_ctools_group sector group, generate(result)"
         local c_group_count "_ctools_group sector group, count"

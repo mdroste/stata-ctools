@@ -1,8 +1,9 @@
 {smcl}
-{* *! version 1.0.1 07Feb2026}{...}
+{* *! version 1.1.0 20261016}{...}
 {viewerjumpto "Syntax" "civreghdfe##syntax"}{...}
 {viewerjumpto "Description" "civreghdfe##description"}{...}
 {viewerjumpto "Options" "civreghdfe##options"}{...}
+{viewerjumpto "Prediction" "civreghdfe##prediction"}{...}
 {viewerjumpto "Examples" "civreghdfe##examples"}{...}
 {viewerjumpto "Stored results" "civreghdfe##results"}{...}
 {title:Title}
@@ -17,18 +18,16 @@
 {p 8 17 2}
 {cmdab:civreghdfe}
 {it:depvar}
-{cmd:(}{it:endogvars} {cmd:=} {it:instruments}{cmd:)}
+[{cmd:(}{it:endogvars} {cmd:=} {it:instruments}{cmd:)}]
 [{it:exogvars}]
 {ifin}
 {weight}
-{cmd:,}
-{opt a:bsorb(varlist)}
-[{it:options}]
+[{cmd:,} {opt a:bsorb(varlist)} {it:options}]
 
 {synoptset 28 tabbed}{...}
 {synopthdr}
 {synoptline}
-{syntab:Main (required)}
+{syntab:Main}
 {synopt:{opt a:bsorb(varlist)}}categorical variables to absorb as fixed effects{p_end}
 
 {syntab:Estimators}
@@ -52,7 +51,6 @@
 {synopt:{opt bw(#)}}bandwidth for kernel-based estimation: AC, or HAC with {opt robust}{p_end}
 {synopt:{opt kernel(string)}}kernel (requires {opt bw()}): {opt bar:tlett} (default), {opt par:zen}, {opt qs}, {opt tru:ncated}, {opt thann}{p_end}
 {synopt:{opt dkraay(#)}}Driscoll-Kraay SEs with bandwidth {it:#} (tsset panel data){p_end}
-{synopt:{opt center}}currently unsupported; returns an error{p_end}
 {synopt:{opt kiefer}}Kiefer SEs: within-panel autocorrelation (tsset panel data){p_end}
 
 {syntab:Estimation Settings}
@@ -63,10 +61,10 @@
 
 {syntab:Reporting}
 {synopt:{opt first}}report first-stage regression statistics{p_end}
-{synopt:{opt ff:irst}}report full first-stage statistics (partial R², F-stat){p_end}
+{synopt:{opt ffir:st}}report full first-stage statistics (partial R², F-stat){p_end}
 {synopt:{opt rf}}report reduced-form estimates{p_end}
 {synopt:{opt coviv}}display covariance matrix of IV estimators{p_end}
-{synopt:{opt v:erbose}}display detailed progress information and timing breakdown{p_end}
+{synopt:{opt v:erbose}}display progress and elapsed times{p_end}
 
 {syntab:Display}
 {synopt:{opt l:evel(#)}}set confidence level; default is {cmd:level(95)}{p_end}
@@ -88,7 +86,7 @@
 
 {syntab:Diagnostic Tests}
 {synopt:{opt orth:og(varlist)}}test orthogonality/exogeneity of specified excluded instruments (C-statistic){p_end}
-{synopt:{opt endogt:est(varlist)}}test endogeneity of specified endogenous regressors{p_end}
+{synopt:{opt endog:test(varlist)}}test endogeneity of specified endogenous regressors{p_end}
 {synopt:{opt red:undant(varlist)}}test redundancy of specified excluded instruments{p_end}
 
 {syntab:Estimation}
@@ -97,12 +95,12 @@
 
 {syntab:Save Results}
 {synopt:{opt res:iduals(newvar)}}save residuals to new variable{p_end}
-{synopt:{opt res:iduals2}}save residuals to auto-named variable _civreghdfe_resid{p_end}
+{synopt:{opt residuals2}}save residuals to auto-named variable _civreghdfe_resid{p_end}
 {synopt:{opt savef:irst}}store the first-stage regressions using {cmd:estimates store}{p_end}
 {synopt:{opt savefp:refix(string)}}prefix for stored results (default: _civreghdfe_){p_end}
 {synopt:{opt saverf}}store reduced-form estimation results{p_end}
 {synopt:{opt saverfp:refix(string)}}prefix for stored RF results (default: _civreghdfe_rf_){p_end}
-{synopt:{opt noret:urn}}skip all result storage (faster for scripted use){p_end}
+{synopt:{opt noreturn}}skip all result storage (faster for scripted use){p_end}
 {synoptline}
 {p2colreset}{...}
 {p 4 6 2}
@@ -114,20 +112,18 @@ see {help weight}.
 {title:Description}
 
 {pstd}
-{cmd:civreghdfe} is a high-performance replacement for {cmd:ivreghdfe} that uses
-a C plugin for all computations. It performs instrumental variables (IV) regression
-using 2SLS, LIML, k-class, GMM, or CUE estimators while absorbing high-dimensional
-fixed effects.
+{cmd:civreghdfe} estimates instrumental-variable models by 2SLS, LIML,
+k-class, two-step GMM, or continuously updated GMM. C routines absorb
+categorical fixed effects and compute the estimates and covariance matrix.
 
-{pstd}
-The command combines the speed of the {cmd:creghdfe} HDFE absorption algorithm
-(using conjugate gradient iteration) with comprehensive IV estimation. All heavy computation
-is performed in optimized C code with OpenMP parallelization.
 
 {pstd}
 The syntax follows {cmd:ivreghdfe}: endogenous variables and their instruments
-are specified in parentheses with an equals sign. The default estimator is 2SLS;
-alternative estimators can be selected via options.
+are specified in parentheses with an equals sign. Fixed effects are optional. The default estimator is 2SLS;
+alternative estimators can be selected via options. Without the parenthesized
+instrument specification, the command estimates OLS. Exogenous regressors may
+appear before or after the parentheses. Factor-variable and time-series
+operators are allowed in regressor and instrument lists.
 
 
 {marker options}{...}
@@ -148,28 +144,23 @@ interactions.
 
 {phang}
 {opt liml} requests limited-information maximum likelihood estimation. LIML is
-more robust to weak instruments than 2SLS but has the same asymptotic distribution
-under standard conditions. The LIML k value (lambda) is stored in {cmd:e(lambda)}.
+computed from a generalized eigenvalue problem. The LIML k value (lambda) is stored in {cmd:e(lambda)}.
 
 {phang}
 {opt fuller(#)} requests Fuller's modified LIML estimator with adjustment parameter
-{it:#}. Fuller(1) has minimum bias while Fuller(4) is approximately efficient. The
-parameter must be positive. This estimator reduces the finite-sample bias of LIML.
+{it:#}. The parameter must be positive and determines the adjustment to the LIML
+k value.
 
 {phang}
 {opt kclass(#)} requests the k-class estimator with {it:k} = {it:#}. Special cases:
-k=0 is OLS, k=1 is 2SLS, k=lambda is LIML. Values between 0 and 1 trade off between
-OLS bias and 2SLS variance.
+k=0 is OLS, k=1 is 2SLS, k=lambda is LIML.
 
 {phang}
 {opt gmm2s} requests two-step efficient GMM estimation. This uses an optimal weighting
-matrix computed from first-step residuals. More efficient than 2SLS under heteroskedasticity
-when overidentified.
+matrix computed from first-step residuals.
 
 {phang}
-{opt cue} requests continuously-updated GMM (CUE) estimation. CUE jointly estimates
-coefficients and the optimal weighting matrix, providing better finite-sample
-properties than two-step GMM.
+{opt cue} requests continuously-updated GMM (CUE) estimation. CUE recomputes the moment covariance at each candidate coefficient vector.
 
 {phang}
 {opt b0(matname)} specifies a matrix of initial coefficient values for iterative
@@ -182,7 +173,7 @@ If not specified, 2SLS estimates are used as starting values.
 {opt vce(vcetype)} specifies the variance-covariance estimation method:
 
 {phang2}{opt unadjusted} or {opt ols} - standard VCE assuming homoskedasticity{p_end}
-{phang2}{opt robust} - heteroskedasticity-robust standard errors (HC1){p_end}
+{phang2}{opt robust} - heteroskedasticity-robust standard errors{p_end}
 {phang2}{opt cluster} {it:clustvar} - cluster-robust standard errors{p_end}
 {phang2}{opt cluster} {it:clustvar1} {it:clustvar2} - two-way cluster-robust standard errors{p_end}
 
@@ -192,13 +183,17 @@ within each dimension using the Cameron-Gelbach-Miller (2011) formula:
 V_twoway = V_clustvar1 + V_clustvar2 - V_intersection.
 This is appropriate for panel data with both cross-sectional and time-series correlation.
 
-{pstd}
-The VCE is computed using the proper sandwich formula for the chosen estimator
-with the original endogenous regressors (not the first-stage fitted values).
+{phang}
+{opt small} applies finite-sample covariance adjustments and reports t and F
+inference. It is implied by {opt absorb()}. Without either option, coefficient
+inference uses the normal distribution.
 
 {phang}
-{opt small} requests small-sample corrections to be applied to variance estimates.
-This includes adjusting for degrees of freedom lost due to absorbed fixed effects.
+{opt dofminus(#)} subtracts a nonnegative integer from the residual degrees
+of freedom. {opt sdofminus(#)} supplies an additional nonnegative adjustment
+for the small-sample covariance multiplier. {opt nopartialsmall} excludes
+partialled-out regressors from that multiplier's regressor count.
+
 
 {dlgtab:HAC Standard Errors}
 
@@ -230,8 +225,8 @@ span of the estimation sample (in units of the tsset delta).
 {phang2}{opt thann}, {opt tukey} or {opt tukey-hanning} - Tukey-Hanning{p_end}
 
 {pstd}
-{cmd:ivreg2}'s Tukey-Hamming, Daniell and Tent kernels and {cmd:bw(auto)} are not
-supported.
+{cmd:bw(auto)}, {opt center}, and the Tukey-Hamming, Daniell, and Tent kernels
+are not supported.
 
 {phang}
 {opt dkraay(#)} requests Driscoll-Kraay standard errors, robust to heteroskedasticity
@@ -265,20 +260,20 @@ kernel whatever {opt kernel()} is, and with {opt kiefer} they are the iid
 solver used in HDFE absorption. Default is 1e-8.
 
 {phang}
-{opt maxiter(#)} specifies the maximum number of CG iterations. Default is 500.
+{opt maxiter(#)} specifies the maximum number of CG iterations. Default is 500. Both {opt maxiter()} and {opt tolerance()} must be positive.
+A projection that exhausts its iteration limit returns error 430.
 
 {phang}
-{opt threads(#)} specifies the maximum number of threads to use for parallel
-operations. By default, {cmd:civreghdfe} uses the {help ctools##threads:ctools thread setting}, which is at most 16 threads unless you change it.
+{opt threads(#)} sets the maximum number of threads, from 1 to 256.
+The default follows the {help ctools##threads:ctools thread setting}.
 
 {phang}
-{opt noconstant} suppresses the constant term. Note that with absorbed fixed
-effects, the constant is typically absorbed anyway.
+{opt noconstant} suppresses the constant term. With {opt absorb()}, the constant is absorbed with the fixed effects.
 
 {dlgtab:Reporting}
 
 {phang}
-{opt first} requests that first-stage statistics be computed. Use {opt ffirst}
+{opt first} displays the first-stage regressions. Use {opt ffirst}
 to display a formatted first-stage summary table.
 
 {phang}
@@ -302,7 +297,7 @@ dimension only; with two-way clustering these options are an error.
 {opt coviv} displays the covariance matrix of the IV estimators.
 
 {phang}
-{opt verbose} displays detailed progress information and timing breakdown.
+{opt verbose} displays progress and elapsed times.
 
 {dlgtab:Display}
 
@@ -378,7 +373,7 @@ excluded instruments. The test evaluates whether the specified instruments contr
 to identification beyond the remaining instruments: {cmd:ranktest}'s LM test (the
 Kleibergen-Paap version under robust, cluster or kernel VCEs). Under H0 (that the instruments
 are redundant), the LM statistic ~ chi-sq(df) where df = K_endog * (number tested).
-A small test statistic (large p-value) suggests the instruments may be safely dropped.
+A large p-value means the test does not reject redundancy.
 Results are stored in {cmd:e(redund)}, {cmd:e(redund_df)}, and {cmd:e(redund_p)}.
 
 {dlgtab:Estimation}
@@ -387,12 +382,11 @@ Results are stored in {cmd:e(redund)}, {cmd:e(redund_df)}, and {cmd:e(redund_p)}
 {opt partial(varlist)} requests that the specified exogenous variables be partialled
 out (removed) from the estimation using the Frisch-Waugh-Lovell (FWL) transformation.
 All other variables (dependent, endogenous, remaining exogenous, and instruments)
-are regressed on the partial variables and replaced with their residuals. The FWL
-theorem guarantees that coefficients on the non-partialled variables are numerically
-identical to those from the full regression. This option is useful when you want to
+are regressed on the partial variables and replaced with their residuals. This retains the controls in the model while omitting their coefficients
+from the displayed output. This option is useful when you want to
 omit certain control variables from the displayed output while still controlling for
 them. The partialled-out variables do not appear in the coefficient table.
-Note: Variables specified in partial() must be included in the model as exogenous
+Variables specified in {opt partial()} must be included in the model as exogenous
 regressors. The partialling is performed after fixed effect absorption, on the
 demeaned data, and uses the estimation weights. A partial() variable that is
 collinear with earlier ones or absorbed by the fixed effects is dropped with a note.
@@ -431,6 +425,20 @@ This is useful for scripted workflows where only side effects (e.g., residuals)
 are needed, avoiding the overhead of transferring results back to Stata.
 
 
+{marker prediction}{...}
+{title:Prediction}
+
+{pstd}
+{cmd:predict newvar} defaults to {opt xb}, the structural linear prediction
+excluding absorbed effects. {opt stdp} gives its standard error.
+{opt residuals} returns estimation-sample residuals; with absorbed effects,
+specify {opt residuals(newvar)} during estimation first. The option
+{opt residuals2} saves these as {cmd:_civreghdfe_resid}.
+
+{pstd}
+{cmd:predict newvar, xbd} returns y minus the saved residual, including absorbed
+effects. It requires saved residuals and is missing outside {cmd:e(sample)}.
+
 {marker examples}{...}
 {title:Examples}
 
@@ -453,7 +461,7 @@ are needed, avoiding the overhead of transferring results back to Stata.
 {pstd}With weights:{p_end}
 {phang2}{cmd:. civreghdfe ln_wage (tenure = union) age [aw=hours], absorb(idcode)}{p_end}
 
-{pstd}LIML estimation (more robust to weak instruments):{p_end}
+{pstd}LIML estimation:{p_end}
 {phang2}{cmd:. civreghdfe ln_wage (tenure = union wks_ue) age, absorb(idcode) liml}{p_end}
 
 {pstd}Fuller's modified LIML with alpha=1:{p_end}
@@ -462,7 +470,8 @@ are needed, avoiding the overhead of transferring results back to Stata.
 {pstd}Two-step GMM:{p_end}
 {phang2}{cmd:. civreghdfe ln_wage (tenure = union wks_ue) age, absorb(idcode) gmm2s vce(robust)}{p_end}
 
-{pstd}HAC standard errors with Bartlett kernel (the data are {cmd:xtset idcode year}):{p_end}
+{pstd}HAC standard errors with Bartlett kernel:{p_end}
+{phang2}{cmd:. xtset idcode year}{p_end}
 {phang2}{cmd:. civreghdfe ln_wage (tenure = union) age, absorb(idcode) kernel(bartlett) bw(3) robust}{p_end}
 
 {pstd}AC standard errors (autocorrelation-consistent, homoskedastic):{p_end}
@@ -497,7 +506,7 @@ are needed, avoiding the overhead of transferring results back to Stata.
 {p2col 5 20 24 2: Scalars}{p_end}
 {synopt:{cmd:e(N)}}number of observations{p_end}
 {synopt:{cmd:e(df_m)}}model degrees of freedom{p_end}
-{synopt:{cmd:e(df_r)}}residual degrees of freedom{p_end}
+{synopt:{cmd:e(df_r)}}residual degrees of freedom (with {opt small} or {opt absorb()}){p_end}
 {synopt:{cmd:e(df_a)}}absorbed degrees of freedom{p_end}
 {synopt:{cmd:e(K)}}number of regressors{p_end}
 {synopt:{cmd:e(K_endog)}}number of endogenous regressors{p_end}
@@ -568,7 +577,7 @@ are needed, avoiding the overhead of transferring results back to Stata.
 {synopt:{cmd:e(title)}}estimation method title{p_end}
 {synopt:{cmd:e(model)}}estimator: 2sls, liml, fuller, kclass, gmm2s, or cue{p_end}
 {synopt:{cmd:e(vcetype)}}VCE type: Robust, Cluster, or Two-way Cluster (Robust for Driscoll-Kraay; empty for AC and Kiefer){p_end}
-{synopt:{cmd:e(clustvar)}}cluster variable (if clustered); for two-way equals e(clustvar1){p_end}
+{synopt:{cmd:e(clustvar)}}cluster variable (if clustered); contains both variable names for two-way clustering{p_end}
 {synopt:{cmd:e(clustvar1)}}first cluster variable (if two-way clustered){p_end}
 {synopt:{cmd:e(clustvar2)}}second cluster variable (if two-way clustered){p_end}
 {synopt:{cmd:e(kernel)}}kernel of a kernel-based VCE: Bartlett, Parzen, Quadratic Spectral, Truncated or Tukey-Hanning{p_end}
@@ -607,8 +616,9 @@ as {cmd:ranktest} does. Rejection indicates instruments are relevant.
 
 {pstd}
 The Cragg-Donald Wald F-statistic (or Kleibergen-Paap rk Wald F for robust,
-cluster and kernel VCEs) tests whether instruments are weak. Compare to Stock-Yogo critical values shown
-in output. Values above 10 generally indicate instruments are not weak.
+cluster and kernel VCEs) tests whether instruments are weak. The output displays Stock-Yogo critical values for the Cragg-Donald statistic.
+Those values assume independent, homoskedastic errors and do not provide
+critical values for the robust Kleibergen-Paap statistic.
 
 {dlgtab:Overidentification Test}
 
@@ -664,24 +674,6 @@ First-stage F-statistics are computed from the partial R-squared of the excluded
 instruments in the first-stage regression.
 
 
-{title:Technical Notes}
-
-{pstd}
-The HDFE absorption uses the same algorithm as {cmd:creghdfe}, which iteratively
-projects out factor means using a conjugate gradient solver with symmetric
-Kaczmarz transformation.
-
-{pstd}
-For clustered standard errors, the command uses the standard cluster-robust
-sandwich estimator adapted for the chosen IV method.
-
-{pstd}
-Driscoll-Kraay standard errors sum the moment conditions over the panels within
-each time period and apply the kernel to these period sums over lags in calendar
-time, which gives consistency under very general forms of cross-sectional and
-temporal dependence (a large-T estimator).
-
-
 {title:References}
 
 {phang}
@@ -735,9 +727,7 @@ Michael Droste{break}
 This command provides similar functionality to {cmd:ivreghdfe} by Sergio Correia.
 The original {cmd:ivreghdfe} package, which combines {cmd:ivreg2} and {cmd:reghdfe},
 is available at {browse "https://github.com/sergiocorreia/ivreghdfe"}.
-We thank Sergio Correia for his groundbreaking work on high-dimensional fixed effects
-estimation, as well as Mark Schaffer, Christopher Baum, and Steven Stillman for their
-foundational work on {cmd:ivreg2}.
+{cmd:ivreg2} is by Christopher Baum, Mark Schaffer, and Steven Stillman.
 
 {pstd}
 See also: Correia, S. 2016. "REGHDFE: Stata module to perform linear or instrumental-variable
@@ -751,10 +741,4 @@ Components, Boston College Department of Economics.
 Online: {browse "https://github.com/sergiocorreia/ivreghdfe":ivreghdfe} (if installed),
 {browse "https://github.com/sergiocorreia/reghdfe":reghdfe} (if installed),
 {help ivreg2} (if installed), {help creghdfe}
-{p_end}
-
-{title:Validation and failure behavior}
-
-{pstd}
-maxiter() and tolerance() must be positive. A fixed-effect projection that exhausts its iteration limit returns error 430; covariance allocation failures propagate as errors rather than successful zero standard errors.
 {p_end}

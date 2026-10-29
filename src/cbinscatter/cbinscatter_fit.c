@@ -7,6 +7,8 @@
  * Optimizations:
  * - No design matrix allocation unless fixed effects must be absorbed
  * - Powers of centered, scaled x keep the normal equations well conditioned
+ * - Passes over the rows run in blocks in parallel; each block's sums are
+ *   added in block order, so results do not depend on the thread count
  */
 
 #include <stdlib.h>
@@ -67,7 +69,7 @@ static ST_retcode fit_polynomial_joint(
     ST_double *wbar = NULL, *XtX = NULL, *Xty = NULL, *b = NULL, *v = NULL;
     ST_double *cols = NULL, **vars = NULL, *dmean = NULL;
     ST_double a[101];
-    ST_int i, j, k;
+    ST_int j, k;
 
     if (order < 1 || order > 100 || K < 0 || (G > 0 && (!fe_vars || !config))) {
         return CBINSCATTER_ERR_INVALID;
@@ -76,18 +78,47 @@ static ST_retcode fit_polynomial_joint(
     for (j = 0; j <= order; j++) coefs[j] = 0.0;
     *r2 = 0.0;
 
+    const ST_int num_blocks = cbs_num_blocks(N);
+    ST_double *blk_sums = NULL;
+    ST_int blk;
+
     wbar = (ST_double *)calloc((size_t)K + 1, sizeof(ST_double));
     if (!wbar) return CBINSCATTER_ERR_MEMORY;
 
-    /* Pass 1: weighted means and the range of x */
-    for (i = 0; i < N; i++) {
-        ST_double w = weights ? weights[i] : 1.0;
-        sw += w;
-        sx += w * x[i];
-        sy += w * y[i];
-        for (k = 0; k < K; k++) wbar[k] += w * controls[(size_t)k * N + i];
-        if (x[i] < xmin) xmin = x[i];
-        if (x[i] > xmax) xmax = x[i];
+    /* Pass 1: weighted means and the range of x. Per block: sw, sx, sy,
+     * xmin, xmax, then the K control sums. */
+    {
+        const size_t per = 5 + (size_t)K;
+        blk_sums = (ST_double *)ctools_safe_calloc2((size_t)num_blocks * per + 1, sizeof(ST_double));
+        if (!blk_sums) { rc = CBINSCATTER_ERR_MEMORY; goto cleanup; }
+        #pragma omp parallel for schedule(static) if (num_blocks > 1)
+        for (blk = 0; blk < num_blocks; blk++) {
+            ST_int i0, i1;
+            cbs_block_range(blk, N, &i0, &i1);
+            ST_double *acc = blk_sums + (size_t)blk * per;
+            ST_double bsw = 0.0, bsx = 0.0, bsy = 0.0, bmin = HUGE_VAL, bmax = -HUGE_VAL;
+            for (ST_int ii = i0; ii < i1; ii++) {
+                ST_double w = weights ? weights[ii] : 1.0;
+                bsw += w;
+                bsx += w * x[ii];
+                bsy += w * y[ii];
+                for (ST_int kk = 0; kk < K; kk++) acc[5 + kk] += w * controls[(size_t)kk * N + ii];
+                if (x[ii] < bmin) bmin = x[ii];
+                if (x[ii] > bmax) bmax = x[ii];
+            }
+            acc[0] = bsw; acc[1] = bsx; acc[2] = bsy; acc[3] = bmin; acc[4] = bmax;
+        }
+        for (blk = 0; blk < num_blocks; blk++) {
+            const ST_double *acc = blk_sums + (size_t)blk * per;
+            sw += acc[0];
+            sx += acc[1];
+            sy += acc[2];
+            if (acc[3] < xmin) xmin = acc[3];
+            if (acc[4] > xmax) xmax = acc[4];
+            for (k = 0; k < K; k++) wbar[k] += acc[5 + k];
+        }
+        free(blk_sums);
+        blk_sums = NULL;
     }
     if (!(sw > 0.0)) goto cleanup;
     ST_double xbar = sx / sw, ybar = sy / sw;
@@ -103,29 +134,45 @@ static ST_retcode fit_polynomial_joint(
     XtX = (ST_double *)calloc((size_t)q * q + 1, sizeof(ST_double));
     Xty = (ST_double *)calloc((size_t)q + 1, sizeof(ST_double));
     b = (ST_double *)calloc((size_t)q + 1, sizeof(ST_double));
-    v = (ST_double *)calloc((size_t)m, sizeof(ST_double));
+    v = (ST_double *)calloc((size_t)num_blocks * m, sizeof(ST_double));
     if (!XtX || !Xty || !b || !v) { rc = CBINSCATTER_ERR_MEMORY; goto cleanup; }
 
     ST_double tss = 0.0, rss = 0.0;
     if (G > 0) {
-        /* Columns [y, d^1..d^p, controls], demeaned within FE levels together */
+        /* Columns [y, d^1..d^p, controls], demeaned within FE levels together.
+         * Per block: tss, then the sums of d^1..d^p. */
+        const size_t per = 1 + (size_t)p;
         cols = (ST_double *)ctools_safe_malloc3((size_t)m, (size_t)N, sizeof(ST_double));
         vars = (ST_double **)malloc((size_t)m * sizeof(ST_double *));
         dmean = (ST_double *)calloc((size_t)p + 1, sizeof(ST_double));
-        if (!cols || !vars || !dmean) { rc = CBINSCATTER_ERR_MEMORY; goto cleanup; }
+        blk_sums = (ST_double *)ctools_safe_calloc2((size_t)num_blocks * per + 1, sizeof(ST_double));
+        if (!cols || !vars || !dmean || !blk_sums) { rc = CBINSCATTER_ERR_MEMORY; goto cleanup; }
         for (j = 0; j < m; j++) vars[j] = &cols[(size_t)j * N];
-        for (i = 0; i < N; i++) {
-            ST_double w = weights ? weights[i] : 1.0;
-            ST_double d = (x[i] - xbar) / scale, pw = 1.0;
-            vars[0][i] = y[i];
-            tss += w * (y[i] - ybar) * (y[i] - ybar);
-            for (j = 1; j <= p; j++) {
-                pw *= d;
-                vars[j][i] = pw;
-                dmean[j] += w * pw;
+        #pragma omp parallel for schedule(static) if (num_blocks > 1)
+        for (blk = 0; blk < num_blocks; blk++) {
+            ST_int i0, i1;
+            cbs_block_range(blk, N, &i0, &i1);
+            ST_double *acc = blk_sums + (size_t)blk * per;
+            for (ST_int ii = i0; ii < i1; ii++) {
+                ST_double w = weights ? weights[ii] : 1.0;
+                ST_double d = (x[ii] - xbar) / scale, pw = 1.0;
+                vars[0][ii] = y[ii];
+                acc[0] += w * (y[ii] - ybar) * (y[ii] - ybar);
+                for (ST_int jj = 1; jj <= p; jj++) {
+                    pw *= d;
+                    vars[jj][ii] = pw;
+                    acc[jj] += w * pw;
+                }
+                for (ST_int kk = 0; kk < K; kk++) vars[1 + p + kk][ii] = controls[(size_t)kk * N + ii];
             }
-            for (k = 0; k < K; k++) vars[1 + p + k][i] = controls[(size_t)k * N + i];
         }
+        for (blk = 0; blk < num_blocks; blk++) {
+            const ST_double *acc = blk_sums + (size_t)blk * per;
+            tss += acc[0];
+            for (j = 1; j <= p; j++) dmean[j] += acc[j];
+        }
+        free(blk_sums);
+        blk_sums = NULL;
         for (j = 1; j <= p; j++) dmean[j] /= sw;
 
         ST_int dropped = 0;
@@ -136,20 +183,41 @@ static ST_retcode fit_polynomial_joint(
         cbinscatter_normal_equations((const ST_double *const *)(vars + 1), q, vars[0], weights,
                                      NULL, 0, N, XtX, Xty);
     } else {
-        /* Streamed: [1, d..d^p, W - w̄] on y - ȳ */
-        for (i = 0; i < N; i++) {
-            ST_double w = weights ? weights[i] : 1.0;
-            ST_double d = (x[i] - xbar) / scale, r = y[i] - ybar;
-            v[0] = 1.0;
-            for (j = 1; j <= p; j++) v[j] = v[j - 1] * d;
-            for (k = 0; k < K; k++) v[1 + p + k] = controls[(size_t)k * N + i] - wbar[k];
-            tss += w * r * r;
-            for (j = 0; j < q; j++) {
-                ST_double wv = w * v[j];
-                Xty[j] += wv * r;
-                for (k = j; k < q; k++) XtX[(size_t)j * q + k] += wv * v[k];
+        /* Streamed: [1, d..d^p, W - w̄] on y - ȳ. Per block: tss, Xty, then
+         * the upper triangle of XtX. */
+        const size_t per = 1 + (size_t)q + (size_t)q * q;
+        blk_sums = (ST_double *)ctools_safe_calloc2((size_t)num_blocks * per + 1, sizeof(ST_double));
+        if (!blk_sums) { rc = CBINSCATTER_ERR_MEMORY; goto cleanup; }
+        #pragma omp parallel for schedule(static) if (num_blocks > 1)
+        for (blk = 0; blk < num_blocks; blk++) {
+            ST_int i0, i1;
+            cbs_block_range(blk, N, &i0, &i1);
+            ST_double *acc = blk_sums + (size_t)blk * per, *bXty = acc + 1, *bXtX = bXty + q;
+            ST_double *vb = v + (size_t)blk * m;
+            for (ST_int ii = i0; ii < i1; ii++) {
+                ST_double w = weights ? weights[ii] : 1.0;
+                ST_double d = (x[ii] - xbar) / scale, r = y[ii] - ybar;
+                vb[0] = 1.0;
+                for (ST_int jj = 1; jj <= p; jj++) vb[jj] = vb[jj - 1] * d;
+                for (ST_int kk = 0; kk < K; kk++) vb[1 + p + kk] = controls[(size_t)kk * N + ii] - wbar[kk];
+                acc[0] += w * r * r;
+                for (ST_int jj = 0; jj < q; jj++) {
+                    ST_double wv = w * vb[jj];
+                    bXty[jj] += wv * r;
+                    for (ST_int kk = jj; kk < q; kk++) bXtX[(size_t)jj * q + kk] += wv * vb[kk];
+                }
             }
         }
+        for (blk = 0; blk < num_blocks; blk++) {
+            const ST_double *acc = blk_sums + (size_t)blk * per, *bXty = acc + 1, *bXtX = bXty + q;
+            tss += acc[0];
+            for (j = 0; j < q; j++) {
+                Xty[j] += bXty[j];
+                for (k = j; k < q; k++) XtX[(size_t)j * q + k] += bXtX[(size_t)j * q + k];
+            }
+        }
+        free(blk_sums);
+        blk_sums = NULL;
     }
 
     if (q > 0) {
@@ -159,22 +227,32 @@ static ST_retcode fit_polynomial_joint(
         if (rc != CBINSCATTER_OK) goto cleanup;
     }
 
-    /* RSS from the same (demeaned or centered) columns */
-    for (i = 0; i < N; i++) {
-        ST_double w = weights ? weights[i] : 1.0, e;
-        if (G > 0) {
-            e = vars[0][i];
-            for (j = 0; j < q; j++) e -= b[j] * vars[1 + j][i];
-        } else {
-            ST_double d = (x[i] - xbar) / scale;
-            v[0] = 1.0;
-            for (j = 1; j <= p; j++) v[j] = v[j - 1] * d;
-            for (k = 0; k < K; k++) v[1 + p + k] = controls[(size_t)k * N + i] - wbar[k];
-            e = y[i] - ybar;
-            for (j = 0; j < q; j++) e -= b[j] * v[j];
+    /* RSS from the same (demeaned or centered) columns, per block */
+    blk_sums = (ST_double *)ctools_safe_calloc2((size_t)num_blocks + 1, sizeof(ST_double));
+    if (!blk_sums) { rc = CBINSCATTER_ERR_MEMORY; goto cleanup; }
+    #pragma omp parallel for schedule(static) if (num_blocks > 1)
+    for (blk = 0; blk < num_blocks; blk++) {
+        ST_int i0, i1;
+        cbs_block_range(blk, N, &i0, &i1);
+        ST_double *vb = v + (size_t)blk * m, brss = 0.0;
+        for (ST_int ii = i0; ii < i1; ii++) {
+            ST_double w = weights ? weights[ii] : 1.0, e;
+            if (G > 0) {
+                e = vars[0][ii];
+                for (ST_int jj = 0; jj < q; jj++) e -= b[jj] * vars[1 + jj][ii];
+            } else {
+                ST_double d = (x[ii] - xbar) / scale;
+                vb[0] = 1.0;
+                for (ST_int jj = 1; jj <= p; jj++) vb[jj] = vb[jj - 1] * d;
+                for (ST_int kk = 0; kk < K; kk++) vb[1 + p + kk] = controls[(size_t)kk * N + ii] - wbar[kk];
+                e = y[ii] - ybar;
+                for (ST_int jj = 0; jj < q; jj++) e -= b[jj] * vb[jj];
+            }
+            brss += w * e * e;
         }
-        rss += w * e * e;
+        blk_sums[blk] = brss;
     }
+    for (blk = 0; blk < num_blocks; blk++) rss += blk_sums[blk];
     if (tss > 0.0) {
         *r2 = 1.0 - rss / tss;
         if (*r2 < 0.0) *r2 = 0.0;
@@ -191,7 +269,7 @@ static ST_retcode fit_polynomial_joint(
 
 cleanup:
     free(wbar); free(XtX); free(Xty); free(b); free(v);
-    free(cols); free(vars); free(dmean);
+    free(cols); free(vars); free(dmean); free(blk_sums);
     return rc;
 }
 
@@ -240,59 +318,26 @@ ST_retcode fit_group_polynomial(
 ST_retcode fit_all_groups(
     const ST_double *y,
     const ST_double *x,
-    const ST_int *by_groups,
+    const ST_int *group_start,
     const ST_double *weights,
     ST_int N,
     const BinscatterConfig *config,
     BinscatterResults *results
 ) {
-    ST_int g, i;
-    ST_retcode rc = CBINSCATTER_OK;
     ST_int order = config->linetype;
 
     if (order < 1) return CBINSCATTER_OK;
 
     /* For single group (no by()), fit directly without copying */
-    if (results->num_by_groups == 1 && by_groups == NULL) {
+    if (results->num_by_groups == 1 && group_start == NULL) {
         return fit_group_polynomial(y, x, weights, N, NULL, 0, NULL, 0,
                                     config, &results->groups[0]);
     }
 
-    /* Multiple groups: need to extract data per group */
-    ST_double *y_group = NULL, *x_group = NULL, *w_group = NULL;
-    ST_int *group_counts = NULL;
-    ST_int max_group_size = 0;
-
-    /* First pass: count observations per group */
-    group_counts = (ST_int *)calloc(results->num_by_groups, sizeof(ST_int));
-    if (!group_counts) return CBINSCATTER_ERR_MEMORY;
-
-    for (i = 0; i < N; i++) {
-        ST_int g_id = by_groups[i] - 1;
-        if (g_id >= 0 && g_id < results->num_by_groups) {
-            group_counts[g_id]++;
-            if (group_counts[g_id] > max_group_size) {
-                max_group_size = group_counts[g_id];
-            }
-        }
-    }
-
-    /* Allocate buffers for largest group */
-    y_group = (ST_double *)malloc(max_group_size * sizeof(ST_double));
-    x_group = (ST_double *)malloc(max_group_size * sizeof(ST_double));
-    if (weights != NULL) {
-        w_group = (ST_double *)malloc(max_group_size * sizeof(ST_double));
-    }
-
-    if (!y_group || !x_group || (weights != NULL && !w_group)) {
-        rc = CBINSCATTER_ERR_MEMORY;
-        goto cleanup;
-    }
-
-    /* Process each group */
-    for (g = 0; g < results->num_by_groups; g++) {
+    /* Each group is a contiguous range of rows */
+    for (ST_int g = 0; g < results->num_by_groups; g++) {
         ByGroupResult *group = &results->groups[g];
-        ST_int n_group = group_counts[g];
+        ST_int first = group_start[g], n_group = group_start[g + 1] - first;
 
         if (n_group < order + 1) {
             group->fit_order = 0;
@@ -300,29 +345,10 @@ ST_retcode fit_all_groups(
             continue;
         }
 
-        /* Extract group data */
-        ST_int j = 0;
-        for (i = 0; i < N; i++) {
-            if (by_groups[i] == g + 1) {
-                y_group[j] = y[i];
-                x_group[j] = x[i];
-                if (w_group != NULL) {
-                    w_group[j] = weights[i];
-                }
-                j++;
-            }
-        }
-
-        rc = fit_group_polynomial(y_group, x_group, w_group, n_group, NULL, 0,
-                                  NULL, 0, config, group);
-        if (rc == CBINSCATTER_ERR_MEMORY) goto cleanup;
-        rc = CBINSCATTER_OK;  /* Don't fail entire operation */
+        ST_retcode rc = fit_group_polynomial(y + first, x + first, weights ? weights + first : NULL,
+                                             n_group, NULL, 0, NULL, 0, config, group);
+        if (rc == CBINSCATTER_ERR_MEMORY) return rc;
+        /* Don't fail entire operation */
     }
-
-cleanup:
-    free(y_group);
-    free(x_group);
-    free(w_group);
-    free(group_counts);
-    return rc;
+    return CBINSCATTER_OK;
 }

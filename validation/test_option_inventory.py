@@ -39,9 +39,10 @@ def main():
     assert not coverage.exercised(dict(options=['generate'],candidate='cencode s, agent(out)'), 'generate','GENerate')
     with tempfile.TemporaryDirectory() as tmp:
         root=Path(tmp)
-        shutil.copytree(coverage.ROOT/'package/ado',root/'package/ado')
+        (root/'build').mkdir()
+        for ado in (coverage.ROOT/'build').glob('*.ado'): shutil.copy2(ado,root/'build'/ado.name)
         shutil.copytree(coverage.ROOT/'validation',root/'validation',ignore=shutil.ignore_patterns('*.log','__pycache__'))
-        path=root/'package/ado/csort.ado'
+        path=root/'build/csort.ado'
         path.write_text(path.read_text().replace('syntax ', 'syntax ',1)+'\nprogram define csort\nsyntax, NEWcoverageoption\nend\n')
         with patch.object(coverage,'ROOT',root):
             gaps=[r for r in coverage.records() if r['status']=='gap']

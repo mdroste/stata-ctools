@@ -138,8 +138,8 @@ program define ppmlhdfe, eclass
     helper_ppml_result
     global HELPER_MUTATION "`mutation'"
 end
-capture program drop cpplmhdfe
-program define cpplmhdfe, eclass
+capture program drop cppmlhdfe
+program define cppmlhdfe, eclass
     helper_ppml_result
 end
 clear
@@ -161,7 +161,7 @@ program define qreg, eclass
 end
 capture program drop cqreg
 program define cqreg, eclass
-    cpplmhdfe `0'
+    cppmlhdfe `0'
 end
 foreach mutation in covariance covariance_above_roundoff coefficient correct {
     global HELPER_MUTATION "`mutation'"
@@ -169,7 +169,7 @@ foreach mutation in covariance covariance_above_roundoff coefficient correct {
     if inlist("`mutation'", "covariance", "correct") helper_expect 0 1
     else helper_expect 1 0
 }
-program drop qreg cqreg ppmlhdfe cpplmhdfe helper_ppml_result
+program drop qreg cqreg ppmlhdfe cppmlhdfe helper_ppml_result
 
 /* A failing reference must not be turned into a nonmissing-value smoke test. */
 capture program drop crangestat

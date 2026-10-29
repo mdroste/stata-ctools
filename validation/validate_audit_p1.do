@@ -5,7 +5,7 @@ program p1_helpers
     capture noisily do validation/test_validation_helpers.do
     local rc = _rc
     * Even a failed mutation assertion must not leak stubs into later cases.
-    foreach cmd in csort cimport qreg cqreg ppmlhdfe cpplmhdfe crangestat rangestat helper_ppml_result helper_expect {
+    foreach cmd in csort cimport qreg cqreg ppmlhdfe cppmlhdfe crangestat rangestat helper_ppml_result helper_expect {
         capture program drop `cmd'
     }
     macro drop HELPER_MUTATION

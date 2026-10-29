@@ -74,6 +74,7 @@ void ctools_filtered_data_free(ctools_filtered_data *fd);
 #define CTOOLS_LOAD_CHECK_IF 0x00      /* Default: check SF_ifobs for each observation */
 #define CTOOLS_LOAD_SKIP_IF 0x01       /* Skip SF_ifobs checks, assume all observations pass */
 #define CTOOLS_LOAD_NO_SORT_ORDER 0x02 /* Omit identity sort_order; caller will not sort */
+#define CTOOLS_LOAD_MARKER 0x04        /* Select by a sample marker, the last plugin variable */
 
 /*
     Load variables with if/in filtering applied at load time.
@@ -90,6 +91,12 @@ void ctools_filtered_data_free(ctools_filtered_data *fd);
     Special modes:
     - If var_indices is NULL: loads ALL variables (equivalent to old ctools_data_load)
     - If CTOOLS_LOAD_SKIP_IF flag is set: skips SF_ifobs() checks entirely
+    - If CTOOLS_LOAD_MARKER is set (without SKIP_IF): the last plugin variable,
+      SF_nvars(), is a numeric sample marker such as the ado's touse, passed
+      in place of `if touse'. Observations of the in-range where it is nonzero
+      are selected, as `if marker' selects them (missing counts as nonzero).
+      The marker is read in parallel, where SF_ifobs() costs one serial SPI
+      call per observation. Load-all mode leaves the marker out.
     - If CTOOLS_LOAD_NO_SORT_ORDER is set: leaves data.sort_order NULL.
       Use only when no subsequent operation requires a sort/permutation order.
       Without this flag the identity sort_order is always populated.
@@ -100,7 +107,8 @@ void ctools_filtered_data_free(ctools_filtered_data *fd);
     @param nvars        [in]  Number of variables (ignored if var_indices is NULL)
     @param obs_start    [in]  First observation (1-based), 0 = use SF_in1()
     @param obs_end      [in]  Last observation (1-based), 0 = use SF_in2()
-    @param flags        [in]  CTOOLS_LOAD_CHECK_IF (0) or CTOOLS_LOAD_SKIP_IF
+    @param flags        [in]  CTOOLS_LOAD_CHECK_IF (0), CTOOLS_LOAD_SKIP_IF or
+                              CTOOLS_LOAD_MARKER, with CTOOLS_LOAD_NO_SORT_ORDER
 
     @return STATA_OK on success, or:
             STATA_ERR_INVALID_INPUT if result is NULL

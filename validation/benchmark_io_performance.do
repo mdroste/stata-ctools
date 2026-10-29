@@ -2,7 +2,8 @@
 * threads=0 in the output denotes cimport excel's automatic worker count.
 * rep=0 warms each path and verifies candidate imports against the baseline.
 * Export artifacts from rep=0 support exact CSV/ZIP-part comparisons.
-args buildpath label outdir cases reps
+args buildpath label outdir cases reps datadir
+if `"`datadir'"'=="" local datadir `"`outdir'"'
 clear all
 set more off
 set linesize 255
@@ -41,8 +42,8 @@ foreach case of local cases {
     tempfile base
     quietly save `base'
     if substr("`label'",1,1)=="b" {
-        quietly cexport delimited using "`outdir'/`case'.csv", replace
-        quietly cexport excel using "`outdir'/`case'.xlsx", firstrow(variables) replace
+        quietly cexport delimited using "`datadir'/`case'.csv", replace
+        quietly cexport excel using "`datadir'/`case'.xlsx", firstrow(variables) replace
     }
     foreach threads in 1 8 {
         foreach op in export_csv import_csv export_xlsx import_xlsx {
@@ -53,10 +54,10 @@ foreach case of local cases {
                 if `rep'==0 local verbose verbose
                 di "PROFILE_BEGIN,`label',`case',`op',`threads',`rep'"
                 plugin call perf_clock, "start"
-                if "`op'"=="export_csv" cexport delimited using "`outdir'/output.csv", replace threads(`threads') `verbose'
-                if "`op'"=="import_csv" cimport delimited using "`outdir'/`case'.csv", clear threads(`threads') `verbose'
-                if "`op'"=="export_xlsx" cexport excel using "`outdir'/output.xlsx", replace firstrow(variables) threads(`threads') `verbose'
-                if "`op'"=="import_xlsx" cimport excel using "`outdir'/`case'.xlsx", clear firstrow
+                if "`op'"=="export_csv" cexport delimited using "`datadir'/output.csv", replace threads(`threads') `verbose'
+                if "`op'"=="import_csv" cimport delimited using "`datadir'/`case'.csv", clear threads(`threads') `verbose'
+                if "`op'"=="export_xlsx" cexport excel using "`datadir'/output.xlsx", replace firstrow(variables) threads(`threads') `verbose'
+                if "`op'"=="import_xlsx" cimport excel using "`datadir'/`case'.xlsx", clear firstrow
                 plugin call perf_clock, "stop"
                 local reported_threads `threads'
                 if "`op'"=="import_xlsx" local reported_threads 0
@@ -64,11 +65,11 @@ foreach case of local cases {
                 if `rep'==0 & substr("`op'",1,6)=="export" {
                     local ext csv
                     if "`op'"=="export_xlsx" local ext xlsx
-                    quietly copy "`outdir'/output.`ext'" "`outdir'/`label'_`case'_`threads'.`ext'", replace
+                    quietly copy "`datadir'/output.`ext'" "`datadir'/`label'_`case'_`threads'.`ext'", replace
                 }
                 if `rep'==0 & substr("`op'",1,6)=="import" {
-                    if substr("`label'",1,1)=="b" quietly save "`outdir'/expected_`case'_`op'.dta", replace
-                    else cf _all using "`outdir'/expected_`case'_`op'.dta"
+                    if substr("`label'",1,1)=="b" quietly save "`datadir'/expected_`case'_`op'.dta", replace
+                    else cf _all using "`datadir'/expected_`case'_`op'.dta"
                 }
             }
         }

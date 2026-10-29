@@ -1,4 +1,4 @@
-*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools
+*! version 1.1.0 20261016 github.com/mdroste/stata-ctools
 
 program define cqreg, eclass
     version 14.1
@@ -271,12 +271,16 @@ program define cqreg, eclass
     if `vcetype' == 2 {
         local plugin_varlist `plugin_varlist' `clustervar'
     }
+    * The sample marker goes last, in place of if `touse': the plugin reads
+    * it in parallel, where Stata answers an if one observation at a time
+    local plugin_varlist `plugin_varlist' `touse'
+    scalar __cqreg_touse = 1
 
     * Create matrix to store VCE (plugin will fill __cqreg_V)
     matrix __cqreg_V = J(`K_x' + 1, `K_x' + 1, 0)
 
     * Call the C plugin with full_regression subcommand
-    capture noisily plugin call ctools_plugin `plugin_varlist' if `touse', ///
+    capture noisily plugin call ctools_plugin `plugin_varlist', ///
         "cqreg `threads_code' full_regression"
 
     local reg_rc = _rc

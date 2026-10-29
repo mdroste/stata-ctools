@@ -200,7 +200,7 @@ void cio_dbf_number(double x, int width, char *out, size_t cap)
         memmove(out + 1, out + 2, n - 1);
 }
 
-int cio_export_dbf(void)
+int cio_export_dbf(const char *selection)
 {
     char path[4096], replace[8], version[12], datafmt[8];
     cio_local_text("__cio_filename", path, sizeof(path));
@@ -209,8 +209,7 @@ int cio_export_dbf(void)
     cio_local_text("__cio_datafmt", datafmt, sizeof(datafmt));
     char count[40];
     cio_local_text("__cio_nvar", count, sizeof(count));
-    int k = atoi(count), rc = 0;
-    uint32_t n = 0;
+    int k = atoi(count), nplugin = cio_export_nvar(selection), rc = 0;
     size_t record = 1;
     if (k < 1)
         return 102;
@@ -222,6 +221,8 @@ int cio_export_dbf(void)
     ctools_output output;
     memset(&output, 0, sizeof(output));
     FILE *fp = NULL;
+    cio_rows rows;
+    memset(&rows, 0, sizeof(rows));
     if (!fields || !kinds)
     {
         rc = 909;
@@ -290,36 +291,37 @@ int cio_export_dbf(void)
         f[17] = (unsigned char)decimal;
         record += (size_t)width;
     }
-    for (int i = SF_in1(); i <= SF_in2(); i++)
-        if (SF_ifobs(i))
-        {
-            n++;
-            /* Native's integer fields truncate the most negative values: byte
-               -100..-127 to "-10", int -10000..-32767 to "-1000", long up from
-               -1000000000 to "-100000000". Widen a field only when such values are
-               exported (by one column: byte 4, int 6, long 11). */
-            for (int j = 0; j < k; j++)
-                if (kinds[j] >= 2)
+    if ((rc = cio_export_rows(&rows, selection)))
+        goto done;
+    for (size_t r = 0; r < rows.n; r++)
+    {
+        int i = cio_row(&rows, r);
+        /* Native's integer fields truncate the most negative values: byte
+           -100..-127 to "-10", int -10000..-32767 to "-1000", long up from
+           -1000000000 to "-100000000". Widen a field only when such values are
+           exported (by one column: byte 4, int 6, long 11). */
+        for (int j = 0; j < k; j++)
+            if (kinds[j] >= 2)
+            {
+                unsigned width = fields[32 * j + 16];
+                double bound = 1;
+                for (unsigned d = 1; d < width; d++)
+                    bound *= 10;
+                double x;
+                if ((rc = (_stata_)->safevdata(j + 1, i, &x)))
+                    goto done;
+                if (!SF_is_missing(x) && x <= -bound)
                 {
-                    unsigned width = fields[32 * j + 16];
-                    double bound = 1;
-                    for (unsigned d = 1; d < width; d++)
-                        bound *= 10;
-                    double x;
-                    if ((rc = (_stata_)->safevdata(j + 1, i, &x)))
-                        goto done;
-                    if (!SF_is_missing(x) && x <= -bound)
+                    char text[40];
+                    int need = snprintf(text, sizeof(text), "%.0f", x);
+                    if (need > (int)width && need < 255)
                     {
-                        char text[40];
-                        int need = snprintf(text, sizeof(text), "%.0f", x);
-                        if (need > (int)width && need < 255)
-                        {
-                            fields[32 * j + 16] = (unsigned char)need;
-                            record += (size_t)need - width;
-                        }
+                        fields[32 * j + 16] = (unsigned char)need;
+                        record += (size_t)need - width;
                     }
                 }
-        }
+            }
+    }
     if (record > 4000)
     {
         rc = 902;
@@ -364,7 +366,7 @@ int cio_export_dbf(void)
                 header[j + 1] = (unsigned char)atoi(value);
         }
     }
-    cio_dbf_p32(header + 4, n);
+    cio_dbf_p32(header + 4, (uint32_t)rows.n);
     cio_dbf_p16(header + 8, 33 + (unsigned)k * 32);
     cio_dbf_p16(header + 10, (unsigned)record);
     if (fwrite(header, 1, 32, fp) != 32 || fwrite(fields, 32, (size_t)k, fp) != (size_t)k ||
@@ -373,10 +375,9 @@ int cio_export_dbf(void)
         rc = 603;
         goto done;
     }
-    for (int i = SF_in1(); i <= SF_in2(); i++)
+    for (size_t r = 0; r < rows.n; r++)
     {
-        if (!SF_ifobs(i))
-            continue;
+        int i = cio_row(&rows, r);
         if ((i & 4095) == 0 && SF_poll())
         {
             rc = 1;
@@ -436,7 +437,7 @@ int cio_export_dbf(void)
                     char index[40];
                     cio_export_meta(j + 1, "fmtvar", index, sizeof(index));
                     int var = atoi(index);
-                    if (var < k + 1 || var > SF_nvars())
+                    if (var < k + 1 || var > nplugin)
                     {
                         rc = 198;
                         goto done;
@@ -467,6 +468,8 @@ int cio_export_dbf(void)
         rc = 603;
         goto done;
     }
+    if ((rc = cio_local_number("__cio_N", rows.n)))
+        goto done;
     if (fclose(fp))
     {
         fp = NULL;
@@ -482,5 +485,6 @@ done:
     free(fields);
     free(row);
     free(kinds);
+    cio_rows_free(&rows);
     return rc;
 }

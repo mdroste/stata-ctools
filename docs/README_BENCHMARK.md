@@ -4,8 +4,9 @@ The [one-shot profiler](../validation/profile_readme.do) compares every command
 in the README with its native Stata or community-package reference. Each pair
 runs **once** on each of **1,000,000, 10,000,000, and 25,000,000 observations**.
 The README reports the minimum and maximum reference/ctools time ratios across
-these three sizes, rounded to one decimal place. Values below 1 mean ctools was
-slower. These are rough workload-specific measurements, not confidence intervals.
+these three sizes, rounded to the nearest whole number, or to one decimal place
+below 2×. Values below 1 mean ctools was slower. These are rough
+workload-specific measurements, not confidence intervals.
 
 ## Running it
 
@@ -31,11 +32,19 @@ install or update packages. Missing commands produce explicit nonzero return
 codes in the CSV and log; other commands continue.
 
 Optional positional arguments are the output directory, a quoted list of sizes,
-and the Stata processor count. Defaults are `docs/benchmarks/readme_profile`,
-`"1000000 10000000 25000000"`, and the current Stata processor setting. The
+the Stata processor count, and a quoted list of pairs to run. Defaults are
+`docs/benchmarks/readme_profile`, `"1000000 10000000 25000000"`, the current
+Stata processor setting, and all twenty pairs (named as in `timings.csv`, for
+example `reghdfe` or `winsor`). From the shell, lists need Stata's own quotes
+inside the shell's, as in `'"reghdfe ivreghdfe ppmlhdfe"'`. The
 processor count applies to Stata (`set processors`) and so to the reference
 commands. ctools commands run without a `threads()` option and use the ctools
-default: every logical CPU. Sizes must be multiples of 200 and at least 1,000.
+resolved thread policy (normally capped at 16 available CPUs, with session,
+environment, and runtime limits applied). Inspect `ctools, environment_check`
+before comparing runs; in the published run it resolved to 12 threads. A subset
+that includes `import` must also include `export`, because both imports read the
+file written by the reference export. Sizes must be multiples of 200 and at
+least 1,000.
 For a quick check:
 
 ```sh
@@ -76,8 +85,8 @@ commands; no data download is needed.
 | gstats winsor | Winsorize three regressors at the 1st/99th percentiles in place. |
 | rangestat | Mean outcome over a ±2-month window within firm. |
 | binscatter | 20 bins; both commands construct the graph with display disabled. |
-| reghdfe/ivreghdfe | Three regressors, firm and group effects; IV instruments x1 with z. |
-| ppmlhdfe | Poisson outcome, three regressors, firm and group effects. |
+| reghdfe/ivreghdfe | Two regressors (`x1`, `x2`), firm and group effects; IV instruments `x1` with `z`. |
+| ppmlhdfe | Poisson outcome, two regressors (`x1`, `x2`), firm and group effects. |
 | psmatch2 | Estimate logit propensity scores, then one-neighbor ATT matching with replacement. |
 | qreg | Median regression of y on three regressors. |
 
@@ -100,24 +109,39 @@ change the results substantially.
 
 ## Results and provenance
 
-Measured October 22, 2026 on an Apple M4 (10 logical CPUs, 16 GiB RAM),
-macOS 27.0, StataNow/MP 19.5 (revision May 21, 2025). Stata ran with
+Measured October 29, 2026 on an Apple M4 Pro (12 logical CPUs, 48 GiB RAM),
+macOS 26.7.1, StataNow/MP 19.5 (revision August 12, 2026). Stata ran with
 **four processors**, the current Stata license limit, so the reference commands
-used at most four cores. ctools ran at its **default thread count: all 10
-logical CPUs**. The speedups therefore include the extra cores ctools can use,
-not only per-core efficiency. The previous run (October 14) used an Apple M4 Pro
-with 12 logical CPUs and 48 GiB RAM; differences between runs also reflect the
-hardware and software environment.
+used at most four cores. ctools ran at its **default thread count, which
+resolved to 12 threads**. The speedups therefore include the extra cores ctools
+can use, not only per-core efficiency. The previous run (October 22) used an
+Apple M4 with 10 logical CPUs and 16 GiB RAM, so differences between runs
+reflect the hardware as well as code changes. In particular, that machine's
+25M-row CSV import (0.77×) was slowed by memory pressure from a large
+retained-row cache; both the larger RAM and the subsequent compact block
+caching contribute to the new import range.
 
-The Mac ARM OpenMP plugin was freshly rebuilt with the winsor2 cutoff-rounding
-fix. The profiler used a frozen copy of the plugin and wrappers through
-`CTOOLS_TEST_PLUGIN_DIR`; the manifest records their hashes and the source-tree
-hash. The working tree contained uncommitted fixes at measurement time, so its
-HEAD is context rather than the binary's source identity.
+The Mac ARM OpenMP plugin was freshly built from the working tree (HEAD
+`35ef972` plus uncommitted changes), with the `make macos-arm` flags and the
+repo-local OpenMP archive, and frozen with the wrappers in a scratch directory
+selected through `CTOOLS_TEST_PLUGIN_DIR`. The manifest records their hashes.
+
+The machine was shared with other jobs, so each pair ran at each size in its
+own batch Stata session, using the profiler's pair-subset argument (`export` and
+`import` together). A session started only after other processes had used less
+than 80% of one CPU in total for a minute, and was discarded and rerun if they
+exceeded 150% while it ran; the manifest records each kept session's maximum.
+Data generation is identical in every session, but ado-file loading and package
+initialization fall inside the timer at every size, not only at the first size
+as in a single-session run.
+Earlier whole-profile attempts the same night were discarded because concurrent
+builds and scripts visibly inflated the timings.
 
 All 120 timed calls completed with return code zero; all observation-count,
 imported-column-count, and estimator-sample-size checks passed. These checks
-do not establish full numerical equivalence.
+do not establish full numerical equivalence. The fastest ctools calls take a
+few milliseconds (for example `decode` at 1M), close to the resolution of
+Stata's timer, so the top of some ranges is imprecise.
 
 - [Times at each size](benchmarks/readme_profile/results.md)
 - [Raw timing and status records](benchmarks/readme_profile/timings.csv)
@@ -125,6 +149,3 @@ do not establish full numerical equivalence.
 
 The full log is retained locally at `docs/benchmarks/readme_profile/profile.log`
 and is ignored by Git because Stata's `about` output includes license details.
-The [earlier three-command report](BENCHMARKS_README_COMMANDS.md) uses different
-sizes, dataset widths, and repeated measurements; it is retained as historical
-evidence and does not supply the current README ranges.

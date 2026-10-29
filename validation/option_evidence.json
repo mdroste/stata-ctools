@@ -765,13 +765,13 @@
       ]
     }
   },
-  "cpplmhdfe": {
+  "cppmlhdfe": {
     "tagsep": {
       "kind": "differential",
       "reason": "Separated-row tags and certificate signs/missingness are checked against native PPML and independent separation constraints.",
       "evidence": [
         {
-          "path": "validation/cpplmhdfe_advanced_cases.do",
+          "path": "validation/cppmlhdfe_advanced_cases.do",
           "anchor": "assert native_tag==ref_tag"
         }
       ]
@@ -781,13 +781,13 @@
       "reason": "Separated-row tags and certificate signs/missingness are checked against native PPML and independent separation constraints.",
       "evidence": [
         {
-          "path": "validation/cpplmhdfe_advanced_cases.do",
+          "path": "validation/cppmlhdfe_advanced_cases.do",
           "anchor": "assert native_tag==ref_tag"
         }
       ]
     }
   },
-  "cpplmhdfe_p": {
+  "cppmlhdfe_p": {
     "cooksd": {
       "kind": "unsupported",
       "reason": "These explicitly unimplemented predictions must fail without creating a destination.",

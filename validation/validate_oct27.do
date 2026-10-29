@@ -10,9 +10,9 @@ capture noisily {
     assert "`e(vcetype)'" == "Robust" & "`e(vce)'" == "robust"
     creghdfe price weight, absorb(rep78) vce(cluster turn)
     assert "`e(vcetype)'" == "Robust" & "`e(vce)'" == "cluster"
-    cpplmhdfe price weight, absorb(rep78)
+    cppmlhdfe price weight, absorb(rep78)
     assert "`e(vcetype)'" == "Robust"
-    cpplmhdfe price weight, absorb(rep78) vce(cluster turn)
+    cppmlhdfe price weight, absorb(rep78) vce(cluster turn)
     assert "`e(vcetype)'" == "Robust"
     * The first-stage regressions run by creghdfe carry the label as well
     civreghdfe price (weight = length), absorb(rep78) vce(robust) savefirst
@@ -118,20 +118,20 @@ else test_pass "two-way clustering refuses auxiliary regressions up front"
 
 capture noisily {
     sysuse auto, clear
-    cpplmhdfe price weight, absorb(rep78 foreign) dof(pairwise clusters)
+    cppmlhdfe price weight, absorb(rep78 foreign) dof(pairwise clusters)
     matrix b0 = e(b)
     matrix V0 = e(V)
     local df_a = e(df_a)
     assert "`e(dofmethod)'" == "pairwise clusters"
-    cpplmhdfe price weight, absorb(rep78 foreign) dof(pair clus)
+    cppmlhdfe price weight, absorb(rep78 foreign) dof(pair clus)
     assert mreldif(b0, e(b)) == 0 & mreldif(V0, e(V)) == 0 & e(df_a) == `df_a'
     assert "`e(dofmethod)'" == "pairwise clusters"
-    cpplmhdfe price weight, absorb(rep78 foreign) dof(firstp)
+    cppmlhdfe price weight, absorb(rep78 foreign) dof(firstp)
     assert "`e(dofmethod)'" == "firstpair"
-    cpplmhdfe price weight, absorb(rep78 foreign)
+    cppmlhdfe price weight, absorb(rep78 foreign)
     assert "`e(dofmethod)'" == "pairwise clusters continuous"
     foreach bad in "pair first" "all clusters" "junk" {
-        capture cpplmhdfe price weight, absorb(rep78 foreign) dof(`bad')
+        capture cppmlhdfe price weight, absorb(rep78 foreign) dof(`bad')
         assert _rc == 198
     }
     creghdfe price weight, absorb(rep78 foreign) dof(pair clus)
@@ -175,7 +175,7 @@ capture noisily {
     assert mreldif(b1, e(b)) < 1e-12 & mreldif(V1, e(V)) < 1e-12
     civreghdfe price (weight = length), absorb(rep78) vce(cluster turn cl2)
     assert "`e(clustvar)'" == "turn cl2" & "`e(clustvar1)'" == "turn" & "`e(clustvar2)'" == "cl2"
-    cpplmhdfe price weight, absorb(rep78) vce(cluster i.turn foreign#rep78)
+    cppmlhdfe price weight, absorb(rep78) vce(cluster i.turn foreign#rep78)
     assert "`e(clustvar)'" == "turn foreign#rep78" & e(N_clustervars) == 2
     assert e(N_clust) == min(e(N_clust1), e(N_clust2))
     foreach bad in "L.turn" "c.turn" {
@@ -213,7 +213,7 @@ capture noisily {
     local c_df_a = e(df_a)
     creghdfe price weight
     assert "`e(absvars)'" == "_cons" & e(df_a_initial) == 1 & e(df_a_redundant) == 0
-    cpplmhdfe price weight, absorb(rep78 foreign)
+    cppmlhdfe price weight, absorb(rep78 foreign)
     matrix t = e(dof_table)
     local columns : colnames t
     assert "`columns'" == "Categories Redundant Num_Coefs Inexact Nested"

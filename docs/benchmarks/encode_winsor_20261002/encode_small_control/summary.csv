@@ -1,3 +1,0 @@
-case,rows,threads,baseline_seconds,candidate_seconds,reference_seconds,improvement,versus_reference,samples_per_build,baseline_min,baseline_max,candidate_min,candidate_max
-e_existing,1000,1,0.0022655,0.0024584999999999997,0.001675,0.9214968476713444,0.6813097417124264,200,0.002204,0.011523,0.002196,0.021637
-e_existing,1000,8,0.002249,0.0022715,0.001675,0.9900946511116003,0.7373981950253137,200,0.002187,0.008147,0.002176,0.002507

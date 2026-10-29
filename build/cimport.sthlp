@@ -1,8 +1,10 @@
 {smcl}
-{* *! version 1.0.1 07Feb2026}{...}
+{* *! version 1.1.0 20261016}{...}
 {viewerjumpto "Syntax" "cimport##syntax"}{...}
 {viewerjumpto "Description" "cimport##description"}{...}
 {viewerjumpto "Options" "cimport##options"}{...}
+{viewerjumpto "Excel options" "cimport##exceloptions"}{...}
+{viewerjumpto "Other formats" "cimport##formats"}{...}
 {viewerjumpto "Remarks" "cimport##remarks"}{...}
 {viewerjumpto "Examples" "cimport##examples"}{...}
 {viewerjumpto "Stored results" "cimport##results"}{...}
@@ -41,17 +43,18 @@ variables is an error.
 {synoptline}
 {syntab:Main}
 {synopt:{opt clear}}clear data in memory before loading{p_end}
-{synopt:{opt d:elimiters(chars)}}specify field delimiter; default is automatic detection{p_end}
+{synopt:{opt delimiters(chars[, collapse|asstring])}}specify field delimiter; default is automatic detection{p_end}
 
 {syntab:Variable names}
-{synopt:{opt varn:ames(rule)}}rule for reading variable names; {opt 1} or {opt nonames}{p_end}
+{synopt:{opt varn:ames(rule)}}header row number or {opt nonames}; default is automatic detection{p_end}
 {synopt:{opt case(option)}}variable name case; {opt preserve}, {opt lower}, or {opt upper}{p_end}
 
 {syntab:Variable types}
-{synopt:{opt asfloat}}import all numeric variables as float{p_end}
+{synopt:{opt asfloat}}use float for noninteger numeric columns{p_end}
 {synopt:{opt asdouble}}import all numeric variables as double{p_end}
 {synopt:{opt numeric:cols(numlist)}}force specified columns to be numeric{p_end}
-{synopt:{opt string:cols(numlist)}}force specified columns to be string{p_end}
+{synopt:{opt string:cols(numlist)}}force specified columns to be string; {cmd:_all} selects all columns{p_end}
+{synopt:{opt favorstrfixed}}prefer fixed-width strings when values fit in 2,045 bytes{p_end}
 
 {syntab:Parsing}
 {synopt:{opt bindq:uotes(option)}}quote binding rule; {opt strict}, {opt loose}, or {opt nobind}{p_end}
@@ -62,15 +65,14 @@ variables is an error.
 {synopt:{opt empty:lines(option)}}empty line handling; {opt skip} or {opt fill}{p_end}
 
 {syntab:Number formats}
-{synopt:{opt decimals:eparator(char)}}decimal point character; default is period{p_end}
-{synopt:{opt groups:eparator(char)}}thousands grouping character; default is none{p_end}
-{synopt:{opt loc:ale(name)}}locale for number parsing (e.g., de_DE, fr_FR){p_end}
+{synopt:{opt decimalsep:arator(char)}}decimal point character; default is period{p_end}
+{synopt:{opt groupsep:arator(char)}}thousands grouping character; default is none{p_end}
 {synopt:{opt parsel:ocale(name)}}locale for numeric parsing{p_end}
 {synopt:{opt maxquoted:rows(#)}}limit on lines in a strict quoted field{p_end}
 
-{syntab:Failure handling}
-{synopt:{opt snap:shot}}{help preserve} the data in memory, as earlier versions did; written to disk above {cmd:c(max_preservemem)}{p_end}
-{synopt:{opt fast}}clear the data first and undo nothing; a failure or Break leaves an incomplete import{p_end}
+{syntab:Data recovery}
+{synopt:{opt snap:shot}}use {help preserve} to restore data after an error or interruption{p_end}
+{synopt:{opt fast}}skip data recovery after an error or interruption{p_end}
 
 {syntab:Reporting}
 {synopt:{opt verbose}}display progress information{p_end}
@@ -93,13 +95,13 @@ variables is an error.
 {synopt:{opt sheet(name)}}worksheet name to import{p_end}
 {synopt:{opt cellr:ange(range)}}cell range to import (e.g., A1:F100){p_end}
 {synopt:{opt first:row}}treat first row as variable names{p_end}
-{synopt:{opt alls:tring}}import all columns as string{p_end}
+{synopt:{opt allstring}[{cmd:(}{it:format}{cmd:)}]}import all columns as string, optionally using a numeric format{p_end}
 {synopt:{opt case(option)}}variable name case; {opt preserve}, {opt lower}, or {opt upper}{p_end}
 {synopt:{opt clear}}clear data in memory before loading{p_end}
 {synopt:{opt desc:ribe}}list worksheet names and ranges without loading data{p_end}
 {synopt:{opt v:erbose}}display progress information{p_end}
-{synopt:{opt snap:shot}}{help preserve} the data in memory, as earlier versions did{p_end}
-{synopt:{opt fast}}undo nothing after a failure{p_end}
+{synopt:{opt snap:shot}}use {help preserve} to restore data after an error or interruption{p_end}
+{synopt:{opt fast}}skip data recovery after an error or interruption{p_end}
 {synoptline}
 
 
@@ -107,39 +109,13 @@ variables is an error.
 {title:Description}
 
 {pstd}
-{cmd:cimport} reads delimited text, Excel (.xls and .xlsx), dBase, SAS7BDAT
-with optional SAS7BCAT catalogs, SAS XPORT5/8, SPSS SAV/ZSAV, and ESRI shapefiles.
-File parsing and I/O run in C. FRED and Windows Haver providers are excluded from this parity scope.
+{cmd:cimport} reads delimited text, Excel (.xls and .xlsx), dBase, SAS7BDAT,
+SAS XPORT5/8, SPSS SAV/ZSAV, and ESRI shapefiles into Stata. It uses C readers
+for file parsing. Text longer than 2,045 bytes is stored as {cmd:strL}.
 
-{phang2}
-{cmd:cimport delimited} imports delimited text files (CSV, TSV, etc.).
-It is a high-performance replacement for {help import delimited:import delimited}.
-
-{phang2}
-{cmd:cimport excel} imports Excel (.xls and .xlsx) files. It is a high-performance
-replacement for {help import excel:import excel}.
-
-{pstd}
-Other file formats use {cmd:cimport dbase}, {cmd:cimport sas},
-{cmd:cimport sasxport5}, {cmd:cimport sasxport8}, {cmd:cimport spss}, and
-{cmd:cimport shp}, followed by {cmd:using filename}. SAS/SPSS also accept a
-variable list and if/in selection. SAS accepts {cmd:bcat(filename)} and
-{cmd:encoding()}; SPSS accepts {cmd:encoding()} and {cmd:zsav}; XPORT5 accepts
-{cmd:member()}, {cmd:novallabels}, and {cmd:describe}.
-
-{pstd}
-Excel column lists may use {cmd:identifier=A note=C}; {cmd:describe} returns
-{cmd:r(N_worksheet)}, {cmd:r(worksheet_1)}, {cmd:r(range_1)}, and corresponding
-results for further sheets. {cmd:allstring} accepts an optional numeric format;
-locale options are accepted. See the audit for Unicode locale validation limits.
-
-{pstd}
-Delimited/Excel/statistical readers use strL for text longer than 2,045 bytes;
-SHP binary headers also use strL. Native invalid long-string display formats are
-replaced with valid {cmd:%9s}; see the parity audit for this metadata difference.
 
 {marker options}{...}
-{title:Options}
+{title:Options for delimited text}
 
 {dlgtab:Main}
 
@@ -154,13 +130,21 @@ the most frequent of tab, comma, semicolon, colon, and pipe outside quotes in
 the first 50 nonempty lines, including the variable-names line; ties favor
 comma, then tab, pipe, colon, and semicolon.
 
+{pmore}
+With several characters, each character is a delimiter. The suboption
+{opt collapse} treats consecutive delimiters as one; {opt asstring} treats
+the entire string as one delimiter. These suboptions cannot be combined.
+For example, {cmd:delimiters("::", asstring)} splits at a pair of colons.
+The top-level {opt collapsedelimiters} option is accepted but has no effect;
+use {cmd:delimiters(chars, collapse)} to collapse runs.
+
 {dlgtab:Variable names}
 
 {phang}
 {opt varnames(rule)} specifies how variable names are determined.
 By default, headers are inferred. {opt varnames(1)} explicitly treats the first row as variable names.
 {opt varnames(nonames)} treats the first row as data and generates default
-variable names (v1, v2, ...). You can also specify {opt varnames(}{it:N}{opt )}
+variable names (v1, v2, ...). You can also specify {cmd:varnames(}{it:N}{cmd:)}
 to use row {it:N} as variable names (e.g., {opt varnames(3)} uses the third row).
 
 {phang}
@@ -177,8 +161,7 @@ double but has less precision. Cannot be combined with {opt asdouble}.
 
 {phang}
 {opt asdouble} imports all numeric variables as Stata {help data types:double}
-type, regardless of whether a smaller type would suffice. This ensures maximum
-precision. Cannot be combined with {opt asfloat}.
+type, regardless of whether a smaller type would suffice. This retains double precision for fractional values. Cannot be combined with {opt asfloat}.
 
 {phang}
 {opt numericcols(numlist)} forces the specified columns to be imported as
@@ -188,14 +171,21 @@ become missing. This overrides automatic type detection for these columns.
 {phang}
 {opt stringcols(numlist)} forces the specified columns to be imported as
 string, even if they contain only numeric values. Column numbers are 1-based.
-This overrides automatic type detection for these columns.
+Use {cmd:stringcols(_all)} for all columns. This overrides automatic type
+detection for these columns.
+
+{phang}
+{opt favorstrfixed} uses fixed-width strings whenever the longest value fits
+in 2,045 bytes. Without it, columns with highly variable text lengths may use
+{cmd:strL} even when their longest value is shorter.
 
 {dlgtab:Parsing}
 
 {phang}
 {opt bindquotes(option)} specifies how quoted fields are handled.
-{opt loose} (the default) treats each line as a row, ignoring quotes.
-{opt strict} respects quotes so that quoted fields can span multiple lines.
+{opt loose} (the default) binds quoted fields within a line, but every newline
+ends a row. {opt strict} allows quoted fields to span lines. {opt nobind}
+ignores quotes when locating field and row boundaries.
 
 {phang}
 {opt stripquotes(default)} removes enclosing quotes when they bind a field.
@@ -204,7 +194,7 @@ This overrides automatic type detection for these columns.
 {phang}
 {opt encoding(encoding)} overrides automatic encoding detection. Supported encodings include UTF-8,
 UTF-16LE/BE, UTF-32LE/BE, ASCII, Latin-1/9, Windows code pages and Mac Roman.
-Named legacy encodings use the system C conversion API.
+{opt charset()} is an alias for {opt encoding()}.
 
 {phang}
 {opt rowrange([start][:end])} specifies a range of rows to import. As in
@@ -239,40 +229,30 @@ European formats like "1.234.567" use {opt groupseparator(.)}.
 {phang}
 {opt parselocale(name)} selects a supported numeric locale, for example
 {cmd:parselocale(de_DE)}. Explicit decimal/group separator options take precedence.
-Delimited import uses {opt parselocale(name)}; {opt locale(name)} is not a native delimited option.
+Use {opt parselocale()} for delimited text; {opt locale()} is not accepted.
 
 {phang}
 {opt maxquotedrows(#)} limits physical rows within a strict quoted field and
-accepts an integer or {cmd:unlimited}; exceeding it returns 5101.
+accepts a nonnegative integer or {cmd:unlimited}. The default is 20; zero
+and {cmd:unlimited} remove the limit. Exceeding the limit returns error 5101.
 
-{dlgtab:Failure handling}
+{dlgtab:Data recovery}
 
 {pstd}
-By default a failed or interrupted import leaves the data in memory as they
-were without writing a snapshot of them to disk. From Stata 16 the data are
-first copied into a {help frame} in memory (if memory is short, the copy fails
-before anything changes) and are restored from it after a failure or Break;
-the copy and the imported data are in memory together until the import
-finishes. Before Stata 16, and when the data in memory are empty (their value
-labels and characteristics stay unless {opt clear} is specified),
-{cmd:cimport} uses {help preserve}. As the native commands do,
-{cmd:cimport sas}, {cmd:spss}, {cmd:sasxport5}, {cmd:sasxport8}, {cmd:dbase}
-and {cmd:shp} clear the data before reading the file, so a failure leaves an
-empty dataset unless {opt snapshot} was explicitly requested.
+For delimited and Excel imports, an error or interruption restores the data
+previously in memory. On Stata 16 or later, recovery usually keeps an in-memory
+copy until the import finishes. Earlier versions use {help preserve}.
 
 {phang}
-{opt snapshot} restores the data after a failed or interrupted import from a
-{help preserve} snapshot of the data in memory instead, as earlier versions of
-{cmd:cimport} did. For binary formats the snapshot is taken before clearing
-the original data or scanning the input file. Stata keeps the snapshot in memory up to
-{cmd:c(max_preservemem)} (1 GB by default) and writes it to disk above that.
-{p_end}
+{opt snapshot} uses {help preserve} to copy the data before importing. Stata
+may write the copy to disk when it exceeds {cmd:c(max_preservemem)}. This
+option also protects the original data for the other file formats, which
+otherwise clear the dataset before reading the input.
 
 {phang}
-{opt fast} clears the data before importing and undoes nothing: the old and the
-new data are never in memory together, but a failure or Break leaves an
-incomplete import. {opt fast} may not be combined with {opt snapshot}.
-{p_end}
+{opt fast} skips recovery and reduces memory use. An error or interruption can
+leave an empty or incomplete import. It cannot be combined with {opt snapshot}.
+
 
 {dlgtab:Reporting}
 
@@ -280,24 +260,117 @@ incomplete import. {opt fast} may not be combined with {opt snapshot}.
 {opt verbose} displays detailed progress information.
 
 {phang}
-{opt threads(#)} specifies the maximum number of threads to use for parallel
-operations. By default, {cmd:cimport} uses the {help ctools##threads:ctools thread setting}, which is at most 16 threads unless you change it.
+{opt threads(#)} sets the maximum number of threads, from 1 to 256.
+The default follows the {help ctools##threads:ctools thread setting}.
 
+
+{marker exceloptions}{...}
+{title:Options for Excel}
+
+{phang}
+{opt sheet(name)} selects a worksheet. By default, the first worksheet is used.
+Chart, dialog, and macro sheets contain no importable worksheet data.
+
+{phang}
+{opt cellrange(range)} selects a rectangular range, for example {cmd:A1:F100}.
+A single cell such as {cmd:B5} sets the upper-left corner and reads through
+the worksheet's remaining used range.
+
+{phang}
+{opt firstrow} uses the first imported row as variable names. Without it, names
+are Excel column letters. Invalid header names are replaced with column letters;
+header text is retained as variable labels. {opt case(preserve)} is the default;
+{opt case(lower)} and {opt case(upper)} change variable-name case.
+
+{phang}
+{opt allstring} imports every column as text. {cmd:allstring(%12.2f)}, for
+example, specifies how numeric cells are converted to strings.
+
+{phang}
+An Excel column list selects and names columns, for example
+{cmd:cimport excel id=A amount=C using data.xlsx, clear}. It cannot be combined
+with {opt firstrow} or {opt case()}.
+
+{phang}
+{opt describe} lists sheet names and used ranges without changing the data.
+Use it without column selections or other import options. Empty worksheets
+and non-worksheet tabs have no reported range.
+
+{phang}
+{opt clear}, {opt snapshot}, and {opt fast} have the meanings given above.
+{opt verbose} is accepted. Excel {opt locale()} and {opt detail} are accepted
+for compatibility and do not change the import. Excel import does not accept
+{opt threads()}; it uses the {help ctools##threads:ctools thread setting}.
+
+{marker formats}{...}
+{title:Other file formats}
+
+{p 8 12 2}
+{cmd:cimport} {it:format} {cmd:using} {it:filename}
+[{cmd:,} {opt clear} {opt snapshot} {opt fast} {it:format_options}]
+
+{pstd}
+The following formats and options are available:
+
+{synoptset 22}{...}
+{synopt:{cmd:dbase}}.dbf files; {opt case(preserve|lower|upper)}{p_end}
+{synopt:{cmd:sas}}.sas7bdat files; {opt bcat(filename)}, {opt encoding(name)}, {opt case()}{p_end}
+{synopt:{cmd:spss}}.sav or .zsav files; {opt zsav}, {opt encoding(name)}, {opt case()}{p_end}
+{synopt:{cmd:sasxport5}}.xpt files; {opt member(name)}, {opt novallabels}, {opt describe}{p_end}
+{synopt:{cmd:sasxport8}}.v8xpt files; {opt vlabfile(filename)}, {opt case()}{p_end}
+{synopt:{cmd:shp}}.shp geometry files{p_end}
+
+{pstd}
+{cmd:sas} and {cmd:spss} also accept a variable list before {cmd:using} and
+{cmd:if}/{cmd:in} selectors evaluated on the imported data. Other formats
+in this table import the whole file. Variable-name case defaults to
+{cmd:preserve}, except XPORT5, which uses lowercase names.
+
+{pstd}
+{opt bcat(filename)} supplies a SAS7BCAT catalog containing value labels.
+{opt encoding(name)} supplies the source character encoding.
+{opt zsav} selects the .zsav extension when the SPSS filename has no extension.
+
+{pstd}
+For XPORT5, {opt member(name)} selects a member of the transport file.
+{opt describe} lists members and variables without importing; it cannot be
+combined with {opt clear} or {opt novallabels}. By default, value labels are
+read from {cmd:formats.xpf} in the input directory. {opt novallabels} skips
+that companion file.
+
+{pstd}
+For XPORT8, {opt vlabfile(filename)} reads a companion transport file first.
+If it contains data, the command stops with error 4 and leaves those data in
+memory; use {opt snapshot} to retain the original dataset on this error.
+
+{pstd}
+Shapefile import reads geometry into {cmd:_ID}, {cmd:_X}, {cmd:_Y},
+{cmd:rec_header}, and, for shapes that use them, {cmd:_Z} and {cmd:_M}.
+The dataset retains shape metadata needed by {help cexport}. Import associated
+dBase attributes separately with {cmd:cimport dbase}.
 
 {marker remarks}{...}
-{title:Remarks}
+{title:Excel values and dates}
 
 {pstd}
-{cmd:cimport} uses a three-phase approach:
-
-{p 8 12 2}1. {bf:Scan:} Parse the file to determine column types and widths{p_end}
-{p 8 12 2}2. {bf:Create:} Create variables with appropriate Stata types{p_end}
-{p 8 12 2}3. {bf:Load:} Load data into variables using parallel processing{p_end}
+Excel dates are converted from the workbook's 1900 or 1904 date system to
+Stata dates. A numeric column containing only date-formatted temporal cells
+uses daily dates; if any temporal cell includes a time, it uses datetime
+values in milliseconds. All numeric cells in that column, including cells
+with General formatting, are converted to the same unit. In the 1900 system,
+serial 60 maps to 28 February 1900.
 
 {pstd}
-{bf:European number formats:} When importing files that use European number
-conventions (comma as decimal separator, period as thousands separator),
-use both {opt decimalseparator(,)} and {opt groupseparator(.)} together.
+When all numeric cells share a format, the corresponding Stata display format
+is retained where supported. Mixed date formats use {cmd:%td} or {cmd:%tc};
+other unsupported numeric formats use {cmd:%10.0g}. With {opt allstring}, date
+and time cells use their formatted Stata values, truncated to whole seconds.
+
+{pstd}
+Boolean cells become 1 or 0, except in date/datetime columns, where they become
+missing. Error cells become missing. Formula cells use the results saved in
+the workbook; the importer does not recalculate formulas. Unicode text and
+cell text longer than 32,766 bytes are retained.
 
 
 {marker examples}{...}
@@ -366,6 +439,18 @@ use both {opt decimalseparator(,)} and {opt groupseparator(.)} together.
 {synopt:{cmd:r(delimiters)}}field delimiters used; tabs reported as {cmd:\t}{p_end}
 
 
+{pstd}
+Excel and the other file formats return {cmd:r(N)}, {cmd:r(k)},
+{cmd:r(width)} (bytes per observation), {cmd:r(changed)}, {cmd:r(datalabel)},
+and {cmd:r(filename)}. They do not return {cmd:r(time)}.
+
+{pstd}
+{cmd:cimport excel, describe} returns {cmd:r(N_worksheet)} and the macros
+{cmd:r(worksheet_1)}, {cmd:r(range_1)}, and corresponding names and ranges for
+subsequent tabs. XPORT5 {opt describe} returns {cmd:r(N)}, {cmd:r(k)}, and
+{cmd:r(size)} for the last member listed; without {opt member()}, it also returns
+{cmd:r(n_members)} and {cmd:r(members)}.
+
 {title:Author}
 
 {pstd}
@@ -381,52 +466,3 @@ Manual: {bf:[D] import delimited}, {bf:[D] import excel}
 {psee}
 Online: {help import delimited}, {help import excel}, {help insheet}, {help cexport}, {help ctools}
 {p_end}
-
-{title:Validation and failure behavior}
-
-{pstd}
-Excel import honors the 1900 and 1904 date systems. As in native import, a
-numeric column with any date or time cell becomes a Stata date when all such
-cells are dates only and a datetime (milliseconds) otherwise; every numeric
-cell in the column, including General-format serials, converts to that unit.
-The column keeps the cells' display format only when all its numeric cells
-share one; otherwise it uses %td or %tc. In the 1900 system, serial 60 maps to
-28 February 1900, following native import. As in native import, the built-in
-Excel number formats 0.00, #,##0, #,##0.00, 0%, 0.00%, 0.00E+00 and ##0.0E+0
-display as %14.2f, %10.0gc, %14.2fc, %4.2f, %6.4f, %10.2e and %10.1e when a
-whole column shares one of them (likewise the parenthesized-negative forms of
-#,##0 and #,##0.00, and two-decimal currency as %14.2f); other built-in and
-custom number formats display as %10.0g. With {cmd:allstring}, a date or time
-cell holds the text of its Stata value in the cell's own format, truncated to
-whole seconds as in native import.
-{p_end}
-
-{pstd}
-TRUE/FALSE cells import as 1/0 (a column of them displays as %1.0f), error
-cells as missing, and text formula results as strings. TRUE/FALSE cells do not
-affect a column's display format, and in a date or datetime column they import
-as missing, as in native import. XLSX worksheets are located through the
-workbook relationships, and the whole worksheet is read whatever its
-{it:dimension} record says. Chart, dialog and macro sheets cannot be imported;
-{cmd:describe} lists them by name without a range, as it does for empty
-worksheets. Without {cmd:sheet()}, {cmd:cimport excel} imports the first
-worksheet, whereas native import reads the first tab and so returns an empty
-dataset when a workbook begins with a chart, dialog or macro sheet. A workbook
-without any worksheet imports as an empty dataset, as in native import.
-{p_end}
-
-{pstd}
-Native import corrupts or drops some content that {cmd:cimport excel} keeps:
-characters outside Unicode's Basic Multilingual Plane (such as emoji), text
-beyond 32,766 bytes in a cell, cells or rows without an {it:r} reference that
-follow explicitly positioned ones, and XLSX worksheets reached through {it:./}
-or {it:../} relationship targets or stored outside the workbook's folder.
-{cmd:cimport excel} also reads XLSX packages that native rejects with r(603),
-such as those without SpreadsheetML content types or with an empty phonetic
-run.
-{p_end}
-
-{pstd}
-Full feature parity with native import/export is not established. See
-{browse "https://github.com/mdroste/stata-ctools/blob/main/docs/IO_PARITY.md":the I/O parity audit}
-for unsupported formats and option combinations.

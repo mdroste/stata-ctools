@@ -1,4 +1,4 @@
-*! version 1.0.2 20260920 github.com/mdroste/stata-ctools
+*! version 1.1.0 20261016 github.com/mdroste/stata-ctools
 
 program define ctools, rclass
     version 14.1
@@ -34,7 +34,7 @@ program define ctools, rclass
         exit
     }
 
-    local __ado_version "1.0.2"
+    local __ado_version "1.1.0"
     if "`environment_check'" != "" | "`version'" != "" | `"`threads'"' != "" {
         * Load the plugin if not already loaded
         _ctools_load
@@ -145,7 +145,7 @@ program define ctools, rclass
     di as result "╚██████╗   ██║   ╚██████╔╝╚██████╔╝███████╗███████║"
     di as result " ╚═════╝   ╚═╝    ╚═════╝  ╚═════╝ ╚══════╝╚══════╝"
     di as text ""
-    di as text "  {it:C-accelerated tools for Stata}{col 56}v1.0.2"
+    di as text "  {it:C-accelerated tools for Stata}{col 56}v1.1.0"
     di as text "{hline 60}"
     di as text ""
     di as text "{ul:Data Management}"
@@ -169,7 +169,7 @@ program define ctools, rclass
     di as text "  {help creghdfe:creghdfe}     OLS with multi-way FE"
     di as text "  {help civreghdfe:civreghdfe}   2SLS/GMM with multi-way FE"
     di as text "  {help cqreg:cqreg}        Quantile regression"
-    di as text "  {help cpplmhdfe:cpplmhdfe}    PPML with multi-way FE"
+    di as text "  {help cppmlhdfe:cppmlhdfe}    PPML with multi-way FE"
     di as text "  {help cpsmatch:cpsmatch}     Propensity score matching"
     di as text ""
     di as text "{ul:Visualization}"

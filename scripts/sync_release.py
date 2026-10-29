@@ -21,16 +21,37 @@ def generated():
 #endif
 #endif
 '''
-    for filename in ("README.md", "package/ado/ctools.ado", "package/help/ctools.sthlp", "package/metadata/ctools.pkg"):
+    # Every package ado/help file carries the release stamp; files without one get it inserted.
+    ado_stamp = f"*! version {v} {date} github.com/mdroste/stata-ctools"
+    help_stamp = f"{{* *! version {v} {date}}}{{...}}"
+    package_files = [
+        "README.md",
+        *sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "build").glob("*.ado")),
+        *sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "build").glob("*.sthlp")),
+        "build/ctools.pkg",
+        "build/stata.toc",
+    ]
+    for filename in package_files:
         text = (ROOT / filename).read_text()
         if filename == "README.md":
             text = re.sub(r"!\[Version\]\([^\n]+\)", f"![Version](https://img.shields.io/badge/version-{v}-blue)", text)
         elif filename.endswith(".ado"):
-            text = re.sub(r"^\*! version .*", f"*! version {v} {date} github.com/mdroste/stata-ctools", text)
+            if re.match(r"\*! version ", text):
+                text = re.sub(r"^\*! version .*", ado_stamp, text)
+            else:
+                text = ado_stamp + "\n" + text
             text = re.sub(r"\{col 56\}v[\d.]+", f"{{col 56}}v{v}", text)
             text = re.sub(r'local __ado_version "[\d.]+"', f'local __ado_version "{v}"', text)
         elif filename.endswith(".sthlp"):
-            text = re.sub(r"\{\* \*! version [^}]+\}", f"{{* *! version {v} {date}}}", text)
+            if re.search(r"(?m)^\{\* \*! version [^}]+\}\{\.\.\.\}$", text):
+                text = re.sub(r"(?m)^\{\* \*! version [^}]+\}\{\.\.\.\}$", help_stamp, text, count=1)
+            else:
+                text = re.sub(r"\A(\{smcl\}\n)?", lambda m: (m.group(1) or "") + help_stamp + "\n", text, count=1)
+        elif filename.endswith(".toc"):
+            if not re.search(r"(?m)^d Version: ", text):
+                text = re.sub(r"(?m)^(d Requires: )", r"d Version: \n\1", text, count=1)
+            text = re.sub(r"(?m)^d Version: .*$", f"d Version: {v}", text)
+            text = re.sub(r"(?m)^d Requires: .*$", f"d Requires: Stata {minimum} or later", text)
         else:
             text = re.sub(r"(?m)^d Version: .*$", f"d Version: {v}", text)
             text = re.sub(r"(?m)^d Requires: .*$", f"d Requires: Stata {minimum} or later", text)

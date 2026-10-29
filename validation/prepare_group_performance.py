@@ -3,6 +3,7 @@
 Use frozen ado/plugin directories. Every session checks all rows against the
 reference command and baseline. Warmups, phases, and individual observations
 are retained; only positive repetition numbers enter the timing summaries.
+Generated datasets are removed on success or failure unless --keep-data is set.
 """
 
 import argparse
@@ -14,7 +15,7 @@ import statistics
 import subprocess
 from pathlib import Path
 
-from stata_runner import launch_driver
+from stata_runner import benchmark_data, launch_driver
 
 ROOT = Path(__file__).resolve().parents[1]
 LABELS = ("b1", "c1", "c2", "b2")
@@ -94,6 +95,8 @@ def main():
     parser.add_argument("--cases", default="")
     parser.add_argument("--refreps", type=int)
     parser.add_argument("--summarize-only", action="store_true")
+    parser.add_argument("--keep-data", action="store_true",
+                        help="retain generated comparison datasets for debugging")
     args = parser.parse_args()
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=True)
@@ -128,22 +131,23 @@ def main():
         check=True,
     )
     shutil.copy2(ROOT / "validation/benchmark_group_performance.do", out / "benchmark.do")
-    for label in LABELS:
-        if any(hashlib.sha256(Path(p).read_bytes()).hexdigest() != h for p, h in hashes.items()):
-            raise ValueError("Frozen build changed")
-        driver = out / f"{label}.do"
-        driver.write_text(f'''clear all
+    with benchmark_data(out, keep=args.keep_data) as data:
+        for label in LABELS:
+            if any(hashlib.sha256(Path(p).read_bytes()).hexdigest() != h for p, h in hashes.items()):
+                raise ValueError("Frozen build changed")
+            driver = out / f"{label}.do"
+            driver.write_text(f'''clear all
 set more off
 log using "{out}/{label}.log", text replace
-capture noisily do "{out}/benchmark.do" "{builds[label[0]]}" {label} "{out}" "{args.cases}" {args.reps} "{args.threads}" {args.rows} "{args.refreps if args.refreps is not None else args.reps}"
+capture noisily do "{out}/benchmark.do" "{builds[label[0]]}" {label} "{out}" "{args.cases}" {args.reps} "{args.threads}" {args.rows} "{args.refreps if args.refreps is not None else args.reps}" "{data}"
 local rc=_rc
 di "GROUP_BENCHMARK_RC=`rc'"
 log close
 exit, clear
 ''')
-        print("Running " + label, flush=True)
-        launch_driver(driver, out / f"{label}.log")
-    summarize(out)
+            print("Running " + label, flush=True)
+            launch_driver(driver, out / f"{label}.log")
+        summarize(out)
 
 
 if __name__ == "__main__":

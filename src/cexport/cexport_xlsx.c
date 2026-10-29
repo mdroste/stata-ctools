@@ -1653,7 +1653,7 @@ static ST_retcode xlsx_write_file(XLSXExportContext *ctx, ctools_filtered_data *
 
 
 static ST_retcode xlsx_load_long_text(XLSXExportContext *ctx, ctools_filtered_data *fd) {
-    return ctools_load_text_data(fd,ctx->nvars,(ctools_text_policy){0, MAX_CELL_CONTENT});
+    return ctools_load_text_data(fd,ctx->nvars,(ctools_text_policy){0, MAX_CELL_CONTENT, CTOOLS_LOAD_CHECK_IF});
 }
 
 ST_retcode cexport_xlsx_main(const char *args) {

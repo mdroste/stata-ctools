@@ -53,7 +53,8 @@ ST_retcode ols_residualize(
 
 /*
  * Residualize y and x using high-dimensional fixed effects
- * Uses CG solver with symmetric Kaczmarz transformations
+ * One factor is a single exact projection; several use the shared CG solver
+ * (src/hdfe) with symmetric Kaczmarz transformations
  *
  * Parameters:
  *   y           - y values (N), modified in-place
@@ -135,13 +136,12 @@ ST_retcode combined_residualize(
  * ======================================================================== */
 
 /*
- * Residualize multiple variables simultaneously using HDFE.
- * FE level arrays are traversed once per sweep for all variables rather
- * than once per variable.
- * Success requires a bound on every column's weighted change norm to be below
- * tolerance times its original weighted norm. Returns CBINSCATTER_ERR_HDFE if
- * maxiter is exhausted. Failure leaves working columns modified; callers must
- * not publish them. Convergence workspace uses O(K_vars) additional doubles.
+ * Residualize multiple variables with the same absorbed effects. One factor
+ * is a single exact projection; several use the shared conjugate-gradient
+ * solver (src/hdfe), each column converging to tolerance as in creghdfe.
+ * Returns CBINSCATTER_ERR_HDFE if a column does not converge within maxiter
+ * iterations. Failure leaves working columns modified; callers must not
+ * publish them.
  *
  * Parameters:
  *   vars        - K_vars pointers to N-length arrays, each modified in-place

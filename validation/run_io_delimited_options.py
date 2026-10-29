@@ -1,7 +1,6 @@
 """Run native delimited option comparisons through the stata shell alias."""
-from stata_runner import launch_driver
+from stata_runner import io_workspace, launch_driver
 import re
-import subprocess
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -56,13 +55,15 @@ def fixtures(directory):
         (directory/('detect_'+name+'.csv')).write_bytes(('id,text\n1,"'+value*100+'"\n2,abc\n').encode(encoding))
 
 def main():
-    directory = ROOT / 'temp/io_delimited_options'
-    directory.mkdir(parents=True, exist_ok=True)
-    fixtures(directory)
-    log = directory / 'regressions.log'
-    log.unlink(missing_ok=True)
-    driver = directory / 'driver.do'
-    driver.write_text(f'''clear all
+    log = ROOT / 'temp/io_delimited_options/regressions.log'
+    log.parent.mkdir(parents=True, exist_ok=True)
+    with io_workspace() as workspace:
+        directory = workspace / 'temp/io_delimited_options'
+        directory.mkdir(parents=True, exist_ok=True)
+        fixtures(directory)
+        log.unlink(missing_ok=True)
+        driver = directory / 'driver.do'
+        driver.write_text(f'''clear all
 capture log close _all
 log using "{log}", text replace
 capture noisily do "{ROOT}/validation/validate_io_delimited_options.do" "{directory}"
@@ -71,7 +72,7 @@ di "CSV_OPTIONS_DRIVER_RC=`rc'"
 log close
 exit, clear
 ''')
-    launch_driver(driver, log)
+        launch_driver(driver, log, cwd=workspace)
     text = log.read_text(errors='replace')
     result = re.findall(r'CSV_OPTIONS_DRIVER_RC=([0-9]+)', text)
     summaries = re.findall(r'CSV_OPTIONS_PASSED=([0-9]+) FAILED=([0-9]+)', text)

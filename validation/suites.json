@@ -24,6 +24,15 @@
       "public": true
     },
     {
+      "name": "csort_identity",
+      "path": "validation/validate_csort_identity.do",
+      "runner": "master",
+      "category": "correctness",
+      "marker": "csort_identity",
+      "fixtures": [],
+      "dependencies": []
+    },
+    {
       "name": "cmerge",
       "path": "validation/validate_cmerge.do",
       "runner": "master",
@@ -354,11 +363,11 @@
       "public": true
     },
     {
-      "name": "cpplmhdfe",
-      "path": "validation/validate_cpplmhdfe.do",
+      "name": "cppmlhdfe",
+      "path": "validation/validate_cppmlhdfe.do",
       "runner": "master",
       "category": "correctness",
-      "marker": "cpplmhdfe",
+      "marker": "cppmlhdfe",
       "fixtures": [
         "pinned-validation-data"
       ],
@@ -787,8 +796,20 @@
       "env": {}
     },
     {
-      "name": "test_cpplmhdfe_native",
-      "path": "validation/test_cpplmhdfe_native.py",
+      "name": "test_cimport_stream_native",
+      "path": "validation/test_cimport_stream_native.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [
+        "C compiler"
+      ],
+      "env": {}
+    },
+    {
+      "name": "test_cppmlhdfe_native",
+      "path": "validation/test_cppmlhdfe_native.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -935,6 +956,48 @@
     {
       "name": "test_sep24_native",
       "path": "validation/test_sep24_native.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [
+        "C compiler"
+      ],
+      "env": {
+        "CTOOLS_SANITIZERS": "address,undefined"
+      }
+    },
+    {
+      "name": "test_counting_sort_native",
+      "path": "validation/test_counting_sort_native.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [
+        "C compiler"
+      ],
+      "env": {
+        "CTOOLS_SANITIZERS": "address,undefined"
+      }
+    },
+    {
+      "name": "test_csort_ordered_native",
+      "path": "validation/test_csort_ordered_native.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [
+        "C compiler"
+      ],
+      "env": {
+        "CTOOLS_SANITIZERS": "address,undefined"
+      }
+    },
+    {
+      "name": "test_msd_sort_native",
+      "path": "validation/test_msd_sort_native.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -1103,6 +1166,16 @@
       "fixtures": [],
       "dependencies": [],
       "reason": "Opt-in experiment; requires explicit size/variant/output parameters. See script usage."
+    },
+    {
+      "name": "benchmark_csort_performance",
+      "path": "validation/benchmark_csort_performance.do",
+      "runner": "manual",
+      "category": "performance",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [],
+      "reason": "Opt-in serial ABBA measurements; run prepare_csort_performance.py with frozen baseline/candidate builds."
     },
     {
       "name": "benchmark_helpers",
@@ -1631,6 +1704,45 @@
       "dependencies": [
         "winsor2"
       ]
+    },
+    {
+      "name": "cpsmatch_statistics",
+      "path": "validation/validate_cpsmatch_statistics.do",
+      "runner": "do",
+      "category": "correctness",
+      "marker": "CPSMATCH_STATISTICS_COMPLETE",
+      "fixtures": [],
+      "dependencies": [
+        "licensed-stata"
+      ]
+    },
+    {
+      "name": "match_winsor_optimizations_native",
+      "path": "validation/test_match_winsor_optimizations_native.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "MATCH_WINSOR_OPTIMIZATIONS_NATIVE_COMPLETE",
+      "fixtures": [],
+      "dependencies": []
+    },
+    {
+      "name": "cpsmatch_paths_native",
+      "path": "validation/test_cpsmatch_paths_native.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "CPSMATCH_PATHS_NATIVE_COMPLETE",
+      "fixtures": [],
+      "dependencies": []
+    },
+    {
+      "name": "benchmark_cpsmatch_paths",
+      "path": "validation/benchmark_cpsmatch_paths.do",
+      "runner": "helper",
+      "category": "performance",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [],
+      "reason": "Driven with frozen builds by prepare_cpsmatch_paths.py."
     }
   ]
 }

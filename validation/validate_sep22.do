@@ -73,7 +73,7 @@ capture noisily {
     gen double x = rnormal()
     gen double y = .4*x + g/10 + rnormal()
     gen double yp = rpoisson(exp(.3*x+g/100))
-    foreach cmd in creghdfe cpplmhdfe {
+    foreach cmd in creghdfe cppmlhdfe {
         local dep = cond("`cmd'" == "creghdfe", "y", "yp")
         `cmd' `dep' x, absorb(g) vce(cluster cl)
         assert e(N_clust) == 40
@@ -136,7 +136,7 @@ capture noisily {
     assert e(sample) == (_n <= 400)
     assert !missing(res) == e(sample)
     estimates store ols_sample
-    cpplmhdfe yp x if _n <= 401, absorb(g)
+    cppmlhdfe yp x if _n <= 401, absorb(g)
     assert e(N) == 400
     assert e(sample) == (_n <= 400)
     estimates restore ols_sample
@@ -158,14 +158,14 @@ capture noisily {
         gen double w = 1+runiform()
         gen double y = rpoisson(exp(.3*x+off))
         replace y = 0 if g == `zero'
-        cpplmhdfe y x if _n <= 401 [aw=w], absorb(g) vce(cluster cl) offset(off)
+        cppmlhdfe y x if _n <= 401 [aw=w], absorb(g) vce(cluster cl) offset(off)
         assert e(N) == 380
         assert e(sample) == (_n <= 400 & g != `zero')
         matrix B = e(b)
         matrix V = e(V)
         local nc = e(N_clust)
         drop if _n > 400 | g == `zero'
-        cpplmhdfe y x [aw=w], absorb(g) vce(cluster cl) offset(off)
+        cppmlhdfe y x [aw=w], absorb(g) vce(cluster cl) offset(off)
         assert e(N_clust) == `nc'
         mata: assert(mreldif(st_matrix("B"),st_matrix("e(b)")) < 1e-7)
         mata: assert(mreldif(st_matrix("V"),st_matrix("e(V)")) < 1e-7)
@@ -182,13 +182,13 @@ capture noisily {
     gen double x = rnormal()
     gen y = (_n < 110)
     gen byte one = 1
-    capture cpplmhdfe y x, absorb(g) vce(cluster one)
+    capture cppmlhdfe y x, absorb(g) vce(cluster one)
     assert _rc == 459
     * A deliberately large guard threshold must fail, not count retained rows
     * as repeatedly dropped. A subsequent ordinary fit must remain usable.
-    capture cpplmhdfe y x, absorb(g) septolerance(10)
+    capture cppmlhdfe y x, absorb(g) septolerance(10)
     assert _rc == 0
-    cpplmhdfe y x, absorb(g)
+    cppmlhdfe y x, absorb(g)
     assert e(num_singletons) == 80
     assert e(num_separated) == 0
     assert e(sample) == (g <= 6)
@@ -269,8 +269,8 @@ capture noisily {
     gen double yp = rpoisson(exp(.3*x))
     gen double w = 1+runiform()
     gen double twice = 2*w
-    foreach cmd in creghdfe cpplmhdfe civreghdfe {
-        local dep = cond("`cmd'" == "cpplmhdfe", "yp", "y")
+    foreach cmd in creghdfe cppmlhdfe civreghdfe {
+        local dep = cond("`cmd'" == "cppmlhdfe", "yp", "y")
         local rhs = cond("`cmd'" == "civreghdfe", "(x=z)", "x")
         `cmd' `dep' `rhs' [aw=2*w], absorb(g)
         matrix B = e(b)
@@ -279,7 +279,7 @@ capture noisily {
         mata: assert(mreldif(st_matrix("B"),st_matrix("e(b)")) < 1e-7)
         mata: assert(mreldif(st_matrix("V"),st_matrix("e(V)")) < 1e-7)
     }
-    cpplmhdfe yp x, absorb(g)
+    cppmlhdfe yp x, absorb(g)
     estimates store ppml_prediction
     capture predict double mu
     assert _rc == 198

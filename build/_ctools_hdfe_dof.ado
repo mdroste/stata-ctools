@@ -1,4 +1,5 @@
-*! dofadjustments() of the HDFE estimators; maintained in package/ado.
+*! version 1.1.0 20261016 github.com/mdroste/stata-ctools
+*! dofadjustments() of the HDFE estimators.
 * _ctools_hdfe_dof [, all none firstpair pairwise clusters continuous]
 *
 * all (the default), none, or any of firstpair|pairwise, clusters and

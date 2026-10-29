@@ -1,6 +1,6 @@
-*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools
+*! version 1.1.0 20261016 github.com/mdroste/stata-ctools
 
-program define cbinscatter, eclass sortpreserve
+program define cbinscatter, eclass
     version 14.1
 
     * Check observation limit (Stata plugin API limitation)
@@ -160,18 +160,35 @@ program define cbinscatter, eclass sortpreserve
     * Count the requested sample before excluding incomplete observations
     marksample touse, novarlist
 
-    * Get observation count from Stata (fast, uses existing if/in)
-    qui count if `touse'
-    local nobs = r(N)
-    if `nobs' == 0 {
-        di as error "no observations"
-        exit 3301
+    * Stata counts the sample and drops incomplete observations only where
+    * the ado needs them before the plugin runs (by-groups, discrete bins,
+    * the verbose header); otherwise the plugin does both while it loads
+    local stata_sample = ("`by'" != "" | "`discrete'" != "" | "`verbose'" != "")
+    if `stata_sample' {
+        qui count if `touse'
+        local nobs = r(N)
+        if `nobs' == 0 {
+            di as error "no observations"
+            exit 3301
+        }
     }
 
+    local check_weights = 0
     if "`weight'" != "" {
-        tempvar evaluated_weight
-        _ctools_weight, generate(`evaluated_weight') touse(`touse') type(`weight') expression(`"`exp'"')
-        local weight_var "`evaluated_weight'"
+        * A weight that is a numeric variable is passed as it is, and the
+        * plugin checks it; other expressions are evaluated and checked here
+        local wexp = strtrim(substr(`"`exp'"', 2, .))
+        capture unab wvar : `wexp', max(1)
+        if !_rc capture confirm numeric variable `wvar'
+        if !_rc & "`wvar'" == "`wexp'" {
+            local weight_var "`wvar'"
+            local check_weights = 1
+        }
+        else {
+            tempvar evaluated_weight
+            _ctools_weight, generate(`evaluated_weight') touse(`touse') type(`weight') expression(`"`exp'"')
+            local weight_var "`evaluated_weight'"
+        }
         if "`weight'" == "aweight" local weight_type = 1
         else if "`weight'" == "fweight" local weight_type = 2
         else if "`weight'" == "pweight" local weight_type = 3
@@ -187,18 +204,19 @@ program define cbinscatter, eclass sortpreserve
     * Group IDs must be dense after excluding incomplete observations.
     * absorb() values are labels (numeric or string); the plugin maps each
     * variable to dense levels over the final sample.
-    markout `touse' `depvar' `xvar' `controls' `weight_var'
-    if "`absorb'" != "" markout `touse' `absorb', strok
-    if "`by'" != "" markout `touse' `by', strok
+    if `stata_sample' {
+        markout `touse' `depvar' `xvar' `controls' `weight_var'
+        if "`absorb'" != "" markout `touse' `absorb', strok
+        if "`by'" != "" markout `touse' `by', strok
+    }
     local num_by_groups = 1
     if "`by'" != "" {
         local by_orig "`by'"
         tempvar by_numeric
         quietly _ctools_group `by' if `touse', generate(`by_numeric') label
         local by "`by_numeric'"
-        quietly summarize `by' if `touse', meanonly
-        local num_by_groups = r(max)
-        if missing(`num_by_groups') error 2000
+        local num_by_groups = r(N_groups)
+        if `num_by_groups' == 0 error 2000
     }
 
     * Load the platform-appropriate ctools plugin if not already loaded
@@ -225,6 +243,11 @@ program define cbinscatter, eclass sortpreserve
     scalar __cbinscatter_method = `method_num'
     scalar __cbinscatter_maxiter = 10000
     scalar __cbinscatter_tolerance = 1e-10
+    * The plugin selects the sample from a marker variable (or, without
+    * if/in, from the data alone) rather than from an if condition, which
+    * Stata answers one observation at a time
+    scalar __cbinscatter_touse_mode = cond(`"`if'`in'"' != "", 1, 2)
+    scalar __cbinscatter_check_weights = `check_weights'
 
     * Display info if verbose
     if "`verbose'" != "" {
@@ -275,6 +298,9 @@ program define cbinscatter, eclass sortpreserve
     if `weight_type' > 0 {
         local plugin_varlist `plugin_varlist' `weight_var'
     }
+    if `"`if'`in'"' != "" {
+        local plugin_varlist `plugin_varlist' `touse'
+    }
 
     * Build threads option string
     local threads_code ""
@@ -286,15 +312,19 @@ program define cbinscatter, eclass sortpreserve
     quietly _ctools_clock __ct_lap99
 
     * Call the C plugin
-    capture noisily plugin call ctools_plugin `plugin_varlist' if `touse', ///
+    capture noisily plugin call ctools_plugin `plugin_varlist', ///
         "cbinscatter `threads_code' compute_bins"
 
     local plugin_rc = _rc
     if `plugin_rc' {
+        * The plugin itself reports an empty sample and invalid weights
+        capture local reported = __cbinscatter_reported
+        if _rc local reported = 0
         _ctools_cleanup cbinscatter
-        di as error "cbinscatter: plugin error (rc=`plugin_rc')"
+        if !`reported' di as error "cbinscatter: plugin error (rc=`plugin_rc')"
         exit `plugin_rc'
     }
+    if !`stata_sample' local nobs = __cbinscatter_N_touse
 
     _ctools_lap elapsed __ct_lap99 `__ct_lap99'
 

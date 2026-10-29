@@ -1,3 +1,4 @@
+*! version 1.1.0 20261016 github.com/mdroste/stata-ctools
 *! Binary statistical readers; parsing and values are provided by C.
 program define _cio_import, rclass
     version 14.1

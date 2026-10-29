@@ -1,3 +1,4 @@
+*! version 1.1.0 20261016 github.com/mdroste/stata-ctools
 *! ctools weight-expression staging; caller owns generate() tempvar
 program define _ctools_weight
     version 14.1

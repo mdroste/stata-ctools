@@ -1,4 +1,5 @@
-*! e() results shared by creghdfe and cpplmhdfe; maintained in package/ado.
+*! version 1.1.0 20261016 github.com/mdroste/stata-ctools
+*! e() results shared by creghdfe and cppmlhdfe.
 * _ctools_hdfe_post, stub(name) absvars(string) nhdfe(#) vce(name)
 *     [extended(string) clustvars(string) nclust(numlist) dofmethod(string)]
 *

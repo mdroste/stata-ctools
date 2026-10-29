@@ -11,12 +11,13 @@
     error.
 
     Wire protocol, version 2:
-        plugin call ctools_plugin <numeric source> <string destination> [if] [in],
-            "cdecode v2 maplen=# width=# [ifcond] [fillall]"
+        plugin call ctools_plugin <numeric source> <string destination> [marker] [if] [in],
+            "cdecode v2 maplen=# width=# [ifcond [touse]] [fillall]"
     Local __cd_map holds maplen bytes: "<count> " followed by one entry per
     mapping, "<value> <bytes> <text> ", where <value> is an integer or .a-.z and
     <text> is exactly <bytes> bytes (at most width), and a closing "|". ifcond
-    says the call carries an if condition to evaluate. Without fillall the
+    says the call carries an if condition to evaluate; with touse a numeric
+    sample marker follows the destination in its place. Without fillall the
     destination must be all "" on entry and only observations with nonempty
     text are written; with fillall (a destination created without initial
     values, and no if or in) every observation is written.
@@ -230,9 +231,11 @@ ST_retcode cdecode_main(const char *args)
         return 198;
     }
     int has_if = ctools_parse_bool_option(args, "ifcond");
+    int touse = has_if && ctools_parse_bool_option(args, "touse");
     int fill_all = ctools_parse_bool_option(args, "fillall");
 
-    if (SF_nvars() != 2 || SF_var_is_string(1) || !SF_var_is_string(2) || SF_var_is_strl(2))
+    if (SF_nvars() != 2 + touse || SF_var_is_string(1) || !SF_var_is_string(2) ||
+        SF_var_is_strl(2) || (touse && SF_var_is_string(3)))
     {
         SF_error("cdecode: expected a numeric source and a fixed-width string destination\n");
         return 198;
@@ -262,18 +265,36 @@ ST_retcode cdecode_main(const char *args)
     ST_int obs1 = SF_in1(), obs2 = SF_in2();
     size_t nobs = obs2 >= obs1 ? (size_t)(obs2 - obs1) + 1 : 0;
 
-    /* The if condition is evaluated on the calling thread, once per observation. */
+    /* The if condition is evaluated on the calling thread, once per
+     * observation; the shared loader reads a sample marker in parallel. */
     uint8_t *selected = NULL;
     if (has_if && nobs > 0)
     {
-        selected = (uint8_t *)malloc(nobs);
+        selected = (uint8_t *)calloc(nobs, 1);
         if (!selected)
         {
             cdecode_map_free(&map);
             return 920;
         }
-        for (size_t i = 0; i < nobs; i++)
-            selected[i] = SF_ifobs(obs1 + (ST_int)i) != 0;
+        if (touse)
+        {
+            ctools_filtered_data marked;
+            stata_retcode select_rc = ctools_data_select(&marked, 0, 0, CTOOLS_LOAD_MARKER);
+            for (size_t k = 0; select_rc == STATA_OK && k < marked.data.nobs; k++)
+                selected[marked.obs_map[k] - (perm_idx_t)obs1] = 1;
+            ctools_filtered_data_free(&marked);
+            if (select_rc != STATA_OK)
+            {
+                free(selected);
+                cdecode_map_free(&map);
+                return ctools_stata_rc(select_rc);
+            }
+        }
+        else
+        {
+            for (size_t i = 0; i < nobs; i++)
+                selected[i] = SF_ifobs(obs1 + (ST_int)i) != 0;
+        }
     }
 
     int error = 0;

@@ -427,7 +427,8 @@ static ST_retcode do_iv_regression(void)
     ctools_filtered_data filtered;
     ctools_filtered_data_init(&filtered);
 
-    stata_retcode load_rc = ctools_data_load(&filtered, var_indices, total_vars, 0, 0, CTOOLS_LOAD_CHECK_IF | CTOOLS_LOAD_NO_SORT_ORDER);
+    int load_flags = CTOOLS_LOAD_NO_SORT_ORDER | (input.touse ? CTOOLS_LOAD_MARKER : CTOOLS_LOAD_CHECK_IF);
+    stata_retcode load_rc = ctools_data_load(&filtered, var_indices, total_vars, 0, 0, load_flags);
     free(var_indices);
 
     /* Capture pure SPI data load time */
