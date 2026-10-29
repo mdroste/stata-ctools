@@ -15,11 +15,10 @@ on:
       - 'build/ctools-codecs-LICENSE.txt'
       - 'scripts/**'
       - 'validation/**'
-      - 'release.json'
+      - 'config/release.json'
       - 'README.md'
       - 'docs/**'
       - 'LICENSE'
-      - 'THIRD_PARTY_NOTICES'
       - '.github/workflows/build.yml'
   pull_request:
     branches: [ main, dev, develop ]
@@ -35,11 +34,10 @@ on:
       - 'build/ctools-codecs-LICENSE.txt'
       - 'scripts/**'
       - 'validation/**'
-      - 'release.json'
+      - 'config/release.json'
       - 'README.md'
       - 'docs/**'
       - 'LICENSE'
-      - 'THIRD_PARTY_NOTICES'
       - '.github/workflows/build.yml'
   workflow_dispatch:
   release:
@@ -366,7 +364,7 @@ jobs:
         run: |
           test "$PLUGIN_PUBLICATION" = success
           test "$(cat release/SOURCE_COMMIT)" = "$GITHUB_SHA"
-          version=$(python3 -c 'import json; print(json.load(open("release.json"))["version"])')
+          version=$(python3 -c 'import json; print(json.load(open("config/release.json"))["version"])')
           echo "tag=v${version}-build.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
           echo "title=ctools ${version} (main build ${GITHUB_RUN_NUMBER})" >> "$GITHUB_OUTPUT"
 

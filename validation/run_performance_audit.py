@@ -137,7 +137,8 @@ def main():
                         str(ROOT / 'validation/performance/benchmark_clock.c'),
                         str(ROOT / 'src/stplugin.c'), '-o', str(clock)], check=True)
     paths = [*sorted(frozen.iterdir()), harness, clock]
-    paths += [ROOT / 'validation/run_performance_audit.py', ROOT / 'Makefile']
+    paths += [ROOT / 'validation/run_performance_audit.py', ROOT / 'Makefile',
+              ROOT / 'scripts/build.mk']
     manifest = dict(label=args.label, sizes=args.sizes, threads=args.threads, reps=args.reps,
                     cases=args.cases, platform=platform.platform(), machine=platform.machine(),
                     seed=95183, columns=40,

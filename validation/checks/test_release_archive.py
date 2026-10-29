@@ -54,7 +54,7 @@ def main():
                         'archive-test-revision', binaries)
         (package / 'scratch.log').write_text('must not ship')
         archive = archive_package(package, root / 'dist')
-        version = json.loads((ROOT / 'release.json').read_text())['version']
+        version = json.loads((ROOT / 'config/release.json').read_text())['version']
         assert archive.name == f'ctools-{version}.zip'
         info = json.loads((package / 'BUILD_INFO.json').read_text())
         with ZipFile(archive) as zipped:

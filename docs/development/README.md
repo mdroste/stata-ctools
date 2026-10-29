@@ -1168,7 +1168,8 @@ operations, and test invalid continuations and owner switches.
 
 ### 4. Source discovery and incremental builds
 
-The Makefile discovers first-party C files recursively. The shared compiler
+The root Makefile includes the build rules in `scripts/build.mk`, which discover
+first-party C files recursively. The shared compiler
 pipeline writes per-platform, per-compiler/flags objects with compiler-generated
 header and `.inc` dependencies under `build/obj`. A change to the source inventory
 forces relinking, including deletions. A no-op invocation verifies the existing
@@ -1181,7 +1182,7 @@ See [the platform contracts](PLATFORMS.md) before changing target flags.
 Edit `build/newcmd.ado` and `build/newcmd.sthlp`; list every ado, prediction
 helper and help file in `build/ctools.pkg`. `build/` is both the only editable
 copy of the Stata files and the published install tree. Release identity comes
-from `release.json` through `scripts/sync_release.py`.
+from `config/release.json` through `scripts/sync_release.py`.
 
 Register validation in `validation/suites.json`, then run
 `python3 -m validation.suite_registry --write-master`. Emit the completion marker
@@ -1360,7 +1361,7 @@ different index space and overwrite inputs. Never change `src/stplugin.c/h`.
 exactly its declared platform scope and all helper files. CI release packages
 must declare all four platforms and require successful licensed Stata validation.
 `scripts/archive_package.py` verifies the staged checksums and all-platform
-scope, then creates `ctools-<version>.zip` using `release.json`. Its flat layout
+scope, then creates `ctools-<version>.zip` using `config/release.json`. Its flat layout
 allows copying the extracted files directly onto an adopath directory. The
 archive contains only manifest-listed payloads, package metadata, and
 `BUILD_INFO.json`, which records the source revision and file checksums.
@@ -1494,10 +1495,11 @@ live in their own `src/<command>/` directories; shared HDFE and file-format
 modules live under `src/hdfe/`, `src/formats/` and `src/io/`. Keep the SDK files
 `src/stplugin.c/h` unmodified and vendor flags scoped to `src/vendor/`.
 
-`release.json` alone defines the release version, date and minimum Stata version.
+`config/release.json` alone defines the release version, date and minimum Stata version.
 After changing it, run `python3 scripts/sync_release.py` and then its `--check`
 mode. Commit every regenerated copy together. The synchronization also copies
-root licenses into the distribution; rebuilding updates the plugin identity.
+`LICENSE` and `docs/licenses/THIRD_PARTY_NOTICES` into the distribution;
+rebuilding updates the plugin identity.
 
 Tracked documentation describes current behavior. Put investigation reports in
 ignored `reports/` subdirectories with dated filenames, and disposable logs,

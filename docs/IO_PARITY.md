@@ -95,4 +95,4 @@ Every format is tested against Stata's own `import` and `export`. The tests comp
 
 ## Third-party code
 
-SAS and SPSS support builds on [ReadStat](https://github.com/WizardMac/ReadStat) 1.1.9, and XLS import uses [libxls](https://github.com/libxls/libxls) 1.6.3. Both are compiled into the plugin. See [THIRD_PARTY_NOTICES](../THIRD_PARTY_NOTICES) for licenses.
+SAS and SPSS support builds on [ReadStat](https://github.com/WizardMac/ReadStat) 1.1.9, and XLS import uses [libxls](https://github.com/libxls/libxls) 1.6.3. Both are compiled into the plugin. See [THIRD_PARTY_NOTICES](licenses/THIRD_PARTY_NOTICES) for licenses.

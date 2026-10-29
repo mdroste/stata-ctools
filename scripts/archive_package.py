@@ -13,10 +13,10 @@ from scripts.package_contract import check_package
 from scripts.stage_package import PLATFORMS
 
 
-def archive_package(source, output, release_file=ROOT / 'release.json'):
+def archive_package(source, output, release_file=ROOT / 'config/release.json'):
     version = json.loads(release_file.read_text())['version']
     if not isinstance(version, str) or not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', version):
-        raise ValueError('release.json must contain a major.minor.patch version')
+        raise ValueError('config/release.json must contain a major.minor.patch version')
     errors = check_package(source, integrity=True)
     if errors:
         raise ValueError('\n'.join(errors))
@@ -24,7 +24,7 @@ def archive_package(source, output, release_file=ROOT / 'release.json'):
     if set(info['platforms']) != set(PLATFORMS):
         raise ValueError('release archives require all four platform plugins')
     if f'd Version: {version}' not in (source / 'ctools.pkg').read_text().splitlines():
-        raise ValueError('staged package version differs from release.json')
+        raise ValueError('staged package version differs from config/release.json')
     # Use the verified manifest, excluding caches, logs and other staging debris.
     entries = sorted([*info['sha256'], 'BUILD_INFO.json'])
     output.mkdir(parents=True, exist_ok=True)

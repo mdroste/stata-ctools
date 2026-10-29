@@ -41,7 +41,8 @@ def main():
     subprocess.run(['cc', *flags, str(ROOT / 'validation/performance/benchmark_clock.c'), str(snapshot / 'src/stplugin.c'), '-o', str(out / 'clock.plugin')], check=True)
     shutil.copy2(ROOT / 'validation/performance/benchmark_readme_commands.do', out / 'benchmark.do')
     files = sorted(f for f in (snapshot / 'src').rglob('*') if f.is_file())
-    files += sorted(build.glob('*.ado')) + [build / plugin, snapshot / 'Makefile']
+    files += sorted(build.glob('*.ado')) + [
+        build / plugin, snapshot / 'Makefile', snapshot / 'scripts/build.mk']
     files += sorted(refs.glob('*.ado')) + [out / 'clock.plugin', out / 'benchmark.do']
     files += [f.resolve() for f in a.reference_dependency]
     files += [ROOT / 'validation/performance' / name for name in

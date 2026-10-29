@@ -47,7 +47,7 @@
 | `ivreghdfe` | `civreghdfe` | 2SLS/GMM with multi-way fixed effects | 10–20× |
 | `ppmlhdfe` | `cppmlhdfe` | PPML with multi-way fixed effects | 5–6× |
 
-¹ These are approximate speedups from a small number of benchmarks on data with **1M, 10M, and 25M observations** and 20 mixed-type variables. Range endpoints are rounded outward, using multiples of ten for speedups of 10× or more. Values below 1× mean ctools was slower. Your machine's mileage may vary. See [benchmark details and results](docs/performance/README.md).
+¹ These are approximate speedups from a small number of benchmarks on data with **1M, 10M, and 25M observations** and 20 mixed-type variables. Values below 1× mean ctools was slower. Your machine's mileage may vary. See [benchmark details and results](docs/performance/README.md).
 
 ## Installation
 
@@ -73,18 +73,6 @@ See the [documentation index](docs/README.md) for command guides, development an
 - [Compatibility and limitations](docs/COMPATIBILITY.md), including supported options and numerical differences.
 - [Installation and building from source](docs/INSTALLATION.md) and the [developer guide](docs/development/README.md).
 
-## Repository layout
-
-| Directory | Purpose |
-| --- | --- |
-| `src/` | C implementations, shared infrastructure and pinned vendor code |
-| `build/` | Editable Stata ado/help sources and published installation tree; compiled objects are ignored under `build/obj/` |
-| `docs/` | User guides, developer contracts and reproducible benchmark evidence |
-| `validation/` | Correctness suites, fixtures and performance tools; see the [validation guide](validation/README.md) |
-| `scripts/` | Build, packaging and metadata synchronization operations |
-| `tools/generation/` | Offline table generators and checksum-pinned inputs |
-| `reports/`, `temp/` | Ignored local reports and disposable output |
-
 ## Authorship
 
 99.9% of this code was written by large language models. The early stuff was written in January 2026 by Claude Opus 4.5 and ChatGPT 5.2, back when it was still surprising for programs to be written like this. More recent bugfixes and improvements were written by Claude Fable 5.1, Claude Opus 5.5, and GPT 6.0/6.1 Astra/Sol. 
@@ -101,7 +89,7 @@ See the [documentation index](docs/README.md) for command guides, development an
 
 ## License
 
-Project code is [MIT-licensed](LICENSE). The distribution includes [third-party notices](THIRD_PARTY_NOTICES).
+Project code is [MIT-licensed](LICENSE). The distribution includes [third-party notices](docs/licenses/THIRD_PARTY_NOTICES).
 
 
 ## Contributing

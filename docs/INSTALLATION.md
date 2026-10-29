@@ -27,7 +27,7 @@ From a source checkout, verify the extracted package with
 
 Each main build that passes all publication gates creates a GitHub prerelease
 tagged `v<version>-build.<run-number>`, containing `ctools-<version>.zip`.
-The version comes from `release.json`; the build number distinguishes builds of
+The version comes from `config/release.json`; the build number distinguishes builds of
 the same version. Manually created GitHub Releases also receive this ZIP.
 Actions runs retain the ZIP in the `ctools-<version>` artifact, including
 candidate builds that have not passed licensed validation. Downloading that
@@ -44,7 +44,7 @@ platform plugins; publication requires the licensed correctness gate.
 
 ## Building from Source Files
 
-Release identity is defined in `release.json`. Run `python3 scripts/sync_release.py` after changing it; CI checks the generated copies. `ctools, version` reports the installed ado and plugin identities.
+Release identity is defined in `config/release.json`. Run `python3 scripts/sync_release.py` after changing it; CI checks the generated copies. `ctools, version` reports the installed ado and plugin identities.
 
 
 You probably do not need to compile the ctools plugin yourself; GitHub automatically builds plugins for Windows, Mac, and Linux. If you want or need to build plugins from source, follow the [platform build instructions](development/PLATFORMS.md), including the deployment-compatible macOS OpenMP runtime.
