@@ -1,4 +1,4 @@
-*! version 1.1.0 20261016 github.com/mdroste/stata-ctools
+*! version 1.2.0 20261029 github.com/mdroste/stata-ctools
 *! Private helper for cppmlhdfe.
 program define _cppmlhdfe_abs_options
     syntax [, SAVEfe GENerate KEEPSINgletons TOLerance(string) ITERate(string) DOFadjustments(string) ACCELeration(string) TRANSform(string) POOLsize(string)]

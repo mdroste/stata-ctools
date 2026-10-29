@@ -1,4 +1,4 @@
-*! version 1.1.0 20261016 github.com/mdroste/stata-ctools
+*! version 1.2.0 20261029 github.com/mdroste/stata-ctools
 
 program define csort, rclass
     version 14.1
@@ -76,6 +76,17 @@ program define csort, rclass
         }
     }
 
+    * Every column may need to move, including non-key strL payloads. Reject
+    * unsupported storage before the sortedby shortcut as well as plugin I/O.
+    unab allvars : *
+    foreach v of local allvars {
+        local storage : type `v'
+        if "`storage'" == "strL" {
+            di as error "csort: strL I/O is unsupported; recast to str2045 when lossless"
+            exit 109
+        }
+    }
+
     * =========================================================================
     * EARLY EXIT: check if data is already sorted by the requested variables
     * =========================================================================
@@ -107,10 +118,6 @@ program define csort, rclass
     capture program ctools_plugin, plugin using("`__ctools_plugin'")
     if _rc != 0 & _rc != 110 exit 601
     capture confirm number 0
-
-    * Get ALL variables in the dataset (we need to sort all of them).
-    * No temporary variables exist at this point, so * lists only user data.
-    unab allvars : *
 
     * Find indices of sort variables within all variables (1-based). A
     * repeated key adds nothing to the order (sorting by x x is sorting by x),

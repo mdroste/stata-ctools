@@ -3,6 +3,7 @@
 *.log
 .claude/
 CLAUDE.md
+AGENTS.md
 *.plugin
 *.dSYM/
 *.o
@@ -12,7 +13,7 @@ CLAUDE.md
 __pycache__/
 
 /temp/
-# Agent-written audits and reports stay local; see CLAUDE.md.
+# Agent-written audits and reports stay local; see docs/development/README.md.
 /reports/
 /build/*.build.json
 /build/*.tmp

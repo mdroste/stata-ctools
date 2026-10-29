@@ -12,7 +12,7 @@ import re
 import subprocess
 import tempfile
 
-ROOT = Path(__file__).resolve().parents[3]
+from validation import ROOT
 SRC = ROOT / "src"
 COMPANIONS = {
     "cimport/cimport_impl.c": ["cimport/cimport_cache.c"],

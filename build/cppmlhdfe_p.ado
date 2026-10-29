@@ -1,4 +1,4 @@
-*! version 1.1.0 20261016 github.com/mdroste/stata-ctools
+*! version 1.2.0 20261029 github.com/mdroste/stata-ctools
 program define cppmlhdfe_p
     version 14.1
     if "`e(cmd)'" != "cppmlhdfe" error 301

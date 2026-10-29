@@ -1,21 +1,23 @@
 ```text
- ███ ████  ██   ██  █     ███
-█     ██  █  █ █  █ █    █
-█     ██  █  █ █  █ █     ██
-█     ██  █  █ █  █ █       █
- ███  ██   ██   ██  ████ ███
+ ████╗█████╗ ████╗  ████╗ ██╗  █████╗
+██╔══╝╚═██╔╝██╔═██╗██╔═██╗██║  ██╔══╝
+██║     ██║ ██║ ██║██║ ██║██║  █████╗
+██║     ██║ ██║ ██║██║ ██║██║  ╚══██║
+╚████╗  ██║ ╚████╔╝╚████╔╝████╗█████║
+ ╚═══╝  ╚═╝  ╚═══╝  ╚═══╝ ╚═══╝╚════╝
+ some really fast Stata programs
 ```
 
-some really fast Stata programs
-
 [![Build](https://github.com/mdroste/stata-ctools/actions/workflows/build.yml/badge.svg)](https://github.com/mdroste/stata-ctools/actions/workflows/build.yml)
-![Version](https://img.shields.io/badge/version-1.1.0-blue)
+![Version](https://img.shields.io/badge/version-1.2.0-blue)
 
 **This is an initial release. Please report problems/suggestions on [Issues](https://github.com/mdroste/stata-ctools/issues).**
 
 ## Overview
 
 **ctools** provides really fast implementations of common Stata routines. The syntax is largely unchanged from the commands they replace, sometimes with additional features; see the [compatibility table](docs/COMPATIBILITY.md).
+
+### Stata built-in commands
 
 | Stata command | Replaced with | Description | Approx. speedup¹ |
 | --- | --- | --- | ---: |
@@ -30,17 +32,22 @@ some really fast Stata programs
 | `destring` | `cdestring` | Recast string as numeric type | 40–50× |
 | `ipolate` | [`cipolate`](docs/USAGE.md#linear-interpolation-cipolate) | Linear interpolation and extrapolation | 50–80× |
 | `split` | [`csplit`](docs/USAGE.md#string-fields-csplit) | Split strings into fields | 70–130× |
-| `rangejoin` | [`crangejoin`](docs/USAGE.md#interval-joins-crangejoin) | Join observations within inclusive intervals | 10–20× |
 | `qreg` | `cqreg` | Quantile regression | 4–6× |
-| `gstats winsor` | `cwinsor` | Winsorize variables | 2–5× |
+
+### User-written commands
+
+| Stata command | Replaced with | Description | Approx. speedup¹ |
+| --- | --- | --- | ---: |
+| `rangejoin` | [`crangejoin`](docs/USAGE.md#interval-joins-crangejoin) | Join observations within inclusive intervals | 10–20× |
+| `winsor2`, `gstats winsor` | `cwinsor` | Winsorize variables | 2–5× vs. `gstats winsor` |
 | `rangestat` | `crangestat` | Range statistics of variables | 80–110× |
 | `psmatch2` | `cpsmatch` | Propensity score matching | 2–4× |
-| `binscatter` | `cbinscatter` | Binned scatter plots | 8–60× |
+| `binscatter`, `binsreg` | `cbinscatter` | Binned scatter plots | 8–60× vs. `binscatter` |
 | `reghdfe` | `creghdfe` | OLS with multi-way fixed effects | 10–20× |
 | `ivreghdfe` | `civreghdfe` | 2SLS/GMM with multi-way fixed effects | 10–20× |
 | `ppmlhdfe` | `cppmlhdfe` | PPML with multi-way fixed effects | 5–6× |
 
-¹ These are approximate speedups from a small number of benchmarks on data with **1M, 10M, and 25M observations** and 20 mixed-type variables. Range endpoints are rounded outward, using multiples of ten for speedups of 10× or more. Values below 1× mean ctools was slower. Your machine's mileage may vary. See [benchmark details and results](docs/README_BENCHMARK.md).
+¹ These are approximate speedups from a small number of benchmarks on data with **1M, 10M, and 25M observations** and 20 mixed-type variables. Range endpoints are rounded outward, using multiples of ten for speedups of 10× or more. Values below 1× mean ctools was slower. Your machine's mileage may vary. See [benchmark details and results](docs/performance/README.md).
 
 ## Installation
 
@@ -50,13 +57,33 @@ Requires Stata 14.1 or later. In Stata:
 net install ctools, from("https://raw.githubusercontent.com/mdroste/stata-ctools/main/build") replace
 ```
 
-You can also install ctools by copying the contents of the /build/ directory in this repository to your Stata installation's [ADOPATH](https://www.stata.com/support/faqs/programming/search-path-for-ado-files/). 
+For a drag-and-drop installation, download `ctools-<version>.zip` from
+[GitHub Releases](https://github.com/mdroste/stata-ctools/releases), unzip it,
+and copy its contents into a directory on your Stata
+[ADOPATH](https://www.stata.com/support/faqs/programming/search-path-for-ado-files/)
+(for example, PERSONAL, whose location is shown by `sysdir`). The ZIP includes
+all ado and help files and all four platform plugins; Stata selects the right
+plugin automatically. Restart Stata after replacing an installed plugin.
 
 ## Documentation
 
-- [Command features](FEATURES.md), [usage examples](docs/USAGE.md), and Stata's `help <command>`.
+See the [documentation index](docs/README.md) for command guides, development and validation.
+
+- [Command features](docs/FEATURES.md), [usage examples](docs/USAGE.md), and Stata's `help <command>`.
 - [Compatibility and limitations](docs/COMPATIBILITY.md), including supported options and numerical differences.
-- [Installation and building from source](docs/INSTALLATION.md) and the [developer guide](DEVELOPERS.md).
+- [Installation and building from source](docs/INSTALLATION.md) and the [developer guide](docs/development/README.md).
+
+## Repository layout
+
+| Directory | Purpose |
+| --- | --- |
+| `src/` | C implementations, shared infrastructure and pinned vendor code |
+| `build/` | Editable Stata ado/help sources and published installation tree; compiled objects are ignored under `build/obj/` |
+| `docs/` | User guides, developer contracts and reproducible benchmark evidence |
+| `validation/` | Correctness suites, fixtures and performance tools; see the [validation guide](validation/README.md) |
+| `scripts/` | Build, packaging and metadata synchronization operations |
+| `tools/generation/` | Offline table generators and checksum-pinned inputs |
+| `reports/`, `temp/` | Ignored local reports and disposable output |
 
 ## Authorship
 

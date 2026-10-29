@@ -1,5 +1,12 @@
 """Run the complete offline correctness gate using the configured Stata launcher."""
-from stata_runner import launch_driver
+
+# Keep the root entry point usable as either a script or a module.
+if __package__ in (None, ""):
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from validation.support.stata_runner import launch_driver
 from pathlib import Path
 import re
 import os
@@ -8,9 +15,9 @@ import subprocess
 import tempfile
 import uuid
 
-ROOT = Path(__file__).resolve().parents[1]
-LOG = ROOT / 'validation/audit_ci.log'
-from suite_registry import load_registry, master_names, check_registry, run_extra_stata
+from validation import ROOT
+LOG = ROOT / 'temp/validation/audit_ci.log'
+from validation.suite_registry import load_registry, master_names, check_registry, run_extra_stata
 COMPONENTS = master_names()
 
 
@@ -31,6 +38,7 @@ def validate_log(text, nonce):
 
 def main():
     check_registry()
+    LOG.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(['python3', 'scripts/fetch_validation_data.py', '--check-only'], cwd=ROOT, check=True)
     LOG.unlink(missing_ok=True)
     expected = os.environ.get('CTOOLS_EXPECTED_REVISION', '')

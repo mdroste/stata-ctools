@@ -7,7 +7,7 @@ import platform
 import subprocess
 import tempfile
 
-ROOT = Path(__file__).resolve().parents[3]
+from validation import ROOT
 CC = os.environ.get("CC", "clang")
 
 

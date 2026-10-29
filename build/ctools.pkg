@@ -25,11 +25,11 @@ d   crangejoin  - Interval joins
 d   cpsmatch    - Propensity score matching (ATT)
 d   cppmlhdfe   - PPML with high-dimensional fixed effects
 d
-d Version: 1.1.0
+d Version: 1.2.0
 d
 d Requires: Stata 14.1 or later
 d
-d Distribution-Date: 20261016
+d Distribution-Date: 20261029
 
 f ctools.ado
 f ctools.sthlp

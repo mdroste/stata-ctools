@@ -637,10 +637,10 @@
     "frozen-build/ctools_mac_arm.plugin": {
       "sha256": "07a4ad699d561cf69441589a3d652cfa41688d868edb70cc544747d962a6a61d"
     },
-    "validation/profile_readme.do": {
+    "validation/performance/profile_readme.do": {
       "sha256": "e4ccdfc31a1a398c4ffe12e9ee264886dc23d9fa44c0162cc49890e3d5927390"
     },
-    "validation/summarize_readme_profile.py": {
+    "validation/performance/summarize_readme_profile.py": {
       "sha256": "c1160eea14915edd276ea479e966973ae7ab28d887d00076449edcdc2e8488d8"
     }
   },

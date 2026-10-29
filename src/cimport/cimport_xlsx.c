@@ -1644,7 +1644,7 @@ bool xlsx_parse_cellrange(const char *range_str, XLSXCellRange *range)
  * XLSX Column Store Worker
  *
  * No longer called by the plugin (Excel import goes through src/io/cio.c);
- * kept because validation/test_p2_native.py exercises its SPI failure paths.
+ * kept because validation/native/tests/test_p2_native.py exercises its SPI failure paths.
  * ============================================================================ */
 
 typedef struct {

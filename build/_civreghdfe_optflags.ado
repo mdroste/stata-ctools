@@ -1,4 +1,4 @@
-*! version 1.1.0 20261016 github.com/mdroste/stata-ctools
+*! version 1.2.0 20261029 github.com/mdroste/stata-ctools
 *! Private helper for civreghdfe.
 program define _civreghdfe_optflags, rclass
     args optvars all touse

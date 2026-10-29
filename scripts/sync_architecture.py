@@ -32,7 +32,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
-    output = ROOT / "docs/COMMAND_INVENTORY.md"
+    output = ROOT / "docs/development/COMMAND_INVENTORY.md"
     content = inventory()
     if args.check:
         if not output.exists() or output.read_text() != content:

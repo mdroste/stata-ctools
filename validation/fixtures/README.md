@@ -17,21 +17,21 @@ as part of the ctools installation package.
 `hdfe_manifest.json` pins a second, opt-in collection the same way: the 15
 Stata files (about 227 MB) of Sergio Correia's
 [HDFE benchmark collection](https://www.scorreia.com/data/hdfe/index.html),
-cached in `data/hdfe/`. Only `validation/run_hdfe_datasets.py` uses it; the
+cached in `data/hdfe/`. Only `validation/performance/run_hdfe_datasets.py` uses it; the
 offline gate does not require it. See
-[the walkthrough](../../docs/HDFE_BENCHMARK_DATASETS.md).
+[the walkthrough](../../docs/performance/HDFE_DATASETS.md).
 
 ```sh
 python3 scripts/fetch_validation_data.py --collection hdfe
 python3 scripts/fetch_validation_data.py --collection hdfe --check-only
 ```
 
-`ctools_fixture` in `validation/validate_setup.do` loads the official examples. Missing
+`ctools_fixture` in `validation/support/validate_setup.do` loads the official examples. Missing
 fixtures fail the component. Built-in `sysuse` examples remain local to Stata.
 The import suite uses available official examples for generic CSV round trips;
 obsolete, unavailable example names are not treated as skipped checks.
 
-Run the complete gate with `python3 validation/run_stata_audit.py`. The runner invokes Stata through the `stata` alias in an interactive login
+Run the complete gate with `python3 -m validation.run_stata_audit`. The runner invokes Stata through the `stata` alias in an interactive login
 zsh and exits Stata cleanly. The reference packages listed in the driver's preflight must
 already be installed. The gate requires each of 20 components to reach its
 completion marker, rejects failed checks and unexpected skips, and verifies a

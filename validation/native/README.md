@@ -1,6 +1,9 @@
 # Native test organization
 
-Python drivers orchestrate compilation and execution. C fixtures live in
+Python drivers in `tests/` orchestrate compilation and execution. Run them from
+the repository root, for example
+`python3 -m validation.native.tests.test_sort_keys_native`.
+C fixtures live in
 `harnesses/` or `memory_safety/`; shared SPI and compiler support live in
 `support/`. Drivers never import executable tests from other tests.
 

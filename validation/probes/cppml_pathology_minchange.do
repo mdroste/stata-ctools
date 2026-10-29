@@ -1,4 +1,4 @@
-do validation/validate_setup.do
+do validation/support/validate_setup.do
 
 capture program drop cmp_case2
 program define cmp_case2

@@ -23,7 +23,7 @@
 #   make help           - Show this help
 #
 # Requirements:
-#   macOS:   C compiler; macOS 11 static OpenMP for distribution (docs/PLATFORMS.md)
+#   macOS:   C compiler; macOS 11 static OpenMP for distribution (docs/development/PLATFORMS.md)
 #   Windows: MSYS2 GCC, or cross-compile with llvm-mingw/MinGW
 #   Linux:   GCC with OpenMP (libgomp)
 #
@@ -329,7 +329,7 @@ ifeq ($(MAC_ARM_HAS_OMP),yes)
 	@echo "    libomp:    OK ($(LIBOMP_PREFIX))"
 	@echo "    OpenMP:    Enabled"
 else
-	@echo "    libomp:    MISSING - see docs/PLATFORMS.md"
+	@echo "    libomp:    MISSING - see docs/development/PLATFORMS.md"
 	@echo "    OpenMP:    Disabled"
 endif
 	@echo ""
@@ -339,7 +339,7 @@ ifeq ($(MAC_X86_HAS_OMP),yes)
 	@echo "    libomp:    OK ($(LIBOMP_INTEL))"
 	@echo "    OpenMP:    Enabled"
 else
-	@echo "    libomp:    MISSING - see docs/PLATFORMS.md"
+	@echo "    libomp:    MISSING - see docs/development/PLATFORMS.md"
 	@echo "    OpenMP:    Disabled"
 endif
 	@echo ""
@@ -404,7 +404,7 @@ $(BUILD_DIR):
 # ------------------------------------------------------------------------------
 macos-arm: $(BUILD_DIR) package-sources
 ifeq ($(MAC_ARM_HAS_OMP),yes)
-	@python3 validation/check_dependencies.py macos "$(LIBOMP_PREFIX)/lib/libomp.a" --arch arm64 --archive
+	@python3 -m validation.checks.check_dependencies macos "$(LIBOMP_PREFIX)/lib/libomp.a" --arch arm64 --archive
 endif
 	@echo ""
 	@echo " Building MacOS plugin (arm64)"
@@ -419,7 +419,7 @@ else
 	@echo "    OpenMP:    Disabled (pthread only)"
 endif
 ifeq ($(MAC_ARM_HAS_OMP),no)
-	@echo "    OpenMP:    Build a compatible static runtime; see docs/PLATFORMS.md"
+	@echo "    OpenMP:    Build a compatible static runtime; see docs/development/PLATFORMS.md"
 endif
 	@python3 scripts/build_plugin.py --platform arm --cc '$(CC_MAC)' \
 		--cflags='$(CFLAGS_MAC_ARM)' --ldflags='$(LDFLAGS_MAC_ARM)' \
@@ -432,7 +432,7 @@ endif
 # ------------------------------------------------------------------------------
 macos-intel: $(BUILD_DIR) package-sources
 ifeq ($(MAC_X86_HAS_OMP),yes)
-	@python3 validation/check_dependencies.py macos "$(LIBOMP_INTEL)/lib/libomp.a" --arch x86_64 --archive
+	@python3 -m validation.checks.check_dependencies macos "$(LIBOMP_INTEL)/lib/libomp.a" --arch x86_64 --archive
 endif
 	@echo ""
 	@echo " Building MacOS plugin (x86_64)"

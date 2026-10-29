@@ -4,7 +4,7 @@
  * Master test runner for ctools validation suite
  * Minimal output: only summary table and failures
  *
- * Usage: python3 validation/run_stata_audit.py
+ * Usage: python3 -m validation.run_stata_audit
  ******************************************************************************/
 
 
@@ -55,7 +55,8 @@ foreach script of local scripts {
     global FAILURE_COUNT = 0
     * Components control their own verbosity. An outer quietly suppresses even
     * named logs inside display-capture tests, leaving those assertions no output.
-    capture noisily do "validation/validate_`script'.do"
+    local script_path : word `script_idx' of `script_paths'
+    capture noisily do "`script_path'"
     local rc_`script_idx' = _rc
     if "${CTOOLS_COMPONENT_COMPLETE}" != "`script'" & `rc_`script_idx'' == 0 {
         local rc_`script_idx' = 9

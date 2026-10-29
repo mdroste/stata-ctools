@@ -3,6 +3,13 @@
 Use matching builds and B-C-C-B order for optimization claims; --summarize
 validates every planned trial and reports medians without deleting outliers.
 """
+
+# Keep the root entry point usable as either a script or a module.
+if __package__ in (None, ""):
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 import argparse
 import csv
 import hashlib
@@ -15,7 +22,7 @@ import statistics
 import subprocess
 from pathlib import Path
 
-from stata_runner import ROOT, run_do
+from validation.support.stata_runner import ROOT, run_do
 
 CASES = ('export import sort merge sample bsample encode decode destring ipolate split '
          'rangejoin winsor rangestat binscatter reghdfe ivreghdfe ppmlhdfe psmatch2 qreg '
@@ -121,13 +128,13 @@ def main():
     for path in [args.build / plugin, *sorted(args.build.glob('*.ado'))]:
         shutil.copy2(path, frozen / path.name)
     harness = out / (args.label + '.do')
-    shutil.copy2(ROOT / 'validation/benchmark_audit.do', harness)
+    shutil.copy2(ROOT / 'validation/performance/benchmark_audit.do', harness)
     clock = out / 'clock.plugin'
     if not clock.exists():
         flags = ['-bundle', '-DSYSTEM=APPLEMAC', '-D_DARWIN_C_SOURCE'] if mac else [
             '-shared', '-fPIC', '-DSYSTEM=STUNIX', '-D_POSIX_C_SOURCE=200809L']
         subprocess.run(['cc', '-std=c11', '-O2', '-I', str(ROOT / 'src'), *flags,
-                        str(ROOT / 'validation/benchmark_clock.c'),
+                        str(ROOT / 'validation/performance/benchmark_clock.c'),
                         str(ROOT / 'src/stplugin.c'), '-o', str(clock)], check=True)
     paths = [*sorted(frozen.iterdir()), harness, clock]
     paths += [ROOT / 'validation/run_performance_audit.py', ROOT / 'Makefile']

@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.1.0 20261016}{...}
+{* *! version 1.2.0 20261029}{...}
 {viewerjumpto "Syntax" "csort##syntax"}{...}
 {viewerjumpto "Description" "csort##description"}{...}
 {viewerjumpto "Options" "csort##options"}{...}
@@ -50,7 +50,8 @@ key values maintain their relative order.
 
 {pstd}
 Like native {cmd:sort}, {cmd:csort} rejects {cmd:if} and {cmd:in}. Fixed-width
-strings are supported; {cmd:strL} variables are rejected.
+strings are supported. Datasets containing {cmd:strL} variables are rejected,
+including non-key columns and data that are already sorted.
 
 {marker options}{...}
 {title:Options}

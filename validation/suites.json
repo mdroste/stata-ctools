@@ -3,7 +3,7 @@
   "suites": [
     {
       "name": "csort",
-      "path": "validation/validate_csort.do",
+      "path": "validation/stata/validate_csort.do",
       "runner": "master",
       "category": "correctness",
       "marker": "csort",
@@ -25,7 +25,7 @@
     },
     {
       "name": "csort_identity",
-      "path": "validation/validate_csort_identity.do",
+      "path": "validation/stata/validate_csort_identity.do",
       "runner": "master",
       "category": "correctness",
       "marker": "csort_identity",
@@ -34,7 +34,7 @@
     },
     {
       "name": "cmerge",
-      "path": "validation/validate_cmerge.do",
+      "path": "validation/stata/validate_cmerge.do",
       "runner": "master",
       "category": "correctness",
       "marker": "cmerge",
@@ -56,7 +56,7 @@
     },
     {
       "name": "cimport",
-      "path": "validation/validate_cimport.do",
+      "path": "validation/stata/validate_cimport.do",
       "runner": "master",
       "category": "correctness",
       "marker": "cimport",
@@ -78,7 +78,7 @@
     },
     {
       "name": "cexport",
-      "path": "validation/validate_cexport.do",
+      "path": "validation/stata/validate_cexport.do",
       "runner": "master",
       "category": "correctness",
       "marker": "cexport",
@@ -100,7 +100,7 @@
     },
     {
       "name": "creghdfe",
-      "path": "validation/validate_creghdfe.do",
+      "path": "validation/stata/validate_creghdfe.do",
       "runner": "master",
       "category": "correctness",
       "marker": "creghdfe",
@@ -122,7 +122,7 @@
     },
     {
       "name": "cqreg",
-      "path": "validation/validate_cqreg.do",
+      "path": "validation/stata/validate_cqreg.do",
       "runner": "master",
       "category": "correctness",
       "marker": "cqreg",
@@ -144,7 +144,7 @@
     },
     {
       "name": "civreghdfe",
-      "path": "validation/validate_civreghdfe.do",
+      "path": "validation/stata/validate_civreghdfe.do",
       "runner": "master",
       "category": "correctness",
       "marker": "civreghdfe",
@@ -166,7 +166,7 @@
     },
     {
       "name": "cdecode",
-      "path": "validation/validate_cdecode.do",
+      "path": "validation/stata/validate_cdecode.do",
       "runner": "master",
       "category": "correctness",
       "marker": "cdecode",
@@ -188,7 +188,7 @@
     },
     {
       "name": "cencode",
-      "path": "validation/validate_cencode.do",
+      "path": "validation/stata/validate_cencode.do",
       "runner": "master",
       "category": "correctness",
       "marker": "cencode",
@@ -210,7 +210,7 @@
     },
     {
       "name": "cdestring",
-      "path": "validation/validate_cdestring.do",
+      "path": "validation/stata/validate_cdestring.do",
       "runner": "master",
       "category": "correctness",
       "marker": "cdestring",
@@ -232,7 +232,7 @@
     },
     {
       "name": "csample",
-      "path": "validation/validate_csample.do",
+      "path": "validation/stata/validate_csample.do",
       "runner": "master",
       "category": "correctness",
       "marker": "csample",
@@ -254,7 +254,7 @@
     },
     {
       "name": "cbsample",
-      "path": "validation/validate_cbsample.do",
+      "path": "validation/stata/validate_cbsample.do",
       "runner": "master",
       "category": "correctness",
       "marker": "cbsample",
@@ -276,7 +276,7 @@
     },
     {
       "name": "cbinscatter",
-      "path": "validation/validate_cbinscatter.do",
+      "path": "validation/stata/validate_cbinscatter.do",
       "runner": "master",
       "category": "correctness",
       "marker": "cbinscatter",
@@ -298,7 +298,7 @@
     },
     {
       "name": "cpsmatch",
-      "path": "validation/validate_cpsmatch.do",
+      "path": "validation/stata/validate_cpsmatch.do",
       "runner": "master",
       "category": "correctness",
       "marker": "cpsmatch",
@@ -320,7 +320,7 @@
     },
     {
       "name": "crangestat",
-      "path": "validation/validate_crangestat.do",
+      "path": "validation/stata/validate_crangestat.do",
       "runner": "master",
       "category": "correctness",
       "marker": "crangestat",
@@ -342,7 +342,7 @@
     },
     {
       "name": "cwinsor",
-      "path": "validation/validate_cwinsor.do",
+      "path": "validation/stata/validate_cwinsor.do",
       "runner": "master",
       "category": "correctness",
       "marker": "cwinsor",
@@ -364,7 +364,7 @@
     },
     {
       "name": "cppmlhdfe",
-      "path": "validation/validate_cppmlhdfe.do",
+      "path": "validation/stata/validate_cppmlhdfe.do",
       "runner": "master",
       "category": "correctness",
       "marker": "cppmlhdfe",
@@ -386,7 +386,7 @@
     },
     {
       "name": "cipolate",
-      "path": "validation/validate_cipolate.do",
+      "path": "validation/stata/validate_cipolate.do",
       "runner": "master",
       "category": "correctness",
       "marker": "cipolate",
@@ -408,7 +408,7 @@
     },
     {
       "name": "csplit",
-      "path": "validation/validate_csplit.do",
+      "path": "validation/stata/validate_csplit.do",
       "runner": "master",
       "category": "correctness",
       "marker": "csplit",
@@ -430,7 +430,7 @@
     },
     {
       "name": "crangejoin",
-      "path": "validation/validate_crangejoin.do",
+      "path": "validation/stata/validate_crangejoin.do",
       "runner": "master",
       "category": "correctness",
       "marker": "crangejoin",
@@ -452,7 +452,7 @@
     },
     {
       "name": "audit_p1",
-      "path": "validation/validate_audit_p1.do",
+      "path": "validation/stata/validate_audit_p1.do",
       "runner": "master",
       "category": "correctness",
       "marker": "audit_p1",
@@ -474,7 +474,7 @@
     },
     {
       "name": "audit_p2",
-      "path": "validation/validate_audit_p2.do",
+      "path": "validation/stata/validate_audit_p2.do",
       "runner": "master",
       "category": "correctness",
       "marker": "audit_p2",
@@ -496,7 +496,7 @@
     },
     {
       "name": "sep22",
-      "path": "validation/validate_sep22.do",
+      "path": "validation/stata/validate_sep22.do",
       "runner": "master",
       "category": "correctness",
       "marker": "sep22",
@@ -518,7 +518,7 @@
     },
     {
       "name": "sep24",
-      "path": "validation/validate_sep24.do",
+      "path": "validation/stata/validate_sep24.do",
       "runner": "master",
       "category": "correctness",
       "marker": "sep24",
@@ -540,7 +540,7 @@
     },
     {
       "name": "oct27",
-      "path": "validation/validate_oct27.do",
+      "path": "validation/stata/validate_oct27.do",
       "runner": "master",
       "category": "correctness",
       "marker": "oct27",
@@ -551,7 +551,7 @@
     },
     {
       "name": "memory_safety",
-      "path": "validation/validate_memory_safety.do",
+      "path": "validation/stata/validate_memory_safety.do",
       "runner": "master",
       "category": "correctness",
       "marker": "memory_safety",
@@ -573,7 +573,7 @@
     },
     {
       "name": "command_optimizations",
-      "path": "validation/validate_command_optimizations.do",
+      "path": "validation/stata/validate_command_optimizations.do",
       "runner": "master",
       "category": "correctness",
       "marker": "command_optimizations",
@@ -595,7 +595,7 @@
     },
     {
       "name": "io_parity",
-      "path": "validation/validate_io_parity.do",
+      "path": "validation/stata/validate_io_parity.do",
       "runner": "python",
       "category": "correctness",
       "marker": "IO_PARITY_DRIVER_RC=0",
@@ -607,13 +607,14 @@
       ],
       "command": [
         "python3",
-        "validation/run_io_parity.py"
+        "-m",
+        "validation.stata.run_io_parity"
       ],
       "log": "temp/io_parity/regressions.log"
     },
     {
       "name": "io_formats",
-      "path": "validation/validate_io_formats.do",
+      "path": "validation/stata/validate_io_formats.do",
       "runner": "python",
       "category": "correctness",
       "marker": "IO_FORMATS_DRIVER_RC=0",
@@ -625,13 +626,14 @@
       ],
       "command": [
         "python3",
-        "validation/run_io_formats.py"
+        "-m",
+        "validation.stata.run_io_formats"
       ],
       "log": "temp/io_allformats/regressions.log"
     },
     {
       "name": "io_delimited_options",
-      "path": "validation/validate_io_delimited_options.do",
+      "path": "validation/stata/validate_io_delimited_options.do",
       "runner": "python",
       "category": "correctness",
       "marker": "CSV_OPTIONS_DRIVER_RC=0",
@@ -643,13 +645,14 @@
       ],
       "command": [
         "python3",
-        "validation/run_io_delimited_options.py"
+        "-m",
+        "validation.stata.run_io_delimited_options"
       ],
       "log": "temp/io_delimited_options/regressions.log"
     },
     {
       "name": "io_excel_options",
-      "path": "validation/validate_io_excel_options.do",
+      "path": "validation/stata/validate_io_excel_options.do",
       "runner": "python",
       "category": "correctness",
       "marker": "IO_OPTIONS_DRIVER_RC=0",
@@ -661,13 +664,14 @@
       ],
       "command": [
         "python3",
-        "validation/run_io_excel_options.py"
+        "-m",
+        "validation.stata.run_io_excel_options"
       ],
       "log": "temp/io_excel_options/regressions.log"
     },
     {
       "name": "cqreg_performance",
-      "path": "validation/validate_cqreg_performance.do",
+      "path": "validation/stata/validate_cqreg_performance.do",
       "runner": "do",
       "category": "correctness",
       "marker": "cqreg performance smoke checks passed",
@@ -678,7 +682,7 @@
     },
     {
       "name": "bigdata",
-      "path": "validation/validate_bigdata.do",
+      "path": "validation/stata/validate_bigdata.do",
       "runner": "do",
       "category": "correctness",
       "marker": "BIGDATA_EDGE_PASS",
@@ -689,7 +693,7 @@
     },
     {
       "name": "transport_strl",
-      "path": "validation/validate_transport_strl.do",
+      "path": "validation/stata/validate_transport_strl.do",
       "runner": "do",
       "category": "correctness",
       "marker": "TRANSPORT_STRL_COMPLETE",
@@ -702,7 +706,7 @@
     },
     {
       "name": "data_io",
-      "path": "validation/test_data_io.do",
+      "path": "validation/stata/test_data_io.do",
       "runner": "do",
       "category": "correctness",
       "marker": "ALL TESTS PASSED",
@@ -723,7 +727,7 @@
     },
     {
       "name": "validate_setup.do",
-      "path": "validation/validate_setup.do",
+      "path": "validation/support/validate_setup.do",
       "runner": "helper",
       "category": "helper",
       "marker": "",
@@ -733,7 +737,7 @@
     },
     {
       "name": "validate_cimport_helper.do",
-      "path": "validation/validate_cimport_helper.do",
+      "path": "validation/support/validate_cimport_helper.do",
       "runner": "helper",
       "category": "helper",
       "marker": "",
@@ -743,7 +747,7 @@
     },
     {
       "name": "validate_io_excel_formulas.do",
-      "path": "validation/validate_io_excel_formulas.do",
+      "path": "validation/stata/validate_io_excel_formulas.do",
       "runner": "helper",
       "category": "helper",
       "marker": "",
@@ -753,7 +757,7 @@
     },
     {
       "name": "test_validation_helpers.do",
-      "path": "validation/test_validation_helpers.do",
+      "path": "validation/support/test_validation_helpers.do",
       "runner": "helper",
       "category": "helper",
       "marker": "",
@@ -763,7 +767,7 @@
     },
     {
       "name": "test_bigdata_native",
-      "path": "validation/test_bigdata_native.py",
+      "path": "validation/native/tests/test_bigdata_native.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -775,7 +779,7 @@
     },
     {
       "name": "test_build_contract",
-      "path": "validation/test_build_contract.py",
+      "path": "validation/checks/test_build_contract.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -785,7 +789,7 @@
     },
     {
       "name": "test_cimport_options_native",
-      "path": "validation/test_cimport_options_native.py",
+      "path": "validation/native/tests/test_cimport_options_native.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -797,7 +801,7 @@
     },
     {
       "name": "test_cimport_stream_native",
-      "path": "validation/test_cimport_stream_native.py",
+      "path": "validation/native/tests/test_cimport_stream_native.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -809,7 +813,7 @@
     },
     {
       "name": "test_cppmlhdfe_native",
-      "path": "validation/test_cppmlhdfe_native.py",
+      "path": "validation/native/tests/test_cppmlhdfe_native.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -821,7 +825,7 @@
     },
     {
       "name": "test_cqreg_native",
-      "path": "validation/test_cqreg_native.py",
+      "path": "validation/native/tests/test_cqreg_native.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -833,7 +837,7 @@
     },
     {
       "name": "test_io_formats_native",
-      "path": "validation/test_io_formats_native.py",
+      "path": "validation/native/tests/test_io_formats_native.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -845,7 +849,7 @@
     },
     {
       "name": "test_io_parity_native",
-      "path": "validation/test_io_parity_native.py",
+      "path": "validation/native/tests/test_io_parity_native.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -857,7 +861,7 @@
     },
     {
       "name": "test_memory_safety_native",
-      "path": "validation/test_memory_safety_native.py",
+      "path": "validation/native/tests/test_memory_safety_native.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -871,7 +875,7 @@
     },
     {
       "name": "test_newcommands_native",
-      "path": "validation/test_newcommands_native.py",
+      "path": "validation/native/tests/test_newcommands_native.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -885,7 +889,7 @@
     },
     {
       "name": "test_order_parallel",
-      "path": "validation/test_order_parallel.py",
+      "path": "validation/native/tests/test_order_parallel.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -897,7 +901,7 @@
     },
     {
       "name": "test_p1_native",
-      "path": "validation/test_p1_native.py",
+      "path": "validation/native/tests/test_p1_native.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -909,7 +913,7 @@
     },
     {
       "name": "test_p2_native",
-      "path": "validation/test_p2_native.py",
+      "path": "validation/native/tests/test_p2_native.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -920,8 +924,18 @@
       "env": {}
     },
     {
+      "name": "test_release_archive",
+      "path": "validation/checks/test_release_archive.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [],
+      "env": {}
+    },
+    {
       "name": "test_release_gate",
-      "path": "validation/test_release_gate.py",
+      "path": "validation/checks/test_release_gate.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -931,7 +945,7 @@
     },
     {
       "name": "test_rowstage_native",
-      "path": "validation/test_rowstage_native.py",
+      "path": "validation/native/tests/test_rowstage_native.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -943,7 +957,7 @@
     },
     {
       "name": "test_sep22_native",
-      "path": "validation/test_sep22_native.py",
+      "path": "validation/native/tests/test_sep22_native.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -955,7 +969,7 @@
     },
     {
       "name": "test_sep24_native",
-      "path": "validation/test_sep24_native.py",
+      "path": "validation/native/tests/test_sep24_native.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -969,7 +983,7 @@
     },
     {
       "name": "test_counting_sort_native",
-      "path": "validation/test_counting_sort_native.py",
+      "path": "validation/native/tests/test_counting_sort_native.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -983,7 +997,7 @@
     },
     {
       "name": "test_csort_ordered_native",
-      "path": "validation/test_csort_ordered_native.py",
+      "path": "validation/native/tests/test_csort_ordered_native.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -997,7 +1011,7 @@
     },
     {
       "name": "test_msd_sort_native",
-      "path": "validation/test_msd_sort_native.py",
+      "path": "validation/native/tests/test_msd_sort_native.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -1011,7 +1025,7 @@
     },
     {
       "name": "test_sort_keys_native",
-      "path": "validation/test_sort_keys_native.py",
+      "path": "validation/native/tests/test_sort_keys_native.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -1025,7 +1039,7 @@
     },
     {
       "name": "test_spi_matrix_native",
-      "path": "validation/test_spi_matrix_native.py",
+      "path": "validation/native/tests/test_spi_matrix_native.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -1037,7 +1051,7 @@
     },
     {
       "name": "test_split_tokens_native",
-      "path": "validation/test_split_tokens_native.py",
+      "path": "validation/native/tests/test_split_tokens_native.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -1051,7 +1065,7 @@
     },
     {
       "name": "test_transport_adaptive_native",
-      "path": "validation/test_transport_adaptive_native.py",
+      "path": "validation/native/tests/test_transport_adaptive_native.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -1063,7 +1077,7 @@
     },
     {
       "name": "test_transport_native",
-      "path": "validation/test_transport_native.py",
+      "path": "validation/native/tests/test_transport_native.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -1077,7 +1091,7 @@
     },
     {
       "name": "test_transport_scheduling",
-      "path": "validation/test_transport_scheduling.py",
+      "path": "validation/native/tests/test_transport_scheduling.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -1091,7 +1105,7 @@
     },
     {
       "name": "test_transport_store_native",
-      "path": "validation/test_transport_store_native.py",
+      "path": "validation/native/tests/test_transport_store_native.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -1103,7 +1117,7 @@
     },
     {
       "name": "test_xls_edit_native",
-      "path": "validation/test_xls_edit_native.py",
+      "path": "validation/native/tests/test_xls_edit_native.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -1115,7 +1129,7 @@
     },
     {
       "name": "test_xlsx_edit_native",
-      "path": "validation/test_xlsx_edit_native.py",
+      "path": "validation/native/tests/test_xlsx_edit_native.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -1127,7 +1141,7 @@
     },
     {
       "name": "test_xlsx_strl_native",
-      "path": "validation/test_xlsx_strl_native.py",
+      "path": "validation/native/tests/test_xlsx_strl_native.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -1139,7 +1153,7 @@
     },
     {
       "name": "benchmark_bigdata",
-      "path": "validation/benchmark_bigdata.do",
+      "path": "validation/performance/benchmark_bigdata.do",
       "runner": "manual",
       "category": "large",
       "marker": "",
@@ -1149,7 +1163,7 @@
     },
     {
       "name": "benchmark_bigdata_native",
-      "path": "validation/benchmark_bigdata_native.py",
+      "path": "validation/performance/benchmark_bigdata_native.py",
       "runner": "manual",
       "category": "large",
       "marker": "",
@@ -1159,7 +1173,7 @@
     },
     {
       "name": "benchmark_command_performance",
-      "path": "validation/benchmark_command_performance.do",
+      "path": "validation/performance/benchmark_command_performance.do",
       "runner": "manual",
       "category": "performance",
       "marker": "",
@@ -1169,7 +1183,7 @@
     },
     {
       "name": "benchmark_csort_performance",
-      "path": "validation/benchmark_csort_performance.do",
+      "path": "validation/performance/benchmark_csort_performance.do",
       "runner": "manual",
       "category": "performance",
       "marker": "",
@@ -1179,7 +1193,7 @@
     },
     {
       "name": "benchmark_helpers",
-      "path": "validation/benchmark_helpers.do",
+      "path": "validation/performance/benchmark_helpers.do",
       "runner": "manual",
       "category": "performance",
       "marker": "",
@@ -1189,7 +1203,7 @@
     },
     {
       "name": "benchmark_newcommands",
-      "path": "validation/benchmark_newcommands.do",
+      "path": "validation/performance/benchmark_newcommands.do",
       "runner": "manual",
       "category": "performance",
       "marker": "",
@@ -1199,7 +1213,7 @@
     },
     {
       "name": "benchmark_readme_commands",
-      "path": "validation/benchmark_readme_commands.do",
+      "path": "validation/performance/benchmark_readme_commands.do",
       "runner": "manual",
       "category": "performance",
       "marker": "",
@@ -1209,7 +1223,7 @@
     },
     {
       "name": "benchmark_speed",
-      "path": "validation/benchmark_speed.do",
+      "path": "validation/performance/benchmark_speed.do",
       "runner": "manual",
       "category": "performance",
       "marker": "",
@@ -1219,7 +1233,7 @@
     },
     {
       "name": "benchmark_speed_synthetic",
-      "path": "validation/benchmark_speed_synthetic.do",
+      "path": "validation/performance/benchmark_speed_synthetic.do",
       "runner": "manual",
       "category": "performance",
       "marker": "",
@@ -1229,7 +1243,7 @@
     },
     {
       "name": "benchmark_transport",
-      "path": "validation/benchmark_transport.py",
+      "path": "validation/performance/benchmark_transport.py",
       "runner": "manual",
       "category": "performance",
       "marker": "",
@@ -1239,7 +1253,7 @@
     },
     {
       "name": "benchmark_transport_campaign",
-      "path": "validation/benchmark_transport_campaign.py",
+      "path": "validation/performance/benchmark_transport_campaign.py",
       "runner": "manual",
       "category": "performance",
       "marker": "",
@@ -1249,7 +1263,7 @@
     },
     {
       "name": "benchmark_transport_commands",
-      "path": "validation/benchmark_transport_commands.do",
+      "path": "validation/performance/benchmark_transport_commands.do",
       "runner": "manual",
       "category": "performance",
       "marker": "",
@@ -1259,7 +1273,7 @@
     },
     {
       "name": "test_settings",
-      "path": "validation/test_settings.do",
+      "path": "validation/stata/test_settings.do",
       "runner": "manual",
       "category": "large",
       "marker": "",
@@ -1269,7 +1283,7 @@
     },
     {
       "name": "test_contracts_native",
-      "path": "validation/test_contracts_native.py",
+      "path": "validation/native/tests/test_contracts_native.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -1283,7 +1297,7 @@
     },
     {
       "name": "test_thread_policy_native",
-      "path": "validation/test_thread_policy_native.py",
+      "path": "validation/native/tests/test_thread_policy_native.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -1297,7 +1311,7 @@
     },
     {
       "name": "test_validation_registry",
-      "path": "validation/test_validation_registry.py",
+      "path": "validation/checks/test_validation_registry.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -1306,7 +1320,7 @@
     },
     {
       "name": "contracts",
-      "path": "validation/validate_contracts.do",
+      "path": "validation/stata/validate_contracts.do",
       "runner": "master",
       "category": "correctness",
       "marker": "contracts",
@@ -1317,7 +1331,7 @@
     },
     {
       "name": "threads",
-      "path": "validation/validate_threads.do",
+      "path": "validation/stata/validate_threads.do",
       "runner": "master",
       "category": "correctness",
       "marker": "threads",
@@ -1328,7 +1342,7 @@
     },
     {
       "name": "test_io_performance_native",
-      "path": "validation/test_io_performance_native.py",
+      "path": "validation/native/tests/test_io_performance_native.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -1339,7 +1353,7 @@
     },
     {
       "name": "benchmark_io_performance",
-      "path": "validation/benchmark_io_performance.do",
+      "path": "validation/performance/benchmark_io_performance.do",
       "runner": "manual",
       "category": "performance",
       "marker": "",
@@ -1352,7 +1366,7 @@
     },
     {
       "name": "refactor_boundaries_native",
-      "path": "validation/test_refactor_boundaries_native.py",
+      "path": "validation/native/tests/test_refactor_boundaries_native.py",
       "runner": "native",
       "category": "correctness",
       "marker": null,
@@ -1363,7 +1377,7 @@
     },
     {
       "name": "refactor_timing",
-      "path": "validation/test_refactor_timing.do",
+      "path": "validation/stata/test_refactor_timing.do",
       "runner": "do",
       "category": "correctness",
       "marker": "CTOOLS_REFACTOR_TIMING_COMPLETE",
@@ -1374,7 +1388,7 @@
     },
     {
       "name": "group_windows",
-      "path": "validation/validate_group_windows.do",
+      "path": "validation/stata/validate_group_windows.do",
       "runner": "master",
       "category": "correctness",
       "marker": "group_windows",
@@ -1385,7 +1399,7 @@
     },
     {
       "name": "benchmark_group_performance",
-      "path": "validation/benchmark_group_performance.do",
+      "path": "validation/performance/benchmark_group_performance.do",
       "runner": "manual",
       "category": "performance",
       "marker": "GROUP_BENCHMARK_COMPLETE",
@@ -1400,7 +1414,7 @@
     },
     {
       "name": "group_windows_native",
-      "path": "validation/test_group_windows_native.py",
+      "path": "validation/native/tests/test_group_windows_native.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -1409,7 +1423,7 @@
     },
     {
       "name": "hdfe_failures_native",
-      "path": "validation/test_hdfe_failures_native.py",
+      "path": "validation/native/tests/test_hdfe_failures_native.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -1420,7 +1434,7 @@
     },
     {
       "name": "option_contracts",
-      "path": "validation/validate_option_contracts.do",
+      "path": "validation/stata/validate_option_contracts.do",
       "runner": "master",
       "marker": "option_contracts",
       "dependencies": [
@@ -1433,7 +1447,7 @@
     },
     {
       "name": "coverage_helpers",
-      "path": "validation/test_coverage_helpers.do",
+      "path": "validation/stata/test_coverage_helpers.do",
       "runner": "do",
       "marker": "COVERAGE_HELPERS_MUTATIONS_PASS",
       "dependencies": [
@@ -1444,7 +1458,7 @@
     },
     {
       "name": "option_inventory",
-      "path": "validation/test_option_inventory.py",
+      "path": "validation/checks/test_option_inventory.py",
       "runner": "native",
       "marker": "",
       "dependencies": [],
@@ -1453,7 +1467,7 @@
     },
     {
       "name": "option_coverage",
-      "path": "validation/test_option_coverage.py",
+      "path": "validation/stata/test_option_coverage.py",
       "runner": "python",
       "marker": "OPTION_COVERAGE_COMPLETE",
       "dependencies": [
@@ -1469,7 +1483,8 @@
       ],
       "command": [
         "python3",
-        "validation/test_option_coverage.py"
+        "-m",
+        "validation.stata.test_option_coverage"
       ],
       "log": "temp/option_coverage/results.log",
       "category": "correctness",
@@ -1477,7 +1492,7 @@
     },
     {
       "name": "encode_labels",
-      "path": "validation/validate_encode_labels.do",
+      "path": "validation/stata/validate_encode_labels.do",
       "runner": "master",
       "category": "correctness",
       "marker": "encode_labels",
@@ -1486,7 +1501,7 @@
     },
     {
       "name": "encode_labels_native",
-      "path": "validation/test_encode_labels_native.py",
+      "path": "validation/native/tests/test_encode_labels_native.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -1497,7 +1512,7 @@
     },
     {
       "name": "winsor_transport",
-      "path": "validation/validate_winsor_transport.do",
+      "path": "validation/stata/validate_winsor_transport.do",
       "runner": "master",
       "category": "correctness",
       "marker": "winsor_transport",
@@ -1508,7 +1523,7 @@
     },
     {
       "name": "winsor_transport_native",
-      "path": "validation/test_winsor_transport_native.py",
+      "path": "validation/native/tests/test_winsor_transport_native.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -1520,7 +1535,7 @@
     },
     {
       "name": "benchmark_encode_performance",
-      "path": "validation/benchmark_encode_performance.do",
+      "path": "validation/performance/benchmark_encode_performance.do",
       "runner": "manual",
       "category": "performance",
       "marker": "ENCODE_BENCHMARK_COMPLETE",
@@ -1534,7 +1549,7 @@
     },
     {
       "name": "benchmark_winsor_references",
-      "path": "validation/benchmark_winsor_references.do",
+      "path": "validation/performance/benchmark_winsor_references.do",
       "runner": "manual",
       "category": "performance",
       "marker": "WINSOR_REFERENCES_COMPLETE",
@@ -1550,7 +1565,7 @@
     },
     {
       "name": "hdfe_datasets",
-      "path": "validation/validate_hdfe_datasets.do",
+      "path": "validation/performance/validate_hdfe_datasets.do",
       "runner": "manual",
       "category": "large",
       "marker": "HDFE_DATASETS_COMPLETE",
@@ -1565,7 +1580,7 @@
     },
     {
       "name": "oct21_native",
-      "path": "validation/test_oct21_native.py",
+      "path": "validation/native/tests/test_oct21_native.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -1574,7 +1589,7 @@
     },
     {
       "name": "oct21_release",
-      "path": "validation/test_oct21_release.py",
+      "path": "validation/checks/test_oct21_release.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -1583,7 +1598,7 @@
     },
     {
       "name": "oct21_stata",
-      "path": "validation/test_oct21_stata.py",
+      "path": "validation/stata/test_oct21_stata.py",
       "runner": "python",
       "category": "correctness",
       "marker": "CTOOLS_OCT21_COMPLETE",
@@ -1591,13 +1606,14 @@
       "dependencies": [],
       "command": [
         "python3",
-        "validation/test_oct21_stata.py"
+        "-m",
+        "validation.stata.test_oct21_stata"
       ],
       "log": "temp/oct21_stata.log"
     },
     {
       "name": "oct21_cases",
-      "path": "validation/validate_oct21.do",
+      "path": "validation/stata/validate_oct21.do",
       "runner": "helper",
       "category": "helper",
       "marker": "",
@@ -1607,7 +1623,7 @@
     },
     {
       "name": "windows_files",
-      "path": "validation/test_windows_files.py",
+      "path": "validation/checks/test_windows_files.py",
       "runner": "helper",
       "category": "correctness",
       "marker": "",
@@ -1617,7 +1633,7 @@
     },
     {
       "name": "performance_audit",
-      "path": "validation/benchmark_audit.do",
+      "path": "validation/performance/benchmark_audit.do",
       "runner": "manual",
       "category": "performance",
       "marker": "AUDIT_COMPLETE",
@@ -1627,7 +1643,7 @@
     },
     {
       "name": "performance_paths",
-      "path": "validation/validate_performance_paths.do",
+      "path": "validation/stata/validate_performance_paths.do",
       "runner": "do",
       "category": "correctness",
       "marker": "PERFORMANCE_PATHS_COMPLETE",
@@ -1638,7 +1654,7 @@
     },
     {
       "name": "performance_evidence",
-      "path": "validation/test_performance_audit.py",
+      "path": "validation/checks/test_performance_audit.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -1647,7 +1663,7 @@
     },
     {
       "name": "oct22_native",
-      "path": "validation/test_oct22_native.py",
+      "path": "validation/native/tests/test_oct22_native.py",
       "runner": "native",
       "category": "correctness",
       "marker": "",
@@ -1656,7 +1672,7 @@
     },
     {
       "name": "oct22_stata",
-      "path": "validation/test_oct22_stata.py",
+      "path": "validation/stata/test_oct22_stata.py",
       "runner": "python",
       "category": "correctness",
       "marker": "OCT22_REGRESSIONS_COMPLETE",
@@ -1666,13 +1682,14 @@
       ],
       "command": [
         "python3",
-        "validation/test_oct22_stata.py"
+        "-m",
+        "validation.stata.test_oct22_stata"
       ],
       "log": "temp/registry_logs/oct22_stata.log"
     },
     {
       "name": "oct22_stata_fixture",
-      "path": "validation/validate_oct22.do",
+      "path": "validation/stata/validate_oct22.do",
       "runner": "helper",
       "category": "helper",
       "marker": "",
@@ -1682,7 +1699,7 @@
     },
     {
       "name": "oct22_reference",
-      "path": "validation/validate_oct22_reference.do",
+      "path": "validation/stata/validate_oct22_reference.do",
       "runner": "do",
       "category": "correctness",
       "marker": "OCT22_REFERENCE_COMPLETE",
@@ -1696,7 +1713,7 @@
     },
     {
       "name": "winsor_rounding",
-      "path": "validation/validate_winsor_rounding.do",
+      "path": "validation/stata/validate_winsor_rounding.do",
       "runner": "do",
       "category": "correctness",
       "marker": "WINSOR_ROUNDING_COMPLETE",
@@ -1707,7 +1724,7 @@
     },
     {
       "name": "cpsmatch_statistics",
-      "path": "validation/validate_cpsmatch_statistics.do",
+      "path": "validation/stata/validate_cpsmatch_statistics.do",
       "runner": "do",
       "category": "correctness",
       "marker": "CPSMATCH_STATISTICS_COMPLETE",
@@ -1718,7 +1735,7 @@
     },
     {
       "name": "match_winsor_optimizations_native",
-      "path": "validation/test_match_winsor_optimizations_native.py",
+      "path": "validation/native/tests/test_match_winsor_optimizations_native.py",
       "runner": "native",
       "category": "correctness",
       "marker": "MATCH_WINSOR_OPTIMIZATIONS_NATIVE_COMPLETE",
@@ -1727,7 +1744,7 @@
     },
     {
       "name": "cpsmatch_paths_native",
-      "path": "validation/test_cpsmatch_paths_native.py",
+      "path": "validation/native/tests/test_cpsmatch_paths_native.py",
       "runner": "native",
       "category": "correctness",
       "marker": "CPSMATCH_PATHS_NATIVE_COMPLETE",
@@ -1736,7 +1753,7 @@
     },
     {
       "name": "benchmark_cpsmatch_paths",
-      "path": "validation/benchmark_cpsmatch_paths.do",
+      "path": "validation/performance/benchmark_cpsmatch_paths.do",
       "runner": "helper",
       "category": "performance",
       "marker": "",

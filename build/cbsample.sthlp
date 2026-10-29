@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.1.0 20261016}{...}
+{* *! version 1.2.0 20261029}{...}
 {viewerjumpto "Syntax" "cbsample##syntax"}{...}
 {viewerjumpto "Description" "cbsample##description"}{...}
 {viewerjumpto "Options" "cbsample##options"}{...}

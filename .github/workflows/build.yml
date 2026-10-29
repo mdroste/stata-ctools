@@ -17,8 +17,6 @@ on:
       - 'validation/**'
       - 'release.json'
       - 'README.md'
-      - 'FEATURES.md'
-      - 'DEVELOPERS.md'
       - 'docs/**'
       - 'LICENSE'
       - 'THIRD_PARTY_NOTICES'
@@ -39,8 +37,6 @@ on:
       - 'validation/**'
       - 'release.json'
       - 'README.md'
-      - 'FEATURES.md'
-      - 'DEVELOPERS.md'
       - 'docs/**'
       - 'LICENSE'
       - 'THIRD_PARTY_NOTICES'
@@ -76,9 +72,9 @@ jobs:
       - name: Validate native code and release metadata
         run: |
           python3 scripts/sync_release.py --check
-          python3 validation/check_package.py build --metadata-only
-          python3 validation/check_docs_tree.py
-          CC=gcc python3 validation/suite_registry.py --native
+          python3 -m validation.checks.check_package build --metadata-only
+          python3 -m validation.checks.check_docs_tree
+          CC=gcc python3 -m validation.suite_registry --native
 
       - name: Check adaptive transport memory ownership
         env:
@@ -86,15 +82,15 @@ jobs:
           CTOOLS_SANITIZERS: address,undefined
           ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
         run: |
-          python3 validation/test_transport_adaptive_native.py
-          python3 validation/test_transport_store_native.py
-          python3 validation/test_rowstage_native.py
+          python3 -m validation.native.tests.test_transport_adaptive_native
+          python3 -m validation.native.tests.test_transport_store_native
+          python3 -m validation.native.tests.test_rowstage_native
 
       - name: Build Linux plugin
         run: make linux BUILD_REVISION=${{ github.sha }}
 
       - name: Check Linux dependency contract
-        run: python3 validation/check_dependencies.py linux build/ctools_linux.plugin
+        run: python3 -m validation.checks.check_dependencies linux build/ctools_linux.plugin
 
       - name: Upload Linux plugin
         uses: actions/upload-artifact@v4
@@ -123,7 +119,7 @@ jobs:
         run: make macos-arm LIBOMP_PREFIX="$RUNNER_TEMP/libomp" BUILD_REVISION=${{ github.sha }}
 
       - name: Check macOS dependency contract
-        run: python3 validation/check_dependencies.py macos build/ctools_mac_arm.plugin --arch arm64
+        run: python3 -m validation.checks.check_dependencies macos build/ctools_mac_arm.plugin --arch arm64
 
       - name: Upload macOS ARM plugin
         uses: actions/upload-artifact@v4
@@ -152,7 +148,7 @@ jobs:
         run: make macos-intel LIBOMP_PREFIX="$RUNNER_TEMP/libomp" BUILD_REVISION=${{ github.sha }}
 
       - name: Check macOS dependency contract
-        run: python3 validation/check_dependencies.py macos build/ctools_mac_x86.plugin --arch x86_64
+        run: python3 -m validation.checks.check_dependencies macos build/ctools_mac_x86.plugin --arch x86_64
 
       - name: Upload macOS Intel plugin
         uses: actions/upload-artifact@v4
@@ -194,11 +190,11 @@ jobs:
 
       - name: Test Windows file APIs and MSYS2 cleanup
         shell: msys2 {0}
-        run: python validation/test_windows_files.py
+        run: python -m validation.checks.test_windows_files
 
       - name: Check Windows dependency contract
         shell: msys2 {0}
-        run: python validation/check_dependencies.py windows build/ctools_windows.plugin
+        run: python -m validation.checks.check_dependencies windows build/ctools_windows.plugin
 
       - name: Upload Windows plugin
         uses: actions/upload-artifact@v4
@@ -232,12 +228,12 @@ jobs:
       - name: Prepare pinned offline examples
         run: python3 scripts/fetch_validation_data.py
       - name: Run complete Stata correctness gate
-        run: python3 validation/run_stata_audit.py
+        run: python3 -m validation.run_stata_audit
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: stata-audit-log-${{ matrix.platform }}
-          path: validation/audit_ci.log
+          path: temp/validation/audit_ci.log
 
   # ===========================================================================
   # Combine all artifacts into single release package
@@ -260,12 +256,27 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: plugins
+          pattern: ctools_*
 
       - name: Organize plugins
         run: |
           python3 scripts/sync_release.py --check
           python3 scripts/stage_package.py --platform all --binaries plugins --output release/build --revision '${{ github.sha }}'
           printf '%s\n' '${{ github.sha }}' > release/SOURCE_COMMIT
+
+      - name: Create versioned install archive
+        id: archive
+        run: |
+          archive=$(python3 scripts/archive_package.py release/build --output dist)
+          echo "name=$(basename "$archive" .zip)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload versioned install archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.archive.outputs.name }}
+          path: dist/*.zip
+          compression-level: 0
+          if-no-files-found: error
 
       - name: Upload combined package
         uses: actions/upload-artifact@v4
@@ -321,16 +332,22 @@ jobs:
           git push origin HEAD:main
 
   # ===========================================================================
-  # Create GitHub Release (only on release events)
+  # Publish validated main builds and attach archives to manual releases
   # ===========================================================================
   release:
-    if: always() && !cancelled() && needs.package.result == 'success' &&
-      needs.stata-validation.result == 'success' && github.event_name == 'release'
-    needs: [package, stata-validation]
+    if: >-
+      always() && !cancelled() && needs.package.result == 'success' &&
+      needs.stata-validation.result == 'success' &&
+      (github.event_name == 'release' ||
+       (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+    needs: [package, stata-validation, commit-plugins]
     runs-on: ubuntu-22.04
     permissions:
       contents: write
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Download package
         uses: actions/download-artifact@v4
         with:
@@ -339,14 +356,44 @@ jobs:
 
       - name: Create release archive
         run: |
-          cd release
-          zip -r ../ctools-${{ github.event.release.tag_name }}.zip build/ SOURCE_COMMIT
-          cd ..
-          ls -la *.zip
+          python3 scripts/archive_package.py release/build --output dist
 
-      - name: Upload to release
+      - name: Identify main build release
+        if: github.event_name == 'push'
+        id: identity
+        env:
+          PLUGIN_PUBLICATION: ${{ needs.commit-plugins.result }}
+        run: |
+          test "$PLUGIN_PUBLICATION" = success
+          test "$(cat release/SOURCE_COMMIT)" = "$GITHUB_SHA"
+          version=$(python3 -c 'import json; print(json.load(open("release.json"))["version"])')
+          echo "tag=v${version}-build.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "title=ctools ${version} (main build ${GITHUB_RUN_NUMBER})" >> "$GITHUB_OUTPUT"
+
+      - name: Publish main build release
+        if: github.event_name == 'push'
         uses: softprops/action-gh-release@v1
         with:
-          files: ctools-${{ github.event.release.tag_name }}.zip
+          tag_name: ${{ steps.identity.outputs.tag }}
+          name: ${{ steps.identity.outputs.title }}
+          target_commitish: ${{ github.sha }}
+          prerelease: true
+          files: dist/ctools-*.zip
+          fail_on_unmatched_files: true
+          body: |
+            Complete all-platform package built from ${{ github.sha }}.
+
+            Download the ctools ZIP below, extract it, and copy its contents into a directory on Stata's adopath (for example, PERSONAL as shown by `sysdir`). The archive includes all ado files, help files, licenses, and plugins for macOS Apple Silicon, macOS Intel, Windows x64, and Linux x64. Stata selects the appropriate plugin automatically. Restart Stata after replacing an installed plugin.
+
+            This main build passed the licensed Stata correctness gate on all four platforms. Linux requires libgomp; see docs/development/PLATFORMS.md in the source tree for runtime requirements.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload to manual release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/ctools-*.zip
+          fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

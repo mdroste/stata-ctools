@@ -449,6 +449,17 @@ ST_retcode csort_main(const char *args)
     size_t obs2 = SF_in2();
     nvars = SF_nvars();
 
+    /* Validate every column before empty/ordered-input shortcuts. Loading
+       short strL text is supported, but sorting cannot publish strL rows;
+       whether the permutation is identity must not change that contract. */
+    for (size_t v = 1; v <= nvars; v++) {
+        if (SF_var_is_string((ST_int)v) && SF_var_is_strl((ST_int)v)) {
+            SF_error("csort: strL I/O is unsupported; recast to str2045 when lossless\n");
+            free(sort_vars);
+            return ctools_stata_rc(STATA_ERR_UNSUPPORTED_TYPE);
+        }
+    }
+
     /* Handle empty dataset case - nothing to sort, return success */
     if (obs2 < obs1) {
         free(sort_vars);
@@ -554,7 +565,7 @@ ST_retcode csort_main(const char *args)
        ================================================================ */
 
     /* Whole observations move fastest row by row. Datasets that cannot be
-       staged that way (strL, strings without a usable width) and failures
+       staged that way (strings without a usable width) and failures
        before any write continue with the column transport below. */
     {
         int modified = 0;

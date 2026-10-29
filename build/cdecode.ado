@@ -1,4 +1,4 @@
-*! version 1.1.0 20261016 github.com/mdroste/stata-ctools
+*! version 1.2.0 20261029 github.com/mdroste/stata-ctools
 
 * Hand one value label to the plugin as local __cd_map (format: see
 * src/cdecode/cdecode_impl.c). Sets __cd_ok to 0 when decode itself must do the
