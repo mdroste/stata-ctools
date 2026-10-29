@@ -1359,12 +1359,14 @@ different index space and overwrite inputs. Never change `src/stplugin.c/h`.
 
 `make package` stages a host-platform manifest. The complete checker verifies
 exactly its declared platform scope and all helper files. CI release packages
-must declare all four platforms and require successful licensed Stata validation.
+must declare all four platforms and pass native and dependency checks. Windows
+plugins must pass signature and timestamp verification before publication.
+Licensed Stata suites run separately from the release workflow.
 `scripts/archive_package.py` verifies the staged checksums and all-platform
 scope, then creates `ctools-<version>.zip` using `config/release.json`. Its flat layout
 allows copying the extracted files directly onto an adopath directory. The
 archive contains only manifest-listed payloads, package metadata, and
-`BUILD_INFO.json`, which records the source revision and file checksums.
+`BUILD_INFO.json`, which records the release version, date, source revision, and file checksums.
 CI retains a versioned ZIP artifact and publishes validated main builds as
 prereleases tagged `v<version>-build.<run-number>` after plugin publication
 succeeds. Manual release events attach the same archive layout to that release.

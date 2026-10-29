@@ -55,6 +55,8 @@ def stage(source, output, selected, revision, binaries=None):
         if errors: raise ValueError('\n'.join(errors))
         hashes = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(stage_dir.iterdir())}
         (stage_dir / 'BUILD_INFO.json').write_text(json.dumps({
+            'version': next(line.removeprefix('d Version: ') for line in lines if line.startswith('d Version: ')),
+            'release_date': next(line.removeprefix('d Distribution-Date: ') for line in lines if line.startswith('d Distribution-Date: ')),
             'revision': revision, 'platforms': selected, 'sha256': hashes}, indent=2) + '\n')
         errors = check_package(stage_dir, integrity=True)
         if errors: raise ValueError('\n'.join(errors))

@@ -22,11 +22,10 @@ def workflow_contract():
         block = source.split('\n  '+job+':\n')[-1]
         condition = re.search(r'    if: (.*?)\n    needs:', block, re.S).group(1)
         condition = condition.removeprefix('>-').strip()
-        assert 'stata-validation' in block.split('    runs-on:')[0]
+        assert 'needs.package.result' in condition
         for status in ('success', 'failure', 'skipped', 'cancelled'):
             expression = condition.replace('always()', 'True').replace('!cancelled()', 'True')
-            expression = expression.replace('needs.package.result', repr('success'))
-            expression = expression.replace('needs.stata-validation.result', repr(status))
+            expression = expression.replace('needs.package.result', repr(status))
             expression = expression.replace('github.event_name', repr('push' if job == 'commit-plugins' else 'release'))
             expression = expression.replace('github.ref', repr('refs/heads/main'))
             expression = ' '.join(expression.replace('&&', 'and').replace('||', 'or').split())
@@ -37,8 +36,11 @@ def workflow_contract():
         patterns = re.findall(r"'([^']+)'", block)
         for name in ('build/new.ado', 'build/cimport.sthlp', 'build/ctools.pkg'):
             assert any(fnmatch.fnmatchcase(name, pattern) for pattern in patterns)
-    assert 'platform: [mac_arm, mac_x86, windows, linux]' in source
-    assert 'name: ctools_${{ matrix.platform }}' in source
+    assert 'stata-validation:' not in source
+    assert 'CTOOLS_STATA_RUNNERS' not in source
+    for platform in ('linux', 'mac_arm', 'mac_x86', 'windows'):
+        assert f'name: ctools_{platform}' in source
+    assert "needs.sign-windows.result == 'success'" in source
     with patch.dict(os.environ, {'CTOOLS_STATA_EXECUTABLE': '/test path/Stata'}):
         assert stata_command('driver.do')[0] == '/test path/Stata'
         assert stata_command('driver.do')[-1] == str(Path('driver.do').resolve())

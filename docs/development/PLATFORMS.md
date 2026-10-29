@@ -25,6 +25,10 @@ For Intel, substitute `x86_64` and `macos-intel`. The helper verifies source arc
 
 Linux distribution CI uses Ubuntu 22.04 and disables optional OpenBLAS. `USE_OPENBLAS=yes` enables detection for custom builds. Windows distribution CI uses MSYS2 GCC; dependency validation rejects external compiler DLLs.
 
+Windows branch and release builds also require Azure Authenticode signing before
+validation and packaging; see [Windows signing](WINDOWS_SIGNING.md) for the Azure
+and GitHub environment configuration. Pull-request candidates remain unsigned.
+
 ## Worker and scratch limits
 
 `threads()` accepts 1–256 workers. Sampling limits workers to available groups; range statistics allocate sorting scratch only for percentiles, the median, and the interquartile range. Both commands reduce concurrent sorting/shuffle work to a 256 MiB scratch target. One worker remains available when a single group needs more than that target; this is not a limit on total command memory.

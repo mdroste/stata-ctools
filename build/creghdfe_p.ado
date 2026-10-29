@@ -1,4 +1,4 @@
-*! version 1.2.0 20261029 github.com/mdroste/stata-ctools
+*! version 1.2.1 20261029 github.com/mdroste/stata-ctools
 
 program define creghdfe_p, rclass
     version 14.1

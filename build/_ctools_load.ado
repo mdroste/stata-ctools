@@ -1,4 +1,4 @@
-*! version 1.2.0 20261029 github.com/mdroste/stata-ctools
+*! version 1.2.1 20261029 github.com/mdroste/stata-ctools
 *! Shared plugin loader and identity contract
 program define _ctools_load, rclass
     version 14.1

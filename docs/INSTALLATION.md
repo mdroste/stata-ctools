@@ -30,7 +30,8 @@ tagged `v<version>-build.<run-number>`, containing `ctools-<version>.zip`.
 The version comes from `config/release.json`; the build number distinguishes builds of
 the same version. Manually created GitHub Releases also receive this ZIP.
 Actions runs retain the ZIP in the `ctools-<version>` artifact, including
-candidate builds that have not passed licensed validation. Downloading that
+candidate builds from development branches and pull requests. Pull-request
+Windows plugins are unsigned. Downloading that
 artifact adds an outer Actions ZIP; extract it to obtain the install ZIP.
 
 A source checkout's `build/` is not necessarily an installable distribution: it
@@ -38,8 +39,8 @@ may contain only the locally compiled binary. After building from source, use
 `make package BUILD_REVISION=<revision> PACKAGE_DIR=dist/ctools-<revision>` to
 produce a complete package for the host platform. Install from that staged
 directory. Its manifest explicitly identifies the platform and `BUILD_INFO.json`
-records the revision and file checksums. Full release packages contain all four
-platform plugins; publication requires the licensed correctness gate.
+records the release version, date, source revision, and file checksums. Full release
+packages contain all four platform plugins, including the signed Windows plugin.
 
 
 ## Building from Source Files
@@ -63,18 +64,13 @@ See [docs/development/README.md](development/README.md) for additional informati
 
 
 
-## Licensed release validation
+## Release validation
 
-Publication requires a successful Stata correctness run on each fresh candidate
-plugin: Mac ARM, Mac Intel, Windows, and Linux. Configure repository variable
-`CTOOLS_STATA_RUNNERS` as a JSON object mapping `mac_arm`, `mac_x86`, `windows`,
-and `linux` to trusted self-hosted runner label arrays. Each runner needs Python
-3, the documented reference commands and `CTOOLS_STATA_EXECUTABLE` set to the
-absolute licensed Stata executable path. The runner's OS/architecture and loaded
-plugin revision are checked against the candidate. Missing configuration permits
-candidate artifact builds but blocks public plugin commits and release assets.
-Untrusted pull requests never run on these licensed runners. Windows uses Stata's
-[noninteractive `/e` batch mode](https://www.stata.com/support/faqs/windows/batch-mode/).
+Publication requires successful builds for Mac ARM, Mac Intel, Windows, and Linux,
+the native CI checks, platform dependency checks, and a verified, timestamped
+Windows signature. See [Windows signing](development/WINDOWS_SIGNING.md) for Azure
+and GitHub configuration. GitHub Actions does not require self-hosted runners or
+run licensed Stata tests. Stata correctness suites remain available for local testing.
 
 Exports normally publish with atomic rename. Multi-file SHP and XPORT exports
 retain originals until all outputs are published and roll back ordinary failures;

@@ -22,6 +22,20 @@ def reject(call):
 
 def main():
     workflow = (ROOT / '.github/workflows/build.yml').read_text()
+    package_block = workflow.split('\n  package:\n')[1]
+    package_condition = re.search(r'    if: >-\n(.*?)\n    runs-on:', package_block, re.S).group(1)
+    build_jobs = ('build-linux', 'build-macos-arm', 'build-macos-intel', 'build-windows')
+    for event in ('push', 'release', 'workflow_dispatch', 'pull_request'):
+        for signing in ('success', 'failure', 'skipped', 'cancelled'):
+            for failed_build in (None, *build_jobs):
+                expression = package_condition.replace('always()', 'True').replace('!cancelled()', 'True')
+                for job in build_jobs:
+                    expression = expression.replace(f'needs.{job}.result', repr('failure' if job == failed_build else 'success'))
+                expression = expression.replace('needs.sign-windows.result', repr(signing))
+                expression = expression.replace('github.event_name', repr(event))
+                expression = ' '.join(expression.replace('&&', 'and').replace('||', 'or').split())
+                allowed = failed_build is None and (signing == 'success' or (event == 'pull_request' and signing == 'skipped'))
+                assert eval(expression, {'__builtins__': {}}, {}) == allowed
     block = workflow.split('\n  release:\n')[-1]
     condition = re.search(r'    if: >-\n(.*?)\n    needs:', block, re.S).group(1)
     for event, ref, publish in (
@@ -34,8 +48,7 @@ def main():
         for status in ('success', 'failure', 'skipped', 'cancelled'):
             expression = condition.replace('always()', 'True').replace('!cancelled()', 'True')
             for key, value in {
-                'needs.package.result': 'success',
-                'needs.stata-validation.result': status,
+                'needs.package.result': status,
                 'github.event_name': event, 'github.ref': ref,
             }.items():
                 expression = expression.replace(key, repr(value))
@@ -57,6 +70,8 @@ def main():
         version = json.loads((ROOT / 'config/release.json').read_text())['version']
         assert archive.name == f'ctools-{version}.zip'
         info = json.loads((package / 'BUILD_INFO.json').read_text())
+        assert info['version'] == version
+        assert info['release_date'] == json.loads((ROOT / 'config/release.json').read_text())['date']
         with ZipFile(archive) as zipped:
             assert set(zipped.namelist()) == set(info['sha256']) | {'BUILD_INFO.json'}
             assert all('/' not in name for name in zipped.namelist())

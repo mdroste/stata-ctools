@@ -197,54 +197,113 @@ jobs:
       - name: Upload Windows plugin
         uses: actions/upload-artifact@v4
         with:
-          name: ctools_windows
+          # Only the signing job may provide the distributable artifact outside PRs.
+          name: ${{ github.event_name == 'pull_request' && 'ctools_windows' || 'windows-unsigned' }}
           path: build/ctools_windows.plugin
           if-no-files-found: error
 
-  # All four fresh candidate plugins must pass licensed validation before
-  # publication. CTOOLS_STATA_RUNNERS maps platform names to runner labels.
-  # Missing configuration deliberately skips this matrix and blocks publishing.
-  # Never run untrusted PR code on persistent licensed runners.
-  stata-validation:
-    if: github.event_name != 'pull_request' && vars.CTOOLS_STATA_RUNNERS != ''
-    needs: [build-linux, build-macos-arm, build-macos-intel, build-windows]
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [mac_arm, mac_x86, windows, linux]
-    runs-on: ${{ fromJSON(vars.CTOOLS_STATA_RUNNERS || '{}')[matrix.platform] }}
-    env:
-      CTOOLS_EXPECTED_REVISION: ${{ github.sha }}
-      CTOOLS_EXPECTED_PLATFORM: ${{ matrix.platform }}
-      CTOOLS_TEST_PLUGIN_DIR: ""
+  sign-windows:
+    if: >-
+      github.event_name != 'pull_request' &&
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' ||
+       github.ref == 'refs/heads/develop' ||
+       (github.event_name == 'release' && startsWith(github.ref, 'refs/tags/v')))
+    needs: build-windows
+    runs-on: windows-2025
+    environment: windows-signing
+    permissions:
+      contents: read
+      id-token: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - name: Check signing configuration
+        shell: pwsh
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
+        run: |
+          $required = @('AZURE_CLIENT_ID', 'AZURE_TENANT_ID', 'AZURE_SUBSCRIPTION_ID',
+                        'AZURE_SIGNING_ENDPOINT', 'AZURE_SIGNING_ACCOUNT', 'AZURE_SIGNING_PROFILE')
+          foreach ($name in $required) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              throw "Set $name in the windows-signing GitHub environment; see docs/development/WINDOWS_SIGNING.md."
+            }
+          }
+
+      - name: Download this run's unsigned Windows plugin
+        uses: actions/download-artifact@v4
         with:
-          name: ctools_${{ matrix.platform }}
-          path: build
-      - name: Prepare pinned offline examples
-        run: python3 scripts/fetch_validation_data.py
-      - name: Run complete Stata correctness gate
-        run: python3 -m validation.run_stata_audit
-      - uses: actions/upload-artifact@v4
-        if: always()
+          name: windows-unsigned
+          path: signing
+
+      - name: Prepare DLL for Authenticode tools
+        shell: pwsh
+        run: |
+          # The Stata plugin is a PE DLL. Use its conventional extension for signing
+          # and verification, then restore the Stata filename without changing bytes.
+          Move-Item -LiteralPath signing/ctools_windows.plugin -Destination signing/ctools_windows.dll
+
+      - name: Log in to Azure with GitHub OIDC
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
-          name: stata-audit-log-${{ matrix.platform }}
-          path: temp/validation/audit_ci.log
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign and timestamp Windows plugin
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2
+        with:
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
+          files: ${{ github.workspace }}\signing\ctools_windows.dll
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          exclude-environment-credential: true
+          exclude-azure-cli-credential: false
+          cache-dependencies: false
+
+      - name: Verify signature and timestamp
+        shell: pwsh
+        run: |
+          $signature = Get-AuthenticodeSignature -LiteralPath signing/ctools_windows.dll
+          if ($signature.Status -ne 'Valid') {
+            throw "Windows plugin signature verification failed: $($signature.Status) $($signature.StatusMessage)"
+          }
+          if ($null -eq $signature.TimeStamperCertificate) {
+            throw 'Windows plugin has no trusted timestamp.'
+          }
+          Move-Item -LiteralPath signing/ctools_windows.dll -Destination signing/ctools_windows.plugin
+          $hash = (Get-FileHash -LiteralPath signing/ctools_windows.plugin -Algorithm SHA256).Hash
+          @('Windows plugin signature: valid',
+            "Publisher: $($signature.SignerCertificate.Subject)",
+            "Certificate: $($signature.SignerCertificate.Thumbprint)",
+            "SHA256: $hash") | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+
+      - name: Upload signed Windows plugin
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctools_windows
+          path: signing/ctools_windows.plugin
+          if-no-files-found: error
 
   # ===========================================================================
   # Combine all artifacts into single release package
   # ===========================================================================
   package:
-    needs: [build-linux, build-macos-arm, build-macos-intel, build-windows, stata-validation]
+    needs: [build-linux, build-macos-arm, build-macos-intel, build-windows, sign-windows]
     if: >-
       always() && !cancelled() &&
       needs.build-linux.result == 'success' &&
       needs.build-macos-arm.result == 'success' &&
       needs.build-macos-intel.result == 'success' &&
       needs.build-windows.result == 'success' &&
-      needs.stata-validation.result != 'failure'
+      (needs.sign-windows.result == 'success' ||
+       (github.event_name == 'pull_request' && needs.sign-windows.result == 'skipped'))
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout code
@@ -286,13 +345,11 @@ jobs:
   # ===========================================================================
   # Commit built plugins to repository
   # ===========================================================================
-  # Candidate artifacts may exist without licensed validation; publication may not.
   commit-plugins:
     if: >-
       always() && !cancelled() && needs.package.result == 'success' &&
-      needs.stata-validation.result == 'success' &&
       github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [package, stata-validation]
+    needs: [package]
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -335,10 +392,9 @@ jobs:
   release:
     if: >-
       always() && !cancelled() && needs.package.result == 'success' &&
-      needs.stata-validation.result == 'success' &&
       (github.event_name == 'release' ||
        (github.event_name == 'push' && github.ref == 'refs/heads/main'))
-    needs: [package, stata-validation, commit-plugins]
+    needs: [package, commit-plugins]
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -370,7 +426,7 @@ jobs:
 
       - name: Publish main build release
         if: github.event_name == 'push'
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: ${{ steps.identity.outputs.tag }}
           name: ${{ steps.identity.outputs.title }}
@@ -383,13 +439,13 @@ jobs:
 
             Download the ctools ZIP below, extract it, and copy its contents into a directory on Stata's adopath (for example, PERSONAL as shown by `sysdir`). The archive includes all ado files, help files, licenses, and plugins for macOS Apple Silicon, macOS Intel, Windows x64, and Linux x64. Stata selects the appropriate plugin automatically. Restart Stata after replacing an installed plugin.
 
-            This main build passed the licensed Stata correctness gate on all four platforms. Linux requires libgomp; see docs/development/PLATFORMS.md in the source tree for runtime requirements.
+            This package passed the native CI checks and platform dependency checks. The Windows plugin is signed and timestamped with Azure Artifact Signing. Linux requires libgomp; see docs/development/PLATFORMS.md in the source tree for runtime requirements.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload to manual release
         if: github.event_name == 'release'
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: dist/ctools-*.zip
           fail_on_unmatched_files: true

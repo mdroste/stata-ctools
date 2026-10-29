@@ -1,4 +1,4 @@
-*! version 1.2.0 20261029 github.com/mdroste/stata-ctools
+*! version 1.2.1 20261029 github.com/mdroste/stata-ctools
 *! _ctools_group — group identifiers from the ctools plugin, in place of egen group()
 *!
 *! Usage:  _ctools_group varlist [if] [in], generate(newvar) [label]

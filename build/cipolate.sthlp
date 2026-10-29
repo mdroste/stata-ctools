@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.0 20261029}{...}
+{* *! version 1.2.1 20261029}{...}
 {viewerjumpto "Syntax" "cipolate##syntax"}{...}
 {viewerjumpto "Description" "cipolate##description"}{...}
 {viewerjumpto "Options" "cipolate##options"}{...}

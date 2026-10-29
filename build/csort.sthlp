@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.0 20261029}{...}
+{* *! version 1.2.1 20261029}{...}
 {viewerjumpto "Syntax" "csort##syntax"}{...}
 {viewerjumpto "Description" "csort##description"}{...}
 {viewerjumpto "Options" "csort##options"}{...}
