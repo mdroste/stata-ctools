@@ -4,8 +4,10 @@ The [one-shot profiler](../validation/profile_readme.do) compares every command
 in the README with its native Stata or community-package reference. Each pair
 runs **once** on each of **1,000,000, 10,000,000, and 25,000,000 observations**.
 The README reports the minimum and maximum reference/ctools time ratios across
-these three sizes, rounded to the nearest whole number, or to one decimal place
-below 2×. Values below 1 mean ctools was slower. These are rough
+these three sizes, with the lower endpoint rounded down and the upper endpoint
+rounded up. Endpoints use tenths below 2×, whole numbers from 2× to below 10×,
+and multiples of ten from 10× onward (for example, 48–57× becomes 40–60×).
+Values below 1 mean ctools was slower. These are rough
 workload-specific measurements, not confidence intervals.
 
 ## Running it

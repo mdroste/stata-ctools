@@ -1,12 +1,13 @@
-  ```
- ████╗██████╗█████╗  █████╗ ██╗  █████╗
-██╔══╝╚═██╔╝██╔══██╗██╔══██╗██║  ██╔══╝
-██║     ██║ ██║  ██║██║  ██║██║  █████╗
-██║     ██║ ██║  ██║██║  ██║██║  ╚══██╗
-╚████╗  ██║ ╚█████╔╝╚█████╔╝████╗█████║
- ╚═══╝  ╚═╝  ╚════╝  ╚════╝ ╚═══╝╚════╝
+```text
+ ██████╗████████╗ ██████╗  ██████╗ ██╗     ███████╗
+██╔════╝╚══██╔══╝██╔═══██╗██╔═══██╗██║     ██╔════╝
+██║        ██║   ██║   ██║██║   ██║██║     ███████╗
+██║        ██║   ██║   ██║██║   ██║██║     ╚════██║
+╚██████╗   ██║   ╚██████╔╝╚██████╔╝███████╗███████║
+ ╚═════╝   ╚═╝    ╚═════╝  ╚═════╝ ╚══════╝╚══════╝
+
  some really fast Stata programs
-  ```
+```
 
 [![Build](https://github.com/mdroste/stata-ctools/actions/workflows/build.yml/badge.svg)](https://github.com/mdroste/stata-ctools/actions/workflows/build.yml)
 ![Version](https://img.shields.io/badge/version-1.1.0-blue)
@@ -19,28 +20,28 @@
 
 | Stata command | Replaced with | Description | Approx. speedup¹ |
 | --- | --- | --- | ---: |
-| `import` | `cimport` | Import text, Excel, dBase, SAS, SPSS, and shapefiles | 48–57× |
-| `export` | `cexport` | Export text, Excel, dBase, SAS, SPSS, and shapefiles | 57–67× |
-| `sort` | `csort` | Sort dataset | 1.4–4× |
-| `merge` | `cmerge` | Merge (join) datasets | 2–6× |
+| `import` | `cimport` | Import text, Excel, dBase, SAS, SPSS, and shapefiles | 40–60× |
+| `export` | `cexport` | Export text, Excel, dBase, SAS, SPSS, and shapefiles | 50–70× |
+| `sort` | `csort` | Sort dataset | 1.3–4× |
+| `merge` | `cmerge` | Merge (join) datasets | 2–7× |
 | `sample` | `csample` | Resampling without replacement | 5–9× |
 | `bsample` | `cbsample` | Resampling with replacement | 3–5× |
-| `encode` | `cencode` | Recast string as labeled numeric | 19–64× |
-| `decode` | `cdecode` | Recast labeled numeric as string | 3–10× |
-| `destring` | `cdestring` | Recast string as numeric type | 43–46× |
-| `ipolate` | [`cipolate`](docs/USAGE.md#linear-interpolation-cipolate) | Linear interpolation and extrapolation | 52–76× |
-| `split` | [`csplit`](docs/USAGE.md#string-fields-csplit) | Split strings into fields | 79–128× |
-| `rangejoin` | [`crangejoin`](docs/USAGE.md#interval-joins-crangejoin) | Join observations within inclusive intervals | 11–16× |
-| `qreg` | `cqreg` | Quantile regression | 5–6× |
-| `gstats winsor` | `cwinsor` | Winsorize variables | 2–4× |
-| `rangestat` | `crangestat` | Range statistics of variables | 80–105× |
-| `psmatch2` | `cpsmatch` | Propensity score matching | 3× |
-| `binscatter` | `cbinscatter` | Binned scatter plots | 9–55× |
-| `reghdfe` | `creghdfe` | OLS with multi-way fixed effects | 12–14× |
-| `ivreghdfe` | `civreghdfe` | 2SLS/GMM with multi-way fixed effects | 17× |
+| `encode` | `cencode` | Recast string as labeled numeric | 10–70× |
+| `decode` | `cdecode` | Recast labeled numeric as string | 2–20× |
+| `destring` | `cdestring` | Recast string as numeric type | 40–50× |
+| `ipolate` | [`cipolate`](docs/USAGE.md#linear-interpolation-cipolate) | Linear interpolation and extrapolation | 50–80× |
+| `split` | [`csplit`](docs/USAGE.md#string-fields-csplit) | Split strings into fields | 70–130× |
+| `rangejoin` | [`crangejoin`](docs/USAGE.md#interval-joins-crangejoin) | Join observations within inclusive intervals | 10–20× |
+| `qreg` | `cqreg` | Quantile regression | 4–6× |
+| `gstats winsor` | `cwinsor` | Winsorize variables | 2–5× |
+| `rangestat` | `crangestat` | Range statistics of variables | 80–110× |
+| `psmatch2` | `cpsmatch` | Propensity score matching | 2–4× |
+| `binscatter` | `cbinscatter` | Binned scatter plots | 8–60× |
+| `reghdfe` | `creghdfe` | OLS with multi-way fixed effects | 10–20× |
+| `ivreghdfe` | `civreghdfe` | 2SLS/GMM with multi-way fixed effects | 10–20× |
 | `ppmlhdfe` | `cppmlhdfe` | PPML with multi-way fixed effects | 5–6× |
 
-¹ These are approximate speedups from a small number of benchmarks on data with **1M, 10M, and 25M observations** and 20 mixed-type variables. Values below 1× mean ctools was slower. Your machine's mileage may vary. See [benchmark details and results](docs/README_BENCHMARK.md).
+¹ These are approximate speedups from a small number of benchmarks on data with **1M, 10M, and 25M observations** and 20 mixed-type variables. Range endpoints are rounded outward, using multiples of ten for speedups of 10× or more. Values below 1× mean ctools was slower. Your machine's mileage may vary. See [benchmark details and results](docs/README_BENCHMARK.md).
 
 ## Installation
 

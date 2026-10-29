@@ -31,12 +31,13 @@ COMMANDS = {
 SIZES = (1_000_000, 10_000_000, 25_000_000)
 
 
-def rounded(ratio):
-    """README precision: one decimal below 2x, whole numbers from 2x; halves round up."""
-    tenths = math.floor(ratio * 10 + 0.5)
-    if tenths < 20:
-        return f"{tenths / 10:.1f}"
-    return str(math.floor(ratio + 0.5))
+def rounded(ratio, *, upper):
+    """Round range endpoints outward: tenths below 2x, units below 10x, then tens."""
+    rounding = math.ceil if upper else math.floor
+    if ratio < 2:
+        return f"{rounding(ratio * 10) / 10:.1f}"
+    step = 1 if ratio < 10 else 10
+    return str(rounding(ratio / step) * step)
 
 
 def summarize(path, sizes):
@@ -72,7 +73,8 @@ def summarize(path, sizes):
                 result = "— (failed check/command or timer resolution)"
             output.append(f"| `{label}` | {n:,} | {times[0]:.3f} | {times[1]:.3f} | {result} |")
         if len(ratios) == len(sizes):
-            low, high = rounded(min(ratios)), rounded(max(ratios))
+            low = rounded(min(ratios), upper=False)
+            high = rounded(max(ratios), upper=True)
             ranges[label] = f"{low}×" if low == high else f"{low}–{high}×"
         else:
             ranges[label] = "—"
