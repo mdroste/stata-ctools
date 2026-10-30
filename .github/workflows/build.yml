@@ -107,7 +107,7 @@ jobs:
   # macOS Apple Silicon (ARM64) Build
   # ===========================================================================
   build-macos-arm:
-    runs-on: macos-14  # M1 runner
+    runs-on: macos-15  # Apple Silicon (arm64)
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
