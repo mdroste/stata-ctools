@@ -6,26 +6,26 @@ In the Weights column, `aw`, `fw`, `pw`, and `iw` are Stata weight types. A dash
 
 | Command | Replaces | Weights | Notes |
 |---|---|---|---|
-| `cimport` | `import` | — | Reads delimited text, XLS/XLSX, dBase, SAS (including catalogs), SAS XPORT v5/v8, SPSS SAV/ZSAV, and shapefiles. Handles Unicode and code-page encodings, custom delimiters, and locale-specific number formats. Long text and shapefile binary headers are stored as strL. FRED, Haver, and StataNow's Parquet import aren't supported. See [cimport details](commands/cimport.md). |
-| `cexport` | `export` | — | Writes delimited text, XLS/XLSX, dBase, SAS, SAS XPORT v5/v8, SPSS SAV, and shapefiles. Can update sheets in existing XLS and XLSX workbooks. Output goes to a temporary file first and replaces the destination only once it's complete, so a failed export doesn't leave a half-written file. See [cexport details](commands/cexport.md). |
-| `csort` | `sort` | — | Stable ascending sort. Doesn't take `if` or `in`, and rejects datasets containing strL variables, including non-key columns and already sorted data. `stream(#)` reduces memory use on wide datasets. `nosortedby` skips marking the data as sorted, which saves time when nothing afterward relies on Stata knowing the sort order. |
-| `cmerge` | `merge` | — | Supports the same merge types and main options. Checks that the key is unique (for 1:1, m:1, and 1:m) before changing anything, and restores the master data if the merge fails. Key variables must be the same type (string or numeric) in both datasets, even with `force`. |
-| `csample` | `sample` | — | Samples without replacement by percentage (`csample 10`) or count (`csample, count(20)`, where `sample` uses `sample 20, count`). Supports `by()`. Results are reproducible with `set seed`, but they won't match the observations `sample` picks with the same seed. |
-| `cbsample` | `bsample` | — | Bootstrap resampling of observations or clusters, optionally within strata. The number you give is the number of draws per stratum, counted in observations or clusters. `weight(varname)` fills an existing numeric variable with frequency weights instead of resampling. |
-| `cencode` | `encode` | — | Encodes several variables at once and adds a `replace` option. Works with str# and strL variables. In a few edge cases, such as existing value labels that contain extended missing values or very long text, it hands the work to `encode`. |
-| `cdecode` | `decode` | — | Gives the same values and storage types as `decode`. Decodes several variables at once and adds a `replace` option that converts all of them or none. Labels longer than 2,045 bytes, and `maxlength()` cuts through multibyte characters, are handled by `decode` itself, so `threads()` doesn't speed those up. |
-| `cdestring` | `destring` | — | Converts str# variables and strL values up to 2,045 bytes. Supports `ignore()`, `force`, and the usual output options. |
-| `cipolate` | `ipolate` | — | Linear interpolation and extrapolation (`epolate`), with `by()` or the `by:` prefix and `if`/`in`. Keeps the original row order. Not related to the cubic-interpolation command of the same name on SSC. |
-| `csplit` | `split` | — | Supports `parse()`, `notrim`, `limit()`, `if`/`in`, and `split`'s `destring` options. strL variables are split by Stata's own `split`. New variables are added only if the whole command succeeds. |
-| `crangejoin` | `rangejoin` 1.1.3 | — | Joins on inclusive intervals, with `by()`, `keepusing()`, `prefix()`, `suffix()`, and `all`. Keeps unmatched master observations, and matches stay in the using data's order. Numeric and str# variables only. Output is limited to 2,147,483,647 observations. |
-| `cwinsor` | `winsor2`, `gstats winsor` | — | Winsorizes or trims, optionally within groups, into new or replaced variables. New variables are missing outside `if`/`in`; with `replace`, those observations keep their original values. |
-| `cbinscatter` | `binscatter`, `binsreg` | aw/fw/pw/iw | Plotted variables must be numeric; controls can be factor variables. Redundant controls are dropped. `method(binsreg)` follows `binsreg`'s approach to binning and adjustment but doesn't compute its confidence bands or tests. It keeps singleton fixed-effect groups, so to compare with `binsreg`, use the same bins and `reghdfeopt(keepsingletons)` there. |
-| `crangestat` | `rangestat` | — | Built-in statistics over intervals, with `by()` and `excludeself`. User-written Mata functions aren't supported. |
+| `cimport` | `import` | — | FRED, Haver, and StataNow's Parquet import aren't supported. See [format-specific differences](IO_PARITY.md). |
+| `cexport` | `export` | — | See [format-specific differences](IO_PARITY.md). |
+| `csort` | `sort` | — | Stable by default. Rejects datasets containing any strL variables, even when already sorted. Adds `stream(#)` and `nosortedby` options. |
+| `cmerge` | `merge` | — | Key variables must be the same type (string or numeric) in both datasets, even with `force`. |
+| `csample` | `sample` | — | Uses `csample, count(20)` instead of `sample 20, count`. Samples need not match `sample` with the same seed. |
+| `cbsample` | `bsample` | — | — |
+| `cencode` | `encode` | — | Accepts several variables at once and adds `replace`. |
+| `cdecode` | `decode` | — | Accepts several variables at once and adds `replace`. |
+| `cdestring` | `destring` | — | strL values are limited to 2,045 bytes. |
+| `cipolate` | `ipolate` | — | Adds `by()` and keeps the original row order. Unrelated to SSC's cubic-interpolation command of the same name. |
+| `csplit` | `split` | — | — |
+| `crangejoin` | `rangejoin` 1.1.3 | — | Numeric and str# variables only. Output is limited to 2,147,483,647 observations. |
+| `cwinsor` | `winsor2`, `gstats winsor` | — | — |
+| `cbinscatter` | `binscatter`, `binsreg` | aw/fw/pw/iw | `method(binsreg)` omits confidence bands and tests. It keeps singleton fixed-effect groups; comparisons with `binsreg` require the same bins and `reghdfeopt(keepsingletons)` there. |
+| `crangestat` | `rangestat` | — | User-written Mata functions aren't supported. |
 | `creghdfe` | `reghdfe` | aw/fw/pw | `absorb()` takes variables, `i.var`, and `var1#var2`, but not heterogeneous slopes (`c.var`), `##`, or `newvar=` terms. Clustering is one-way only. Not every `reghdfe` solver or degrees-of-freedom option is available. |
-| `civreghdfe` | `ivreghdfe` | aw/fw/pw | 2SLS, LIML, Fuller, k-class, two-step GMM, and CUE, with robust, one- or two-way clustered, and HAC standard errors. `absorb()` doesn't take heterogeneous slopes, and `center` isn't supported. A few estimator and VCE combinations aren't available; see the help file. |
-| `cqreg` | `qreg` | — | IID, robust, or clustered standard errors. No weights and no `absorb()`; add fixed effects as factor variables instead (`i.firm`). `predict` supports `xb`, `residuals`, and `stdp`. It uses a different solver and density estimator than `qreg`, so coefficients and standard errors can differ slightly. It exits with an error if the solver doesn't converge. |
-| `cpsmatch` | `psmatch2` | — | Estimates the ATT for one outcome. No ATE/ATU and no observation weights. Matching without replacement requires `neighbor(1)`. Standard errors use `psmatch2`'s default formula (below); the `ai()` option isn't supported. |
-| `cppmlhdfe` | `ppmlhdfe` | aw/fw/pw | Supports fixed effects with interactions and heterogeneous slopes, exposure and offset, robust or multiway clustered standard errors, and `ppmlhdfe`'s separation checks (`fe`, `simplex`, `relu`, `mu`). Individual fixed effects can be saved, and `d()` saves their sum for `predict`. `ppmlhdfe`'s undocumented debugging options aren't available, and the iteration path can differ even when the final estimates agree. See [cppmlhdfe details](commands/cppmlhdfe.md). |
+| `civreghdfe` | `ivreghdfe` | aw/fw/pw | `absorb()` doesn't take heterogeneous slopes, and `center` isn't supported. Some estimator and VCE combinations aren't available; see the help file. |
+| `cqreg` | `qreg` | — | Adds clustered standard errors. Different solver and density estimator can produce slightly different coefficients and standard errors. Errors on nonconvergence. |
+| `cpsmatch` | `psmatch2` | — | ATT for one outcome only; no ATE/ATU or `ai()`. Matching without replacement requires `neighbor(1)`. |
+| `cppmlhdfe` | `ppmlhdfe` | aw/fw/pw | Undocumented debugging options aren't available. The iteration path can differ even when final estimates agree. See [cppmlhdfe details](commands/cppmlhdfe.md). |
 
 ## cpsmatch standard errors
 
