@@ -1367,9 +1367,12 @@ scope, then creates `ctools-<version>.zip` using `config/release.json`. Its flat
 allows copying the extracted files directly onto an adopath directory. The
 archive contains only manifest-listed payloads, package metadata, and
 `BUILD_INFO.json`, which records the release version, date, source revision, and file checksums.
-CI retains a versioned ZIP artifact and publishes validated main builds as
-prereleases tagged `v<version>-build.<run-number>` after plugin publication
-succeeds. Manual release events attach the same archive layout to that release.
+CI retains a versioned ZIP artifact for each successful package build. Create a
+GitHub Release to attach the archive to that release after checks pass. To update
+the installable plugins in `main/build`, run **Build Plugins** manually on `main`
+with **publish_plugins** selected; the option defaults to false. Publication
+requires all package checks to pass and `main` to still point to the built commit.
+Pushes to `main` run CI without publishing releases or committing plugins.
 
 ## Shared failure and wrapper contracts
 

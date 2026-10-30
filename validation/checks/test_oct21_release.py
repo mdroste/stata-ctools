@@ -23,13 +23,29 @@ def workflow_contract():
         condition = re.search(r'    if: (.*?)\n    needs:', block, re.S).group(1)
         condition = condition.removeprefix('>-').strip()
         assert 'needs.package.result' in condition
-        for status in ('success', 'failure', 'skipped', 'cancelled'):
-            expression = condition.replace('always()', 'True').replace('!cancelled()', 'True')
-            expression = expression.replace('needs.package.result', repr(status))
-            expression = expression.replace('github.event_name', repr('push' if job == 'commit-plugins' else 'release'))
-            expression = expression.replace('github.ref', repr('refs/heads/main'))
-            expression = ' '.join(expression.replace('&&', 'and').replace('||', 'or').split())
-            assert eval(expression, {'__builtins__': {}}, {}) == (status == 'success'), (job, status)
+        for event in ('push', 'pull_request', 'workflow_dispatch', 'release'):
+            for ref in ('refs/heads/main', 'refs/heads/dev', 'refs/tags/v1.0.0'):
+                for requested in (False, True):
+                    for status in ('success', 'failure', 'skipped', 'cancelled'):
+                        for cancelled in (False, True):
+                            expression = condition.replace('always()', 'True')
+                            expression = expression.replace('!cancelled()', repr(not cancelled))
+                            for key, value in {
+                                'needs.package.result': status,
+                                'github.event_name': event,
+                                'github.ref': ref,
+                                'inputs.publish_plugins': requested,
+                            }.items():
+                                expression = expression.replace(key, repr(value))
+                            expression = ' '.join(expression.replace('&&', 'and').replace('||', 'or').split())
+                            publish = (event == 'release' if job == 'release' else
+                                       event == 'workflow_dispatch' and requested and ref == 'refs/heads/main')
+                            allowed = publish and status == 'success' and not cancelled
+                            assert eval(expression, {'__builtins__': {}}, {}) == allowed, (
+                                job, event, ref, requested, status, cancelled)
+    dispatch = source.split('  workflow_dispatch:\n')[1].split('  release:\n')[0]
+    assert 'publish_plugins:' in dispatch
+    assert 'type: boolean' in dispatch and 'default: false' in dispatch
     paths = re.findall(r"    paths:\n((?:      - .*\n)+)", source)
     assert len(paths) == 2
     for block in paths:
@@ -48,7 +64,7 @@ def workflow_contract():
         command = stata_command('driver.do')
         assert command[0] == 'C:/Program Files/Stata/StataMP.exe'
         assert command[1:3] == ['/e', 'do']
-    print('PASS publication rejects skipped/failed/cancelled gates; canonical sources trigger CI')
+    print('PASS publication requires explicit action and successful checks; pushes only build')
 
 
 def packages():

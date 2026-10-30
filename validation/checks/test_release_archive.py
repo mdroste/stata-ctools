@@ -39,7 +39,7 @@ def main():
     block = workflow.split('\n  release:\n')[-1]
     condition = re.search(r'    if: >-\n(.*?)\n    needs:', block, re.S).group(1)
     for event, ref, publish in (
-        ('push', 'refs/heads/main', True),
+        ('push', 'refs/heads/main', False),
         ('push', 'refs/heads/dev', False),
         ('pull_request', 'refs/heads/main', False),
         ('workflow_dispatch', 'refs/heads/main', False),
@@ -54,8 +54,9 @@ def main():
                 expression = expression.replace(key, repr(value))
             expression = ' '.join(expression.replace('&&', 'and').replace('||', 'or').split())
             assert eval(expression, {'__builtins__': {}}, {}) == (publish and status == 'success')
-    assert 'PLUGIN_PUBLICATION: ${{ needs.commit-plugins.result }}' in block
-    assert 'test "$PLUGIN_PUBLICATION" = success' in block
+    assert 'needs: [package]' in block
+    assert 'tag_name:' not in block
+    assert 'Publish main build release' not in block
     with tempfile.TemporaryDirectory(prefix='ctools-zip-') as tmp:
         root = Path(tmp)
         binaries = root / 'binaries'

@@ -40,6 +40,12 @@ on:
       - 'LICENSE'
       - '.github/workflows/build.yml'
   workflow_dispatch:
+    inputs:
+      publish_plugins:
+        description: 'Update the installable plugins on main after checks pass'
+        type: boolean
+        required: false
+        default: false
   release:
     types: [created]
 
@@ -343,12 +349,13 @@ jobs:
           if-no-files-found: error
 
   # ===========================================================================
-  # Commit built plugins to repository
+  # Publish plugins to main when explicitly requested
   # ===========================================================================
   commit-plugins:
     if: >-
       always() && !cancelled() && needs.package.result == 'success' &&
-      github.event_name == 'push' && github.ref == 'refs/heads/main'
+      github.event_name == 'workflow_dispatch' && inputs.publish_plugins &&
+      github.ref == 'refs/heads/main'
     needs: [package]
     runs-on: ubuntu-22.04
     permissions:
@@ -387,14 +394,13 @@ jobs:
           git push origin HEAD:main
 
   # ===========================================================================
-  # Publish validated main builds and attach archives to manual releases
+  # Attach archives to manually created releases
   # ===========================================================================
   release:
     if: >-
       always() && !cancelled() && needs.package.result == 'success' &&
-      (github.event_name == 'release' ||
-       (github.event_name == 'push' && github.ref == 'refs/heads/main'))
-    needs: [package, commit-plugins]
+      github.event_name == 'release'
+    needs: [package]
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -412,39 +418,7 @@ jobs:
         run: |
           python3 scripts/archive_package.py release/build --output dist
 
-      - name: Identify main build release
-        if: github.event_name == 'push'
-        id: identity
-        env:
-          PLUGIN_PUBLICATION: ${{ needs.commit-plugins.result }}
-        run: |
-          test "$PLUGIN_PUBLICATION" = success
-          test "$(cat release/SOURCE_COMMIT)" = "$GITHUB_SHA"
-          version=$(python3 -c 'import json; print(json.load(open("config/release.json"))["version"])')
-          echo "tag=v${version}-build.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
-          echo "title=ctools ${version} (main build ${GITHUB_RUN_NUMBER})" >> "$GITHUB_OUTPUT"
-
-      - name: Publish main build release
-        if: github.event_name == 'push'
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
-        with:
-          tag_name: ${{ steps.identity.outputs.tag }}
-          name: ${{ steps.identity.outputs.title }}
-          target_commitish: ${{ github.sha }}
-          prerelease: true
-          files: dist/ctools-*.zip
-          fail_on_unmatched_files: true
-          body: |
-            Complete all-platform package built from ${{ github.sha }}.
-
-            Download the ctools ZIP below, extract it, and copy its contents into a directory on Stata's adopath (for example, PERSONAL as shown by `sysdir`). The archive includes all ado files, help files, licenses, and plugins for macOS Apple Silicon, macOS Intel, Windows x64, and Linux x64. Stata selects the appropriate plugin automatically. Restart Stata after replacing an installed plugin.
-
-            This package passed the native CI checks and platform dependency checks. The Windows plugin is signed and timestamped with Azure Artifact Signing. Linux requires libgomp; see docs/development/PLATFORMS.md in the source tree for runtime requirements.
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Upload to manual release
-        if: github.event_name == 'release'
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: dist/ctools-*.zip

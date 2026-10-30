@@ -25,10 +25,10 @@ Alternatively, run `net install ctools, from("/absolute/path/to/extracted/archiv
 From a source checkout, verify the extracted package with
 `python3 -m validation.checks.check_package /path/to/extracted/archive --integrity`.
 
-Each main build that passes all publication gates creates a GitHub prerelease
-tagged `v<version>-build.<run-number>`, containing `ctools-<version>.zip`.
-The version comes from `config/release.json`; the build number distinguishes builds of
-the same version. Manually created GitHub Releases also receive this ZIP.
+GitHub Releases are created explicitly and receive `ctools-<version>.zip` after
+the build checks pass. The version comes from `config/release.json`. Pushes to
+`main` run CI and produce artifacts. Updating the installable plugins on `main`
+requires a manual **Build Plugins** run on `main` with **publish_plugins** selected.
 Actions runs retain the ZIP in the `ctools-<version>` artifact, including
 candidate builds from development branches and pull requests. Pull-request
 Windows plugins are unsigned. Downloading that
