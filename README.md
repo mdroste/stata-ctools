@@ -81,9 +81,15 @@ See the [documentation index](docs/README.md) for command guides, development an
 ## Thanks
 
 - [Sergio Correia](https://github.com/sergiocorreia) for [ftools](https://github.com/sergiocorreia/ftools), [reghdfe](https://github.com/sergiocorreia/reghdfe), and [ivreghdfe](https://github.com/sergiocorreia/ivreghdfe) (with [Lars Vilhuber](https://www.ilr.cornell.edu/people/lars-vilhuber)), as well as tons of helpful comments and suggestions
+- Sergio Correia, Paulo Guimarães, and Thomas Zylkin for [ppmlhdfe](https://github.com/sergiocorreia/ppmlhdfe)
 - [Mauricio Caceres Bravo](https://mcaceresb.github.io/) for [gtools](https://github.com/mcaceresb/gtools) and invaluable contributions to [cowsay](https://github.com/mdroste/stata-cowsay)
 - [Christopher (Kit) Baum](https://www.bc.edu/bc-web/schools/morrissey/departments/economics/people/faculty-directory/christopher-baum.html), [Mark E Schaffer](https://www.hw.ac.uk/profiles/uk/school/ebs/faculty/mark-schaffer), and [Steven Stillman](https://www.unibz.it/en/faculties/economics-management/academic-staff/person/36390-steven-stillman) for [ivreg2](https://ideas.repec.org/c/boc/bocode/s425401.html)
 - [Robert Picard](https://ideas.repec.org/f/ppi320.html), [Nicholas J. Cox](https://ideas.repec.org/e/pco34.html), and Roberto Ferrer for [rangestat](https://ideas.repec.org/c/boc/bocode/s458161.html)
+- Robert Picard for [rangejoin](https://ideas.repec.org/c/boc/bocode/s458162.html)
+- Edwin Leuven and Barbara Sianesi for [psmatch2](https://ideas.repec.org/c/boc/bocode/s432001.html)
+- Yujun Lian for [winsor2](https://ideas.repec.org/c/boc/bocode/s457765.html)
+- Michael Stepner for [binscatter](https://michaelstepner.com/binscatter/)
+- Matias D. Cattaneo, Richard K. Crump, Max H. Farrell, and Yingjie Feng for [binsreg](https://github.com/nppackages/binsreg)
 - [Sascha Witt](https://github.com/SaschaWitt) for the [In-place Parallel Super Scalar Samplesort (IPS⁴o)](https://github.com/SaschaWitt/ips4o) sorting algorithm.
 
 
