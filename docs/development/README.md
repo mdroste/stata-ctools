@@ -1,8 +1,9 @@
 # ctools Developer Guide
 
-This guide documents the internal C infrastructure for developers contributing to ctools.
-For build requirements, see [platform contracts](PLATFORMS.md); for correctness
-gates and suite organization, see the [validation guide](../../validation/README.md).
+This guide explains how ctools reads Stata data, runs C code and returns results.
+It also describes the shared functions used to add or maintain commands.
+See [build requirements](PLATFORMS.md) for compiler and library setup and the
+[testing guide](../../validation/README.md) for tests and benchmarks.
 
 ## Table of Contents
 
@@ -11,24 +12,33 @@ gates and suite organization, see the [validation guide](../../validation/README
 - [Data I/O](#data-io)
 - [Sorting Algorithms](#sorting-algorithms)
 - [Thread Pool](#thread-pool)
+- [Choosing OpenMP or the Thread Pool](#choosing-openmp-or-the-thread-pool)
 - [Timing and Profiling](#timing-and-profiling)
 - [Argument Parsing](#argument-parsing)
 - [Error Handling](#error-handling)
 - [Memory Management](#memory-management)
 - [Arena Allocators](#arena-allocators)
 - [Hash Tables](#hash-tables)
-- [OLS and Regression Infrastructure](#ols-and-regression-infrastructure)
+- [OLS and Regression Functions](#ols-and-regression-functions)
 - [Adding a New Command](#adding-a-new-command)
 - [Performance Guidelines](#performance-guidelines)
+- [Quick Reference](#quick-reference)
+- [Tests and installation packages](#tests-and-installation-packages)
+- [Shared ado helpers and error handling](#shared-ado-helpers-and-error-handling)
+- [Interpolation, splitting, and interval joins](#interpolation-splitting-and-interval-joins)
+- [Maintaining shared code](#maintaining-shared-code)
 - [Repository conventions](#repository-conventions)
 
 ---
 
 ## Architecture Overview
 
-### Plugin Lifecycle
+### Running a command
 
-Most commands follow this pattern. `cdecode` reads label text through Mata, lets the plugin map values to text, falls back to Stata's `decode` for results the plugin does not produce (strL, multibyte `maxlength()` cuts), and commits staged outputs only after every variable succeeds.
+Most commands load data into C memory, compute results and write them back to
+Stata. `cdecode` also reads value labels through Mata and uses Stata's `decode`
+for strL results and multibyte `maxlength()` cuts. It saves the output only after
+every variable succeeds.
 
 ```
 Stata -> C Plugin -> Stata
@@ -37,18 +47,18 @@ Stata -> C Plugin -> Stata
   3. Store results back to Stata
 ```
 
-On each command invocation the dispatcher in `ctools_plugin.c`:
+For each command, `ctools_plugin.c`:
 
-1. Resolves a descriptor from `ctools_commands.def` and parses `threads()`.
-2. Calls `ctools_command_begin()` to validate the phase and clean any previous owner.
-3. Runs the handler and calls `ctools_command_finish(rc)`; an error or final phase cleans its owner.
-4. Destroys the worker pool after the call. Only a valid multi-phase command retains its cache.
+1. Finds the command in `ctools_commands.def` and reads `threads()`.
+2. Calls `ctools_command_begin()` to check that the requested step is allowed and free data retained by the previous command if necessary.
+3. Runs the command's function and stops the worker threads.
+4. Calls `ctools_command_finish(rc)`. An error or the last step frees the retained data; commands with more steps to run can keep their data for the next call.
 
-Identity and monotonic-clock queries bypass command transitions and do not disturb
-an active import/merge session. Cleanup hooks are idempotent. `cio` owns a dataset
-cache at the dispatch boundary; its readers receive an explicit dataset pointer.
-Regression modules own separate HDFE states; the shared solver takes a state
-argument and owns no estimator-global state.
+Version and timing queries leave an active import or merge unchanged. Cleanup
+functions can be called repeatedly without causing errors. The `cio` module
+keeps its dataset between calls and passes a pointer to the functions that read
+it. Each regression command keeps its own fixed-effects estimation state; the
+shared solver receives that state as an argument.
 
 ### Memory Model
 
@@ -62,17 +72,17 @@ argument and owns no estimator-global state.
 | File | Purpose |
 |------|---------|
 | `src/ctools_plugin.c` | Main dispatcher - routes commands to implementations |
-| `src/ctools_types.h` | Compatibility umbrella for focused data, transport, sort and conversion headers |
-| `src/ctools_data.h`, `ctools_data_io.h`, `ctools_sort.h`, `ctools_convert.h` | Data ownership, SPI transport, ordering and conversions |
-| `src/ctools_alloc.h`, `ctools_platform.h/c` | Allocation and one-time cache/prefetch discovery |
-| `src/ctools_data_plan.c`, `ctools_data_io.c`, `ctools_data_store.c`, `ctools_transport.c` | Selection/planning, load kernels, store kernels and shared transport checks |
-| `src/ctools_rowstage.h/c` | Row-major staging for commands that move whole observations (`csort`, `cmerge`) |
-| `src/hdfe/` | Estimator-independent projection, remapping and estimation-sample factors |
-| `src/formats/` | ZIP/XML, bounded Excel addresses and atomic output publication |
-| `src/ctools_text.h/c` | Length-aware CSV/Excel text transport with explicit format limits |
-| `src/ctools_rng.h`, `ctools_group.h/c`, `sort/sort_block.h` | Sampling streams, group runs and stable block radix support |
+| `src/ctools_types.h` | Includes the data, transfer, sorting and conversion headers |
+| `src/ctools_data.h`, `ctools_data_io.h`, `ctools_sort.h`, `ctools_convert.h` | Data storage, Stata Plugin Interface (SPI) transfers, sorting and conversions |
+| `src/ctools_alloc.h`, `ctools_platform.h/c` | Memory allocation and CPU cache/prefetch settings |
+| `src/ctools_data_plan.c`, `ctools_data_io.c`, `ctools_data_store.c`, `ctools_transport.c` | Select observations, read and write values, and check data transfers |
+| `src/ctools_rowstage.h/c` | Temporary row storage for commands that move whole observations (`csort`, `cmerge`) |
+| `src/hdfe/` | Shared fixed-effects projection, group numbering and estimation-sample functions |
+| `src/formats/` | ZIP/XML, Excel cell addresses and replacing files only after writing succeeds |
+| `src/ctools_text.h/c` | CSV/Excel text transfers with length and format checks |
+| `src/ctools_rng.h`, `ctools_group.h/c`, `sort/sort_block.h` | Random sampling, groups of rows and stable block radix sorting |
 | `src/ctools_config.h` | Aligned alloc, prefetch, thread management, constants |
-| `src/ctools_runtime.h/c` | Error reporting, timing, lifecycle cleanup |
+| `src/ctools_runtime.h/c` | Error reporting, timing and freeing command data |
 | `src/ctools_parse.h/c` | Argument parsing utilities |
 | `src/ctools_threads.h/c` | Persistent thread pool |
 | `src/ctools_arena.h/c` | Arena allocators (growing + string) |
@@ -89,13 +99,13 @@ argument and owns no estimator-global state.
 | `src/ctools_eisel_lemire.h` | Fast float parsing (Eisel-Lemire algorithm) |
 | `src/stplugin.c/h` | Stata Plugin Interface (DO NOT MODIFY) |
 
-### Dispatched Commands
+### Command definitions
 
-The dispatch inventory, state owners and cleanup hooks come from
-[`src/ctools_commands.def`](../../src/ctools_commands.def). Run
-`python3 scripts/sync_architecture.py --check` to verify the generated inventory
-in [docs/development/COMMAND_INVENTORY.md](COMMAND_INVENTORY.md). Wire aliases and internal
-handlers are included explicitly; they are not additional public ado commands.
+[`src/ctools_commands.def`](../../src/ctools_commands.def) lists commands, the
+C functions that implement them, and the functions that free their retained data.
+Run `python3 scripts/sync_architecture.py --check` to check the generated
+[command list](COMMAND_INVENTORY.md). The list also includes internal calls and
+alternative names used by the ado code.
 
 ---
 
@@ -105,7 +115,9 @@ Include: `#include "ctools_types.h"`
 
 ### perm_idx_t
 
-Permutation index type. Uses `uint32_t` instead of `size_t` for 50% memory savings on 64-bit systems. Stata's SPI limits observations to < 2^31.
+This type stores observation indices. Using `uint32_t` instead of `size_t`
+halves their memory use on 64-bit systems. Stata's SPI limits observations to
+fewer than 2^31.
 
 ```c
 typedef uint32_t perm_idx_t;
@@ -144,7 +156,7 @@ typedef struct {
 
 ### ctools_filtered_data
 
-Dataset loaded with if/in filtering applied at load time:
+A dataset containing only observations selected by `if` and `in`:
 
 ```c
 typedef struct {
@@ -176,7 +188,7 @@ Include: `#include "ctools_types.h"`
 
 ### Loading Data from Stata
 
-The primary loading function is `ctools_data_load()`, which handles selective variable loading and if/in filtering in a single call:
+`ctools_data_load()` reads selected variables and applies `if` and `in` restrictions:
 
 ```c
 ctools_filtered_data fd;
@@ -204,28 +216,30 @@ Parameters:
 | `CTOOLS_LOAD_NO_SORT_ORDER` | `0x02` | Omit the identity permutation and leave `fd.data.sort_order == NULL`. |
 | `CTOOLS_LOAD_MARKER` | `0x04` | Select the rows where the last plugin variable, a numeric sample marker, is nonzero (missing counts, as in `if`). Load-all mode leaves the marker out. |
 
-Loading first resolves the selection into `obs_map`, then loads only selected
-observations. The map always contains the original 1-based Stata observation
-indices. Memory for the loaded values is O(N_selected x K).
+The function records selected observations in `obs_map`, using their original
+one-based Stata observation numbers, then reads their values. Memory use is
+O(N_selected x K).
 
-Stata answers `SF_ifobs()` one observation at a time, and with an `if` each
-call costs about 11 ns (about 0.11 s per 10M rows, even when every row passes).
-Wrappers that already hold a `touse` variable therefore append it as the last
-plugin variable, call the plugin without `if`, and tell the command to load
-with `CTOOLS_LOAD_MARKER` (scalar `__<cmd>_touse` for the regression families,
-argument `touse` for `cpsmatch`, `_ctools_group`, `csample`, `cbsample`,
-`cdecode` and the SAS, SPSS and dBase exporters of `cexport`); the marker is
-read in parallel. Commands that need only the selection call
-`ctools_data_select()` (`csample` and `cbsample` load the marker column instead,
-because their memory-safety harness stubs only the loader), and the strL text
-loader of `cexport` takes the same flags. `_ctools_group`, `cdestring`,
-`cencode`, `cexport delimited` and the `cexport` SAS/SPSS/dBase exporters pass
-`skipif` without an `if`.
-`_ctools_group` and `cdecode` pass an `if` that names a numeric variable as the
-marker itself; otherwise these commands `mark` the `if` (about 0.04 s per 10M
-rows) unless `in` limits the range. A marker they create is the last variable
-and is dropped right after the call: dropping a middle variable, or narrowing
-one that precedes it, rewrites every row.
+Stata evaluates `SF_ifobs()` one observation at a time. With an `if` condition,
+each call costs about 11 ns: about 0.11 seconds per 10 million rows, even when
+every row is selected. Ado wrappers that already have a `touse` variable append
+it to the plugin varlist and use `CTOOLS_LOAD_MARKER` instead. Worker threads
+can then read that variable in parallel.
+
+Regression commands indicate this with the scalar `__<cmd>_touse`. `cpsmatch`,
+`_ctools_group`, `csample`, `cbsample`, `cdecode` and the SAS, SPSS and dBase
+exporters use the `touse` argument. Functions that need only the selected
+observation numbers call `ctools_data_select()`. `csample` and `cbsample` read
+the marker column instead because their memory tests replace only the loading
+function. `cexport`'s strL loader accepts the same flags.
+
+`_ctools_group`, `cdestring`, `cencode`, `cexport delimited` and the SAS, SPSS
+and dBase exporters pass `skipif` when no `if` is supplied. If an `if` names a
+numeric variable, `_ctools_group` and `cdecode` use that variable directly as
+the marker. Otherwise they call `mark`, taking about 0.04 seconds per 10 million
+rows, unless `in` restricts the range. Put a new marker last and drop it after
+the plugin call. Dropping a middle variable or narrowing an earlier variable
+rewrites every row.
 
 The default load creates an identity `sort_order`. Callers that only inspect or
 transform columns can add `CTOOLS_LOAD_NO_SORT_ORDER`; filtering, column order,
@@ -244,21 +258,20 @@ processing needs to sort, load with the default flag instead.
 indexed by **plugin-visible variable index minus one** and must have
 `SF_nvars()` entries, even when the loaded varlist selects or reorders a subset.
 Passing `NULL` reads the caller's `_ctools_strw` metadata when available.
-Hints select an allocation strategy; they do not relax read bounds. Known
-`str2045` columns use packed arenas with a reservation capped at 2 GiB per
-column, then retry the original 64-byte-per-row estimate if allocation fails.
-Actual strings are stored densely. Virtual/committed memory accounting depends
-on the platform; short values are not expanded into 2046-byte slots.
+Width hints determine how much memory to reserve; reads still check their
+bounds. For `str2045` columns, the function reserves up to 2 GiB per column in
+shared string storage. If allocation fails, it retries with 64 bytes per row.
+Strings occupy only the space they need. The operating system determines how
+much reserved memory is backed by physical pages.
 
 `strL` reads stay on the calling thread. Fixed strings and numeric columns may
-use the transport schedulers. Shared numeric writes retain the checked SPI
-callback; switching to the unchecked store has produced cross-column corruption
-in real Stata.
+be read by worker threads. Numeric writes use the checked SPI function because
+unchecked writes can overwrite values in other columns.
 
-Small transfers avoid worker-pool setup using a width-weighted work estimate.
-All-numeric loads use 512-row tiles when there are at least 128 columns and
+For small transfers, a work estimate based on column widths determines whether
+to start worker threads. All-numeric loads use blocks of 512 rows when there are at least 128 columns and
 50,000 selected observations. `validation/native/tests/test_transport_adaptive_native.py`
-checks the gate; re-measure before changing these thresholds.
+checks these thresholds. Measure performance again before changing them.
 
 ### Storing Data to Stata
 
@@ -280,12 +293,10 @@ rc = ctools_stream_var_permuted(var_idx, source_rows, output_nobs, obs1);
 
 Include: `#include "ctools_rowstage.h"`
 
-Stata keeps one record per observation, so a per-variable transfer walks the
-whole dataset once per variable, and a reordered store gathers every cell from
-a different place in its C column. Commands that reorder or replicate complete
-observations (`csort`, `cmerge`) stage rows instead: each Stata record is read
-once and written once, in tiles small enough to stay cache-resident, and a
-reordered store fetches one staged row per output row.
+Stata stores values by observation. Reading one variable at a time therefore
+scans the dataset once for each variable. `csort` and `cmerge` instead copy whole
+rows into temporary storage. They read and write each row once, in blocks small
+enough to fit in the CPU cache. Reordering then needs one lookup per output row.
 
 ```c
 ctools_rowstage staged;                      // zero-based staged rows
@@ -297,80 +308,65 @@ if (ctools_rowstage_supported(vars, nvars, widths, nobs)) {
 }
 ```
 
-`vars` holds one-based plugin variable indices and `widths` follows the
-`ctools_data_load_ex()` convention (`NULL` reads the caller's `_ctools_strw`
-metadata). Numeric variables and fixed-width strings with a width hint below
-2045 can be staged; strL, unhinted strings, and string columns whose
-declared-width slots would exceed 2 GiB cannot, and callers then use the
-column transport. `source[]` may repeat rows or be `CTOOLS_ROW_NONE` (missing
-numerics, empty strings), so it also expresses join outputs. Loads fail before
-anything is written, stores validate ranges and row indices before the first
-write, and numeric writes use the checked SPI callback. Staging needs
-`nobs * stride` bytes, where the stride is 8 bytes per numeric variable plus
-`width + 1` per string. An in-order store (`source == NULL`) writes straight
-from the staged rows and allocates nothing.
+`vars` contains one-based plugin variable indices. `widths` follows the
+`ctools_data_load_ex()` convention: `NULL` reads the caller's `_ctools_strw`
+values. Numeric variables and fixed strings with a width hint below 2045 can
+use row storage. strL, strings without width hints, and string columns whose
+reserved space would exceed 2 GiB use column transfers instead.
 
-`cmerge` uses its staged master as the undo copy that replaces a `preserve`
-snapshot (full loaded columns when the strings are too wide to stage). Its
-plugin phases are `load_using`, `plan` (master keys only, before the ado
-changes the master, so join errors need no rollback), `execute` (copies the
-master before the first overwrite, restores it itself if a write fails, and
-keeps the copy), then `rollback` (rewrites the master after a Break or a later
-ado failure) or `commit`. The ado records its own schema changes first
-(`_cmerge_record`) and undoes them under `nobreak` (`_cmerge_rollback`); paths
-it cannot undo that way (strL, some empty-data merges) keep a snapshot frame in
-memory. Options `snapshot` (whole-dataset `preserve`) and `fast` (no copy, plan
-argument `nocopy`) replace this. The validation hook `$CTOOLS_cmerge_fault`
-fails a merge at each stage.
+`source[]` lists the rows to write. It may repeat rows or use `CTOOLS_ROW_NONE`
+to write missing numerics and empty strings, as needed for joins. Reads finish
+before any Stata values change. Writes check all ranges and row indices first
+and use the checked SPI function for numerics. The temporary rows require
+`nobs * stride` bytes: 8 bytes per numeric variable and `width + 1` per string.
+An in-order write (`source == NULL`) copies these rows without another allocation.
 
-The other wrappers that used to take a whole-dataset `preserve` follow the same
-rule: no snapshot on disk by default, `snapshot` (the old `preserve`) and `fast`
-(no copy, no undo) as opt-in options, parsed by `_ctools_mode` (it reads the
-options after the first comma outside parentheses and quotes, so `if
-inlist(g,1,2)` is skipped; `snapshot fast` is r(198)). `_ctools_undo record`
-saves `_N`, `c(k)`, the sort marker, `c(changed)`, the value-label names and the
-`_dta` characteristics (notes included) in globals `CTOOLS_u_<command>_*`
-before the first change; `rollback` (under `nobreak`, after the plugin has
-restored any values it overwrote) drops the observations and variables added at
-the end and the added value labels, puts back the characteristics, recorded
-variable labels, the sort marker (a stable sort of data already in order) and
-`c(changed)`. Each wrapper runs `nobreak { capture noisily break <impl> }`.
+`cmerge` keeps the copied master rows so it can undo a failed merge. If strings
+are too wide for row storage, it keeps full columns instead. The steps are:
 
-- `creghdfe`, `crangestat`, `cwinsor` with `suffix()`/`prefix()`: only add
-  variables, so the record alone undoes them.
-- `cwinsor` in place: the main call takes option `undo`, copies the loaded
-  target values and their observation numbers before changing anything, restores
-  them itself if its store fails, and keeps them (runtime phase 1) until
-  `cwinsor commit` or `cwinsor rollback`.
-- `crangejoin`: from Stata 16 the using data are read in a tempname frame (before
-  16 they can only replace the master, so a `preserve` stays). `write` keeps the
-  master copy `prepare` loaded (phase 3), restores the master rows itself if it
-  fails part way (unless `norestore`), and `crangejoin rollback` rewrites them
-  after a later failure; `crangejoin clear` frees the copy.
-- `cimport` and `_cio_import` replace the whole dataset, so they copy the data in
-  memory first (`frame copy` into a tempname frame, restored with `frame copy
-  ..., replace`; `preserve` before Stata 16 or for an empty dataset). The import
-  is not built in a new frame that then takes the current frame's name: when a
-  frame whose data came from native `import excel` is renamed or dropped and
-  another frame takes its name, a later native `import spss` returns a wrong
-  string for a user-missing value (StataNow 19.5, reproduced with native
-  commands only).
-- `cbinscatter` changes nothing; `savedata()` builds the bins in a tempname frame.
+1. `load_using` reads the using dataset.
+2. `plan` reads the master keys and checks the join before the ado code changes the master.
+3. `execute` copies the master before overwriting values. It restores the copy if a write fails and keeps it after a successful write.
+4. `rollback` restores the master after a Break or later ado error; `commit` completes the merge.
 
-Validation hooks `$CTOOLS_<command>_fault` (`creghdfe`: `outputs`, `post`;
-`crangestat`: `outputs`, `post`; `cwinsor`: `outputs`, `store`, `post`;
-`crangejoin`: `schema`, `store`, `post`; `cimport`: `load`) fail a call after
-its first change; `validation/support/rollback_helpers.do` runs each case in all three
-modes.
+The ado code records changes to variables with `_cmerge_record` and undoes them
+under `nobreak` with `_cmerge_rollback`. Cases it cannot undo this way, including
+strL and some empty-data merges, keep a copy in another frame. `snapshot` uses
+whole-dataset `preserve`; `fast` skips the copy (`nocopy` in `plan`). Tests use
+`$CTOOLS_cmerge_fault` to simulate a failure at each step.
+
+Other commands also keep enough information to undo changes without writing a
+disk snapshot by default. `_ctools_mode` parses `snapshot` and `fast` after the
+first comma outside parentheses and quotes, so commas in `if inlist(g,1,2)` do
+not count. Specifying both options returns r(198).
+
+Before a change, `_ctools_undo record` saves `_N`, `c(k)`, the sort marker,
+`c(changed)`, value-label names and `_dta` characteristics, including notes, in
+`CTOOLS_u_<command>_*` globals. After the plugin has restored overwritten values,
+`rollback` runs under `nobreak`. It removes appended observations, variables and
+value labels, and restores characteristics, recorded variable labels, sort order
+and `c(changed)`. Each ado wrapper runs `nobreak { capture noisily break <impl> }`.
+
+- `creghdfe`, `crangestat` and `cwinsor` with `suffix()` or `prefix()` only add variables, so this record is enough to undo their changes.
+- In-place `cwinsor` uses `undo` to copy target values and observation numbers before writing. It restores them after a write error and keeps them in runtime phase 1 until `cwinsor commit` or `cwinsor rollback`.
+- From Stata 16, `crangejoin` reads using data in a temporary frame. Earlier versions use `preserve` because loading the data replaces the master. `write` keeps the master copy loaded by `prepare` in phase 3 and restores it after a partial write failure unless `norestore` is set. `crangejoin rollback` restores it after a later failure; `crangejoin clear` frees it.
+- `cimport` and `_cio_import` copy the dataset into a temporary frame before replacing it, then restore it with `frame copy ..., replace` if needed. They use `preserve` before Stata 16 or with an empty dataset. Replacing the original frame by renaming another frame triggers a StataNow 19.5 bug: after `import excel`, a later `import spss` can return the wrong string for a user-missing value. Copying the data back avoids that problem.
+- `cbinscatter` leaves the dataset unchanged; `savedata()` builds the bins in a temporary frame.
+
+Tests set `$CTOOLS_<command>_fault` to simulate errors after a command starts
+changing data: `outputs` or `post` for `creghdfe` and `crangestat`; `outputs`,
+`store` or `post` for `cwinsor`; `schema`, `store` or `post` for `crangejoin`;
+and `load` for `cimport`. `validation/support/rollback_helpers.do` tests each
+case in the default, `snapshot` and `fast` modes.
 
 ### Cleanup
 
-The filtered result owns its column buffers, string arenas/fallback strings,
-observation map, and optional sort order. Free the previous result before
-loading into the same object again. Do not free individual loaded string
-pointers: they may point inside an arena. A caller that takes ownership of a
-buffer must clear the corresponding pointer in the result before cleanup.
-String-column ownership includes both the pointer array and its arena metadata.
+Freeing a filtered result releases its columns, string storage, observation map
+and optional sort order. Free the old result before loading new data into the
+same object. Release strings through the result's cleanup function: individual
+pointers may refer to a shared block. If a caller keeps a buffer, clear its
+pointer in the result before cleanup. Keeping a string column also requires
+keeping its pointer array and the information describing its shared storage.
 
 ```c
 ctools_filtered_data_free(&fd);  // Safe to call multiple times
@@ -379,24 +375,26 @@ ctools_filtered_data_free(&fd);  // Safe to call multiple times
 stata_data_free(&data);
 ```
 
-### Transport validation
+### Testing data transfers
 
-The native transport suites use independent SPI mocks and build both serial
-and OpenMP variants:
+The C tests replace the SPI with test functions and compile with and without
+OpenMP:
 
-- `validation/native/tests/test_transport_native.py`: selection, values, width bounds, and ownership.
-- `validation/native/tests/test_transport_scheduling.py`: variable/row scheduling, permutations, destination maps, and SPI failures.
-- `validation/native/tests/test_transport_adaptive_native.py`: wide numeric gate boundaries, allocation retries, packed-string ownership, optional sort order, and reordered fixed-string/strL/numeric loads with errors.
-- `validation/native/tests/test_transport_store_native.py`: duplicate and invalid destination maps, sparse/OOM fallbacks, checked writes and cancellation, and the sorted-gather size boundary.
-- `validation/native/tests/test_rowstage_native.py`: row staging eligibility, staged values and extracted columns, reordered/repeated/absent sources, rejection before any write, SPI failures, cancellation, stale width hints and allocation failure.
+| Test in `validation/native/tests/` | What it checks |
+| --- | --- |
+| `test_transport_native.py` | Selected observations, values, string-width limits and which buffers to free |
+| `test_transport_scheduling.py` | Work split by variable or row, reordered data, destination indices and SPI errors |
+| `test_transport_adaptive_native.py` | Size thresholds for wide numeric loads, allocation retries, packed strings, optional sort order and reordered loads with errors |
+| `test_transport_store_native.py` | Duplicate or invalid destination indices, sparse data, allocation failures, writes, cancellation and size thresholds for sorted writes |
+| `test_rowstage_native.py` | Which data can use row storage, copied values, extracted columns, repeated or absent sources, errors before writing, cancellation and incorrect width hints |
 
-Run a suite directly with Python, or run the complete native inventory with
+Run a test directly with Python, or run all C tests with
 `python3 -m validation.suite_registry --native`. `CTOOLS_TEST_SOURCE` selects an
-isolated source directory; `CTOOLS_SANITIZERS=address,undefined` enables ASan plus
-UBSan where supported. Linux CI includes the suites and explicitly checks the
-new adaptive-load and sorted-store ownership paths with both sanitizers and
-leak detection. Mock tests complement the real-Stata command and transport regressions;
-they do not establish SPI thread safety or end-to-end performance.
+alternative source directory. `CTOOLS_SANITIZERS=address,undefined` enables
+AddressSanitizer and UndefinedBehaviorSanitizer, which check memory access and
+undefined C operations. Linux CI runs these tests and checks adaptive loads and
+sorted writes with both sanitizers and leak detection. Tests in Stata check the
+actual SPI calls and timings.
 
 ---
 
@@ -406,9 +404,11 @@ Include: `#include "ctools_types.h"`
 
 ### Available Algorithms
 
-The public `csort` default is `algorithm(auto)`. It selects an engine based on the data; an explicit low-level LSD entry point does not define the public default.
+`csort` defaults to `algorithm(auto)`, which chooses a sorting algorithm based
+on the data. C callers choose an algorithm through `ctools_sort_dispatch()`.
 
-Every engine computes `data->sort_order` without moving the loaded columns (an "order-only" sort). Most callers should go through `ctools_sort_dispatch()`.
+Each algorithm computes the row order in `data->sort_order` while leaving the
+loaded columns in place.
 
 | Algorithm | Best For | Order-only function |
 |-----------|----------|---------------------|
@@ -464,7 +464,9 @@ ctools_sort_dispatch(&data, sort_vars, nsort, SORT_ALG_COUNTING);
 
 Include: `#include "ctools_threads.h"`
 
-ctools uses a **persistent thread pool** that keeps workers alive between tasks, eliminating thread creation overhead for repeated parallel operations.
+ctools reuses worker threads between tasks within a command. This avoids
+creating a new set of threads for each operation. The dispatcher stops them
+when the plugin call finishes.
 
 ### Global Pool (Most Common)
 
@@ -517,17 +519,17 @@ ctools_set_max_threads(4);             // Override
 ctools_reset_max_threads();            // Reset to the resolved default
 ```
 
-The default is resolved once per process by `ctools_thread_policy_get()` in
-`src/ctools_threads.c`. The first set source wins: `threads()` on the command,
+`ctools_thread_policy_get()` in `src/ctools_threads.c` determines the process
+default. Settings take precedence in this order: `threads()` on the command,
 the session global `CTOOLS_THREADS` (`ctools, threads(#)`), the
 `CTOOLS_NUM_THREADS` environment variable, the saved per-user setting
 (`ctools, threads(#) permanently`), `OMP_NUM_THREADS`, and finally
-`CTOOLS_DEFAULT_THREAD_CAP` (16). Every source is clamped to the CPUs the
+`CTOOLS_DEFAULT_THREAD_CAP` (16). The requested count is limited by the CPUs the
 process may use (Linux affinity mask and cgroup CPU quota, Windows process
 affinity, macOS `hw.activecpu`), `OMP_THREAD_LIMIT`, and `CTOOLS_MAX_THREADS`.
-The dispatcher clamps explicit requests with `ctools_clamp_thread_request()`;
-`ctools_set_max_threads()` itself does not, so native harnesses can still run
-12 workers on small CI machines. The saved setting lives in
+The dispatcher applies these limits with `ctools_clamp_thread_request()`;
+`ctools_set_max_threads()` itself does not, so C tests can request more workers
+than the machine has CPUs. The saved setting lives in
 `%APPDATA%\ctools\ctools.conf` (Windows),
 `~/Library/Application Support/ctools/ctools.conf` (macOS), or
 `$XDG_CONFIG_HOME/ctools/ctools.conf`, default `~/.config/ctools/ctools.conf`
@@ -535,9 +537,11 @@ The dispatcher clamps explicit requests with `ctools_clamp_thread_request()`;
 
 ---
 
-## Threading Model (OpenMP vs Persistent Pool)
+## Choosing OpenMP or the Thread Pool
 
-ctools uses a mixed threading model. OpenMP is preferred for tight, regular loops or divide-and-conquer tasks. The persistent pool is preferred for batches of heterogeneous work items (e.g., per-variable I/O) where thread creation overhead would dominate.
+Use OpenMP for regular loops and recursive tasks. Use the persistent pool for
+batches of tasks that differ in size, such as reading variables, or when reusing
+threads saves time.
 
 ### OpenMP usage (parallel loops/tasks)
 
@@ -556,15 +560,15 @@ ctools uses a mixed threading model. OpenMP is preferred for tight, regular loop
 
 - **OpenMP**: tight, uniform loops where per-iteration work is similar and data access is contiguous.
 - **Persistent pool**: many small/medium independent tasks, per-variable work, or repeated batches across a command where thread reuse saves overhead.
-- Avoid nested parallelism (e.g., OpenMP inside code already using the persistent pool) to reduce oversubscription.
+- Avoid starting OpenMP work inside a pool task; the resulting threads can compete for the same CPUs.
 
 ### OpenMP tuning tips
 
 - `OMP_NUM_THREADS`: ctools uses its first value as the default unless `CTOOLS_NUM_THREADS`, a saved setting, the session setting or `threads()` takes precedence. `CTOOLS_NUM_THREADS` sets ctools alone without affecting other OpenMP programs.
-- `OMP_PROC_BIND=spread` and `OMP_PLACES=cores`: keep threads pinned and reduce cache thrash.
-- `OMP_DYNAMIC=FALSE`: avoid runtime thread count changes that interfere with sizing heuristics.
+- `OMP_PROC_BIND=spread` and `OMP_PLACES=cores`: keep threads on assigned cores and reduce repeated cache loads.
+- `OMP_DYNAMIC=FALSE`: keep the thread count fixed when allocating work.
 - `OMP_WAIT_POLICY=PASSIVE` (lower CPU use when waiting) or `ACTIVE` (lower latency for short tasks).
-- `GOMP_CPU_AFFINITY` (GNU OpenMP) or `KMP_AFFINITY` (Intel/OpenMP) for explicit pinning when needed.
+- `GOMP_CPU_AFFINITY` (GNU OpenMP) or `KMP_AFFINITY` (Intel/OpenMP) to assign threads to specific CPUs.
 
 ---
 
@@ -801,11 +805,13 @@ ctools_reset_max_threads();     // Back to default
 
 Include: `#include "ctools_arena.h"`
 
-Two arena types for different allocation patterns.
+An arena allocates memory in blocks that can be freed together. ctools provides
+two types:
 
 ### Growing Arena (unknown total size)
 
-A chain of fixed-size blocks. When the current block is exhausted, a new one is allocated. All blocks freed together.
+The growing arena adds a fixed-size block when the current block fills up.
+Freeing the arena releases all its blocks.
 
 ```c
 ctools_arena arena;
@@ -829,7 +835,8 @@ ctools_arena_free(&arena);
 
 ### String Arena (known/estimated total size)
 
-A single contiguous block optimized for string pooling. Three fallback modes when full:
+The string arena stores strings in one contiguous block. Choose one of three
+behaviors when it fills up:
 
 ```c
 // Create with estimated capacity and fallback mode
@@ -849,7 +856,8 @@ if (ctools_string_arena_owns(sa, s1)) { /* arena-owned */ }
 ctools_string_arena_free(sa);
 ```
 
-Fallback modes:
+When full:
+
 - `CTOOLS_STRING_ARENA_NO_FALLBACK` - return NULL when full
 - `CTOOLS_STRING_ARENA_STRDUP_FALLBACK` - fall back to `strdup()` (caller must track and free)
 - `CTOOLS_STRING_ARENA_STATIC_FALLBACK` - return a static empty string (never NULL)
@@ -860,7 +868,9 @@ Fallback modes:
 
 Include: `#include "ctools_hash.h"`
 
-An open-addressing string -> integer hash table with linear probing and automatic resizing at 75% load factor, used by cencode. `cdecode` needs no hash table: its ado passes the value-label mapping, and the plugin looks values up in a direct table or by binary search.
+`cencode` uses a hash table to map strings to integers. It uses linear probing
+to resolve collisions and grows when 75% full. `cdecode` reads the value-label
+mapping from its ado code and finds values in a direct table or by binary search.
 
 ### String -> Integer (for cencode)
 
@@ -891,7 +901,7 @@ ctools_label_write_stata_file(strings, codes, n_labels, "myvar", "output.do");
 
 ---
 
-## OLS and Regression Infrastructure
+## OLS and Regression Functions
 
 ### Linear Algebra (`ctools_ols.h`)
 
@@ -1040,27 +1050,27 @@ void ctools_hdfe_state_cleanup(HDFE_State *state);
 
 ### Parallel loops and reproducibility
 
-The regression kernels are parallelized only where each output element is an
-independent sum whose terms are added in a fixed order: across columns or
-column pairs (cross products, the sandwich meat, double-double normal
-equations, PPML's reference projection), or across blocks of rows for
-element-wise updates. Results therefore do not depend on the thread count or
-on scheduling. A loop that would have to split one sum across threads (the
-per-level scatter of the FE projection, a deviance or RSS total) stays serial.
-New parallel code in these paths should keep that property and be checked
-with a bit-level before/after comparison of `e()`.
+Parallel regression code assigns independent outputs to different threads and
+adds the terms of each sum in a fixed order. This applies to column cross
+products, the middle matrix of sandwich covariance estimators, double-double
+normal equations and PPML projection. Element-wise updates can divide rows
+into blocks. Keeping each sum on one thread makes the result independent of
+thread count and scheduling.
+
+Fixed-effect group sums, deviance and residual sums of squares stay on one
+thread when splitting them would change the order of addition. Preserve this
+rule in new code and compare `e()` results bit for bit before and after the change.
 
 Declare every index and accumulator of a parallel loop inside the loop. A
 variable declared at function scope is shared by all threads: an inner
 `for (k = ...)` over such a `k` races, and once the body calls a function the
-index is reloaded from memory and can run past the end of an array. (This was
-the heap overflow in cqreg's removed `nopreprocess(-1)` solver.)
+index can be reloaded from memory and run past the end of an array.
 
 `cbinscatter` and `cqreg` follow the same rule: `cbinscatter` demeans one
 variable per thread and builds its normal equations with
 `cbinscatter_normal_equations()` (`cbinscatter_resid.h`); `cqreg`'s `X'DX`
-kernels keep the lane structure of their sequential form and run one row of
-the triangle per thread. `cqreg` solves its two auxiliary quantiles side by
+functions preserve the sequential grouping of arithmetic operations and assign
+one row of the triangular matrix to each thread. `cqreg` solves its two auxiliary quantiles side by
 side only for small samples, because a `parallel sections` region turns the
 loops inside each solve serial.
 
@@ -1158,65 +1168,73 @@ ST_retcode newcmd_main(const char *args)
 }
 ```
 
-### 3. Register dispatch and state ownership
+### 3. Connect the command to the plugin
 
-Include the implementation header in `src/ctools_plugin.c`, add a unique owner
-value in `ctools_runtime.h` if needed, and add one `CTOOLS_COMMAND` entry to
-`src/ctools_commands.def`. Supply an idempotent cleanup hook for persistent
-state. Define allowed phases in `ctools_command_begin()` for multi-call
-operations, and test invalid continuations and owner switches.
+Include the implementation header in `src/ctools_plugin.c` and add a
+`CTOOLS_COMMAND` entry to `src/ctools_commands.def`. If the command keeps data
+between calls, give it a unique owner value in `ctools_runtime.h` and a cleanup
+function that is safe to call more than once. In `ctools_command_begin()`,
+define which steps may follow each other. Test invalid sequences and switching
+to another command while data are retained.
 
-### 4. Source discovery and incremental builds
+### 4. Build the new sources
 
-The root Makefile includes the build rules in `scripts/build.mk`, which discover
-first-party C files recursively. The shared compiler
-pipeline writes per-platform, per-compiler/flags objects with compiler-generated
-header and `.inc` dependencies under `build/obj`. A change to the source inventory
-forces relinking, including deletions. A no-op invocation verifies the existing
-plugin hash. Failed compiles or links preserve the published plugin. Vendor-only
-flags and compatibility include paths are scoped in `scripts/build_plugin.py`.
-See [the platform contracts](PLATFORMS.md) before changing target flags.
+The Makefile uses `scripts/build.mk` to find ctools' C files recursively.
+Compiled objects go in `build/obj`, separated by platform, compiler and flags.
+The compiler records header and `.inc` dependencies so edits rebuild the affected
+objects. Adding or removing a source file relinks the plugin. When nothing has
+changed, the build checks the existing plugin's checksum.
 
-### 5. Create Stata files and register validation
+A failed compile or link leaves the previous plugin in place.
+`scripts/build_plugin.py` applies library-specific flags and include paths only
+to the relevant bundled sources. See [build requirements](PLATFORMS.md) before
+changing platform flags.
 
-Edit `build/newcmd.ado` and `build/newcmd.sthlp`; list every ado, prediction
-helper and help file in `build/ctools.pkg`. `build/` is both the only editable
-copy of the Stata files and the published install tree. Release identity comes
-from `config/release.json` through `scripts/sync_release.py`.
+### 5. Add Stata files and tests
 
-Register validation in `validation/suites.json`, then run
-`python3 -m validation.suite_registry --write-master`. Emit the completion marker
-at the actual end of each component. The registry, package contract and release
-tests reject missing files, unregistered suites and incomplete executions.
-Update the command inventory with `python3 scripts/sync_architecture.py`.
+Create `build/newcmd.ado` and `build/newcmd.sthlp`, and list every ado, prediction
+helper and help file in `build/ctools.pkg`. Edit the Stata files in `build/`;
+this is also the directory used for installation. Set the version in
+`config/release.json` and copy it into the package files with
+`scripts/sync_release.py`.
+
+Add tests to `validation/suites.json`, then run
+`python3 -m validation.suite_registry --write-master`. Each test group must print
+its completion message after its last check. The test-list and package checks
+report missing files, tests omitted from the list and incomplete runs.
+Update the generated command list with `python3 scripts/sync_architecture.py`.
 
 ---
 
 ## Performance Guidelines
 
-The three-command benchmark compares
-`cipolate`, `csplit`, and `crangejoin` against native/SSC commands at 1M, 5M, and
-20M rows. Use `validation/performance/prepare_readme_benchmarks.py` with a frozen build,
-then `validation/performance/summarize_readme_benchmarks.py` to validate complete logs and
-retain every trial. The harness uses a monotonic clock, alternates execution
-order, and checks every output cell outside the timed region.
+Measure changes with the same data and options in both builds. The
+three-command benchmark compares `cipolate`, `csplit` and `crangejoin` with
+Stata or SSC commands at 1M, 5M and 20M rows. Use
+`python3 -m validation.performance.prepare_readme_benchmarks` with a saved build,
+then `python3 -m validation.performance.summarize_readme_benchmarks` to check the
+logs and summarize all trials. The scripts alternate execution order, use a clock
+that cannot jump backward, and check every output cell outside the timed code.
 
-The performance audit (`validation/run_performance_audit.py`) screens all public
-commands on 40 mixed-type columns, then confirms the selection/output changes
-with separate B-C-C-B processes. `validation/run_performance_audit.py` freezes
-each plugin and wrapper set and rejects incomplete timing or output-check grids.
-`cipolate` and `csplit` pass original selections to the plugin; `skipif` is valid
-only when the wrapper knows there is no predicate. An uninitialized destination
-requires a complete write, including missing interpolation results and every
-absent split field. Restricted outputs must remain initialized. `cwinsor` can
-load original sources and write separate floating-point destinations, retaining
-double working precision and avoiding repeated Stata `recast` copies. Its trim,
-integer-output and in-place undo paths retain their existing contracts.
-Ungrouped `cwinsor` retains its loaded columns between cutoff computation and
-application. Stata expands the two cutoffs per variable through numeric locals,
-matching `winsor2` rounding exactly, then the plugin applies them and stores the
-outputs once. The runtime owns this pending phase and clears it on interruption,
-failure, commit, or a different command; the undo copy survives successful apply.
+`python3 -m validation.run_performance_audit` compares public commands on 40
+mixed-type columns. Run baseline and candidate builds in B-C-C-B order, each in
+a separate Stata process. The script copies the plugin and ado files for each
+run and checks that every planned timing and output comparison is present.
+
+For `cipolate` and `csplit`, pass the original observation selection to the
+plugin. Use `skipif` only when there is no `if` condition to evaluate. Write
+every value of a new output, including missing interpolation results and absent
+split fields. Outputs restricted to a subset of observations must still be
+initialized elsewhere.
+
+`cwinsor` can read the original variables and write separate floating-point
+outputs. This keeps double precision during computation and avoids repeated
+Stata `recast` copies. Preserve trimming, integer outputs and the ability to undo
+in-place changes. Ungrouped `cwinsor` keeps its loaded columns between computing
+and applying cutoffs. Stata expands each variable's two cutoffs through numeric
+locals to match `winsor2` rounding; the plugin then applies them and writes the
+results once. The runtime clears pending work after interruption, failure,
+commit or a different command. A successful apply keeps the undo copy.
 
 ### Parallelization
 
@@ -1277,9 +1295,9 @@ failure, commit, or a different command; the undo copy survives successful apply
    CTOOLS_CHECK_ALLOC(mat, "mymod", STATA_ERR_MEMORY);
    ```
 
-### Avoid Common Pitfalls
+### Allocation and timing checks
 
-1. **Don't mix `malloc`/`ctools_aligned_free`** - causes crashes on Windows
+1. **Match allocation and free functions** - freeing `malloc` memory with `ctools_aligned_free` crashes on Windows
 2. **Check allocations** - use `CTOOLS_CHECK_ALLOC` macro
 3. **Free in reverse order** - prevents dangling pointer issues
 4. **Use `verbose` option** - always support timing output for debugging
@@ -1324,65 +1342,66 @@ ST_retcode mycmd_main(const char *args)
 }
 ```
 
-## Correctness and distribution
+## Tests and installation packages
 
-Use `scripts/fetch_validation_data.py` once to cache the checksum-pinned official
-Stata fixtures, then `validation/run_stata_audit.py` for the complete offline
-suite. The driver uses the machine's `stata` shell alias and exits cleanly.
-Every component must reach its completion marker. Missing references, any skipped checks, and failed assertions block publication.
-Method-specific inference is checked against the relevant independent formula;
-comparisons must not count a skipped inference test as a pass.
+See the [testing guide](../../validation/README.md) for required packages, data
+and commands. `python3 -m validation.run_stata_audit` runs all Stata correctness
+tests. Each test group must finish with zero failed or skipped checks.
+Standard-error tests use the formula appropriate to each method.
 
-The `run_io_*.py` runners generate fixtures in disposable workspaces and remove
-them on success or failure; their regression logs remain under `temp/io_*`.
-Run I/O benchmarks with `validation/performance/prepare_io_performance.py --run` to generate
-and clean up data automatically. Logs, build manifests, `timings.csv`,
-`summary.csv`, and `comparisons.txt` remain in `--output`. Add `--keep-data` only
-when the input/export files are needed for debugging or `--summarize-only`.
-Preparing drivers without `--run` retains data when those drivers are executed
-manually; use `--run` for automatic cleanup.
-The encode and grouped-command benchmark runners also remove generated `.dta`
-comparison files on success or failure; use `--keep-data` to retain them.
-For `prepare_command_performance.py`, pass `--run` to execute the ABBA sequence,
-save `timings.csv`, and clean up datasets automatically. Its default mode still
-prints commands for manual execution. Benchmark logs and summaries can be
-re-read without retaining datasets, except for I/O's exact export comparisons.
+The `run_io_*.py` scripts create temporary test files and remove them after each
+run, including after errors. Logs remain in `temp/io_*`. For performance
+comparisons, run `python3 -m validation.performance.prepare_io_performance --run`.
+The output directory keeps the logs, build settings, `timings.csv`, `summary.csv`
+and `comparisons.txt`. Use `--keep-data` to keep input and exported files for
+debugging or `--summarize-only`. Preparing scripts without `--run` leaves data in
+place when those scripts are later executed manually.
 
-`validation/performance/run_hdfe_datasets.py` is an opt-in comparison of `creghdfe` with
-`reghdfe` on the HDFE benchmark collection, outside the gate. It needs
-`scripts/fetch_validation_data.py --collection hdfe` (about 227 MB) and is
-described in `docs/performance/HDFE_DATASETS.md`.
+The encode and grouped-command benchmarks also remove generated `.dta` files
+unless `--keep-data` is set. `prepare_command_performance.py --run` runs the
+baseline and candidate in A-B-B-A order, saves timings and removes generated
+data. Without `--run`, it prints commands for manual execution. Timing summaries
+can be read again after deleting the data; comparing exported files byte for
+byte requires keeping those files.
 
-Numeric variable indices are positions in the plugin varlist. Use shared checked
-I/O or `SD_SAFEMODE` for direct SPI calls; raw `SD_FASTMODE` stores can use a
-different index space and overwrite inputs. Never change `src/stplugin.c/h`.
+For comparisons of `creghdfe` and `reghdfe` on larger examples, see the
+[HDFE benchmark guide](../performance/HDFE_DATASETS.md). These benchmarks run
+separately from the correctness tests and need the HDFE download collection
+(about 227 MB).
 
-`make package` stages a host-platform manifest. The complete checker verifies
-exactly its declared platform scope and all helper files. CI release packages
-must declare all four platforms and pass native and dependency checks. Windows
-plugins must pass signature and timestamp verification before publication.
-Licensed Stata suites run separately from the release workflow.
-`scripts/archive_package.py` verifies the staged checksums and all-platform
-scope, then creates `ctools-<version>.zip` using `config/release.json`. Its flat layout
-allows copying the extracted files directly onto an adopath directory. The
-archive contains only manifest-listed payloads, package metadata, and
-`BUILD_INFO.json`, which records the release version, date, source revision, and file checksums.
-CI retains a versioned ZIP artifact for each successful package build. Create a
-GitHub Release to attach the archive to that release after checks pass. To update
-the installable plugins in `main/build`, run **Build Plugins** manually on `main`
-with **publish_plugins** selected; the option defaults to false. Publication
-requires all package checks to pass and `main` to still point to the built commit.
-Pushes to `main` run CI without publishing releases or committing plugins.
+### Create an installation package
 
-## Shared failure and wrapper contracts
+`make package` prepares installation files for the current platform. The package
+checker verifies that the required plugins and ado helpers are present.
+Continuous integration (CI) builds packages for all four platforms and checks
+the C code and required libraries. Windows plugins also need a valid signature
+and timestamp. Licensed Stata tests run separately from this workflow.
 
-`_ctools_load.ado` owns platform selection and plugin identity checks. Stata
-scopes plugin registration to the calling ado, so each wrapper registers the
-helper-selected binary in its own scope. Missing platform files may fall back to
-`ctools.plugin`; an incompatible file returns an error. `_ctools_newvars.ado`
-validates complete output-name lists before allocation, and `_ctools_weight.ado`
-stages expression weights while leaving command-specific sample rules in callers.
-`cqreg` uses native `qreg_p`; the unused custom prediction ado is no longer shipped.
+`scripts/archive_package.py` checks the file checksums and all four plugins,
+then creates `ctools-<version>.zip` using `config/release.json`. The ZIP's files
+can be copied directly into a directory on Stata's ado-path. It contains the
+files listed in the package, installation metadata and `BUILD_INFO.json`, which
+records the version, date, source revision and file checksums.
+
+CI saves the ZIP as a downloadable workflow artifact. Creating a GitHub Release
+starts a build that attaches the ZIP after checks pass. To update plugins in
+`main/build`, run **Build Plugins** manually on `main` and select
+**publish_plugins**, which is off by default. That update requires successful
+package checks and `main` to still point to the commit that was built. Ordinary
+pushes run CI without creating releases or committing plugins.
+
+## Shared ado helpers and error handling
+
+An ado wrapper prepares a Stata command's arguments, calls the plugin and
+returns its results. `_ctools_load.ado` selects the platform's plugin and checks
+its identity. Each wrapper registers that plugin itself because Stata keeps
+registration local to the calling ado. If the platform file is missing, the
+helper may use `ctools.plugin`; an incompatible plugin returns an error.
+
+`_ctools_newvars.ado` checks all proposed output names before creating variables.
+`_ctools_weight.ado` evaluates weight expressions into temporary variables; each
+command chooses its own estimation sample. `cqreg` uses Stata's `qreg_p` for
+predictions.
 
 The estimation wrappers (`creghdfe`, `civreghdfe`, `cppmlhdfe`, `cqreg`,
 `cbinscatter`) share these private helpers:
@@ -1392,7 +1411,7 @@ The estimation wrappers (`creghdfe`, `civreghdfe`, `cppmlhdfe`, `cqreg`,
 | `_ctools_fvsplit` | Splits an `fvexpand` list into the terms sent to the plugin and the base/omitted placeholders. A term is a placeholder only when every `#`-component carries a `b.` or `o.` marker (`1b.a#2.b` and `0b.foreign#c.weight` are estimated). |
 | `_ctools_ebv` | Builds `e(b)` and `e(V)` in Mata from the plugin's compact results: zeros for placeholders and dropped columns, `o.` names for dropped columns, optional `_cons`. The constant is read from its scalar, never through a local. |
 | `_ctools_cleanup` | Drops every scalar and matrix named `__<command>_*` or `_<command>_*`. Each wrapper calls it on entry, after a plugin error and on exit. |
-| `_ctools_lap` | One lap of a caller-local wall clock started with `_ctools_clock`. |
+| `_ctools_lap` | Measures time since the preceding `_ctools_lap` call or the initial `_ctools_clock` call, then restarts the clock. |
 | `_ctools_vce` | Classifies a `vce()` string (cluster, robust, unadjusted, ols, iid, bootstrap); which kinds a command accepts stays with the command. |
 | `_ctools_hdfe_absorb` | `absorb()` terms of `creghdfe` and `civreghdfe` as reghdfe accepts them (variables, string variables, `i.`, `a#b`): marks out the sample and returns each effect's name, variables and whether `_ctools_group` must number it. Slopes, `##` and `newvar=` are refused; `cppmlhdfe` keeps its own parser for them. |
 | `_ctools_hdfe_vce` | `vce()` of the three HDFE wrappers: the `_ctools_vce` kind and, for clusters, each dimension's name, variables and grouping flag (`i.`, `a#b`, strings), with the sample marked out. Call it before factor variables are expanded. Accepted kinds, dimension limits and messages stay with each command. |
@@ -1403,121 +1422,120 @@ The estimation wrappers (`creghdfe`, `civreghdfe`, `cppmlhdfe`, `cqreg`,
 A wrapper that keeps a statistic between plugin calls holds it in a `tempname`
 scalar, not a global name.
 
-`partial_out_columns()` returns status, convergence, and iteration count.
-Callers must propagate a failed projection and must not post successful estimates.
-The shared robust/cluster covariance APIs also return status: allocation or
-cluster-sort failure is 920, invalid covariance configuration is 498. Output
-matrices remain unpublished after an error. Legitimate zero residual variance
-still produces a successful zero covariance matrix.
+`partial_out_columns()` returns an error status, convergence status and iteration
+count. A failed projection must return an error to Stata. The shared robust and
+clustered covariance functions return 920 for allocation or cluster-sort failures
+and 498 for invalid covariance settings. Return matrices only after success.
+Zero residual variance produces a valid zero covariance matrix.
 
-OpenMP sort capacity is distinct from pthread/hardware capacity. Logical work
-partitions use work-sharing loops so reduced runtime teams still cover every row.
-Without OpenMP, sorting uses one usable OpenMP worker. Arena reset retains and
-reuses its block chain; aligned and ordinary allocation reject size overflow.
+Sorting uses the number of workers available to OpenMP, which can differ from
+the pthread count or CPU count. OpenMP loops must cover every row even when the
+runtime supplies fewer threads than requested. Sorting runs with one worker
+when OpenMP is disabled. Resetting an arena reuses its blocks; both aligned and
+ordinary allocations check for size overflow.
 
-Platform builds reuse only objects matching the compiler, flags and dependency
-timestamps, stop on the first compiler error, and link the explicit current
-source inventory. Publication uses an atomic rename after a successful link;
-failed builds preserve the previous plugin and remove temporary outputs.
-
-The September 24 regressions are `validation/stata/validate_sep24.do` and
-`validation/native/tests/test_sep24_native.py`. The native runner accepts
-`CTOOLS_TEST_OPENMP_PREFIX` for constrained-team tests and
-`CTOOLS_SANITIZERS=address,undefined` for ASan plus UBSan. The Stata cases are part
-of the full offline release gate.
+`validation/stata/validate_sep24.do` and
+`validation/native/tests/test_sep24_native.py` check these behaviors. The C test
+accepts `CTOOLS_TEST_OPENMP_PREFIX` to test a limited number of OpenMP workers
+and `CTOOLS_SANITIZERS=address,undefined` to enable memory and undefined-behavior
+checks. The Stata tests are included in the full correctness run.
 
 ## Interpolation, splitting, and interval joins
 
-`cipolate` performs one stable index sort and scans groups. `csplit` has a
-scan/size phase followed by a write to temporary output variables. `crangejoin`
-caches using columns, prepares matches and checked output counts, then writes
-the expanded dataset. Both multi-phase commands register cache cleanup with
-`ctools_runtime`; their ado wrappers clear caches after errors.
+`cipolate` sorts observation indices once, preserving the order of ties, then
+scans each group. `csplit` first determines output sizes, then writes temporary
+variables. `crangejoin` keeps the using columns, finds matches, checks output
+counts and writes the expanded dataset. `csplit` and `crangejoin` register
+cleanup functions with `ctools_runtime` because they make multiple plugin calls;
+their ado wrappers clear retained data after errors.
 
-The three command suites are part of `validate_all.do`. The interval-join
-reference tests additionally require SSC `rangejoin` 1.1.3 (and `rangestat`) on
-the test runner's adopath. Production `crangejoin` has neither dependency.
-`python3 -m validation.native.tests.test_newcommands_native` checks the kernels under UBSan
-and fails each allocation in turn; set `CTOOLS_SANITIZERS=address,undefined` to
-include ASan. Linux CI runs both sanitizers. `validation/performance/benchmark_newcommands.do`
-provides reproducible end-to-end timings and reference-result checks.
+All three command tests run through `validate_all.do`. Tests of `crangejoin`
+against SSC `rangejoin` require version 1.1.3 and `rangestat`. Using `crangejoin`
+itself requires neither package. Run
+`python3 -m validation.native.tests.test_newcommands_native` to test the C
+functions with UndefinedBehaviorSanitizer and simulate each allocation failure.
+Set `CTOOLS_SANITIZERS=address,undefined` to add AddressSanitizer; Linux CI uses
+both. `validation/performance/benchmark_newcommands.do` measures complete
+commands and compares their results.
 
-The shared stable order helper selects radix passes for large numeric inputs,
-parallel merge tiles for string/mixed inputs, and a no-sort path for ordered data.
-It preserves extended missing values and stable ties. Run
-`python3 -m validation.native.tests.test_order_parallel` with `CTOOLS_LIBOMP_PREFIX` pointing
-to the macOS OpenMP prefix (Linux uses `-fopenmp`).
-`python3 -m validation.native.tests.test_split_tokens_native` checks in-place token storage
-with the existing SPI/allocator mock; it also accepts `CTOOLS_SANITIZERS`.
-`validation/stata/validate_command_optimizations.do` adds reference checks for the
-optimized paths; run it through an error-capturing Stata driver.
+The shared stable-sort function uses radix sorting for large numeric inputs,
+parallel merge sorting for string or mixed inputs, and skips sorting data already
+in order. It preserves extended missing values and the order of ties. Check it
+with `python3 -m validation.native.tests.test_order_parallel`. On macOS, set
+`CTOOLS_LIBOMP_PREFIX` to the OpenMP installation directory; Linux uses
+`-fopenmp`.
 
-For repeated timing and phase profiles, use
-`validation/performance/prepare_command_performance.py` and
-`validation/performance/summarize_command_performance.py`. The benchmark uses separate
-processes for frozen baseline and candidate plugins and a monotonic timer.
+`python3 -m validation.native.tests.test_split_tokens_native` checks in-place
+string storage, using test substitutes for SPI and allocation functions. It also
+accepts `CTOOLS_SANITIZERS`. `validation/stata/validate_command_optimizations.do`
+compares results with the original Stata or community commands; run it through
+`validation/support/stata_runner.py` to capture errors.
 
-## Module boundaries and maintenance
+For repeated timings, use the `prepare_command_performance` and
+`summarize_command_performance` Python modules in `validation/performance/`.
+They run saved baseline and candidate plugins in separate processes and use a
+clock that cannot jump backward.
 
-Estimator `*_input` readers isolate the existing ado scalar protocol in typed
-configuration structs. `*_result` writers borrow completed matrices and metadata
-for posting; they do not own or recompute estimates. PPML numerical modules take
-immutable options explicitly. Keep arithmetic order, thresholds, precision and
-method-specific covariance semantics unchanged when moving numerical code.
-The OLS and quantile-regression headers specify matrix layout and mutation;
-only identical triangular substitutions share `ctools_linalg.h`.
+## Maintaining shared code
 
-`_ctools_clock` returns a monotonic timestamp in a caller local and preserves
-`r()`. Wrapper timings use local accumulators, leaving Stata's numbered timers
-available to callers. Use this helper for new ado timing. `_ctools_load`,
-`_ctools_newvars` and `_ctools_weight` retain their existing scope and sample
-contracts; private helpers live in matching ado filenames.
+The estimator `*_input` files read ado scalars into C configuration structures.
+The `*_result` files write the completed matrices and other results back to
+Stata; they use the estimator's memory without freeing it or recomputing estimates.
+PPML functions receive read-only options as explicit arguments.
 
-C columns, group-run positions and permutations are zero based. SPI variable
-indices and observation maps are one based. `ctools_group_ranges` uses exact
-numeric equality, distinguishes extended missing values, and equates a NULL
-string with an empty string. `ctools_rng` preserves seeded stream and draw order.
+When moving numerical code, preserve the order of arithmetic, thresholds,
+precision and covariance formulas. The OLS and quantile-regression headers
+specify matrix layouts and which functions modify their inputs. Only identical
+triangular substitutions share `ctools_linalg.h`.
 
-Read [validation/native/README.md](../../validation/native/README.md) for reusable
-harness support and the deliberate whitebox allocation-interposition exception.
-Read [tools/generation/README.md](../../tools/generation/README.md) for offline generated
-tables and pinned inputs. Vendored codecs live only under `src/vendor`;
-`stplugin.c/h` remain unmodified SDK files. [docs/development/STYLE.md](STYLE.md) describes
-formatting scope. Agent-written audits and reports live in ignored `reports/`, retained standalone
-probes in `validation/probes`, and disposable outputs in ignored `temp/`.
+`_ctools_clock` returns a timestamp in a caller's local macro and preserves
+`r()`. It uses a clock that cannot jump backward. Ado wrappers store their timing
+totals in local macros, leaving Stata's numbered timers available to users.
+Use this helper for new ado timing. Keep `_ctools_load`, `_ctools_newvars` and
+`_ctools_weight` consistent with each caller's variable scope and sample selection.
+Private helpers live in ado files with matching names.
 
+C column indices, group positions and permutations start at zero. SPI variable
+indices and observation numbers start at one. Numeric indices refer to positions
+in the plugin varlist. Use shared data-transfer functions or `SD_SAFEMODE` for
+direct SPI calls: `SD_FASTMODE` writes can use different indices and overwrite
+other inputs. `ctools_group_ranges` uses exact numeric equality, distinguishes
+extended missing values and treats a NULL string as empty. `ctools_rng`
+preserves the seeded sequence and order of draws.
+
+See [C tests](../../validation/native/README.md) for shared helpers and tests that
+include source files directly to simulate allocation failures. See
+[generated import tables](../../tools/generation/README.md) for updating generated
+files, and [code style](STYLE.md) for formatting conventions.
 
 ## Repository conventions
 
-Build from the repository root with `make`; `make check` checks dependencies
-and `make clean` removes compiled output. See [platform contracts](PLATFORMS.md)
-for compiler and OpenMP requirements and the [validation guide](../../validation/README.md)
-for correctness gates and individual suites.
+Build from the repository root with `make`. `make check` checks dependencies;
+`make clean` removes compiled files. See [build requirements](PLATFORMS.md)
+for compiler and OpenMP setup and the [testing guide](../../validation/README.md)
+for commands to run tests.
 
-Edit Stata ado/help sources directly in `build/`, which is also the published
-installation tree. Do not maintain a second source copy. First-party C commands
-live in their own `src/<command>/` directories; shared HDFE and file-format
-modules live under `src/hdfe/`, `src/formats/` and `src/io/`. Keep the SDK files
-`src/stplugin.c/h` unmodified and vendor flags scoped to `src/vendor/`.
+Edit Stata ado and help files in `build/`, the directory used for installation.
+ctools' C commands live in `src/<command>/`; shared fixed-effects and file-format
+code lives in `src/hdfe/`, `src/formats/` and `src/io/`. Bundled libraries live
+in `src/vendor/`, with compiler settings applied only to those libraries. Keep
+Stata's SDK files `src/stplugin.c/h` unchanged.
 
-`config/release.json` alone defines the release version, date and minimum Stata version.
-After changing it, run `python3 scripts/sync_release.py` and then its `--check`
-mode. Commit every regenerated copy together. The synchronization also copies
-`LICENSE` and `docs/licenses/THIRD_PARTY_NOTICES` into the distribution;
-rebuilding updates the plugin identity.
+Set the release version, date and minimum Stata version in `config/release.json`.
+Run `python3 scripts/sync_release.py`, then run it with `--check`. Commit the
+updated package files together. The script also copies `LICENSE` and
+`docs/licenses/THIRD_PARTY_NOTICES` into `build/`. Rebuild the plugin to update
+its embedded version.
 
-Tracked documentation describes current behavior. Put investigation reports in
-ignored `reports/` subdirectories with dated filenames, and disposable logs,
-drivers and data in ignored `temp/`. Do not add dated snapshots or run artifacts
-to `docs/`, or cite ignored reports from tracked documentation or source code.
-`docs/benchmarks/` contains only the fixed evidence paths regenerated by
+Keep tracked documentation about current behavior. Investigation reports go in
+ignored `reports/` subdirectories with dated filenames. Logs, temporary do-files
+and generated data go in `temp/`. Tracked documentation and source comments
+should link to files available in a clean clone.
+
+`docs/benchmarks/` holds the results regenerated by
 `validation/performance/profile_readme.do` and
-`python3 -m validation.performance.run_hdfe_datasets --write-doc`. A new evidence
-location needs a reproducing script, a documentation citation and an explicit
-entry in the documentation-tree check. Record conclusions supporting thresholds
-where those thresholds live, with the relevant numbers and reproducing script.
-
-When adding commands, register dispatch in `src/ctools_commands.def`, create the
-ado/help files in `build/`, list helpers in `build/ctools.pkg`, and register
-validation in `validation/suites.json`. Preserve the numerical and ownership
-contracts described in this guide.
+`python3 -m validation.performance.run_hdfe_datasets --write-doc`. To add results
+there, provide a script that regenerates them at fixed paths, link them from a
+tracked document and add the paths to the documentation-tree check. When a
+measurement supports a threshold in the code, explain the relevant numbers and
+name the script that reproduces them beside that threshold.

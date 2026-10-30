@@ -1,51 +1,54 @@
-# Pinned C codecs
+# Bundled libraries
 
-* ReadStat 1.1.9 (MIT), https://github.com/WizardMac/ReadStat/tree/v1.1.9
-  Only library sources for SAS, XPORT, and SPSS are included. Generated Ragel C
-  parsers are checked in; Ragel is not a build dependency.
-* `zlib/zlib.h` is not zlib: it is a small shim that maps the zlib names
-  ReadStat's SPSS .zsav code uses onto miniz (src/vendor/miniz, MIT), which
-  ctools already compiles for XLSX I/O. No zlib sources are vendored.
+ctools compiles the libraries below into its plugin. See
+[third-party notices](../../docs/licenses/THIRD_PARTY_NOTICES) for versions and
+licenses, and [build requirements](../../docs/development/PLATFORMS.md) for
+system libraries needed on each platform.
 
-Everything is compiled into the plugin; users need no additional dynamic libraries.
-ReadStat uses system iconv on Unix and the Windows code-page adapter on Windows.
-Local changes to upstream sources are documented here as they are introduced.
+## ReadStat and compression
 
-* libdeflate 1.25 (MIT), https://github.com/ebiggers/libdeflate/tree/v1.25
-  The decompressor and CRC-32 implementation are included. XLSX export uses
-  its accelerated CRC-32, including runtime CPU dispatch and the portable
-  slice-by-eight fallback. The CRC sources and tables are unchanged upstream
-  files, added from the v1.25 archive (SHA-256
-  `d11473c1ad4c57d874695e8026865e38b47116bbcb872bfc622ec8f37a86017d`).
+[ReadStat 1.1.9](https://github.com/WizardMac/ReadStat/tree/v1.1.9) (MIT) provides
+SAS, XPORT and SPSS support. The repository includes the C parsers generated
+by Ragel, so Ragel is not needed to build ctools.
 
-ReadStat changes: iconv includes route through `readstat_iconv.h`, which selects
-the local code-page adapter on Windows. The header also has an include guard for repeated charset includes.
+ReadStat uses the system `iconv` functions on Unix and a Windows code-page
+adapter on Windows. `readstat_iconv.h` selects the implementation and prevents
+repeated header definitions. SAS string conversion preserves spaces before a
+NUL terminator, matching Stata. Records padded with spaces use ReadStat's
+original trimming behavior.
 
-SAS string conversion preserves spaces before a NUL terminator, matching Stata;
-space-padded records retain the upstream trimming behavior.
+`zlib/zlib.h` maps the zlib functions used by ReadStat's SPSS `.zsav` reader to
+miniz, the MIT-licensed library in `miniz/` also used for XLSX files. The header
+provides this translation; ctools does not include the zlib library itself.
 
-* libxls 1.6.3 (BSD 2 clause), https://github.com/libxls/libxls/tree/v1.6.3
-  The five library C sources and public headers are included. Config selects
-  iconv; Windows conversion uses the same system adapter as ReadStat. The
-  integer typedefs have XLS prefixes to avoid collisions with windows.h.
+[libdeflate 1.25](https://github.com/ebiggers/libdeflate/tree/v1.25) (MIT)
+provides decompression and CRC-32 checksums. XLSX export uses its fast CRC-32
+implementation, choosing CPU-specific instructions where available and the
+portable slice-by-eight algorithm otherwise. The CRC sources and tables are
+unchanged from the v1.25 archive, whose SHA-256 checksum is
+`d11473c1ad4c57d874695e8026865e38b47116bbcb872bfc622ec8f37a86017d`.
 
-libxls locale/endian headers are renamed with xls_ prefixes so the repository
-include-directory discovery does not shadow system locale.h or endian.h.
+## Excel files
 
-* ICU 67.1 charset recognition (Unicode license). Statistical byte maps and
-  frequency tables plus a portable C adaptation of the default recognizers;
-  Java and ICU libraries are not runtime or build dependencies. Provenance,
-  source checksums and regeneration instructions are in `icu_charset/README.md`.
+[libxls 1.6.3](https://github.com/libxls/libxls/tree/v1.6.3) (BSD 2 clause)
+provides five C source files and their public headers. It uses `iconv` on Unix
+and the same Windows adapter as ReadStat. Integer type names have `XLS` prefixes
+to avoid collisions with `windows.h`. The locale and endian headers have
+`xls_` prefixes so the compiler can distinguish them from system headers.
 
-## Unified ownership and compilation
+## Character encoding detection
 
-Compression now lives alongside the codecs: `miniz/` and `libdeflate/` retain
-the exact previously vendored sources and licenses. This relocation does not
-upgrade upstream packages. See the root `THIRD_PARTY_NOTICES` for their versions
-and licenses. ICU input provenance is in `icu_charset/` and `tools/generation/`.
+The ICU 67.1 adaptation (Unicode license) includes byte maps, frequency tables
+and C implementations of its default encoding detectors. See the
+[ICU guide](icu_charset/README.md) for source files, checksums and instructions
+for regenerating the tables. Building and using ctools requires neither Java
+nor the ICU libraries.
 
-`scripts/build_plugin.py` scopes warning suppression to vendor sources. Only
-ReadStat sees `HAVE_ZLIB` and `vendor/zlib`; only libxls sees its config and public
-include directory. First-party modules use `-Isrc` and explicit module paths.
-The renamed libxls locale/endian headers remain for compatibility with native
-test builds, but no recursive global include path can shadow system headers.
+## Compiler settings
+
+`scripts/build_plugin.py` applies library-specific compiler options only to the
+relevant sources. Only ReadStat uses `HAVE_ZLIB` and the `vendor/zlib` include
+path; only libxls uses its configuration and public include directory.
+Suppressed warnings apply only to bundled libraries. ctools' own code uses
+`-Isrc` and explicit module paths, so library headers cannot replace system
+headers accidentally. The renamed libxls headers also support the C tests.

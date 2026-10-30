@@ -2,15 +2,15 @@
 
 ## Install and use ctools
 
-- [Installation](INSTALLATION.md): Stata installation, release archives and source builds.
-- [Usage](USAGE.md): examples for the command families.
-- [Features](FEATURES.md): capabilities added by ctools.
-- [Compatibility](COMPATIBILITY.md): supported syntax and differences from reference commands.
-- [Import/export parity](IO_PARITY.md): file formats and workbook behavior.
-- [Option coverage](OPTION_COVERAGE.md): generated inventory and validation evidence.
+- [Installation](INSTALLATION.md): install ctools or build it from source.
+- [Usage](USAGE.md): command examples.
+- [Features](FEATURES.md): additional features provided by ctools.
+- [Compatibility](COMPATIBILITY.md): supported syntax and differences from the commands ctools replaces.
+- [Import and export](IO_PARITY.md): supported file formats and Excel workbook behavior.
+- [Tests of command options](OPTION_COVERAGE.md): which options are tested and where to find the tests.
 
-Stata's `help <command>` contains the installed command reference. The following
-command guides provide additional implementation and usage detail:
+In Stata, run `help <command>` for syntax and options. These guides give more
+detail about individual commands:
 
 | Data and file operations | Estimation and statistics |
 | --- | --- |
@@ -21,20 +21,20 @@ command guides provide additional implementation and usage detail:
 | [cexport](commands/cexport.md) | [civreghdfe](commands/civreghdfe.md) |
 | | [cppmlhdfe](commands/cppmlhdfe.md) |
 
-## Develop and validate
+## Build, test and contribute
 
-- [Developer guide](development/README.md): architecture, numerical contracts and adding commands.
-- [Platform contracts](development/PLATFORMS.md): compilers, OpenMP and binary dependencies.
-- [Code style](development/STYLE.md): formatting scope and conventions.
-- [Command inventory](development/COMMAND_INVENTORY.md): generated plugin dispatch inventory.
-- [Validation guide](../validation/README.md): correctness gates, fixtures and performance tools.
-- [Offline generators](../tools/generation/README.md): pinned inputs and generated import tables.
+- [Developer guide](development/README.md): how the code works and how to add commands.
+- [Build requirements](development/PLATFORMS.md): compilers, OpenMP and required libraries for each platform.
+- [Code style](development/STYLE.md): formatting conventions.
+- [Command implementations](development/COMMAND_INVENTORY.md): generated list of commands, C functions and cleanup functions.
+- [Testing guide](../validation/README.md): tests, test data and benchmarks.
+- [Generated import tables](../tools/generation/README.md): check or regenerate character encoding and locale tables.
 
-## Performance evidence
+## Benchmarks
 
-- [README benchmark methodology](performance/README.md).
-- [HDFE dataset comparisons](performance/HDFE_DATASETS.md).
+- [Speed comparisons in the main README](performance/README.md): how they are measured and how to repeat them.
+- [HDFE comparisons](performance/HDFE_DATASETS.md): compare fixed-effects regression on example datasets.
 
-Reproducible tables and measurements live at fixed paths in `benchmarks/`.
-Investigation reports and disposable output belong in the ignored `reports/`
-and `temp/` directories at the repository root.
+Scripts write the published tables and measurements to `benchmarks/`. Save
+investigation reports in `reports/` and temporary files in `temp/` at the
+repository root; both directories are ignored by Git.

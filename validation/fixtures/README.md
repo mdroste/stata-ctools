@@ -1,9 +1,9 @@
 # Test data
 
-This folder holds dataset manifests, small test inputs and builders for file
-format tests. Downloaded datasets are cached under `validation/fixtures/data/`,
-which is ignored by Git. Each manifest records source URLs and SHA-256 checksums
-so runs use the same data.
+This folder contains small test files, scripts that create test data, and lists
+of datasets to download. Downloaded files go in `validation/fixtures/data/`,
+which is ignored by Git. The download lists record each file's URL and SHA-256
+checksum so the tests can check that its contents have not changed.
 
 ## Stata example datasets
 
@@ -14,20 +14,20 @@ from the repository root:
 python3 scripts/fetch_validation_data.py
 ```
 
-Check the cache without downloading:
+Check the downloaded files without fetching anything:
 
 ```sh
 python3 scripts/fetch_validation_data.py --check-only
 ```
 
-The full Stata audit checks this cache before running tests. The `ctools_fixture`
-helper in `validation/support/validate_setup.do` loads the cached examples;
-Stata's `sysuse` command loads its bundled examples. Missing files or checksum
-mismatches fail validation. To update a manifest, review the source changes and
-use the fetch script's `--record` option to record the new checksums.
+The full Stata test script checks these files before running tests. The
+`ctools_fixture` helper in `validation/support/validate_setup.do` loads them;
+Stata's `sysuse` command loads its bundled examples. Missing or changed files
+cause the checks to fail. When intentionally updating the datasets, review the
+source changes and use the fetch script's `--record` option to save new checksums.
 
-See [running the tests](../README.md#run-the-tests) for Stata setup, reference
-packages and the full audit command.
+See [running the tests](../README.md#run-the-tests) for Stata setup and required
+comparison commands.
 
 ## HDFE benchmark datasets
 
@@ -39,14 +39,14 @@ python3 scripts/fetch_validation_data.py --collection hdfe
 python3 scripts/fetch_validation_data.py --collection hdfe --check-only
 ```
 
-These files are cached in `validation/fixtures/data/hdfe/` and used by
-`validation/performance/run_hdfe_datasets.py`. Download this collection when
-running that benchmark. See the [HDFE benchmark guide](../../docs/performance/HDFE_DATASETS.md)
-for workloads and options.
+These files go in `validation/fixtures/data/hdfe/`. Download them when running
+`validation/performance/run_hdfe_datasets.py`, which compares fixed-effects
+regression times. See the [HDFE benchmark guide](../../docs/performance/HDFE_DATASETS.md)
+for datasets and options.
 
-## File format inputs
+## File format tests
 
-The Python and C builders create small files for import and export tests,
-including Excel formats and formulas, malformed files and other format-specific
-cases. The checked-in Excel workbooks cover the 1900 and 1904 date systems.
-Keep generated files in `temp/`; the builders and small fixed inputs live here.
+Python and C programs in this folder create small files for import and export
+tests, including Excel formats and formulas, malformed files and other cases
+specific to each format. The Excel workbooks stored here cover the 1900 and
+1904 date systems. Save generated files in `temp/`.

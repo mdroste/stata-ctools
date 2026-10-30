@@ -1,153 +1,151 @@
-# README benchmark
+# Measuring ctools performance
 
-The [one-shot profiler](../../validation/performance/profile_readme.do) compares every command
-in the README with its native Stata or community-package reference. Each pair
-runs **once** on each of **1,000,000, 10,000,000, and 25,000,000 observations**.
-The README reports the minimum and maximum reference/ctools time ratios across
-these three sizes, with the lower endpoint rounded down and the upper endpoint
-rounded up. Endpoints use tenths below 2×, whole numbers from 2× to below 10×,
-and multiples of ten from 10× onward (for example, 48–57× becomes 40–60×).
-Values below 1 mean ctools was slower. These are rough
-workload-specific measurements, not confidence intervals.
+The [benchmark script](../../validation/performance/profile_readme.do) measures
+the speed comparisons in the main README. It runs each ctools command and the
+Stata or community command it replaces once on datasets with **1 million,
+10 million and 25 million observations**.
 
-## Running it
+The reported speedup is the comparison command's time divided by ctools' time.
+The README shows the smallest and largest ratios across the three dataset sizes,
+rounded outward: tenths below 2×, whole numbers below 10×, and multiples of ten
+thereafter. For example, 48–57× becomes 40–60×. A value below 1× means ctools
+was slower. These ranges describe the three measurements; they are not
+confidence intervals.
 
-From the repository root, with a compiled plugin and ado files in `build/`:
+## Run the benchmark
 
-```sh
-/bin/zsh -lic 'stata -q -b do "/absolute/path/to/stata-ctools/validation/performance/profile_readme.do"'
-python3 -m validation.performance.summarize_readme_profile docs/benchmarks/readme_profile --update-readme README.md
+Build the plugin and keep it with the ado files in `build/`. Install the commands
+used for comparison: `rangejoin`, `rangestat`, `gtools` (`gstats`), `psmatch2`,
+`binscatter`, `reghdfe`, `ivreghdfe` and `ppmlhdfe`, along with their dependencies,
+including `ftools`, `ivreg2` and `ranktest`.
+
+In a fresh Stata session, set the working directory to the repository root and
+run:
+
+```stata
+do "validation/performance/profile_readme.do"
 ```
 
-On this machine Stata must be invoked through the `stata` alias in an interactive
-login zsh. Confirm the invocation on other machines. The driver exits with
-`exit, clear`, including after a captured error. The summarizer checks completion
-markers, exactly one timing per command/method/size, return codes, basic output
-checks, and positive finite elapsed times before updating the table. A failed
-pair at any size leaves that command's speedup as a dash. It never publishes a
-range based on only the successful sizes.
-
-Reference packages must already be installed: `rangejoin`, `rangestat`, `gtools`
-(`gstats`), `psmatch2`, `binscatter`, `reghdfe`, `ivreghdfe`, `ppmlhdfe`, and their
-dependencies (including `ftools`, `ivreg2`, and `ranktest`). The profiler does not
-install or update packages. Missing commands produce explicit nonzero return
-codes in the CSV and log; other commands continue.
-
-Optional positional arguments are the output directory, a quoted list of sizes,
-the Stata processor count, and a quoted list of pairs to run. Defaults are
-`docs/benchmarks/readme_profile`, `"1000000 10000000 25000000"`, the current
-Stata processor setting, and all twenty pairs (named as in `timings.csv`, for
-example `reghdfe` or `winsor`). From the shell, lists need Stata's own quotes
-inside the shell's, as in `'"reghdfe ivreghdfe ppmlhdfe"'`. The
-processor count applies to Stata (`set processors`) and so to the reference
-commands. ctools commands run without a `threads()` option and use the ctools
-resolved thread policy (normally capped at 16 available CPUs, with session,
-environment, and runtime limits applied). Inspect `ctools, environment_check`
-before comparing runs; in the published run it resolved to 12 threads. A subset
-that includes `import` must also include `export`, because both imports read the
-file written by the reference export. Sizes must be multiples of 200 and at
-least 1,000.
-For a quick check:
+The script closes Stata when it finishes, including after an error. It writes
+results to `docs/benchmarks/readme_profile`, replacing files at that location.
+To summarize them, run this command from the repository root in a terminal:
 
 ```sh
-/bin/zsh -lic 'stata -q -b do "/absolute/path/to/stata-ctools/validation/performance/profile_readme.do" "/private/tmp/ctools-profile-smoke" "10000"'
-python3 -m validation.performance.summarize_readme_profile /private/tmp/ctools-profile-smoke --sizes 10000
+python3 -m validation.performance.summarize_readme_profile docs/benchmarks/readme_profile
 ```
 
-The profiler replaces files in its output directory. Save previous results
-elsewhere before rerunning. It writes `profile.log` (complete Stata output) and
-`timings.csv` (each command's time, return code, and check return code). The
-summarizer adds `results.md`; without `--update-readme`, it only writes the results
-and prints ranges. Nonstandard sizes cannot update the README. Large temporary
-datasets and CSVs are deleted after each size. Allow several GB of RAM and tens
-of GB of scratch space; native regression and matching can take substantially
-longer than the data operations.
+Add `--update-readme README.md` to update the speedup table. The summarizer
+requires a completed run, one timing for each command and size, successful
+return codes and output checks, and positive finite times. A failed comparison
+at any size produces a dash for that command.
 
-## Data and timed work
+## Run a smaller comparison
 
-Every command starts from the same saved, unsorted **20-variable** dataset at
-each size: 16 numeric variables spanning byte/int/long/float/double and four
-fixed-width strings (`str8`, `str8`, `str16`, `str40`). It contains a 200-month
-firm panel, a second categorical effect, continuous regressors and an instrument,
-a continuous outcome, a Poisson outcome, treatment, labeled categories, numeric
-text, and pipe-delimited text. The seed and sort seed are 95183. The
-[do-file](../../validation/performance/profile_readme.do) specifies the full generator and exact
-commands; no data download is needed.
+The do-file accepts four arguments, in order:
 
-| Pair | Workload |
-|---|---|
-| import/export | All 20 columns in comma-delimited text, numeric category codes. Both imports read the native export file; CSV only, not other supported formats. |
+| Argument | Default |
+| --- | --- |
+| Output directory | `docs/benchmarks/readme_profile` |
+| Quoted list of observation counts | `"1000000 10000000 25000000"` |
+| Number of Stata processors | Current Stata setting |
+| Quoted list of command pairs | All twenty pairs |
+
+For a quick check, run this in a fresh Stata session from the repository root:
+
+```stata
+capture mkdir "temp"
+do "validation/performance/profile_readme.do" "temp/profile-small" "10000"
+```
+
+Then summarize the results in a terminal:
+
+```sh
+python3 -m validation.performance.summarize_readme_profile temp/profile-small --sizes 10000
+```
+
+To select commands, use the names in `timings.csv`, such as `"reghdfe ivreghdfe
+ppmlhdfe"`, as the fourth argument. Include `export` whenever selecting `import`:
+those comparisons read the CSV written by Stata's export command. Observation
+counts must be multiples of 200 and at least 1,000. Only the three standard sizes
+can update the main README.
+
+The processor argument sets Stata's `set processors` value. ctools uses its
+default thread count, normally limited to 16 available CPUs, subject to session,
+environment and runtime settings. Run `ctools, environment_check` to see the
+settings before comparing results.
+
+`profile.log` contains Stata's output. `timings.csv` records each command's time,
+return code and output-check result. The summarizer adds `results.md` and prints
+the speedup ranges. Missing comparison commands are recorded as errors while the
+other comparisons continue. The script removes large temporary datasets and CSVs
+after each size. The full run needs several GB of RAM and tens of GB of temporary
+disk space; regression and matching can take much longer than data operations.
+
+## Data and operations
+
+Each comparison starts from the same saved, unsorted dataset with **20 variables**:
+16 numeric variables spanning byte, int, long, float and double types, and four
+strings of widths 8, 8, 16 and 40. The data form a 200-month firm panel and include
+another categorical effect, regressors, an instrument, continuous and Poisson
+outcomes, treatment, labeled categories, numeric text and pipe-delimited text.
+Both random seeds are 95183. The do-file generates all the data locally.
+
+| Command pair | Operation |
+| --- | --- |
+| import/export | All 20 columns as CSV, with numeric category codes. Both imports read Stata's exported file. |
 | sort | Stable sort on a continuous regressor and unique row ID. |
-| merge | Many-to-one merge into a three-column firm lookup with N/200 rows. |
+| merge | Many-to-one merge with a three-column firm lookup containing N/200 rows. |
 | sample/bsample | Retain 10% without replacement / bootstrap N observations. |
-| encode/decode/destring | Four-category strings / four labeled codes / numeric strings. |
+| encode/decode/destring | Convert four-category strings / four labeled codes / numeric strings. |
 | ipolate | Interpolate 30% randomly missing outcomes within firm, with extrapolation. |
 | split | Split three pipe-delimited fields. |
-| rangejoin | N-row, 20-column inputs, ±0.5 month within firm; using times offset by 0.25, giving N output rows. Select two using payload variables. |
+| rangejoin | Join two N-row, 20-column datasets within firm and ±0.5 month. Using-data times are offset by 0.25, producing N rows. Keep two variables from the using data. |
 | gstats winsor | Winsorize three regressors at the 1st/99th percentiles in place. |
 | rangestat | Mean outcome over a ±2-month window within firm. |
-| binscatter | 20 bins; both commands construct the graph with display disabled. |
+| binscatter | Construct a 20-bin graph with display disabled. |
 | reghdfe/ivreghdfe | Two regressors (`x1`, `x2`), firm and group effects; IV instruments `x1` with `z`. |
 | ppmlhdfe | Poisson outcome, two regressors (`x1`, `x2`), firm and group effects. |
 | psmatch2 | Estimate logit propensity scores, then one-neighbor ATT matching with replacement. |
 | qreg | Median regression of y on three regressors. |
 
-Stata `timer` surrounds the complete command, including ado work and plugin
-loading, reads/writes intrinsic to that command, computation, and output.
-Dataset generation, saving/reloading starting data, and basic result checks are
-outside the timer. There are no warmups or repetitions. The reference runs first,
-then ctools, with input and RNG state reset before each. Filesystem caches are
-not flushed. Package initialization and execution order can affect these
-one-shot measurements, especially at the smallest size.
+Stata's timer measures the complete command: ado code, plugin loading, data
+transfers, computation and output. Preparing and reloading data and checking
+results happen outside the timer. The comparison command runs first, followed
+by ctools, with the data and random-number state reset before each command.
+There are no warmup runs or repetitions, and filesystem caches are left in place.
+Loading packages and the order of execution can affect the times, especially
+for the smallest dataset.
 
-The driver checks output observation counts, imported column counts, and
-estimator sample sizes; it records command failures. It is a timing profiler,
-not a full numerical-equivalence test. Broader correctness checks live in
-`validation/`. Sampling realizations can differ under the same seed, and
-estimators can use different algorithms; see [compatibility](../COMPATIBILITY.md).
-Twenty variables remain in memory even when a command only uses a few of them.
-Memory pressure, string widths, group counts, options, and join expansion can
-change the results substantially.
+The script checks observation counts, imported column counts and estimation
+sample sizes. Numerical comparisons are in `validation/`. Sampling results can
+differ under the same seed, and estimators can use different algorithms; see
+[compatibility](../COMPATIBILITY.md). All twenty variables stay in memory even
+when a command uses only a few. Available memory, string widths, group counts,
+options and the number of rows produced by a join can all affect speed.
 
-## Results and provenance
+## Published results
 
-Measured October 29, 2026 on an Apple M4 Pro (12 logical CPUs, 48 GiB RAM),
-macOS 26.7.1, StataNow/MP 19.5 (revision August 12, 2026). Stata ran with
-**four processors**, the current Stata license limit, so the reference commands
-used at most four cores. ctools ran at its **default thread count, which
-resolved to 12 threads**. The speedups therefore include the extra cores ctools
-can use, not only per-core efficiency. The previous run (October 22) used an
-Apple M4 with 10 logical CPUs and 16 GiB RAM, so differences between runs
-reflect the hardware as well as code changes. In particular, that machine's
-25M-row CSV import (0.77×) was slowed by memory pressure from a large
-retained-row cache; both the larger RAM and the subsequent compact block
-caching contribute to the new import range.
+The published measurements use an Apple M4 Pro with 12 logical CPUs and 48 GiB
+RAM, macOS 26.7.1, and StataNow/MP 19.5 (revision August 12, 2026). Stata used
+**four processors**, its license limit; ctools used **12 threads**, its default
+on that machine. The speedups therefore reflect both the implementation and the
+additional cores available to ctools.
 
-The Mac ARM OpenMP plugin was freshly built from the working tree (HEAD
-`35ef972` plus uncommitted changes), with the `make macos-arm` flags and the
-repo-local OpenMP archive, and frozen with the wrappers in a scratch directory
-selected through `CTOOLS_TEST_PLUGIN_DIR`. The manifest records their hashes.
+Each command pair and dataset size ran in a separate Stata session, with
+`export` and `import` together. A session began after other processes used less
+than 80% of one CPU in total for a minute; sessions exceeding 150% were rerun.
+Package initialization and ado-file loading therefore fall inside every timing.
+The [measurement record](../benchmarks/readme_profile/manifest.json) contains
+these settings, per-session CPU measurements, and checksums identifying the
+plugin and ado files used.
 
-The machine was shared with other jobs, so each pair ran at each size in its
-own batch Stata session, using the profiler's pair-subset argument (`export` and
-`import` together). A session started only after other processes had used less
-than 80% of one CPU in total for a minute, and was discarded and rerun if they
-exceeded 150% while it ran; the manifest records each kept session's maximum.
-Data generation is identical in every session, but ado-file loading and package
-initialization fall inside the timer at every size, not only at the first size
-as in a single-session run.
-Earlier whole-profile attempts the same night were discarded because concurrent
-builds and scripts visibly inflated the timings.
+All 120 timed calls and their output-count checks passed. The fastest calls,
+such as `decode` at 1 million observations, take only a few milliseconds, so
+Stata's timer resolution limits the precision of some speedup estimates.
 
-All 120 timed calls completed with return code zero; all observation-count,
-imported-column-count, and estimator-sample-size checks passed. These checks
-do not establish full numerical equivalence. The fastest ctools calls take a
-few milliseconds (for example `decode` at 1M), close to the resolution of
-Stata's timer, so the top of some ranges is imprecise.
+- [Times and speedups](../benchmarks/readme_profile/results.md)
+- [Individual timings and return codes](../benchmarks/readme_profile/timings.csv)
+- [Hardware, software and file checksums](../benchmarks/readme_profile/manifest.json)
 
-- [Times at each size](../benchmarks/readme_profile/results.md)
-- [Raw timing and status records](../benchmarks/readme_profile/timings.csv)
-- [Machine and file identities](../benchmarks/readme_profile/manifest.json)
-
-The full log is retained locally at `docs/benchmarks/readme_profile/profile.log`
-and is ignored by Git because Stata's `about` output includes license details.
+The full `profile.log` is ignored by Git because Stata's `about` output includes
+license details.
