@@ -1,45 +1,52 @@
-# Offline validation data
+# Test data
 
-`manifest.json` pins 24 official Stata 18 example datasets by source URL and
-SHA-256. Prepare the cache once from the repository root:
+This folder holds dataset manifests, small test inputs and builders for file
+format tests. Downloaded datasets are cached under `validation/fixtures/data/`,
+which is ignored by Git. Each manifest records source URLs and SHA-256 checksums
+so runs use the same data.
+
+## Stata example datasets
+
+`manifest.json` lists 24 official Stata 18 example datasets. Download them once
+from the repository root:
 
 ```sh
 python3 scripts/fetch_validation_data.py
+```
+
+Check the cache without downloading:
+
+```sh
 python3 scripts/fetch_validation_data.py --check-only
 ```
 
-Downloads go to the ignored `data/` directory. A changed upstream file fails
-checksum verification; a Stata test never downloads a replacement. Review
-upstream changes before using the maintainer-only `--record` option to change
-the manifest. The binary datasets are cached locally rather than redistributed
-as part of the ctools installation package.
+The full Stata audit checks this cache before running tests. The `ctools_fixture`
+helper in `validation/support/validate_setup.do` loads the cached examples;
+Stata's `sysuse` command loads its bundled examples. Missing files or checksum
+mismatches fail validation. To update a manifest, review the source changes and
+use the fetch script's `--record` option to record the new checksums.
 
-`hdfe_manifest.json` pins a second, opt-in collection the same way: the 15
-Stata files (about 227 MB) of Sergio Correia's
-[HDFE benchmark collection](https://www.scorreia.com/data/hdfe/index.html),
-cached in `data/hdfe/`. Only `validation/performance/run_hdfe_datasets.py` uses it; the
-offline gate does not require it. See
-[the walkthrough](../../docs/performance/HDFE_DATASETS.md).
+See [running the tests](../README.md#run-the-tests) for Stata setup, reference
+packages and the full audit command.
+
+## HDFE benchmark datasets
+
+`hdfe_manifest.json` lists the 15 Stata files in Sergio Correia's HDFE benchmark
+collection, about 227 MB in total. Download and check them with:
 
 ```sh
 python3 scripts/fetch_validation_data.py --collection hdfe
 python3 scripts/fetch_validation_data.py --collection hdfe --check-only
 ```
 
-`ctools_fixture` in `validation/support/validate_setup.do` loads the official examples. Missing
-fixtures fail the component. Built-in `sysuse` examples remain local to Stata.
-The import suite uses available official examples for generic CSV round trips;
-obsolete, unavailable example names are not treated as skipped checks.
+These files are cached in `validation/fixtures/data/hdfe/` and used by
+`validation/performance/run_hdfe_datasets.py`. Download this collection when
+running that benchmark. See the [HDFE benchmark guide](../../docs/performance/HDFE_DATASETS.md)
+for workloads and options.
 
-Run the complete gate with `python3 -m validation.run_stata_audit`. The runner invokes Stata through the `stata` alias in an interactive login
-zsh and exits Stata cleanly. The reference packages listed in the driver's preflight must
-already be installed. The gate requires each of 20 components to reach its
-completion marker, rejects failed checks and unexpected skips, and verifies a
-unique driver marker so an old successful log cannot satisfy a new run.
+## File format inputs
 
-The 48 documented matching standard-error comparisons use different methods
-and are recorded as exclusions, not passing checks. `test_release_gate.py`
-verifies that aborted components, stale logs, missing summaries, failed checks,
-and unexplained skips cannot pass the gate. Publication in CI requires a
-successful licensed Stata job configured with `CTOOLS_STATA_RUNNER`; skipping
-that job cannot publish or commit release binaries.
+The Python and C builders create small files for import and export tests,
+including Excel formats and formulas, malformed files and other format-specific
+cases. The checked-in Excel workbooks cover the 1900 and 1904 date systems.
+Keep generated files in `temp/`; the builders and small fixed inputs live here.

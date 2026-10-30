@@ -1,10 +1,25 @@
-# Manual diagnostic probes
+# Diagnostic probes
 
-These retained programs were previously named `validation/temp_*.do`. They are
-historical debugging aids, not release tests, and may rely on interactive state
-or obsolete paths. Useful cases have separate named regressions in the suite
-registry. Run probes only after checking their paths and inputs, and route new
-logs and temporary files to `temp/<task>/`.
+These Stata scripts help investigate specific command behavior. Run them manually;
+the automated correctness suite is listed in `validation/suites.json`.
 
-All Stata execution uses the `stata` alias through `/bin/zsh -lic`; batch drivers
-must end with `exit, clear`. Do not invoke an application binary directly.
+| Script | Purpose |
+| --- | --- |
+| `merge.do` | Compares `merge` and `cmerge` on datasets with 25 million observations |
+| `nobatch.do` | Exercises `csort` with batch transfers enabled and disabled |
+| `which_cppml.do` | Shows which `cppmlhdfe` ado-file Stata loads and prints its opening lines |
+| `cppml_pathology_debug.do` | Compares PPML coefficients and covariance matrices across convergence settings |
+| `cppml_pathology_minchange.do` | Examines PPML covariance differences as convergence tolerances change |
+| `cwinsor_macro_rounding.do` | Checks percentile cutoff rounding against `winsor2` |
+
+Run probes from the repository root in a fresh Stata session, with `build/` on
+the ado-path and the required reference packages installed. Review each script's
+inputs and settings before running it. The merge and sorting probes create large
+datasets; the sorting probe also changes the `ctools_nobatch` global.
+
+Save logs and generated output in `temp/<task>/`. For batch runs, use
+`validation/support/stata_runner.py` with a driver that closes its log and ends
+with `exit, clear`. See [Stata setup](../README.md#run-the-tests).
+
+Add repeatable regression tests to the appropriate test directory and register
+them in `validation/suites.json`.
