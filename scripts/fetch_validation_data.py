@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / 'validation/fixtures'
 # examples: official Stata datasets required by the offline gate.
 # hdfe: Sergio Correia's HDFE benchmark collection (https://www.scorreia.com/data/hdfe/),
-#       about 227 MB, used only by the opt-in validation/performance/run_hdfe_datasets.py.
+#       about 227 MB, used only by the opt-in validation/bench.py hdfe.
 COLLECTIONS = {
     'examples': {
         'manifest': FIXTURES / 'manifest.json', 'directory': FIXTURES / 'data',

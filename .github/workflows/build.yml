@@ -76,9 +76,9 @@ jobs:
       - name: Validate native code and release metadata
         run: |
           python3 scripts/sync_release.py --check
-          python3 -m validation.checks.check_package build --metadata-only
-          python3 -m validation.checks.check_docs_tree
-          CC=gcc python3 -m validation.suite_registry --native
+          python3 validation/run.py --checks package build --metadata-only
+          python3 validation/run.py --checks docs
+          CC=gcc python3 validation/run.py --native
 
       - name: Check adaptive transport memory ownership
         env:
@@ -86,15 +86,15 @@ jobs:
           CTOOLS_SANITIZERS: address,undefined
           ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
         run: |
-          python3 -m validation.native.tests.test_transport_adaptive_native
-          python3 -m validation.native.tests.test_transport_store_native
-          python3 -m validation.native.tests.test_rowstage_native
+          python3 validation/run.py --native test_transport_adaptive_native
+          python3 validation/run.py --native test_transport_store_native
+          python3 validation/run.py --native test_rowstage_native
 
       - name: Build Linux plugin
         run: make linux BUILD_REVISION=${{ github.sha }}
 
       - name: Check Linux dependency contract
-        run: python3 -m validation.checks.check_dependencies linux build/ctools_linux.plugin
+        run: python3 validation/run.py --checks dependencies linux build/ctools_linux.plugin
 
       - name: Upload Linux plugin
         uses: actions/upload-artifact@v4
@@ -123,7 +123,7 @@ jobs:
         run: make macos-arm LIBOMP_PREFIX="$RUNNER_TEMP/libomp" BUILD_REVISION=${{ github.sha }}
 
       - name: Check macOS dependency contract
-        run: python3 -m validation.checks.check_dependencies macos build/ctools_mac_arm.plugin --arch arm64
+        run: python3 validation/run.py --checks dependencies macos build/ctools_mac_arm.plugin --arch arm64
 
       - name: Upload macOS ARM plugin
         uses: actions/upload-artifact@v4
@@ -152,7 +152,7 @@ jobs:
         run: make macos-intel LIBOMP_PREFIX="$RUNNER_TEMP/libomp" BUILD_REVISION=${{ github.sha }}
 
       - name: Check macOS dependency contract
-        run: python3 -m validation.checks.check_dependencies macos build/ctools_mac_x86.plugin --arch x86_64
+        run: python3 validation/run.py --checks dependencies macos build/ctools_mac_x86.plugin --arch x86_64
 
       - name: Upload macOS Intel plugin
         uses: actions/upload-artifact@v4
@@ -194,11 +194,11 @@ jobs:
 
       - name: Test Windows file APIs and MSYS2 cleanup
         shell: msys2 {0}
-        run: python -m validation.checks.test_windows_files
+        run: python validation/run.py --checks windows
 
       - name: Check Windows dependency contract
         shell: msys2 {0}
-        run: python -m validation.checks.check_dependencies windows build/ctools_windows.plugin
+        run: python validation/run.py --checks dependencies windows build/ctools_windows.plugin
 
       - name: Upload Windows plugin
         uses: actions/upload-artifact@v4

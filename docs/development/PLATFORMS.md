@@ -18,7 +18,7 @@ An installed Homebrew OpenMP archive may target a newer macOS release than the p
 ```bash
 python3 scripts/build_macos_openmp.py arm64 /tmp/ctools-libomp --work /tmp/ctools-llvm
 make macos-arm LIBOMP_PREFIX=/tmp/ctools-libomp
-python3 -m validation.checks.check_dependencies macos build/ctools_mac_arm.plugin --arch arm64
+python3 validation/run.py --checks dependencies macos build/ctools_mac_arm.plugin --arch arm64
 ```
 
 For Intel, substitute `x86_64` and `macos-intel`. The helper verifies source archive hashes and builds OpenMP 21.1.8 for macOS 11. Both Make targets check the archive's architecture and deployment version before linking. With no static archive, a local build uses pthreads without OpenMP; it never silently adds a Homebrew dylib dependency. Distribution CI builds the static runtime explicitly.

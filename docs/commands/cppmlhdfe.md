@@ -91,7 +91,7 @@ log exposure, and excludes the absorbed effects.
 
 ## Validation and compatibility limits
 
-`validation/stata/validate_cppmlhdfe.do` includes the original examples,
+`validation/stata/cppmlhdfe.do` includes the original examples,
 `cppmlhdfe_precision_cases.do`, `cppmlhdfe_compatibility_cases.do`,
 `cppmlhdfe_upstream_cases.do`, and `cppmlhdfe_advanced_cases.do`. These compare
 actual retained rows, coefficient

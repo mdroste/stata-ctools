@@ -2,7 +2,7 @@
 
 Sergio Correia's [HDFE benchmark collection](https://www.scorreia.com/data/hdfe/index.html) is a set of 15 datasets for testing estimators that absorb high-dimensional fixed effects. Each has an outcome `y`, regressors `x1` and `x2`, and two identifiers, `id1` and `id2`, that define a bipartite graph. Several carry further identifiers. The graphs differ in the property that makes absorption easy or hard, how well the two sets of units are connected: they range from a complete bipartite design to a single path through 10,001 nodes.
 
-[`validation/performance/validate_hdfe_datasets.do`](../../validation/performance/validate_hdfe_datasets.do) runs `creghdfe` and `reghdfe` on every dataset with one, two, three and four fixed effects, with regrouped identifiers, and with unadjusted, robust and clustered covariances, and compares what the two commands store. This page walks through those tests and what they show. The tables are generated from the run described under [Environment](#environment). The underlying rows are in [`benchmarks/hdfe_datasets_results.csv`](../benchmarks/hdfe_datasets_results.csv) and [`benchmarks/hdfe_datasets_oracle.csv`](../benchmarks/hdfe_datasets_oracle.csv).
+[`validation/performance/datasets.do`](../../validation/performance/datasets.do) runs `creghdfe` and `reghdfe` on every dataset with one, two, three and four fixed effects, with regrouped identifiers, and with unadjusted, robust and clustered covariances, and compares what the two commands store. This page walks through those tests and what they show. The tables are generated from the run described under [Environment](#environment). The underlying rows are in [`benchmarks/hdfe_datasets_results.csv`](../benchmarks/hdfe_datasets_results.csv) and [`benchmarks/hdfe_datasets_oracle.csv`](../benchmarks/hdfe_datasets_oracle.csv).
 
 The suite is opt-in. It needs about 227 MB of downloaded data and is not part of the offline release gate.
 
@@ -26,8 +26,8 @@ The suite is opt-in. It needs about 227 MB of downloaded data and is not part of
 
 ```sh
 python3 scripts/fetch_validation_data.py --collection hdfe   # once: 15 files, checksum-pinned
-python3 -m validation.performance.run_hdfe_datasets                      # run the comparisons
-python3 -m validation.performance.run_hdfe_datasets --write-doc          # also regenerate the tables below
+python3 validation/bench.py hdfe                      # run the comparisons
+python3 validation/bench.py hdfe --write-doc          # also regenerate the tables below
 ```
 
 The first command downloads the Stata files into the ignored `validation/fixtures/data/hdfe/` and verifies each against the SHA-256 in [`validation/fixtures/hdfe_manifest.json`](../../validation/fixtures/hdfe_manifest.json). The suite never downloads anything itself. It needs `reghdfe` and `ftools` installed, uses the plugin in `build/` unless `--build-dir` names another build, and took about eleven minutes on the machine below. The runner exits with an error when any comparison fails.
@@ -314,8 +314,8 @@ The totals above and the per-row seconds are single wall-clock runs taken during
 
 | File | Purpose |
 |---|---|
-| [`validation/performance/validate_hdfe_datasets.do`](../../validation/performance/validate_hdfe_datasets.do) | The comparisons |
-| [`validation/performance/run_hdfe_datasets.py`](../../validation/performance/run_hdfe_datasets.py) | Checks the data cache, runs Stata, regenerates the tables here |
+| [`validation/performance/datasets.do`](../../validation/performance/datasets.do) | The comparisons |
+| [`validation/bench_profiles.py`](../../validation/bench_profiles.py) | Checks the data cache, runs Stata, regenerates the tables here |
 | [`scripts/fetch_validation_data.py`](../../scripts/fetch_validation_data.py) | `--collection hdfe` downloads and verifies the datasets |
 | [`validation/fixtures/hdfe_manifest.json`](../../validation/fixtures/hdfe_manifest.json) | Source URL and SHA-256 of each dataset |
 | [`benchmarks/hdfe_datasets_results.csv`](../benchmarks/hdfe_datasets_results.csv) | One row per run: settings, sample, degrees of freedom of both commands, digits, seconds, differences |

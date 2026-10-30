@@ -270,7 +270,7 @@ unchecked writes can overwrite values in other columns.
 
 For small transfers, a work estimate based on column widths determines whether
 to start worker threads. All-numeric loads use blocks of 512 rows when there are at least 128 columns and
-50,000 selected observations. `validation/native/tests/test_transport_adaptive_native.py`
+50,000 selected observations. `validation/native_contracts.py`
 checks these thresholds. Measure performance again before changing them.
 
 ### Storing Data to Stata
@@ -380,16 +380,16 @@ stata_data_free(&data);
 The C tests replace the SPI with test functions and compile with and without
 OpenMP:
 
-| Test in `validation/native/tests/` | What it checks |
+| Named check in `validation/native_contracts.py` | What it checks |
 | --- | --- |
-| `test_transport_native.py` | Selected observations, values, string-width limits and which buffers to free |
-| `test_transport_scheduling.py` | Work split by variable or row, reordered data, destination indices and SPI errors |
-| `test_transport_adaptive_native.py` | Size thresholds for wide numeric loads, allocation retries, packed strings, optional sort order and reordered loads with errors |
-| `test_transport_store_native.py` | Duplicate or invalid destination indices, sparse data, allocation failures, writes, cancellation and size thresholds for sorted writes |
-| `test_rowstage_native.py` | Which data can use row storage, copied values, extracted columns, repeated or absent sources, errors before writing, cancellation and incorrect width hints |
+| `test_transport_native` | Selected observations, values, string-width limits and which buffers to free |
+| `test_transport_scheduling` | Work split by variable or row, reordered data, destination indices and SPI errors |
+| `test_transport_adaptive_native` | Size thresholds for wide numeric loads, allocation retries, packed strings, optional sort order and reordered loads with errors |
+| `test_transport_store_native` | Duplicate or invalid destination indices, sparse data, allocation failures, writes, cancellation and size thresholds for sorted writes |
+| `test_rowstage_native` | Which data can use row storage, copied values, extracted columns, repeated or absent sources, errors before writing, cancellation and incorrect width hints |
 
 Run a test directly with Python, or run all C tests with
-`python3 -m validation.suite_registry --native`. `CTOOLS_TEST_SOURCE` selects an
+`python3 validation/run.py --native`. `CTOOLS_TEST_SOURCE` selects an
 alternative source directory. `CTOOLS_SANITIZERS=address,undefined` enables
 AddressSanitizer and UndefinedBehaviorSanitizer, which check memory access and
 undefined C operations. Linux CI runs these tests and checks adaptive loads and
@@ -1190,7 +1190,7 @@ A failed compile or link leaves the previous plugin in place.
 to the relevant bundled sources. See [build requirements](PLATFORMS.md) before
 changing platform flags.
 
-### 5. Add Stata files and tests
+### 5. Add Stata files
 
 Create `build/newcmd.ado` and `build/newcmd.sthlp`, and list every ado, prediction
 helper and help file in `build/ctools.pkg`. Edit the Stata files in `build/`;
@@ -1198,11 +1198,6 @@ this is also the directory used for installation. Set the version in
 `config/release.json` and copy it into the package files with
 `scripts/sync_release.py`.
 
-Add tests to `validation/suites.json`, then run
-`python3 -m validation.suite_registry --write-master`. Each test group must print
-its completion message after its last check. The test-list and package checks
-report missing files, tests omitted from the list and incomplete runs.
-Update the generated command list with `python3 scripts/sync_architecture.py`.
 
 ---
 
@@ -1211,12 +1206,12 @@ Update the generated command list with `python3 scripts/sync_architecture.py`.
 Measure changes with the same data and options in both builds. The
 three-command benchmark compares `cipolate`, `csplit` and `crangejoin` with
 Stata or SSC commands at 1M, 5M and 20M rows. Use
-`python3 -m validation.performance.prepare_readme_benchmarks` with a saved build,
-then `python3 -m validation.performance.summarize_readme_benchmarks` to check the
+`python3 validation/bench.py readme` with a saved build,
+then `python3 validation/bench.py summarize-readme` to check the
 logs and summarize all trials. The scripts alternate execution order, use a clock
 that cannot jump backward, and check every output cell outside the timed code.
 
-`python3 -m validation.run_performance_audit` compares public commands on 40
+`python3 validation/bench.py audit` compares public commands on 40
 mixed-type columns. Run baseline and candidate builds in B-C-C-B order, each in
 a separate Stata process. The script copies the plugin and ado files for each
 run and checks that every planned timing and output comparison is present.
@@ -1344,30 +1339,8 @@ ST_retcode mycmd_main(const char *args)
 
 ## Tests and installation packages
 
-See the [testing guide](../../validation/README.md) for required packages, data
-and commands. `python3 -m validation.run_stata_audit` runs all Stata correctness
-tests. Each test group must finish with zero failed or skipped checks.
-Standard-error tests use the formula appropriate to each method.
-
-The `run_io_*.py` scripts create temporary test files and remove them after each
-run, including after errors. Logs remain in `temp/io_*`. For performance
-comparisons, run `python3 -m validation.performance.prepare_io_performance --run`.
-The output directory keeps the logs, build settings, `timings.csv`, `summary.csv`
-and `comparisons.txt`. Use `--keep-data` to keep input and exported files for
-debugging or `--summarize-only`. Preparing scripts without `--run` leaves data in
-place when those scripts are later executed manually.
-
-The encode and grouped-command benchmarks also remove generated `.dta` files
-unless `--keep-data` is set. `prepare_command_performance.py --run` runs the
-baseline and candidate in A-B-B-A order, saves timings and removes generated
-data. Without `--run`, it prints commands for manual execution. Timing summaries
-can be read again after deleting the data; comparing exported files byte for
-byte requires keeping those files.
-
-For comparisons of `creghdfe` and `reghdfe` on larger examples, see the
-[HDFE benchmark guide](../performance/HDFE_DATASETS.md). These benchmarks run
-separately from the correctness tests and need the HDFE download collection
-(about 227 MB).
+Follow the [test instructions](../../validation/README.md) to check ctools.
+For timing comparisons, follow the [benchmark instructions](../performance/README.md).
 
 ### Create an installation package
 
@@ -1434,8 +1407,8 @@ runtime supplies fewer threads than requested. Sorting runs with one worker
 when OpenMP is disabled. Resetting an arena reuses its blocks; both aligned and
 ordinary allocations check for size overflow.
 
-`validation/stata/validate_sep24.do` and
-`validation/native/tests/test_sep24_native.py` check these behaviors. The C test
+`validation/stata/regressions.do` and
+`validation/native_contracts.py` check these behaviors. The C test
 accepts `CTOOLS_TEST_OPENMP_PREFIX` to test a limited number of OpenMP workers
 and `CTOOLS_SANITIZERS=address,undefined` to enable memory and undefined-behavior
 checks. The Stata tests are included in the full correctness run.
@@ -1449,30 +1422,30 @@ counts and writes the expanded dataset. `csplit` and `crangejoin` register
 cleanup functions with `ctools_runtime` because they make multiple plugin calls;
 their ado wrappers clear retained data after errors.
 
-All three command tests run through `validate_all.do`. Tests of `crangejoin`
+All three command tests run through `validation/run.py`. Tests of `crangejoin`
 against SSC `rangejoin` require version 1.1.3 and `rangestat`. Using `crangejoin`
 itself requires neither package. Run
-`python3 -m validation.native.tests.test_newcommands_native` to test the C
+`python3 validation/run.py --native test_newcommands_native` to test the C
 functions with UndefinedBehaviorSanitizer and simulate each allocation failure.
 Set `CTOOLS_SANITIZERS=address,undefined` to add AddressSanitizer; Linux CI uses
-both. `validation/performance/benchmark_newcommands.do` measures complete
+both. `validation/performance/commands.do` measures complete
 commands and compares their results.
 
 The shared stable-sort function uses radix sorting for large numeric inputs,
 parallel merge sorting for string or mixed inputs, and skips sorting data already
 in order. It preserves extended missing values and the order of ties. Check it
-with `python3 -m validation.native.tests.test_order_parallel`. On macOS, set
+with `python3 validation/run.py --native test_order_parallel`. On macOS, set
 `CTOOLS_LIBOMP_PREFIX` to the OpenMP installation directory; Linux uses
 `-fopenmp`.
 
-`python3 -m validation.native.tests.test_split_tokens_native` checks in-place
+`python3 validation/run.py --native test_split_tokens_native` checks in-place
 string storage, using test substitutes for SPI and allocation functions. It also
-accepts `CTOOLS_SANITIZERS`. `validation/stata/validate_command_optimizations.do`
+accepts `CTOOLS_SANITIZERS`. `validation/stata/contracts.do`
 compares results with the original Stata or community commands; run it through
-`validation/support/stata_runner.py` to capture errors.
+`python3 validation/run.py --stata contracts` to capture errors.
 
-For repeated timings, use the `prepare_command_performance` and
-`summarize_command_performance` Python modules in `validation/performance/`.
+For repeated timings, use `python3 validation/bench.py commands` and
+`python3 validation/bench.py summarize-commands`.
 They run saved baseline and candidate plugins in separate processes and use a
 clock that cannot jump backward.
 
@@ -1503,7 +1476,7 @@ other inputs. `ctools_group_ranges` uses exact numeric equality, distinguishes
 extended missing values and treats a NULL string as empty. `ctools_rng`
 preserves the seeded sequence and order of draws.
 
-See [C tests](../../validation/native/README.md) for shared helpers and tests that
+See [C tests](../../validation/README.md) for shared helpers and tests that
 include source files directly to simulate allocation failures. See
 [generated import tables](../../tools/generation/README.md) for updating generated
 files, and [code style](STYLE.md) for formatting conventions.
@@ -1533,8 +1506,8 @@ and generated data go in `temp/`. Tracked documentation and source comments
 should link to files available in a clean clone.
 
 `docs/benchmarks/` holds the results regenerated by
-`validation/performance/profile_readme.do` and
-`python3 -m validation.performance.run_hdfe_datasets --write-doc`. To add results
+`validation/performance/profiles.do` and
+`python3 validation/bench.py hdfe --write-doc`. To add results
 there, provide a script that regenerates them at fixed paths, link them from a
 tracked document and add the paths to the documentation-tree check. When a
 measurement supports a threshold in the code, explain the relevant numbers and

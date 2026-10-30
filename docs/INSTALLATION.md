@@ -23,7 +23,7 @@ net install ctools, from("https://raw.githubusercontent.com/mdroste/stata-ctools
 
 Alternatively, run `net install ctools, from("/absolute/path/to/extracted/archive") replace`.
 From a source checkout, verify the extracted package with
-`python3 -m validation.checks.check_package /path/to/extracted/archive --integrity`.
+`python3 validation/run.py --checks package /path/to/extracted/archive --integrity`.
 
 GitHub Releases are created explicitly and receive `ctools-<version>.zip` after
 the build checks pass. The version comes from `config/release.json`. Pushes to

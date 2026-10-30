@@ -68,7 +68,7 @@ strL variables load the column first and are coded on one thread. `encode` itsel
 
 Measured October 14, 2026 on an Apple M4 Pro with StataNow/MP 19.5, both
 commands limited to four processors, on the 20-variable README profiler dataset
-(`validation/performance/profile_readme.do`): `encode region, gen(result)` with four distinct
+(`validation/performance/profiles.do`): `encode region, gen(result)` with four distinct
 `str8` values. Median of three calls.
 
 | Observations | `encode` | `cencode` | Speedup |

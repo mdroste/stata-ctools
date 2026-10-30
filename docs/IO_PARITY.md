@@ -91,7 +91,7 @@ Exports write to a temporary file next to the destination and replace it only af
 
 ## Testing
 
-Every format is tested against Stata's own `import` and `export`. The tests compare values, variable names, storage types, display formats, labels, characteristics, sort order, and the data left in memory after an error. The suites are listed in [`validation/suites.json`](../validation/suites.json).
+Every format is tested against Stata's own `import` and `export`. The tests compare values, variable names, storage types, display formats, labels, characteristics, sort order, and the data left in memory after an error. List the discovered cases with `python3 validation/run.py --list`; see the [testing guide](../validation/README.md).
 
 ## Third-party code
 

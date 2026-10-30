@@ -404,7 +404,7 @@ $(BUILD_DIR):
 # ------------------------------------------------------------------------------
 macos-arm: $(BUILD_DIR) package-sources
 ifeq ($(MAC_ARM_HAS_OMP),yes)
-	@python3 -m validation.checks.check_dependencies macos "$(LIBOMP_PREFIX)/lib/libomp.a" --arch arm64 --archive
+	@python3 validation/run.py --checks dependencies macos "$(LIBOMP_PREFIX)/lib/libomp.a" --arch arm64 --archive
 endif
 	@echo ""
 	@echo " Building MacOS plugin (arm64)"
@@ -432,7 +432,7 @@ endif
 # ------------------------------------------------------------------------------
 macos-intel: $(BUILD_DIR) package-sources
 ifeq ($(MAC_X86_HAS_OMP),yes)
-	@python3 -m validation.checks.check_dependencies macos "$(LIBOMP_INTEL)/lib/libomp.a" --arch x86_64 --archive
+	@python3 validation/run.py --checks dependencies macos "$(LIBOMP_INTEL)/lib/libomp.a" --arch x86_64 --archive
 endif
 	@echo ""
 	@echo " Building MacOS plugin (x86_64)"

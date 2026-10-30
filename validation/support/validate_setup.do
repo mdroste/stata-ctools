@@ -95,7 +95,7 @@ program define test_skip
 end
 
 /*******************************************************************************
- * print_failures - Print all recorded failures (called by validate_all.do)
+ * print_failures - Print all recorded failures (called by the test runner)
  ******************************************************************************/
 capture program drop print_failures
 program define print_failures
@@ -126,7 +126,7 @@ end
 
 /*******************************************************************************
  * print_summary - No-op for backwards compatibility (silent)
- * Summary is now printed only by validate_all.do
+ * The runner prints the aggregate summary
  ******************************************************************************/
 capture program drop print_summary
 program define print_summary
@@ -473,7 +473,7 @@ program define reset_counters
 end
 
 * Load benchmark helper programs (works from project root or validation dir)
-capture quietly do "validation/performance/benchmark_helpers.do"
+capture quietly do "validation/support/comparisons.do"
 if _rc != 0 {
-    quietly do "benchmark_helpers.do"
+    quietly do "support/comparisons.do"
 }
