@@ -4,12 +4,12 @@ High-performance C-accelerated instrumental variables regression with high-dimen
 
 ## Overview
 
-`civreghdfe` is a high-performance replacement for `ivreghdfe` that uses a C plugin for all computations. It performs instrumental variables (IV) regression with two-stage least squares (2SLS) while absorbing high-dimensional fixed effects. The command combines the speed of the `creghdfe` HDFE absorption algorithm with 2SLS estimation.
+`civreghdfe` is a high-performance replacement for `ivreghdfe` that uses a C plugin for all computations. It defaults to two-stage least squares (2SLS) and also supports LIML, Fuller LIML, k-class, two-step GMM, and continuously updated GMM. Absorbing fixed effects is optional.
 
 ## Syntax
 
 ```stata
-civreghdfe depvar (endogvars = instruments) [exogvars] [if] [in] [weight], absorb(varlist) [options]
+civreghdfe depvar (endogvars = instruments) [exogvars] [if] [in] [weight] [, absorb(varlist) options]
 ```
 
 ## Options
@@ -17,7 +17,7 @@ civreghdfe depvar (endogvars = instruments) [exogvars] [if] [in] [weight], absor
 ### Main Options
 | Option | Description |
 |--------|-------------|
-| `absorb(varlist)` | **Required.** Categorical variables to absorb as fixed effects |
+| `absorb(varlist)` | Optional categorical fixed effects |
 
 ### Variance/Standard Error Options
 | Option | Description |
@@ -34,6 +34,12 @@ civreghdfe depvar (endogvars = instruments) [exogvars] [if] [in] [weight], absor
 |--------|-------------|
 | `tolerance(#)` | CG solver convergence tolerance (default: 1e-8) |
 | `maxiter(#)` | Maximum CG iterations (default: 500) |
+| `liml`, `fuller(#)`, `kclass(#)` | Alternative IV estimators |
+| `gmm2s`, `cue` | Two-step or continuously updated GMM |
+| `partial(varlist)` | Partial out specified model terms; `fwl()` is an alias |
+| `orthog()`, `endogtest()`, `redundant()` | Instrument orthogonality, regressor endogeneity, and instrument redundancy tests |
+| `residuals(newvar)` | Save residuals |
+| `threads(#)` | Maximum workers; zero uses the ctools thread setting |
 
 ### Reporting Options
 | Option | Description |
@@ -117,7 +123,7 @@ Compute residuals using original X (not projected X) for proper inference. Apply
 
 With the `first` option, `civreghdfe` reports:
 - First-stage F-statistics for each endogenous variable
-- Tests instrument strength (rule of thumb: F > 10)
+- Reports excluded-instrument relevance; interpretation depends on the model and covariance estimator
 
 Computed from the partial R-squared of excluded instruments in first-stage regressions.
 
@@ -215,7 +221,7 @@ For valid 2SLS estimation:
 `civreghdfe` achieves its speed through the following tricks:
 
 **HDFE Absorption (shared with `creghdfe`):**
-- **CG solver with symmetric Kaczmarz transform**: Forward + backward sweep per iteration doubles convergence rate
+- **CG solver with symmetric Kaczmarz transform**: Forward and backward sweeps define the projection operator
 - **Pre-computed inverse group counts**: Multiplies instead of divides in the inner demeaning loop
 - **Counting sort for CSR construction**: O(N+L) sparse index builds
 - **Thread-local buffers**: Eliminates contention during parallel demeaning

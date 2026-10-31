@@ -1,4 +1,4 @@
-*! version 1.2.1 20261029 github.com/mdroste/stata-ctools
+*! version 1.2.3 20261030 github.com/mdroste/stata-ctools
 *! ctools: drop the scalars and matrices a command and its plugin leave behind
 * _ctools_cleanup <command> [<command> ...] drops every scalar and matrix
 * named __<command>_* or _<command>_*.

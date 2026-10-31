@@ -16,8 +16,48 @@ from unittest.mock import patch
 from validation import bench as benchmark
 from validation import options as coverage
 from validation import stata as launcher
+from validation import bench_profiles
+from validation import native as native_harness
 from validation.bench import audit_summarize as summarize
 from validation.options import CASES, source, validate_cases
+
+
+class performance_ProfileEvidence(unittest.TestCase):
+    def test_selected_pair_and_incomplete_results(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "timings.csv"
+            header = "command,observations,method,seconds,rc,check_rc\n"
+            ref = "distinct,1000000,ref,1,0,0\n"
+            candidate = "distinct,1000000,c,0.1,0,0\n"
+            path.write_text(header + ref + candidate)
+            _, ranges = bench_profiles.profile_summarize(path, [1000000], ["distinct"])
+            self.assertEqual(ranges, {"distinct": "10×"})
+            for rows in [ref, ref + candidate + candidate]:
+                path.write_text(header + rows)
+                with self.assertRaises(ValueError):
+                    bench_profiles.profile_summarize(path, [1000000], ["distinct"])
+            path.write_text(header + ref + candidate.replace(",0,0\n", ",0,9\n"))
+            _, ranges = bench_profiles.profile_summarize(path, [1000000], ["distinct"])
+            self.assertEqual(ranges, {"distinct": "—"})
+
+    def test_selected_readme_update_preserves_other_rows(self):
+        with tempfile.TemporaryDirectory() as directory:
+            out = Path(directory)
+            (out / "profile.log").write_text("PROFILE_COMPLETE\nPROFILE_EXIT rc=0\n")
+            rows = "command,observations,method,seconds,rc,check_rc\n"
+            for n in bench_profiles.profile_SIZES:
+                rows += f"distinct,{n},ref,1,0,0\ndistinct,{n},c,0.1,0,0\n"
+            (out / "timings.csv").write_text(rows)
+            readme = out / "README.md"
+            other = "| `sort` | `csort` | Sort | 1–4× |\n"
+            readme.write_text(other + "| `distinct` | `cdistinct` | Count | — |\n")
+            with contextlib.redirect_stdout(io.StringIO()):
+                bench_profiles.profile_main(
+                    [str(out), "--pairs", "distinct", "--update-readme", str(readme)]
+                )
+            self.assertEqual(
+                readme.read_text(), other + "| `distinct` | `cdistinct` | Count | 10× |\n"
+            )
 
 
 class performance_AuditEvidence(unittest.TestCase):
@@ -237,7 +277,7 @@ def check_io_cleanup(root):
 
 def check_dataset_cleanup(root):
     build = root / "build"
-    for command in ("cipolate", "csplit", "crangejoin"):
+    for command in ("cinterpolate", "csplit", "crangejoin"):
         (build / (command + ".ado")).write_text("fake frozen ado")
     for name in ("command", "encode", "group"):
         runner = benchmark
@@ -324,13 +364,35 @@ def check_dataset_cleanup(root):
 
 
 def test_performance():
-    suite = unittest.defaultTestLoader.loadTestsFromTestCase(performance_AuditEvidence)
+    suite = unittest.TestSuite(
+        unittest.defaultTestLoader.loadTestsFromTestCase(case)
+        for case in (performance_AuditEvidence, performance_ProfileEvidence)
+    )
     result = unittest.TextTestRunner().run(suite)
     if not result.wasSuccessful():
         raise AssertionError("Benchmark evidence checks failed")
 
 
 def test_runner():
+    # MSYS2 Python may default to cp1252, which cannot decode UTF-8 source comments.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        folder = root / "validation/native"
+        folder.mkdir(parents=True)
+        (folder / "encoding.suite.c").write_text(
+            '// UTF-8 closing quote: ”\n#if defined(CTOOLS_CASE_encoding)\n#endif\n',
+            encoding="utf-8",
+        )
+        original_open = Path.open
+
+        def legacy_open(path, mode="r", *args, **kwargs):
+            if "b" not in mode and kwargs.get("encoding") is None:
+                kwargs["encoding"] = "cp1252"
+            return original_open(path, mode, *args, **kwargs)
+
+        with patch.object(native_harness, "ROOT", root), patch.object(Path, "open", legacy_open):
+            source = native_harness.unit(root, "encoding")
+            assert "CTOOLS_CASE_encoding" in source.read_text(encoding="utf-8")
     available, _ = launcher.cases()
     assert "memory_safety" in available
     for marker in (

@@ -214,6 +214,7 @@ profile_COMMANDS = {
     "encode": "encode",
     "decode": "decode",
     "destring": "destring",
+    "distinct": "distinct",
     "ipolate": "ipolate",
     "split": "split",
     "rangejoin": "rangejoin",
@@ -238,7 +239,10 @@ def profile_rounded(ratio, *, upper):
     return str(rounding(ratio / step) * step)
 
 
-def profile_summarize(path, sizes):
+def profile_summarize(path, sizes, pairs=None):
+    commands = profile_COMMANDS if pairs is None else {key: profile_COMMANDS[key] for key in pairs}
+    if not commands or (pairs is not None and len(commands) != len(pairs)):
+        raise ValueError("Select at least one command, without duplicates")
     rows = {}
     with path.open(newline="") as source:
         for row in csv.DictReader(source):
@@ -246,9 +250,7 @@ def profile_summarize(path, sizes):
             if key in rows:
                 raise ValueError(f"duplicate timing: {key}")
             rows[key] = row
-    expected = {
-        (cmd, n, method) for cmd in profile_COMMANDS for n in sizes for method in ("ref", "c")
-    }
+    expected = {(cmd, n, method) for cmd in commands for n in sizes for method in ("ref", "c")}
     if rows.keys() != expected:
         raise ValueError(f"unexpected/missing timings: {rows.keys() ^ expected}")
     output = [
@@ -256,7 +258,7 @@ def profile_summarize(path, sizes):
         "|---|---:|---:|---:|---:|",
     ]
     ranges = {}
-    for cmd, label in profile_COMMANDS.items():
+    for cmd, label in commands.items():
         ratios = []
         for n in sizes:
             pair = [rows[cmd, n, method] for method in ("ref", "c")]
@@ -290,6 +292,12 @@ def profile_main(argv=None):
         "--sizes", nargs="+", type=int, default=profile_SIZES, help="override only for smoke tests"
     )
     parser.add_argument("--update-readme", type=Path)
+    parser.add_argument(
+        "--pairs",
+        nargs="+",
+        choices=profile_COMMANDS,
+        help="Summarize only the specified profiler pairs",
+    )
     args = parser.parse_args(argv)
     log = (args.directory / "profile.log").read_text()
     if not re.search(r"^PROFILE_COMPLETE$", log, re.MULTILINE) or not re.search(
@@ -299,7 +307,7 @@ def profile_main(argv=None):
     if args.update_readme and tuple(args.sizes) != profile_SIZES:
         parser.error("README publication requires the full 1M/10M/25M run")
     try:
-        details, ranges = profile_summarize(args.directory / "timings.csv", args.sizes)
+        details, ranges = profile_summarize(args.directory / "timings.csv", args.sizes, args.pairs)
     except (ValueError, KeyError) as error:
         parser.error(str(error))
     (args.directory / "results.md").write_text(details)

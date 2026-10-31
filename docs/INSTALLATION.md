@@ -4,7 +4,7 @@
 
 ctools is compatible with Stata 14.1+ (plugin interface version 3.0). The [platform contract](development/PLATFORMS.md) specifies CPU/OS baselines and runtime dependencies, including Linux libgomp.
 
-**Note:** ctools does not support datasets exceeding 2^31 (~2.147 billion) observations. This is a [known limitation](https://github.com/mcaceresb/stata-gtools/issues/43) of Stata's plugin API for C and can only be addressed with an internal Stata update. ctools will gracefully exit with an error if your dataset exceeds this limit.
+**Note:** ctools does not support datasets exceeding 2^31−1 (2,147,483,647) observations. This is a [known limitation](https://github.com/mcaceresb/stata-gtools/issues/43) of Stata's plugin API for C and can only be addressed with an internal Stata update. ctools will gracefully exit with an error if your dataset exceeds this limit.
 
 
 ## Installation
@@ -14,6 +14,14 @@ ctools is compatible with Stata 14.1+ (plugin interface version 3.0). The [platf
 ```stata
 net install ctools, from("https://raw.githubusercontent.com/mdroste/stata-ctools/main/build") replace
 ```
+
+### Updating an installation
+
+Restart Stata after replacing a loaded plugin. The interpolation command is
+`cinterpolate`; `cinterpolate, cubic` implements SSC `cipolate`-style interpolation.
+When upgrading from a ctools installation that supplied `cipolate.ado` and
+`cipolate.sthlp`, locate those files with `which cipolate`, check their headers,
+and remove only the stale ctools copies. See the [migration instructions](USAGE.md#interpolation-cinterpolate).
 
 ### Manual Installation
 

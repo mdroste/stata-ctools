@@ -1,4 +1,4 @@
-*! version 1.2.1 20261029 github.com/mdroste/stata-ctools
+*! version 1.2.3 20261030 github.com/mdroste/stata-ctools
 
 program define ctools, rclass
     version 14.1
@@ -34,7 +34,7 @@ program define ctools, rclass
         exit
     }
 
-    local __ado_version "1.2.1"
+    local __ado_version "1.2.3"
     if "`environment_check'" != "" | "`version'" != "" | `"`threads'"' != "" {
         * Load the plugin if not already loaded
         _ctools_load
@@ -145,12 +145,14 @@ program define ctools, rclass
     di as result "╚██████╗   ██║   ╚██████╔╝╚██████╔╝███████╗███████║"
     di as result " ╚═════╝   ╚═╝    ╚═════╝  ╚═════╝ ╚══════╝╚══════╝"
     di as text ""
-    di as text "  {it:C-accelerated tools for Stata}{col 56}v1.2.1"
+    di as text "  {it:C-accelerated tools for Stata}{col 56}v1.2.3"
     di as text "{hline 60}"
     di as text ""
     di as text "{ul:Data Management}"
     di as text "  {help cimport:cimport}      Import delimited/Excel data"
     di as text "  {help cexport:cexport}      Export delimited/Excel data"
+    di as text "  {help cdistinct:cdistinct}    Report distinct values"
+    di as text "  {help chdfe:chdfe}        Remove fixed effects from variables"
     di as text "  {help csort:csort}        Sort dataset"
     di as text "  {help cmerge:cmerge}       Merge datasets"
     di as text "  {help csample:csample}      Sample without replacement"
@@ -161,7 +163,7 @@ program define ctools, rclass
     di as text "  {help cwinsor:cwinsor}      Winsorize variables"
     di as text "  {help crangestat:crangestat}   Range statistics"
     di as text ""
-    di as text "  {help cipolate:cipolate}     Linear interpolation"
+    di as text "  {help cinterpolate:cinterpolate} Linear and cubic interpolation"
     di as text "  {help csplit:csplit}       Split strings into fields"
     di as text "  {help crangejoin:crangejoin}   Interval joins"
     di as text ""

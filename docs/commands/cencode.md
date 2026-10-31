@@ -9,18 +9,19 @@ High-performance C-accelerated string encoding for Stata datasets.
 ## Syntax
 
 ```stata
-cencode varname [if] [in], generate(newvar) [options]
+cencode varlist [if] [in], {generate(newvarlist) | replace} [options]
 ```
 
 ## Options
 
 | Option | Description |
 |--------|-------------|
-| `generate(newvar)` | **Required.** Name of the new numeric variable to create |
+| `generate(newvarlist)` | One distinct new output name per source variable; required unless `replace` is specified |
+| `replace` | Replace each source with its encoded numeric variable; cannot be combined with `generate()` |
 | `label(name)` | Name for the value label (default: same as newvar) |
 | `noextend` | Do not extend existing value label |
 | `verbose` | Display timing breakdown |
-| `threads(#)` | Maximum number of threads (default: all available) |
+| `threads(#)` | Maximum workers; zero uses the ctools thread setting (automatic cap: 16) |
 
 ## Examples
 
@@ -37,7 +38,7 @@ label list make_code
 cencode make, generate(make_num) label(car_makes)
 
 * Encode with verbose timing output
-cencode make, generate(make_code) verbose
+cencode make, generate(make_verbose) verbose
 
 * Encode only foreign cars
 cencode make if foreign == 1, generate(foreign_make)
@@ -56,7 +57,7 @@ cencode make if foreign == 1, generate(foreign_make)
 - Each thread writes the final codes for its observations to the output variable
 - Without `if`/`in`, the output variable is created without initial values and every observation is written
 
-strL variables load the column first and are coded on one thread. `encode` itself handles `noextend` with an unlabeled string, existing labels with extended missing values or text longer than 2,045 bytes, and codes beyond the `long` range.
+`encode` handles strL inputs. It also handles `noextend` with an unlabeled string, existing labels with extended missing values or text longer than 2,045 bytes, and codes beyond the `long` range.
 
 ### Speedup Tricks
 1. **Streaming two-pass design**: Only K unique strings and a 4-byte code per observation are stored in memory, not the strings themselves
@@ -66,21 +67,12 @@ strL variables load the column first and are coded on one thread. `encode` itsel
 
 ## Performance
 
-Measured October 14, 2026 on an Apple M4 Pro with StataNow/MP 19.5, both
-commands limited to four processors, on the 20-variable README profiler dataset
-(`validation/performance/profiles.do`): `encode region, gen(result)` with four distinct
-`str8` values. Median of three calls.
-
-| Observations | `encode` | `cencode` | Speedup |
-|-------------:|---------:|----------:|--------:|
-| 1,000,000 | 0.21s | 0.010s | ~20x |
-| 10,000,000 | 3.0s | 0.085s | ~35x |
-| 10,000,000, existing value label | 2.7s | 0.06s | ~45x |
-
-Performance gains are most significant with:
-- Large datasets (100K+ observations)
-- Moderate number of unique values
-- Longer string values
+See the [published profiler results](../benchmarks/readme_profile/results.md)
+and [run metadata](../benchmarks/readme_profile/manifest.json) for measured
+encoding times. Reproduce them with the [benchmark runner](../performance/README.md).
+The streaming C path keeps a four-byte code per observation and storage for the
+unique strings, so memory use depends on both the number of rows and the number
+and length of distinct values.
 
 ## Timing Breakdown
 
@@ -112,28 +104,25 @@ cencode timing breakdown:
 
 ## Stored Results
 
-`cencode` stores the following scalars:
+`cencode` stores the following in `r()`:
 
 | Scalar | Description |
 |--------|-------------|
-| `_cencode_n_unique` | Number of unique string values encoded |
-| `_cencode_time_load` | Time to read and code strings (pass 1, seconds) |
-| `_cencode_time_sort` | Time to sort unique values (seconds) |
-| `_cencode_time_encode` | Time to encode and write values (seconds) |
-| `_cencode_time_total` | Total C plugin time (seconds) |
+| `r(N_unique)` | Number of unique strings encoded for the last source variable |
+| `r(N_vars)` | Number of variables encoded |
 
 ## Limitations
 
 - Maximum of 65,536 unique values (Stata value label limit)
-- Stata's Plugin Interface serializes data access, limiting parallelization benefits
+- Empty strings and observations excluded by `if`/`in` become numeric missing values, including with `replace`
 
 ## Comparison with Native `encode`
 
 | Feature | Stata `encode` | `cencode` |
 |---------|----------------|-----------|
-| Algorithm | Mata-based | C with hash table |
-| Memory | O(N) | O(K) unique values |
-| Lookup | Linear search | Hash table O(1) |
+| Multiple source variables | No | Yes |
+| Replace source variables | No | Yes |
+| String coding | Native command | Hash tables plus bytewise sorting of unique strings |
 
 ## See Also
 

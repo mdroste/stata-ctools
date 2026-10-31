@@ -388,7 +388,7 @@
       "sha256": "2e3b784d9b2d18bae8e0af9a2532fc9fff2fc22ac955272757d66badcdb6a85d",
       "version_comments": [
         "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
-        "*! _ctools_group — group identifiers from the ctools plugin, in place of egen group()",
+        "*! _ctools_group \u2014 group identifiers from the ctools plugin, in place of egen group()",
         "*!",
         "*! Usage:  _ctools_group varlist [if] [in], generate(newvar) [label]",
         "*!         _ctools_group varlist [if] [in], count",
@@ -457,7 +457,7 @@
       "sha256": "e058c1d65c266f37a144908b5889827390026d72454792361619acb0ee3471c7",
       "version_comments": [
         "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
-        "*! _ctools_strw — set string width metadata for ctools flat buffer optimization",
+        "*! _ctools_strw \u2014 set string width metadata for ctools flat buffer optimization",
         "*!",
         "*! Usage:  _ctools_strw varlist",
         "*!",
@@ -705,7 +705,7 @@
       "sha256": "92888a6e4e67213c71e09a50f9ec043c0320828105b553757d6cee01ca5a0b82",
       "version_comments": [
         "*! version 2.3.3 02nov2025",
-        "*! Authors: Sergio Correia, Paulo Guimarães, Thomas Zylkin",
+        "*! Authors: Sergio Correia, Paulo Guimar\u00e3es, Thomas Zylkin",
         "*! URL: https://github.com/sergiocorreia/ppmlhdfe"
       ]
     },
@@ -724,16 +724,85 @@
       ]
     }
   },
-  "completed_calls": 120,
+  "completed_calls": 126,
   "command_failures": 0,
   "basic_check_failures": 0,
   "result_files": {
     "timings.csv": {
-      "sha256": "276305ca49f949ce2d7a4e33250902ed92d86b3465b7237b47573eed2498ab57"
+      "sha256": "4f9400f68e8958505b3d27943c449d78f4719a4eedaf3698410f5f6e6d63361a"
     },
     "results.md": {
-      "sha256": "d368a858161280f20a24f27115af375000afbac257e204d5f5483b56674c2f91"
+      "sha256": "c7b6d15b0c20bb88b36a2f9be3d5104f58fee2f31d26b9e9c4f33013f916cdf0"
     }
   },
-  "ctools_threads_note": "ctools commands ran without threads(); the thread policy resolved to 12 (usable CPUs, at most 16). Stata references used set processors 4, the license limit."
+  "ctools_threads_note": "ctools commands ran without threads(); the thread policy resolved to 12 (usable CPUs, at most 16). Stata references used set processors 4, the license limit.",
+  "command_runs": {
+    "distinct": {
+      "platform": "macOS-26.7.1-arm64-arm-64bit-Mach-O",
+      "machine": "arm64",
+      "stata_processors": 4,
+      "ctools_threads": 12,
+      "seed": 95183,
+      "sortseed": 95183,
+      "observations": [
+        1000000,
+        10000000,
+        25000000
+      ],
+      "variables": 20,
+      "keys": [
+        "firm",
+        "group",
+        "region",
+        "sector"
+      ],
+      "reference": "distinct 1.2.1 (1 March 2012)",
+      "warmups": 0,
+      "repetitions": 1,
+      "order": [
+        "reference",
+        "ctools"
+      ],
+      "timer": "Stata timer around the complete four-variable command; generation, reloads, and correctness checks excluded",
+      "checks": "r(N), r(ndistinct), and original row order; each column checked separately outside timing",
+      "files": {
+        "frozen-build/cdistinct.ado": {
+          "sha256": "1094bade5c90d2f93cf68dd6811fa28b18e808c5f3cc53267395c5f6a30eb37f"
+        },
+        "frozen-build/_ctools_load.ado": {
+          "sha256": "7e4144423400b8a484db1f7c6aba38abe132571d2535b85c9198ac2fb7eaba39"
+        },
+        "frozen-build/_ctools_strw.ado": {
+          "sha256": "833d82832c9019efa9ed03ecb6745b8369072dd4d67cbb49860ee477a6703883"
+        },
+        "frozen-build/ctools.ado": {
+          "sha256": "269255982f52ebcd29fea9ea09fdeb75d1a613676341c25f16fdfd6b1c9de75f"
+        },
+        "frozen-build/ctools_mac_arm.plugin": {
+          "sha256": "533d62b1070dc6e8cae214d3b334bb76b334c78b22f295b469a02bcfb688211a"
+        },
+        "frozen-build/distinct.ado": {
+          "sha256": "84b9e238385e1baf2cb338e75c2e20d6c5d1fadf5866e1a3a98551b533f123e1"
+        },
+        "validation/performance/profiles.do": {
+          "sha256": "954d627a14899e03564a967d4b9f6facad99c9b28446b2950d9f5f7f0ddb8b8c"
+        },
+        "generated-workload": {
+          "sha256": "381545dc46dc100842c1f5401a7e5b48c2ccd02df13396619b3461e77cd1d423"
+        }
+      },
+      "reference_sha256": "84b9e238385e1baf2cb338e75c2e20d6c5d1fadf5866e1a3a98551b533f123e1",
+      "date": "2026-10-30",
+      "timezone": "America/Los_Angeles",
+      "stata": "StataNow/MP 19.5 for Unix (Apple Silicon); Revision 14 Oct 2026",
+      "logical_processors": 12,
+      "command": "distinct firm group region sector",
+      "candidate": "cdistinct firm group region sector",
+      "completed_calls": 6,
+      "command_failures": 0,
+      "basic_check_failures": 0,
+      "execution_note": "The three sizes ran sequentially in one Stata batch using frozen plugin and ado files. Thread settings were queried using the same frozen build and launch environment immediately afterward.",
+      "source_identity": "Local working tree; the frozen plugin and wrappers are identified by their SHA-256 hashes."
+    }
+  }
 }

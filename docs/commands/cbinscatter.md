@@ -30,6 +30,8 @@ cbinscatter yvar xvar [if] [in] [weight] [, options]
 | `controls(varlist)` | Control variables to partial out via OLS |
 | `absorb(varlist)` | Fixed effects to absorb via HDFE (numeric or string; any codes) |
 | `by(varname)` | Create separate series by group |
+| `method(string)` | `classic` (default) residualizes x and y; `binsreg` bins raw x and adjusts bin means jointly with controls |
+| `threads(#)` | Maximum workers; zero uses the ctools thread setting |
 
 ### Line Fitting Options
 | Option | Description |
@@ -52,6 +54,8 @@ cbinscatter yvar xvar [if] [in] [weight] [, options]
 | `xtitle(string)` | X-axis title (default: variable name) |
 | `legend(string)` | Legend options |
 | `colors(string)` | Colors for series |
+| `msymbols(string)` | Marker symbols for series |
+| `mlabels(string)` | Text labels for the plotted series |
 | *twoway_options* | Additional options passed to `twoway` |
 
 ### Reporting Options
@@ -67,7 +71,7 @@ Supports `aweight`, `fweight`, `pweight`, and `iweight`.
 
 ```stata
 * Basic binned scatter plot
-sysuse auto
+sysuse auto, clear
 cbinscatter price mpg
 
 * With 10 bins and no fit line
@@ -81,7 +85,7 @@ webuse nlswork, clear
 cbinscatter ln_wage tenure, absorb(idcode year)
 
 * Separate series by group
-sysuse auto
+sysuse auto, clear
 cbinscatter price mpg, by(foreign) nquantiles(10)
 
 * Quadratic fit with custom titles
@@ -205,7 +209,7 @@ With `verbose`, you'll see time spent in:
 ## See Also
 
 - [ctools Overview](../../README.md)
-- [creghdfe](creghdfe.md) - Regression with HDFE (used internally)
+- [creghdfe](creghdfe.md) - Regression with HDFE
 - binscatter - Original Stata implementation (if installed)
 
 ## Controls and weights

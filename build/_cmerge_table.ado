@@ -1,4 +1,4 @@
-*! version 1.2.1 20261029 github.com/mdroste/stata-ctools
+*! version 1.2.3 20261030 github.com/mdroste/stata-ctools
 *! Private helper for cmerge.
 program define _cmerge_table
     args isupdate m1 m2 m3 m4 m5 mergevar

@@ -31,7 +31,7 @@ typedef struct
  *
  * Writes must stay on the checked callback: concurrent unchecked stores to
  * different variables corrupted whole columns in real Stata (cwinsor and
- * cipolate validation, September 2026), redirecting one variable's column
+ * cinterpolate validation), redirecting one variable's column
  * into another, even though single-threaded semantics are bitwise identical.
  * Do not switch IO_VSTORE_FN to (_stata_)->store. */
 #ifdef CTOOLS_IO_CHECKED_SPI

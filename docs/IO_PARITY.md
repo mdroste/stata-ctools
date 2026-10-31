@@ -18,7 +18,7 @@
 
 StataNow's `import parquet`, `import fred`, and `import haver` aren't supported. Commands like `odbc`, `jdbc`, `infile`, and `infix` are separate from `import` and have no ctools versions.
 
-Both commands carry variable names, storage types, variable and value labels, display formats, and dataset characteristics between Stata and the file. Text longer than 2,045 bytes is stored as strL, and so are shapefile binary headers.
+Metadata preservation depends on the file format and options. Statistical formats can carry variable and value labels and display formats; delimited text cannot preserve a Stata dataset's full metadata. Text longer than 2,045 bytes is stored as strL on import, and so are shapefile binary headers.
 
 ## Delimited text
 
@@ -28,7 +28,7 @@ Both commands carry variable names, storage types, variable and value labels, di
 - explicit variable names, row and column ranges, `favorstrfixed`, and `maxquotedrows()`
 - UTF-8, UTF-16, UTF-32, and named code pages
 - automatic encoding detection, using the same ICU detectors as Stata
-- `locale()` with all 1,016 locale names Stata recognizes, so numbers like `1.234,5` parse correctly
+- `parselocale()` with 1,016 names from the pinned OpenJDK locale tables, so numbers like `1.234,5` parse correctly
 
 `cexport delimited` handles strL variables.
 
@@ -42,7 +42,7 @@ Dates and numbers are handled as in `import excel`:
 
 - Both the 1900 and 1904 date systems work.
 - Each column is a date or a datetime column. A single cell with a time of day makes the whole column datetime.
-- When a column shares one built-in Excel number format, it gets the matching Stata display format. Custom formats and mixed columns get `%10.0g`.
+- Recognized built-in and custom date/time formats receive corresponding Stata display formats. Other custom formats are not fully mapped; mixed columns follow the inferred column type.
 - TRUE/FALSE cells import as 1/0, error cells as missing, and text formula results as strings.
 
 `cimport excel` differs from `import excel` in a few ways, all deliberate:
@@ -87,11 +87,11 @@ Two cases get different display formats than in Stata, because Stata's own choic
 
 As in Stata, SAS, SPSS, XPORT, dBase, and shapefile imports clear the data in memory before reading the file, so a failed import leaves an empty dataset unless you specify `snapshot`. Excel imports check the file before replacing anything. See [Compatibility](COMPATIBILITY.md#when-a-command-fails) for `snapshot` and `fast`.
 
-Exports write to a temporary file next to the destination and replace it only after the write succeeds, so a failed export never leaves a half-written file. Formats that write more than one file, such as shapefiles and XPORT files with value labels, replace each file in turn. If a later file fails, the earlier ones have already been replaced.
+Exports write to temporary files next to their destinations and publish them after writing succeeds. Multi-file exports, such as shapefiles and XPORT files with value labels, retain the originals and roll back ordinary publication failures. This is not a crash-atomic transaction across files. If rollback itself fails, the original backups are retained and their paths reported. On POSIX filesystems without exclusive rename or hard links, the no-overwrite fallback copies into an exclusively created destination; that name is visible during the copy and is removed if copying fails.
 
 ## Testing
 
-Every format is tested against Stata's own `import` and `export`. The tests compare values, variable names, storage types, display formats, labels, characteristics, sort order, and the data left in memory after an error. List the discovered cases with `python3 validation/run.py --list`; see the [testing guide](../validation/README.md).
+Tests compare with Stata's `import` and `export` where the reference command is available, checking values, variable names, storage types, display formats, labels, characteristics, sort order, and the data left in memory after an error. SAS export uses reader-based validation because the validation installation lacks the native SAS writer. List the discovered cases with `python3 validation/run.py --list`; see the [testing guide](../validation/README.md).
 
 ## Third-party code
 

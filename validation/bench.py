@@ -123,7 +123,7 @@ def commands_main(argv=None):
     manifest = {}
     for tag, build in [("b", a.baseline.resolve()), ("c", a.candidate.resolve())]:
         files = [build / plugin] + [
-            build / (command + ".ado") for command in ("cipolate", "csplit", "crangejoin")
+            build / (command + ".ado") for command in ("cinterpolate", "csplit", "crangejoin")
         ]
         manifest[tag] = {str(f): hashlib.sha256(f.read_bytes()).hexdigest() for f in files}
     flags = ["-std=c11", "-O2", "-I", str(ROOT / "src")]

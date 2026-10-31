@@ -71,7 +71,7 @@ def included_sources(path, includes, seen=None):
     seen.add(path)
     if path.name.endswith(".suite.c"):
         return seen  # Selected sections declare their own companion includes.
-    for name in re.findall(r'^\s*#include\s+"([^"\n]+\.c)"', path.read_text(), re.M):
+    for name in re.findall(r'^\s*#include\s+"([^"\n]+\.c)"', path.read_text(encoding="utf-8"), re.M):
         for folder in [path.parent, *includes]:
             candidate = folder / name
             if candidate.is_file():
@@ -125,7 +125,7 @@ def compile_native(command, **kwargs):
                     return match[0]
 
                 source = re.sub(
-                    r'^\s*#include\s+"([^"\n]+)"', include, path.read_text(), flags=re.M
+                    r'^\s*#include\s+"([^"\n]+)"', include, path.read_text(encoding="utf-8"), flags=re.M
                 )
                 tail = [p for group in additions.values() for p in group]
                 wrapper.write_text(
@@ -133,7 +133,8 @@ def compile_native(command, **kwargs):
                     + source
                     + "\n"
                     + "\n".join(f'#include "{p}"' for p in tail)
-                    + "\n"
+                    + "\n",
+                    encoding="utf-8",
                 )
                 command[index] = str(wrapper)
         return subprocess.run(command, **kwargs)
@@ -156,7 +157,7 @@ def openmp_prefix():
 def run_test(directory, name, source, modules=(), openmp=False):
     cfile = directory / f"{name}.c"
     binary = directory / name
-    cfile.write_text(source)
+    cfile.write_text(source, encoding="utf-8")
     flags = [
         "-std=c11",
         "-O2",
@@ -225,7 +226,7 @@ def harness(name):
     matches = [
         p
         for p in (ROOT / "validation/native").glob("*.suite.c")
-        if f"#if defined(CTOOLS_CASE_{name})" in p.read_text()
+        if f"#if defined(CTOOLS_CASE_{name})" in p.read_text(encoding="utf-8")
     ]
     if len(matches) != 1:
         raise ValueError(f"Native case {name}: expected one source, found {matches}")
@@ -234,7 +235,7 @@ def harness(name):
 
 def unit(directory, name):
     path = directory / (name + ".c")
-    path.write_text(harness(name))
+    path.write_text(harness(name), encoding="utf-8")
     return path
 
 
@@ -258,7 +259,7 @@ def run_transfer(name, *, passive=False):
     with tempfile.TemporaryDirectory(prefix="ctools-transfer-") as temporary:
         directory = Path(temporary)
         source = directory / "test.c"
-        source.write_text(SPI + harness(name))
+        source.write_text(SPI + harness(name), encoding="utf-8")
         for omp in (False, True):
             binary = directory / ("test-" + str(omp))
             flags = [

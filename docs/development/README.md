@@ -176,9 +176,16 @@ typedef enum {
     STATA_ERR_INVALID_INPUT = 2,// NULL pointer or invalid parameter
     STATA_ERR_STATA_READ = 3,   // Stata plugin read error
     STATA_ERR_STATA_WRITE = 4,  // Stata plugin write error
-    STATA_ERR_UNSUPPORTED_TYPE = 5
+    STATA_ERR_UNSUPPORTED_TYPE = 5,
+    STATA_ERR_CANCELLED = 6,
+    STATA_ERR_SINGULAR = 7,
+    STATA_ERR_NONCONVERGENCE = 8
 } stata_retcode;
 ```
+
+Convert these internal statuses with `ctools_stata_rc()` at the command boundary.
+Do not convert a native SPI return code a second time.
+
 
 ---
 
@@ -452,7 +459,7 @@ typedef enum {
 
 ### Choosing an Algorithm
 
-`SORT_ALG_AUTO` uses MSD when any key is a string and counting sort otherwise, falling back to LSD when the data are unsuitable for counting sort. An explicit `SORT_ALG_COUNTING` also falls back to LSD:
+`SORT_ALG_AUTO` uses MSD when a string key is wider than 16 bytes, LSD when all string keys fit within 16 bytes, and counting sort for all-numeric keys. Counting sort falls back to LSD when the numeric data are unsuitable. An explicit `SORT_ALG_COUNTING` also falls back to LSD:
 
 ```c
 ctools_sort_dispatch(&data, sort_vars, nsort, SORT_ALG_COUNTING);
@@ -650,14 +657,18 @@ if (ctools_parse_bool_option(args, "stable")) {
 ```c
 // Get integer option ("key=value" format)
 int nthreads = 4;  // default
-ctools_parse_int_option(args, "threads", &nthreads);
+if (ctools_parse_int_option(args, "threads", &nthreads) == CTOOLS_PARSE_INVALID) {
+    return 198;
+}
 
 // Get double option with default
 double pctl = ctools_parse_double_option(args, "p", 1.0);
 
 // Get string option
 char name[64];
-if (ctools_parse_string_option(args, "name", name, sizeof(name))) {
+ctools_parse_status parsed = ctools_parse_string_option(args, "name", name, sizeof(name));
+if (parsed == CTOOLS_PARSE_INVALID) return 198;
+if (parsed == CTOOLS_PARSE_OK) {
     // name = value from "name=value"
 }
 ```
@@ -782,9 +793,8 @@ if (CTOOLS_UNLIKELY(error)) {
 | `CACHE_LINE_SIZE` | 64 | Alignment for allocations |
 | `RADIX_BITS` | 8 | Radix sort bucket size (256 buckets) |
 | `CTOOLS_IO_BUFFER_SIZE` | 64 KB | File I/O buffer size |
-| `CTOOLS_IMPORT_CHUNK_SIZE` | 8 MB | Bytes per CSV parsing chunk |
 | `CTOOLS_EXPORT_CHUNK_SIZE` | 10,000 | Rows per CSV formatting chunk |
-| `CTOOLS_ARENA_BLOCK_SIZE` | 1 MB | Arena allocator block size |
+| `CTOOLS_ARENA_DEFAULT_BLOCK_SIZE` | 1 MB | Growing-arena block size (`ctools_arena.h`) |
 | `CTOOLS_MAX_VARNAME_LEN` | 32 | Maximum Stata variable name length |
 | `CTOOLS_MAX_STRING_LEN` | 2045 | Maximum Stata string length |
 | `CTOOLS_MAX_COLUMNS` | 32,767 | Maximum Stata columns |
@@ -895,8 +905,10 @@ ctools_str_hash_free(&ht);
 ### Value Label Output
 
 ```c
-// Write a .do file that rebuilds the labels with Mata st_vlmodify()
-ctools_label_write_stata_file(strings, codes, n_labels, "myvar", "output.do");
+// Write length-prefixed label data for cencode's Mata reader, not executable code.
+if (ctools_label_write_file(strings, codes, n_labels, "labels.dat") != 0) {
+    /* handle the write error */
+}
 ```
 
 ---
@@ -915,11 +927,11 @@ ST_int ctools_invert_from_cholesky(const ST_double *L, ST_int n, ST_double *inv)
 // Solve Ax = b
 ST_int ctools_solve_cholesky(const ST_double *A, const ST_double *b, ST_int n, ST_double *x);
 
-// Quad-precision dot products (match Stata's quadcross)
+// Compensated and fast double-precision dot products
 ST_double kahan_dot(const ST_double *x, const ST_double *y, ST_int N);
 ST_double fast_dot(const ST_double *x, const ST_double *y, ST_int N);
 
-// Quad-precision sum of squares
+// Double-double accumulation of sums of squares
 ST_double dd_sum_sq(const ST_double *x, ST_int N);
 ST_double dd_sum_sq_weighted(const ST_double *x, const ST_double *w, ST_int N);
 
@@ -991,8 +1003,8 @@ typedef struct {
     ST_int normalize_weights; // 1=normalize aw/pw (OLS), 0=raw (IV)
 } ctools_vce_data;
 
-void ctools_vce_robust(const ctools_vce_data *d, ST_double dof_adj, ST_double *V);
-void ctools_vce_cluster(const ctools_vce_data *d, const ST_int *cluster_ids,
+ST_retcode ctools_vce_robust(const ctools_vce_data *d, ST_double dof_adj, ST_double *V);
+ST_retcode ctools_vce_cluster(const ctools_vce_data *d, const ST_int *cluster_ids,
                         ST_int num_clusters, ST_double dof_adj, ST_double *V);
 ```
 
@@ -1149,13 +1161,27 @@ ST_retcode newcmd_main(const char *args)
                                          CTOOLS_LOAD_CHECK_IF);
     if (rc != STATA_OK) {
         ctools_error("newcmd", "Failed to load data");
-        return 920;
+        ctools_filtered_data_free(&fd);
+        return ctools_stata_rc(rc);
+    }
+
+    // This example accepts numeric columns only.
+    for (size_t k = 0; k < nvars; ++k) {
+        if (fd.data.vars[k].type != STATA_TYPE_DOUBLE) {
+            ctools_filtered_data_free(&fd);
+            return 109;
+        }
     }
 
     // Process... (fd.data.vars[k].data.dbl[i])
 
     // Store results
-    rc = ctools_data_store(&fd.data, SF_in1());
+    // Map selected rows back to their original Stata observations.
+    // This example handles numeric columns; use ctools_store_filtered_str for strings.
+    for (size_t k = 0; k < nvars && rc == STATA_OK; ++k) {
+        rc = ctools_store_filtered(fd.data.vars[k].data.dbl, fd.data.nobs,
+                                   var_indices[k], fd.obs_map);
+    }
     ctools_filtered_data_free(&fd);
 
     if (verbose) {
@@ -1164,7 +1190,7 @@ ST_retcode newcmd_main(const char *args)
                        _timer_total_elapsed);
     }
 
-    return rc == STATA_OK ? 0 : 920;
+    return ctools_stata_rc(rc);
 }
 ```
 
@@ -1204,7 +1230,7 @@ this is also the directory used for installation. Set the version in
 ## Performance Guidelines
 
 Measure changes with the same data and options in both builds. The
-three-command benchmark compares `cipolate`, `csplit` and `crangejoin` with
+three-command benchmark compares `cinterpolate`, `csplit` and `crangejoin` with
 Stata or SSC commands at 1M, 5M and 20M rows. Use
 `python3 validation/bench.py readme` with a saved build,
 then `python3 validation/bench.py summarize-readme` to check the
@@ -1216,7 +1242,7 @@ mixed-type columns. Run baseline and candidate builds in B-C-C-B order, each in
 a separate Stata process. The script copies the plugin and ado files for each
 run and checks that every planned timing and output comparison is present.
 
-For `cipolate` and `csplit`, pass the original observation selection to the
+For `cinterpolate` and `csplit`, pass the original observation selection to the
 plugin. Use `skipif` only when there is no `if` condition to evaluate. Write
 every value of a new output, including missing interpolation results and absent
 split fields. Outputs restricted to a subset of observations must still be
@@ -1274,7 +1300,7 @@ commit or a different command. A successful apply keeps the undo copy.
 2. **Prefetch for indirect access**:
    ```c
    for (size_t i = 0; i < n; i++) {
-       CTOOLS_PREFETCH(&data[order[i + 16]]);
+       if (i + 16 < n) CTOOLS_PREFETCH(&data[order[i + 16]]);
        output[i] = data[order[i]];
    }
    ```
@@ -1415,9 +1441,17 @@ checks. The Stata tests are included in the full correctness run.
 
 ## Interpolation, splitting, and interval joins
 
-`cipolate` sorts observation indices once, preserving the order of ties, then
-scans each group. `csplit` first determines output sizes, then writes temporary
-variables. `crangejoin` keeps the using columns, finds matches, checks output
+`cinterpolate` sorts observation indices once, preserving the order of ties, then
+scans each group. Linear mode preserves `ipolate` arithmetic and optional
+endpoint extrapolation. Cubic mode averages ties, maintains a rolling window
+of four distinct anchors, and evaluates a Lagrange polynomial only in the
+middle interval. Gaps without two anchors on each side remain missing;
+`cubic epolate` is rejected. Ratio products avoid cubing large x differences.
+The cubic scan needs only four anchor indices per worker, with no extra
+per-observation allocation. `validation/stata/cinterpolate.do` checks known
+polynomials, edge cases, grouped results, and SSC `cipolate` comparisons on
+unique x values (install SSC `cipolate` to run these comparisons). `csplit`
+first determines output sizes, then writes temporary variables. `crangejoin` keeps the using columns, finds matches, checks output
 counts and writes the expanded dataset. `csplit` and `crangejoin` register
 cleanup functions with `ctools_runtime` because they make multiple plugin calls;
 their ado wrappers clear retained data after errors.
@@ -1512,3 +1546,37 @@ there, provide a script that regenerates them at fixed paths, link them from a
 tracked document and add the paths to the documentation-tree check. When a
 measurement supports a threshold in the code, explain the relevant numbers and
 name the script that reproduces them beside that threshold.
+
+## Counting values and transforming fixed effects
+
+`cdistinct` uses `src/cdistinct/cdistinct_impl.c`. Its ado wrapper marks the
+sample and formats the count table. C counts exact distinct combinations
+without changing Stata data or observation order.
+
+`cdistinct` loads only selected keys, without a copied sample column or an
+initial permutation. It counts sorted inputs in one pass. Other inputs use an
+open-addressed hash table, with exact row comparisons for matching hashes and
+normalized signed zero. The table stops growing at 4,096 slots (64 KiB), then
+falls back to the shared radix/merge sorter. This bounds memory used by the
+hashing attempt when most values are unique. The workload in
+`validation/performance/cdistinct.do` compares ordered, numeric, string, mixed,
+and restricted samples against a separate frozen build. On Mac ARM with one
+million rows, this path reduced median elapsed time for 100 repeated strings
+from 65 ms to 19 ms and four separate numeric/string counts from 122 ms to
+60 ms; the mostly unique numeric case fell from 16 ms to 11 ms.
+
+`chdfe` parses factor/time-series syntax in ado and uses C group IDs for
+absorbed categories. Its C adapter builds a local `HDFE_State`, removes
+singletons, prepares weights and slopes, computes absorbed degrees of freedom,
+and calls the shared projection routines. Intercepts and slopes are separate
+factors; slopes paired with an intercept are centered within their category.
+Weights, slopes, and projection inputs are rescaled by powers of two to keep
+squared norms in range; residuals are returned in the original units.
+Projection columns are processed in pools. The default uses the same symmetric
+Kaczmarz/conjugate-gradient solver as `creghdfe`; optional transforms and
+accelerators are exposed through `partial_out_columns_options()`.
+
+Each call frees its C allocations before returning. Result variables are
+published only after all projections succeed. Clear mode preserves the dataset
+during publication. `validation/stata/cdistinct.do` and
+`validation/stata/chdfe.do` compare reference results and exercise output and error contracts.

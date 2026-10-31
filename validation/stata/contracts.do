@@ -167,7 +167,7 @@ foreach groups in "g" "x" "y" "x y" {
     ipolate y x, gen(ref) by(`groups') epolate
     sort id
     foreach threads in 1 4 12 {
-        cipolate y x, gen(got) by(`groups') epolate threads(`threads')
+        cinterpolate y x, gen(got) by(`groups') epolate threads(`threads')
         assert_var_equal got ref $DEFAULT_SIGFIGS "radix/alias by(`groups') threads(`threads')"
         assert id==_n
         drop got
@@ -422,7 +422,7 @@ foreach selection in "" "if mod(id,3)==0" "in 13/17000" ///
     "if mod(id,3)==1 in 13/17000" "if 0" "if missing(x)" {
     foreach grouping in "" "by(g)" "by(x)" "by(y)" {
         ipolate y x `selection', gen(expected) epolate `grouping'
-        cipolate y x `selection', gen(actual) epolate `grouping'
+        cinterpolate y x `selection', gen(actual) epolate `grouping'
         assert reldif(actual,expected)<1e-12 | (missing(actual)&missing(expected))
         assert id==_n
         drop expected actual
@@ -460,7 +460,7 @@ drop expected* actual*
 local comparisons=`comparisons'+2
 * Every missing x value must be written even with an uninitialized destination.
 replace x=.z
-cipolate y x, gen(actual) epolate
+cinterpolate y x, gen(actual) epolate
 assert actual==.
 drop actual
 local ++comparisons
@@ -540,12 +540,12 @@ gen strL longkey="g"
 forvalues j=1/12 {
     quietly replace longkey=longkey+longkey in 2
 }
-cipolate y x, by(longkey) gen(actual) epolate
+cinterpolate y x, by(longkey) gen(actual) epolate
 assert actual==y if !missing(x)
 assert actual==. if missing(x)
 drop actual
 replace x=.
-cipolate y x, by(longkey) gen(actual)
+cinterpolate y x, by(longkey) gen(actual)
 assert actual==.
 local comparisons=`comparisons'+2
 di "PERFORMANCE_PATHS_COMPARISONS=`comparisons'"

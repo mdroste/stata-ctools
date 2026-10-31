@@ -16,13 +16,15 @@ Where `merge_type` is one of:
 - `1:1` - One-to-one merge
 - `m:1` - Many-to-one merge
 - `1:m` - One-to-many merge
-- `m:m` - Many-to-many merge (not recommended)
+- `m:m` - Pair repeated keys sequentially, repeating the shorter group's last row; this does not form all combinations
+
+Use `cmerge 1:1 _n using filename` to merge by observation number.
 
 ## Options
 
 | Option | Description |
 |--------|-------------|
-| `keep(results)` | Which observations to keep: `match`, `master`, `using`, `1`, `2`, `3` |
+| `keep(results)` | Keep `master`, `using`, `match`, `match_update`, `match_conflict`, or codes 1–5 |
 | `assert(results)` | Verify merge results match expected values |
 | `generate(varname)` | Name for merge indicator variable (default: `_merge`) |
 | `nogenerate` | Do not create merge indicator variable |
@@ -32,6 +34,11 @@ Where `merge_type` is one of:
 | `noreport` | Suppress merge result table |
 | `verbose` | Display timing and progress information |
 | `nolabel` | Do not copy value labels from using data |
+| `nonotes` | Do not copy notes from using data |
+| `update` | Fill missing master values from same-named using variables |
+| `replace` | Replace conflicting nonmissing values; requires `update` |
+| `preserve_order(#)` | Preserve master observation order when set to 1 |
+| `threads(#)` | Maximum workers; zero uses the ctools thread setting |
 | `snapshot` | Restore the master after a failure from a `preserve` snapshot (written to disk above `c(max_preservemem)`) |
 | `fast` | Keep no copy of the master; a failure or Break can leave the data partly merged |
 
@@ -53,7 +60,7 @@ cmerge m:1 id using lookup.dta, nogenerate verbose
 * Assert all observations should match
 cmerge 1:1 id using data2.dta, assert(match)
 
-* Force merge when key variable types differ
+* Retain master types when non-key variables have incompatible types
 cmerge m:1 code using lookup.dta, force
 ```
 
@@ -94,7 +101,9 @@ The `_merge` variable (or variable specified by `generate()`) indicates:
 |-------|-------|---------|
 | 1 | master only | Observation from master, no match in using |
 | 2 | using only | Observation from using, no match in master |
-| 3 | matched | Observation matched in both datasets |
+| 3 | matched | Observation matched without an update or conflict |
+| 4 | match update | Missing master values updated, without a conflict |
+| 5 | match conflict | Conflicting nonmissing values found |
 
 ## Stored Results
 
@@ -106,7 +115,9 @@ The `_merge` variable (or variable specified by `generate()`) indicates:
 | `r(N)` | Number of observations after merge |
 | `r(N_1)` | Number of observations only in master |
 | `r(N_2)` | Number of observations only in using |
-| `r(N_3)` | Number of matched observations |
+| `r(N_3)` | Matches without updates or conflicts |
+| `r(N_4)` | Updated matches (with `update`) |
+| `r(N_5)` | Conflicting matches (with `update`) |
 | `r(time)` | Elapsed time in seconds |
 
 ### Macros
@@ -117,7 +128,7 @@ The `_merge` variable (or variable specified by `generate()`) indicates:
 
 ## Technical Notes
 
-- Key variable types must match between master and using (unless `force` is specified)
+- Key variables must both be numeric or both be string, even with `force`
 - The using file must be a Stata `.dta` file (extension can be omitted)
 - Variable name conflicts: master values are kept by default
 - Missing values in key variables are treated as valid match keys

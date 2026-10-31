@@ -31,4 +31,4 @@ and GitHub environment configuration. Pull-request candidates remain unsigned.
 
 ## Worker and scratch limits
 
-`threads()` accepts 1–256 workers. Sampling limits workers to available groups; range statistics allocate sorting scratch only for percentiles, the median, and the interquartile range. Both commands reduce concurrent sorting/shuffle work to a 256 MiB scratch target. One worker remains available when a single group needs more than that target; this is not a limit on total command memory.
+`threads(0)` uses the configured default; positive requests accept 1–256 workers and are clamped to the available CPUs and runtime limits. Without an override, the default cap is 16. See the [thread policy](README.md#thread-count-management). Sampling limits workers to available groups; range statistics allocate sorting scratch only for percentiles, the median, and the interquartile range. Both commands reduce concurrent sorting/shuffle work to a 256 MiB scratch target. One worker remains available when a single group needs more than that target; this is not a limit on total command memory.

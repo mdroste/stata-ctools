@@ -23,7 +23,7 @@ program define perf_run
     if substr("`case'",1,2)=="ip" {
         local byopt by(g)
         if "`case'"=="ip_single" local byopt
-        cipolate y x, gen(result) `byopt' epolate threads(`threads') `verbose'
+        cinterpolate y x, gen(result) `byopt' epolate threads(`threads') `verbose'
     }
     else if substr("`case'",1,2)=="sp" {
         if "`case'"=="sp_multi" csplit text, gen(part) parse("::" ":" "|" ";" "--") threads(`threads') `verbose'
@@ -148,7 +148,7 @@ tempfile interpolated
 save `interpolated'
 use `base', clear
 timer on 2
-cipolate y x, gen(ref) by(g) epolate verbose
+cinterpolate y x, gen(ref) by(g) epolate verbose
 timer off 2
 cf _all using `interpolated'
 clear
@@ -185,7 +185,7 @@ cf _all using `joined'
 quietly timer list 1
 local ipolate=r(t1)
 quietly timer list 2
-local cipolate=r(t2)
+local cinterpolate=r(t2)
 quietly timer list 3
 local split=r(t3)
 quietly timer list 4
@@ -194,7 +194,7 @@ quietly timer list 5
 local rangejoin=r(t5)
 quietly timer list 6
 local crangejoin=r(t6)
-di "BENCH ipolate rows=`N' native=`ipolate' ctools=`cipolate'"
+di "BENCH ipolate rows=`N' native=`ipolate' ctools=`cinterpolate'"
 di "BENCH split rows=`N' native=`split' ctools=`csplit'"
 di "BENCH rangejoin rows=200000+200000 output=`=_N' native=`rangejoin' ctools=`crangejoin'"
 exit
@@ -274,7 +274,7 @@ foreach N of local sizes {
         local c_encode "cencode region, gen(result)"
         local c_decode "cdecode category, gen(result)"
         local c_destring "cdestring number, gen(result)"
-        local c_ipolate "cipolate yi month, by(firm) gen(result) epolate"
+        local c_ipolate "cinterpolate yi month, by(firm) gen(result) epolate"
         local c_split `"csplit code, gen(part) parse("|")"'
         local c_rangejoin `"crangejoin month -.5 .5 using "`offers'", by(firm) keepusing(x2 region)"'
         local c_qreg "cqreg y x1 x2 x3,"

@@ -1,4 +1,4 @@
-*! version 1.2.1 20261029 github.com/mdroste/stata-ctools
+*! version 1.2.3 20261030 github.com/mdroste/stata-ctools
 *! Private helper for cmerge.
 program define _cmerge_assert
     args codes n1 n2 n3 n4 n5

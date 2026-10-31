@@ -19,17 +19,17 @@ d   cdestring   - Convert strings to numeric data
 d   csample/cbsample - Sampling and bootstrap draws
 d   cwinsor     - Winsorize or trim variables
 d   crangestat  - Range statistics
-d   cipolate    - Linear interpolation
+d   cinterpolate    - Linear and cubic interpolation
 d   csplit      - String splitting
 d   crangejoin  - Interval joins
 d   cpsmatch    - Propensity score matching (ATT)
 d   cppmlhdfe   - PPML with high-dimensional fixed effects
 d
-d Version: 1.2.1
+d Version: 1.2.3
 d
 d Requires: Stata 14.1 or later
 d
-d Distribution-Date: 20261029
+d Distribution-Date: 20261030
 
 f ctools.ado
 f ctools.sthlp
@@ -79,8 +79,8 @@ f csample.ado
 f csample.sthlp
 f cwinsor.ado
 f cwinsor.sthlp
-f cipolate.ado
-f cipolate.sthlp
+f cinterpolate.ado
+f cinterpolate.sthlp
 f csplit.ado
 f csplit.sthlp
 f crangejoin.ado
@@ -114,3 +114,7 @@ f _cmerge_results.ado
 f _cmerge_table.ado
 f _cmerge_template.ado
 f _cppmlhdfe_abs_options.ado
+f cdistinct.ado
+f cdistinct.sthlp
+f chdfe.ado
+f chdfe.sthlp

@@ -715,3 +715,30 @@ program define coverage_prepare_bins_reference
     assert `declarations'==1 & `exposures'==1
     quietly run "`reference_copy'"
 end
+
+* Counts must agree even though these commands do not change the dataset.
+capture program drop coverage_count
+program define coverage_count
+    syntax, REFerence(string asis) CANDidate(string asis) NAME(string)
+    preserve
+    tempfile original
+    quietly save `original'
+    capture quietly `reference'
+    local nr = _rc
+    if !`nr' {
+        local n = r(N)
+        local d = r(ndistinct)
+    }
+    quietly use `original', clear
+    capture quietly `candidate'
+    local cr = _rc
+    local same = 0
+    if !`cr' & !`nr' {
+        local same = r(N)==`n' & r(ndistinct)==`d'
+        capture cf _all using `original'
+        local same = `same' & !_rc
+    }
+    restore
+    if `nr' | `cr' | !`same' coverage_failure "`name'" "reference rc=`nr'; candidate rc=`cr'; counts and data equal=`same'"
+    else test_pass "`name'"
+end

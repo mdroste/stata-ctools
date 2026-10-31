@@ -55,6 +55,8 @@
 #include "ctools_config.h"
 #include "ctools_threads.h"
 #include "ctools_runtime.h"
+#include "cdistinct/cdistinct_impl.h"
+#include "chdfe/chdfe_impl.h"
 #include "ctools_version.h"
 
 /*
@@ -263,7 +265,7 @@ static ST_retcode thread_settings_call(const char *args)
 #include "crangestat/crangestat_impl.h"
 #include "cpsmatch/cpsmatch_impl.h"
 #include "cppmlhdfe/cppmlhdfe_impl.h"
-#include "cipolate/cipolate_impl.h"
+#include "cinterpolate/cinterpolate_impl.h"
 #include "csplit/csplit_impl.h"
 #include "crangejoin/crangejoin_impl.h"
 #include "cgroup/cgroup_impl.h"

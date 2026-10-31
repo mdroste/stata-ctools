@@ -8,6 +8,8 @@ In the Weights column, `aw`, `fw`, `pw`, and `iw` are Stata weight types. A dash
 |---|---|---|---|
 | `cimport` | `import` | — | FRED, Haver, and StataNow's Parquet import aren't supported. See [format-specific differences](IO_PARITY.md). |
 | `cexport` | `export` | — | See [format-specific differences](IO_PARITY.md). |
+| `cdistinct` | `distinct` | — | Uses the original `in` range for each variable; distinct 1.2.1 can reselect rows after sorting. strL text is limited to 2,045 bytes. |
+| `chdfe` | `hdfe` | aw/fw/pw | Categorical interactions and heterogeneous slopes are supported. Solver iteration paths may differ. Conjugate gradient requires a symmetric transform. See [details](commands/chdfe.md). |
 | `csort` | `sort` | — | Stable by default. Rejects datasets containing any strL variables, even when already sorted. Adds `stream(#)` and `nosortedby` options. |
 | `cmerge` | `merge` | — | Key variables must be the same type (string or numeric) in both datasets, even with `force`. |
 | `csample` | `sample` | — | Uses `csample, count(20)` instead of `sample 20, count`. Samples need not match `sample` with the same seed. |
@@ -15,7 +17,7 @@ In the Weights column, `aw`, `fw`, `pw`, and `iw` are Stata weight types. A dash
 | `cencode` | `encode` | — | Accepts several variables at once and adds `replace`. |
 | `cdecode` | `decode` | — | Accepts several variables at once and adds `replace`. |
 | `cdestring` | `destring` | — | strL values are limited to 2,045 bytes. |
-| `cipolate` | `ipolate` | — | Adds `by()` and keeps the original row order. Unrelated to SSC's cubic-interpolation command of the same name. |
+| `cinterpolate` | `ipolate`, `cipolate` | — | Linear by default; `cubic` selects local four-point cubic interpolation without extrapolation. Adds `by()` and keeps row order. Cubic anchors use distinct x values after averaging ties; all extended missings are excluded. See [usage](USAGE.md#interpolation-cinterpolate) for migration from the former ctools name. |
 | `csplit` | `split` | — | — |
 | `crangejoin` | `rangejoin` 1.1.3 | — | Numeric and str# variables only. Output is limited to 2,147,483,647 observations. |
 | `cwinsor` | `winsor2`, `gstats winsor` | — | — |
@@ -41,7 +43,7 @@ The Unmatched row also follows `psmatch2`: its standard error comes from an OLS 
 
 ## String variables
 
-Most commands handle numeric variables, str# variables up to `str2045`, and strL values of text up to 2,045 bytes. Longer or binary strL values aren't supported, and neither is creating strL variables. When a command can't handle a strL, it either passes the work to the Stata command it replaces (`cencode`, `cdecode`, `csplit`) or stops with an error (`csort`, `crangejoin`). `cimport` and `cexport` are the exception: they handle long text and binary data for the Excel, SAS, SPSS, and shapefile formats.
+The shared C transfer layer handles numeric variables and fixed-width strings up to `str2045`. strL support depends on the command: `cencode`, `cdecode`, `csplit`, and `cmerge` use native Stata paths where needed, while `csort` and `crangejoin` reject strL. `cdestring` limits strL text to 2,045 bytes. `cimport` and `cexport` have dedicated long-text paths for delimited, Excel, and statistical formats, and handle shapefile binary headers. See the command help for format-specific limits.
 
 ## When a command fails
 

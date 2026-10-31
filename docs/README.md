@@ -4,6 +4,7 @@
 
 - [Installation](INSTALLATION.md): install ctools or build it from source.
 - [Usage](USAGE.md): command examples.
+- [Interpolation](USAGE.md#interpolation-cinterpolate), [string splitting](USAGE.md#string-fields-csplit), and [interval joins](USAGE.md#interval-joins-crangejoin).
 - [Features](FEATURES.md): additional features provided by ctools.
 - [Compatibility](COMPATIBILITY.md): supported syntax and differences from the commands ctools replaces.
 - [Import and export](IO_PARITY.md): supported file formats and Excel workbook behavior.
@@ -19,7 +20,8 @@ detail about individual commands:
 | [cencode](commands/cencode.md) | [crangestat](commands/crangestat.md) |
 | [cimport](commands/cimport.md) | [creghdfe](commands/creghdfe.md) |
 | [cexport](commands/cexport.md) | [civreghdfe](commands/civreghdfe.md) |
-| | [cppmlhdfe](commands/cppmlhdfe.md) |
+| [cdistinct](commands/cdistinct.md) | |
+| [chdfe](commands/chdfe.md) | [cppmlhdfe](commands/cppmlhdfe.md) |
 
 ## Build, test and contribute
 

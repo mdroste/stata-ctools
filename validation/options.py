@@ -81,11 +81,11 @@ for qualifier in ["", "if id<451", "in 20/480"]:
         )
     for opt in ["", "epolate", "by(group)", "by(group) epolate"]:
         case(
-            "cipolate",
+            "cinterpolate",
             f"interpolation {qualifier} {opt}",
             "generate epolate by threads verbose",
             f"ipolate y time {qualifier}, gen(out) {opt}",
-            f"cipolate y time {qualifier}, gen(out) {opt} threads(2) verbose",
+            f"cinterpolate y time {qualifier}, gen(out) {opt} threads(2) verbose",
             sortby="id",
         )
     for opt in [
@@ -774,6 +774,23 @@ for opt in ["charset(utf8)", 'delimiters(",")', 'delimiters(",") collapsedelimit
         + opt.replace("charset(utf8)", "encoding(utf8)"),
         f'cimport delimited using "`incoming\'", clear {opt}',
         setup=import_setup,
+    )
+
+# Counts have an r()-result oracle because successful calls leave data unchanged.
+for opt in ["", "missing", "joint", "joint missing"]:
+    case(
+        "cdistinct", "distinct counts " + opt,
+        "missing joint abbrev minimum maximum verbose threads",
+        f"distinct g s if id<451, {opt}",
+        f"cdistinct g s if id<451, {opt} abbrev(8) min(0) max(999) verbose threads(2)",
+        "count",
+    )
+for effects in ["g h", "g##c.time h"]:
+    case(
+        "chdfe", "within transformation " + effects,
+        "absorb generate sample tolerance poolsize threads verbose",
+        f"hdfe y x, absorb({effects}) gen(out_) sample(used) tol(1e-12) accel(none)",
+        f"chdfe y x, absorb({effects}) gen(out_) sample(used) tol(1e-12) pool(1) threads(2) verbose",
     )
 
 # Diagnostics must exist; two missing scalars are not evidence of equivalence.

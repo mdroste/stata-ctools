@@ -211,7 +211,7 @@ STATA_ORDER = (
     "crangestat",
     "cwinsor",
     "cppmlhdfe",
-    "cipolate",
+    "cinterpolate",
     "csplit",
     "crangejoin",
     "audit_p1",

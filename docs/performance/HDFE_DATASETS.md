@@ -6,6 +6,10 @@ Sergio Correia's [HDFE benchmark collection](https://www.scorreia.com/data/hdfe/
 
 The suite is opt-in. It needs about 227 MB of downloaded data and is not part of the offline release gate.
 
+The results below belong to the build recorded under [Environment](#environment).
+Run the reproduction commands to assess the current checkout; the recorded pass
+counts and timings do not certify a different build.
+
 ## Results in brief
 
 <!-- BEGIN GENERATED: totals -->

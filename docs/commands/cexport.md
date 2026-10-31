@@ -25,7 +25,7 @@ than the general str2045 transfer buffer. Both Excel writers support
 retains untouched cells and workbook content; keepcellfmt preserves styles in
 the written rectangle. XLSX edits move overwritten shared-formula anchors to
 surviving cells, remove calculation chains, and request recalculation on opening.
-See the audit for complex-workbook validation limits.
+See [import and export formats](../IO_PARITY.md) for format-specific behavior and validation.
 
 ## Delimited text
 
@@ -54,11 +54,14 @@ cexport delimited [varlist] using filename [if] [in] [, options]
 | `quote` | Quote all string fields |
 | `noquoteif` | Never quote strings, even if they contain delimiters |
 | `datafmt` | Apply numeric and date/time display formats |
+| `nolabel` | Write numeric codes instead of value-label text |
+| `datestring(fmt)` | Write date/time variables as strings using a common Stata format |
 
 ### Reporting Options
 | Option | Description |
 |--------|-------------|
 | `verbose` | Display progress information during export |
+| `threads(#)` | Maximum workers; zero uses the ctools thread setting |
 
 ## Examples
 
@@ -176,14 +179,14 @@ file before publishing it. A failed export leaves an existing destination intact
 without `replace`, publication refuses an existing file, including one created
 while export is running. The destination directory must allow temporary files.
 
-Excel export uses the 1900 date system. Daily dates retain their calendar day;
+New Excel workbooks use the 1900 date system; edits preserve the existing workbook's date system. Daily dates retain their calendar day;
 `%tc` retains milliseconds as fractional days, and `%tC` is converted to `%tc`
 with `cofC()` first. Leap seconds cannot be represented in Excel. Monthly,
 quarterly, weekly, half-yearly, and yearly dates use the first day of the period.
 `datafmt` and `datestring()` instead export date/time values as text.
 
-`keepcellfmt` only copies an existing style-definition table. It does not retain worksheet cell-style assignments or other sheets; existing date style indices may be incompatible with newly written date cells. It is not a formatted-template update facility.
+`keepcellfmt` preserves the existing cell formats in the written rectangle when modifying a worksheet. Cells outside that rectangle and other worksheets retain their content and formatting. Use `sheet(..., modify)` for edits and `sheet(..., replace)` to replace the selected worksheet. Whole-workbook `replace` retains only style definitions with `keepcellfmt`, not the old cells, their style assignments, or other sheets.
 
 ## More details
 
-Excel export now writes data in the first row by default, matching Stata. Use `firstrow(variables)` for variable names or `firstrow(varlabels)` for labels. See [import and export formats](../IO_PARITY.md) for supported formats, differences from `export`, and testing.
+Excel export writes data in the first row by default, matching Stata. Use `firstrow(variables)` for variable names or `firstrow(varlabels)` for labels. See [import and export formats](../IO_PARITY.md) for supported formats, differences from `export`, and testing.

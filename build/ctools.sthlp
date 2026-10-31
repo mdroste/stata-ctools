@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.1 20261029}{...}
+{* *! version 1.2.3 20261030}{...}
 {viewerjumpto "Syntax" "ctools##syntax"}{...}
 {viewerjumpto "Description" "ctools##description"}{...}
 {viewerjumpto "Options" "ctools##options"}{...}
@@ -111,6 +111,8 @@ a higher value with any of the methods above.
 {p2colset 5 20 22 2}{...}
 {p2col:{help cimport}}Import text, Excel, dBase, SAS, SPSS, and shapefiles{p_end}
 {p2col:{help cexport}}Export text, Excel, dBase, SAS, SPSS, and shapefiles{p_end}
+{p2col:{help cdistinct}}Report distinct values{p_end}
+{p2col:{help chdfe}}Remove fixed effects from variables{p_end}
 {p2col:{help csort}}Sort dataset{p_end}
 {p2col:{help cmerge}}Merge (join) datasets{p_end}
 {p2col:{help csample}}Resampling without replacement{p_end}
@@ -121,7 +123,7 @@ a higher value with any of the methods above.
 {p2col:{help cwinsor}}Winsorize variables{p_end}
 {p2col:{help crangestat}}Range statistics of variables{p_end}
 
-{p2col:{help cipolate}}Linear interpolation{p_end}
+{p2col:{help cinterpolate}}Linear and cubic interpolation{p_end}
 {p2col:{help csplit}}Split strings into fields{p_end}
 {p2col:{help crangejoin}}Inclusive interval joins{p_end}
 
@@ -189,6 +191,6 @@ The package draws on the following commands and algorithms:
 Online: {help cimport}, {help cexport}, {help csort}, {help cmerge}, {help cencode},
 {help cdecode}, {help cdestring}, {help csample}, {help cbsample}, {help cwinsor},
 {help crangestat}, {help creghdfe}, {help civreghdfe}, {help cqreg}, {help cpsmatch},
-{help cbinscatter}, {help cppmlhdfe}, {help cipolate}, {help csplit},
+{help cbinscatter}, {help cppmlhdfe}, {help cinterpolate}, {help csplit},
 {help crangejoin}
 {p_end}

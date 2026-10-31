@@ -6,10 +6,12 @@ Run these commands in a terminal from the ctools folder.
 
 1. Install Python 3 and Stata, then [build ctools](../docs/development/PLATFORMS.md).
 2. In Stata, install `reghdfe`, `ivreghdfe`, `ppmlhdfe`, `psmatch2`,
-   `binscatter`, `rangestat`, `rangejoin`, `winsor2` and `gtools`, along with
+   `binscatter`, `binsreg`, `rangestat`, `rangejoin`, `winsor2`, `cipolate`, `distinct` and `gtools`, along with
    any packages they require.
-3. Make sure the `stata` command works in your terminal. Otherwise, set
-   `CTOOLS_STATA_EXECUTABLE` to the location of your Stata application.
+3. On this Mac, the runner invokes the `stata` alias from `~/.zshrc` through
+   `/bin/zsh -lic`. Check it with `/bin/zsh -lic 'type stata'`. On other machines,
+   configure the launcher for that environment; `CTOOLS_STATA_EXECUTABLE` accepts
+   an executable path (required on Windows). Batch drivers end with `exit, clear`.
 4. Download the test data:
 
 ```sh
@@ -33,6 +35,18 @@ To run checks that do not use Stata:
 ```sh
 python3 validation/run.py --native
 ```
+
+## Check documentation and generated inventories
+
+```sh
+python3 scripts/sync_release.py --check
+python3 scripts/sync_architecture.py --check
+python3 validation/run.py --checks options
+python3 validation/run.py --checks docs
+```
+
+The docs-tree check invokes Git. On this Mac, run it through zsh outside the
+sandbox, as required for other Git operations.
 
 ## Check one command
 

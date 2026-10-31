@@ -1,32 +1,38 @@
 # Usage notes
 
-- All ctools programs follow a basic structure: (1) copy data from Stata to C; (2) operate on that data (3) return data from C to Stata. *This means that ctools programs require more memory than the programs they replace.* In addition, some commands will run faster when they involve fewer variables, or when you have fewer variables in memory. For instance,  `csort`'s runtime is heavily dependent on the number of variables in memory, and can be slower Stata's built-in `sort` if the dataset is relatively wide (e.g. 100+ variables) due to this data transfer overhead.
+- All ctools programs follow a basic structure: (1) copy data from Stata to C; (2) operate on that data (3) return data from C to Stata. *This means that ctools programs require more memory than the programs they replace.* In addition, some commands will run faster when they involve fewer variables, or when you have fewer variables in memory. For instance,  `csort`'s runtime is heavily dependent on the number of variables in memory, and can be slower than Stata's built-in `sort` if the dataset is relatively wide (e.g. 100+ variables) due to this data transfer overhead.
 - The default options for `csort` and `cmerge` require a lot of memory. For `csort`, you probably require 2-3 times as much memory as your dataset. For `csort`, you can reduce this memory overhead with the optional argument `stream(#)`, which reads variables a handful at a time rather than all at once (at a modest cost to runtime).
 
-### Linear interpolation: `cipolate`
+### Interpolation: `cinterpolate`
 
-`cipolate` implements Stata's **linear** `ipolate`, including grouped interpolation and optional extrapolation. It is distinct from the SSC cubic-interpolation command also named `cipolate`; check `which cipolate` if both packages are installed.
+`cinterpolate` defaults to Stata's linear `ipolate`, including grouped interpolation and optional extrapolation. The `cubic` option implements local cubic interpolation as in Nicholas J. Cox's SSC [`cipolate`](https://www.stata.com/statalist/archive/2002-07/msg00088.html). Neither reference command is required to run `cinterpolate`.
 
 ```stata
-cipolate yvar xvar [if] [in], generate(newvar) ///
-    [by(varlist) epolate threads(#) verbose]
+cinterpolate yvar xvar [if] [in], generate(newvar) ///
+    [by(varlist) epolate cubic threads(#) verbose]
 ```
 
 - `generate(newvar)` is required and creates a double-precision result. The source variables and observation order are preserved.
 - `by(varlist)` interpolates separately within numeric or string groups. The `by:` prefix also works; use either the prefix or `by()`. Missing group values participate, with `.`, `.a`, etc. treated as distinct groups. Group strings must fit within 2,045 bytes.
-- At duplicate `xvar` values, nonmissing `yvar` values are averaged. Missing values between known points are filled by linear interpolation. Missing `xvar` values and observations excluded by `if`/`in` receive missing results.
+- At duplicate `xvar` values, nonmissing `yvar` values are averaged. By default, missing values between known points are filled by linear interpolation. Missing `xvar` values and observations excluded by `if`/`in` receive missing results.
+- `cubic` fits a polynomial through the nearest two distinct known x points on each side of each gap. It leaves gaps missing when either side has fewer than two anchors, including gaps in the first and last known intervals. This is local Lagrange interpolation, not a spline; it can overshoot. Duplicate x values are averaged before choosing distinct anchors. Unlike legacy SSC `cipolate`, duplicate rows do not create repeated anchors, and extended missing values are treated as missing. `cubic` cannot be combined with `epolate`.
 - Without `epolate`, results outside the known range are missing. `epolate` extends the line through the nearest two distinct known x points at each end; groups with fewer than two known points cannot extrapolate.
 - `threads(#)` accepts a nonnegative integer and caps C worker threads; `threads(0)`, the default, uses the automatic setting. `verbose` reports phase timings.
 
 ```stata
 * Fill missing monthly sales separately for each firm.
-cipolate sales month, generate(sales_i) by(firm)
+cinterpolate sales month, generate(sales_i) by(firm)
 
 * Also extrapolate at the ends of each firm's observed series.
-cipolate sales month, generate(sales_e) by(firm) epolate threads(8)
+cinterpolate sales month, generate(sales_e) by(firm) epolate threads(8)
+
+* Use four neighboring known points for local cubic interpolation.
+cinterpolate sales month, generate(sales_c) by(firm) cubic
 ```
 
-The output variable is the result; no command-specific stored results are promised. See `help cipolate` or the [full help file](../build/cipolate.sthlp).
+Use `cinterpolate` in scripts that previously called the ctools linear command `cipolate`. ctools no longer ships `cipolate.ado` or `cipolate.sthlp`, leaving that name to the SSC package. When updating an existing installation, remove stale ctools copies of those two files from its ado directory; use `which cipolate` to locate them and check the file header before removal.
+
+The output variable is the result; no command-specific stored results are promised. See `help cinterpolate` or the [full help file](../build/cinterpolate.sthlp).
 
 ### String fields: `csplit`
 
@@ -89,3 +95,26 @@ Accumulated scalar statistics (such as total, model, and residual sums of square
 in `cqreg`, `creghdfe`, and `civreghdfe` may match their reference commands to only
 about seven significant digits. See [compatibility](COMPATIBILITY.md) for
 command-specific numerical differences.
+
+## Distinct values (cdistinct)
+
+```stata
+cdistinct firm year
+cdistinct firm year, joint missing
+```
+
+`cdistinct` excludes missing values by default and examines each variable
+separately unless `joint` is specified. Add `missing` to include missing values.
+See [cdistinct](commands/cdistinct.md) for output and saved-result details.
+
+## Removing fixed effects (chdfe)
+
+```stata
+chdfe sales capital, absorb(firm year) generate(within_) sample(used)
+chdfe sales capital [aw=weight], absorb(firm##c.year) clear keepvars(firm year)
+```
+
+Use `generate()` to keep the original data or `clear` to retain only the
+transformed sample and requested variables. The command reports absorbed
+degrees of freedom in `e(df_a)`. See [chdfe](commands/chdfe.md) for weights,
+slopes, solver options, and saved results.

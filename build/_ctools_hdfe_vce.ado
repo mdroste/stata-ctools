@@ -1,4 +1,4 @@
-*! version 1.2.1 20261029 github.com/mdroste/stata-ctools
+*! version 1.2.3 20261030 github.com/mdroste/stata-ctools
 *! vce() of the HDFE estimators.
 * _ctools_hdfe_vce, spec(string) touse(varname) cmd(name)
 *

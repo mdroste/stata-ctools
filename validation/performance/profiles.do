@@ -17,7 +17,7 @@ set graphics off
 if `"`outdir'"' == "" local outdir "docs/benchmarks/readme_profile"
 if `"`sizes'"' == "" local sizes "1000000 10000000 25000000"
 if "`threads'" == "" local threads = c(processors)
-local allpairs "export import sort merge sample bsample encode decode destring ipolate split rangejoin winsor rangestat binscatter reghdfe ivreghdfe ppmlhdfe psmatch2 qreg"
+local allpairs "export import sort merge sample bsample encode decode destring distinct ipolate split rangejoin winsor rangestat binscatter reghdfe ivreghdfe ppmlhdfe psmatch2 qreg"
 if `"`pairs'"' == "" local pairs "`allpairs'"
 capture mkdir "`outdir'"
 log using "`outdir'/profile.log", text replace name(profile)
@@ -33,7 +33,7 @@ program define profile_readme
     ctools, version
     di "PROFILE_SETTINGS sizes=`sizes' variables=20 processors=`threads' seed=95183 pairs=`pairs'"
     foreach cmd in cimport cexport csort cmerge csample cbsample cencode cdecode ///
-        cdestring cipolate csplit crangejoin cqreg cwinsor crangestat cpsmatch ///
+        cdestring cdistinct distinct cinterpolate csplit crangejoin cqreg cwinsor crangestat cpsmatch ///
         cbinscatter creghdfe civreghdfe cppmlhdfe rangejoin rangestat gstats ///
         psmatch2 binscatter reghdfe ivreghdfe ppmlhdfe ftools ivreg2 {
         capture noisily which `cmd'
@@ -71,6 +71,10 @@ program define profile_readme
         quietly gen int year = 2000 + mod(month,20)
         quietly gen byte flag = mod(id,2)
         assert c(k)==20
+        if strpos(" `pairs' ", " distinct ") {
+            quietly tabulate group
+            local group_count = r(r)
+        }
         tempfile base lookup offers inputcsv outputcsv
         quietly save `base'
         preserve
@@ -105,8 +109,10 @@ program define profile_readme
         local c_decode "cdecode category, gen(result)"
         local ref_destring "destring number, gen(result)"
         local c_destring "cdestring number, gen(result)"
+        local ref_distinct "distinct firm group region sector"
+        local c_distinct "cdistinct firm group region sector"
         local ref_ipolate "ipolate yi month, by(firm) gen(result) epolate"
-        local c_ipolate "cipolate yi month, by(firm) gen(result) epolate"
+        local c_ipolate "cinterpolate yi month, by(firm) gen(result) epolate"
         local ref_split `"split code, gen(part) parse("|")"'
         local c_split `"csplit code, gen(part) parse("|")"'
         local ref_rangejoin `"rangejoin month -.5 .5 using "`offers'", by(firm) keepusing(x2 region)"'
@@ -140,6 +146,10 @@ program define profile_readme
                 capture noisily `command'
                 local rc = _rc
                 timer off 99
+                if "`cmd'"=="distinct" & `rc'==0 {
+                    local count_n = r(N)
+                    local count_d = r(ndistinct)
+                }
                 quietly timer list 99
                 local elapsed = r(t99)
                 local checkrc = 0
@@ -155,6 +165,25 @@ program define profile_readme
                     if "`cmd'"=="import" {
                         capture assert c(k)==20
                         if _rc local checkrc = _rc
+                    }
+                    if "`cmd'"=="distinct" {
+                        capture assert `count_n'==`N' & `count_d'==1000 & id==_n
+                        if _rc local checkrc = _rc
+                        * Check every column against its known count, outside timing.
+                        local counter distinct
+                        if "`method'"=="c" local counter cdistinct
+                        local cardinalities `=`N'/200' `group_count' 4 1000
+                        local column 0
+                        foreach key in firm group region sector {
+                            local ++column
+                            local expected_d : word `column' of `cardinalities'
+                            capture quietly `counter' `key'
+                            if _rc local checkrc = _rc
+                            else {
+                                capture assert r(N)==`N' & r(ndistinct)==`expected_d' & id==_n
+                                if _rc local checkrc = _rc
+                            }
+                        }
                     }
                 }
                 file write `results' "`cmd',`N',`method',`elapsed',`rc',`checkrc'" _n
@@ -203,7 +232,7 @@ program define readme_run
     if "`method'"=="ctools" local cap threads(`threads')
     if "`case'"=="ipolate" {
         local command ipolate
-        if "`method'"=="ctools" local command cipolate
+        if "`method'"=="ctools" local command cinterpolate
         `command' sales month, generate(sales_i) by(firm) epolate `cap'
     }
     else if "`case'"=="split" {

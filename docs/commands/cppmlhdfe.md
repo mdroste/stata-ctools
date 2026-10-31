@@ -92,8 +92,8 @@ log exposure, and excludes the absorbed effects.
 ## Validation and compatibility limits
 
 `validation/stata/cppmlhdfe.do` includes the original examples,
-`cppmlhdfe_precision_cases.do`, `cppmlhdfe_compatibility_cases.do`,
-`cppmlhdfe_upstream_cases.do`, and `cppmlhdfe_advanced_cases.do`. These compare
+the named cases `cppmlhdfe_precision_cases`, `cppmlhdfe_compatibility_cases`,
+`cppmlhdfe_upstream_cases`, and `cppmlhdfe_advanced_cases` in that same file. These compare
 actual retained rows, coefficient
 names, full covariance including the constant, standard errors, inference,
 absorbed degrees of freedom, and predictions. Coverage includes randomized
@@ -106,19 +106,17 @@ significant digits required. Prediction comparisons use three converged referenc
 iterations because its saved FE predictions can otherwise lag the coefficient
 solution. Native separation/projection tests run under ASan and UBSan.
 
-The final macOS ARM run passed **1,065 PPML checks** and **23 shared regression
-checks**, with no skips, against installed `ppmlhdfe` 2.3.3 (02nov2025).
-Across 360 randomized default fits, the largest relative slope-SE difference
-was `4.630861419e-7`. All 450 stringent randomized coefficient/SE/covariance
-comparisons passed. The 40 advanced-option checks include weighted
-heterogeneous slopes, saved-effect reconstruction, diagnostic-only ReLU,
-initialization, and alternative solvers. Native ASan/UBSan tests and the plugin
-dependency-contract check also passed.
+Run `python3 validation/run.py cppmlhdfe` for the current Stata checks.
+The suite covers randomized default fits, stringent coefficient/SE/covariance
+comparisons, weighted heterogeneous slopes, saved-effect reconstruction,
+diagnostic-only ReLU, initialization, and alternative solvers. Native checks run
+through `python3 validation/run.py --native`; set
+`CTOOLS_SANITIZERS=address,undefined` to check memory and undefined behavior.
 
-The pathological upstream `slopes4` fixture now matches the reference's default
+The upstream `slopes4` regression check requires the reference's default
 sample: 14 retained observations, three separated rows, and ten singletons.
-The correction reproduces its joint intercept/slope projection, warm residual
-reuse, and tolerance-dependent stopping rule. For a saturated upstream model,
+The implementation uses joint intercept/slope projection, warm residual
+reuse, and tolerance-dependent stopping rules. For a saturated upstream model,
 the reference is initialized at its exact mean to avoid premature convergence
 from rounded zero deviance. Multiple absorbed slopes are checked against the
 equivalent explicit-regressor reference model because the installed release's
@@ -134,6 +132,7 @@ are not implemented. Unsupported options produce an explicit error. Legacy
 `septolerance()` is accepted but does not set the `mu` screening threshold;
 use `mu_tol()` when explicitly enabling that method.
 
-Validation and the rebuilt plugin in this checkout use macOS ARM. Other platforms
-must be rebuilt and tested separately. Keep the ado files and plugin together;
-the command rejects an older plugin API.
+Run licensed Stata validation on each target platform before claiming numerical
+coverage there. CI builds all four platform plugins and runs native checks, but
+does not run licensed Stata. Keep ado files and plugins together; the command
+rejects an older plugin API.

@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.1 20261029}{...}
+{* *! version 1.2.3 20261030}{...}
 {viewerjumpto "Syntax" "crangejoin##syntax"}{...}
 {viewerjumpto "Description" "crangejoin##description"}{...}
 {viewerjumpto "Options" "crangejoin##options"}{...}

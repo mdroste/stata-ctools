@@ -9,7 +9,7 @@
 ```
 
 [![Build](https://github.com/mdroste/stata-ctools/actions/workflows/build.yml/badge.svg)](https://github.com/mdroste/stata-ctools/actions/workflows/build.yml)
-![Version](https://img.shields.io/badge/version-1.2.1-blue)
+![Version](https://img.shields.io/badge/version-1.2.3-blue)
 
 **This is an initial release. Please report problems/suggestions on [Issues](https://github.com/mdroste/stata-ctools/issues).**
 
@@ -27,10 +27,10 @@
 | `merge` | `cmerge` | Merge (join) datasets | 2–7× |
 | `sample` | `csample` | Resampling without replacement | 5–9× |
 | `bsample` | `cbsample` | Resampling with replacement | 3–5× |
-| `encode` | `cencode` | Recast string as labeled numeric | 10–70× |
+| `encode` | `cencode` | Recast string as labeled numeric | 15–70× |
 | `decode` | `cdecode` | Recast labeled numeric as string | 2–20× |
 | `destring` | `cdestring` | Recast string as numeric type | 40–50× |
-| `ipolate` | [`cipolate`](docs/USAGE.md#linear-interpolation-cipolate) | Linear interpolation and extrapolation | 50–80× |
+| `ipolate` | [`cinterpolate`](docs/USAGE.md#interpolation-cinterpolate) | Linear interpolation and extrapolation | 50–80× |
 | `split` | [`csplit`](docs/USAGE.md#string-fields-csplit) | Split strings into fields | 70–130× |
 | `qreg` | `cqreg` | Quantile regression | 4–6× |
 
@@ -38,6 +38,9 @@
 
 | Stata command | Replaced with | Description | Approx. speedup¹ |
 | --- | --- | --- | ---: |
+| `distinct` | [`cdistinct`](docs/commands/cdistinct.md) | Report distinct values | 10–30× |
+| `hdfe` | [`chdfe`](docs/commands/chdfe.md) | Remove fixed effects from variables | — |
+| `cipolate` | [`cinterpolate, cubic`](docs/USAGE.md#interpolation-cinterpolate) | Local cubic interpolation | — |
 | `rangejoin` | [`crangejoin`](docs/USAGE.md#interval-joins-crangejoin) | Join observations within inclusive intervals | 10–20× |
 | `winsor2`, `gstats winsor` | `cwinsor` | Winsorize variables | 2–5× vs. `gstats winsor` |
 | `rangestat` | `crangestat` | Range statistics of variables | 80–110× |
@@ -80,17 +83,18 @@ See the [documentation index](docs/README.md) for command guides, development an
 
 ## Thanks
 
-- [Sergio Correia](https://github.com/sergiocorreia) for [ftools](https://github.com/sergiocorreia/ftools), [reghdfe](https://github.com/sergiocorreia/reghdfe), and [ivreghdfe](https://github.com/sergiocorreia/ivreghdfe) (with [Lars Vilhuber](https://www.ilr.cornell.edu/people/lars-vilhuber)), as well as tons of helpful comments and suggestions
+- Sergio Correia for [ftools](https://github.com/sergiocorreia/ftools), [reghdfe](https://github.com/sergiocorreia/reghdfe), and [ivreghdfe](https://github.com/sergiocorreia/ivreghdfe) (with Lars Vilhuber), as well as tons of helpful comments and suggestions
 - Sergio Correia, Paulo Guimarães, and Thomas Zylkin for [ppmlhdfe](https://github.com/sergiocorreia/ppmlhdfe)
-- [Mauricio Caceres Bravo](https://mcaceresb.github.io/) for [gtools](https://github.com/mcaceresb/gtools) and invaluable contributions to [cowsay](https://github.com/mdroste/stata-cowsay)
-- [Christopher (Kit) Baum](https://www.bc.edu/bc-web/schools/morrissey/departments/economics/people/faculty-directory/christopher-baum.html), [Mark E Schaffer](https://www.hw.ac.uk/profiles/uk/school/ebs/faculty/mark-schaffer), and [Steven Stillman](https://www.unibz.it/en/faculties/economics-management/academic-staff/person/36390-steven-stillman) for [ivreg2](https://ideas.repec.org/c/boc/bocode/s425401.html)
-- [Robert Picard](https://ideas.repec.org/f/ppi320.html), [Nicholas J. Cox](https://ideas.repec.org/e/pco34.html), and Roberto Ferrer for [rangestat](https://ideas.repec.org/c/boc/bocode/s458161.html)
+- Mauricio Caceres Bravo for [gtools](https://github.com/mcaceresb/gtools) and invaluable contributions to [cowsay](https://github.com/mdroste/stata-cowsay)
+- Christopher (Kit) Baum, Mark E Schaffer, and Steven Stillman for [ivreg2](https://ideas.repec.org/c/boc/bocode/s425401.html)
+- Robert Picard, Nicholas J. Cox, and Roberto Ferrer for [rangestat](https://ideas.repec.org/c/boc/bocode/s458161.html)
+- Nicholas J. Cox for [cipolate](https://ideas.repec.org/c/boc/bocode/s426202.html)
 - Robert Picard for [rangejoin](https://ideas.repec.org/c/boc/bocode/s458162.html)
 - Edwin Leuven and Barbara Sianesi for [psmatch2](https://ideas.repec.org/c/boc/bocode/s432001.html)
 - Yujun Lian for [winsor2](https://ideas.repec.org/c/boc/bocode/s457765.html)
-- Michael Stepner for [binscatter](https://michaelstepner.com/binscatter/)
+- Michael Stepner and Jessica Laird for [binscatter](https://michaelstepner.com/binscatter/)
 - Matias D. Cattaneo, Richard K. Crump, Max H. Farrell, and Yingjie Feng for [binsreg](https://github.com/nppackages/binsreg)
-- [Sascha Witt](https://github.com/SaschaWitt) for the [In-place Parallel Super Scalar Samplesort (IPS⁴o)](https://github.com/SaschaWitt/ips4o) sorting algorithm.
+- Michael Axtmann, Sascha Witt, Daniel Ferizovic, and Peter Sanders for the [In-place Parallel Super Scalar Samplesort (IPS⁴o)](https://github.com/SaschaWitt/ips4o) sorting algorithm.
 
 
 ## License

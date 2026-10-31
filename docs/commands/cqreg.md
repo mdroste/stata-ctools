@@ -42,6 +42,7 @@ Exhausting the iteration limit, numerical breakdown, or nonfinite results return
 | Option | Description |
 |--------|-------------|
 | `verbose` | Display progress information |
+| `threads(#)` | Maximum workers; zero uses the ctools thread setting |
 
 ## Examples
 
@@ -67,6 +68,7 @@ cqreg ln_wage age ttl_exp tenure i.idcode
 cqreg ln_wage age ttl_exp tenure i.idcode i.year, vce(cluster idcode)
 
 * Using Bofinger bandwidth
+sysuse auto, clear
 cqreg price mpg weight, quantile(0.5) bwmethod(bofinger)
 
 * With verbose timing
@@ -80,8 +82,7 @@ cqreg price mpg weight, verbose
 ### Speedup Tricks
 
 **IPM Solver:**
-- **Mehrotra predictor-corrector**: Each Newton step computes both a predictor (affine) and corrector direction, achieving superlinear convergence and typically finishing in 15-30 iterations regardless of N
-- **O(sqrt(N)) convergence**: IPM complexity is polynomial, compared to the simplex method's exponential worst case—dominant advantage on large datasets
+- **Mehrotra predictor-corrector**: Each Newton step computes a predictor and a corrector direction. Runtime depends on sample size, the number of regressors, conditioning, and the iterations needed to converge.
 
 **Linear Algebra:**
 - **BLAS/LAPACK dispatch**: Automatically uses Apple Accelerate (macOS) or OpenBLAS when available for matrix-matrix and matrix-vector operations, falling back to hand-tuned C kernels
@@ -185,7 +186,6 @@ quantile loss. Use explicit indicators when the number of groups permits it.
 | Feature | Stata `qreg` | `cqreg` |
 |---------|--------------|---------|
 | Algorithm | Simplex | Interior Point Method |
-| Complexity | O(N²) worst case | O(sqrt(N)) |
 | HDFE Support | No | No; explicit indicators required |
 | Parallelization | No | Yes (OpenMP) |
 

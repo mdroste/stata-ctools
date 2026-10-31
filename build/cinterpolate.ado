@@ -1,9 +1,13 @@
-*! version 1.2.1 20261029 github.com/mdroste/stata-ctools
-*! C-accelerated linear interpolation (ctools)
-program define cipolate, byable(onecall)
+*! version 1.2.3 20261030 github.com/mdroste/stata-ctools
+*! C-accelerated linear and cubic interpolation (ctools)
+program define cinterpolate, byable(onecall)
     version 14.1
     syntax varlist(numeric min=2 max=2) [if] [in], Generate(name) ///
-        [BY(varlist) Epolate Verbose THReads(integer 0)]
+        [BY(varlist) Epolate CUBic Verbose THReads(integer 0)]
+    if "`cubic'" != "" & "`epolate'" != "" {
+        di as error "cubic may not be combined with epolate"
+        exit 198
+    }
     if _by() {
         if "`by'" != "" exit 190
         local by "`_byvars'"
@@ -36,7 +40,7 @@ program define cipolate, byable(onecall)
     * With no restriction it writes every result, including missing values.
     if `"`if'`in'"' == "" & !`longby' mata: (void) st_addvar("double", st_local("result"), 1)
     else quietly gen double `result' = .
-    local cipolate_nmissing = _N
+    local cinterpolate_nmissing = _N
     if `run' {
         local sourcey `y'
         local sourcex `x'
@@ -60,9 +64,9 @@ program define cipolate, byable(onecall)
         if `"`if'"' == "" & !`longby' local selectopt skipif
         _ctools_strw `sourcey' `sourcex' `by'
         plugin call ctools_plugin `sourcey' `sourcex' `by' `result' `sample', ///
-            "cipolate `threadopt' `nby' `ext' `timing' `selectopt'"
+            "cinterpolate `threadopt' `nby' `ext' `timing' `selectopt' `cubic'"
     }
     label variable `result' "Interpolation of `y' on `x'"
     rename `result' `generate'
-    if `cipolate_nmissing' di as text "(`cipolate_nmissing' missing values generated)"
+    if `cinterpolate_nmissing' di as text "(`cinterpolate_nmissing' missing values generated)"
 end

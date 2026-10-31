@@ -1,8 +1,9 @@
-*! version 1.2.1 20261029 github.com/mdroste/stata-ctools
+*! version 1.2.3 20261030 github.com/mdroste/stata-ctools
 *! _ctools_group — group identifiers from the ctools plugin, in place of egen group()
 *!
 *! Usage:  _ctools_group varlist [if] [in], generate(newvar) [label]
-*!         _ctools_group varlist [if] [in], count
+*!         _ctools_group varlist [if] [in], count [strict]
+*! strict returns plugin errors instead of sorting in Stata.
 *!
 *! Numbers the distinct values of varlist 1, 2, ... in sort order, as
 *! egen group() does: observations excluded by if/in, or with a missing value
@@ -17,7 +18,7 @@
 
 program define _ctools_group, rclass
     version 14.1
-    syntax varlist [if] [in], [GENerate(name) LABel COUNT]
+    syntax varlist [if] [in], [GENerate(name) LABel COUNT STRICT]
     if ("`generate'" == "") == ("`count'" == "") | ("`label'" != "" & "`generate'" == "") {
         di as error "_ctools_group: specify generate() [label] or count"
         exit 198
@@ -101,6 +102,7 @@ program define _ctools_group, rclass
         }
         capture scalar drop _ctools_group_n
     }
+    if `rc' & "`strict'" != "" exit `rc'
     if `rc' {
         _ctools_group_sort `varlist' `if' `in', generate(`generate') `count' `label'
         local n_groups = r(N_groups)

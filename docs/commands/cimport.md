@@ -68,13 +68,18 @@ As in `import delimited`, an `extvarlist` renames the first imported variables i
 | `encoding(encoding)` | Automatic detection or explicit UTF-8/16/32 and system code pages |
 | `rowrange([start][:end])` / `colrange([start][:end])` | Select rows and columns before inference; rows are file lines as in native (the header, blank lines and quoted line breaks count) |
 | `maxquotedrows(#)` | Strict quoted-row limit; accepts `unlimited` |
-| `parselocale(locale)` | C numeric profiles for installed Java locale names |
+| `parselocale(locale)` | C numeric profiles from the pinned OpenJDK locale tables; no installed Java runtime is needed |
 | `favorstrfixed` | Prefer fixed strings up to Stata's 2,045-byte limit |
+| `stringcols(numlist \| _all)` | Force selected columns to string |
+| `numericcols(numlist \| _all)` | Force selected columns to numeric |
+| `asdouble`, `asfloat` | Select numeric storage precision |
 
 ### Reporting Options
 | Option | Description |
 |--------|-------------|
 | `verbose` | Display progress information and throughput (MB/s) |
+| `threads(#)` | Maximum workers; zero uses the ctools thread setting |
+| `snapshot`, `fast` | Use a whole-dataset recovery snapshot, or skip recovery; mutually exclusive |
 
 ## Examples
 

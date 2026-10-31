@@ -1098,5 +1098,295 @@
         }
       ]
     }
+  },
+  "cinterpolate": {
+    "cubic": {
+      "kind": "contract",
+      "reason": "Known cubic polynomials, tied anchors, sparse groups, selections, thread consistency, and extrapolation rejection are checked.",
+      "evidence": [
+        {
+          "path": "validation/stata/cinterpolate.do",
+          "anchor": "cubic polynomial on irregular grouped x"
+        },
+        {
+          "path": "validation/stata/cinterpolate.do",
+          "anchor": "cubic rejects extrapolation without creating output"
+        }
+      ]
+    }
+  },
+  "cdistinct": {
+    "missing": {
+      "kind": "differential",
+      "reason": "The command suite checks reference counts or residuals and saved results, with output and failure contracts for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/cdistinct.do",
+          "anchor": "distinct oracle: numeric, string, joint, missing, if and in"
+        }
+      ]
+    },
+    "joint": {
+      "kind": "differential",
+      "reason": "The command suite checks reference counts or residuals and saved results, with output and failure contracts for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/cdistinct.do",
+          "anchor": "distinct oracle: numeric, string, joint, missing, if and in"
+        }
+      ]
+    },
+    "abbrev": {
+      "kind": "contract",
+      "reason": "The command suite checks reference counts or residuals and saved results, with output and failure contracts for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/cdistinct.do",
+          "anchor": "display filters do not affect results; thread parity"
+        }
+      ]
+    },
+    "minimum": {
+      "kind": "contract",
+      "reason": "The command suite checks reference counts or residuals and saved results, with output and failure contracts for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/cdistinct.do",
+          "anchor": "display filters do not affect results; thread parity"
+        }
+      ]
+    },
+    "maximum": {
+      "kind": "contract",
+      "reason": "The command suite checks reference counts or residuals and saved results, with output and failure contracts for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/cdistinct.do",
+          "anchor": "display filters do not affect results; thread parity"
+        }
+      ]
+    },
+    "verbose": {
+      "kind": "contract",
+      "reason": "The command suite checks reference counts or residuals and saved results, with output and failure contracts for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/cdistinct.do",
+          "anchor": "display filters do not affect results; thread parity"
+        }
+      ]
+    },
+    "threads": {
+      "kind": "differential",
+      "reason": "The command suite checks reference counts or residuals and saved results, with output and failure contracts for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/cdistinct.do",
+          "anchor": "display filters do not affect results; thread parity"
+        }
+      ]
+    }
+  },
+  "chdfe": {
+    "absorb": {
+      "kind": "differential",
+      "reason": "The command suite checks reference counts or residuals and saved results, with output and failure contracts for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/chdfe.do",
+          "anchor": "weighted projections, interactions, slopes, singleton samples, and degrees of freedom"
+        }
+      ]
+    },
+    "generate": {
+      "kind": "differential",
+      "reason": "The command suite checks reference counts or residuals and saved results, with output and failure contracts for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/chdfe.do",
+          "anchor": "weighted projections, interactions, slopes, singleton samples, and degrees of freedom"
+        }
+      ]
+    },
+    "sample": {
+      "kind": "differential",
+      "reason": "The command suite checks reference counts or residuals and saved results, with output and failure contracts for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/chdfe.do",
+          "anchor": "weighted projections, interactions, slopes, singleton samples, and degrees of freedom"
+        }
+      ]
+    },
+    "tolerance": {
+      "kind": "differential",
+      "reason": "The command suite checks reference counts or residuals and saved results, with output and failure contracts for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/chdfe.do",
+          "anchor": "weighted projections, interactions, slopes, singleton samples, and degrees of freedom"
+        }
+      ]
+    },
+    "clustervars": {
+      "kind": "differential",
+      "reason": "The command suite checks reference counts or residuals and saved results, with output and failure contracts for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/chdfe.do",
+          "anchor": "cluster nesting and degrees-of-freedom options"
+        }
+      ]
+    },
+    "dofadjustments": {
+      "kind": "differential",
+      "reason": "The command suite checks reference counts or residuals and saved results, with output and failure contracts for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/chdfe.do",
+          "anchor": "cluster nesting and degrees-of-freedom options"
+        }
+      ]
+    },
+    "keepsingletons": {
+      "kind": "differential",
+      "reason": "The command suite checks reference counts or residuals and saved results, with output and failure contracts for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/chdfe.do",
+          "anchor": "cluster nesting and degrees-of-freedom options"
+        }
+      ]
+    },
+    "clear": {
+      "kind": "differential",
+      "reason": "The command suite checks reference counts or residuals and saved results, with output and failure contracts for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/chdfe.do",
+          "anchor": "clear output, saved IDs, empty sample and rollback"
+        }
+      ]
+    },
+    "keepvars": {
+      "kind": "differential",
+      "reason": "The command suite checks reference counts or residuals and saved results, with output and failure contracts for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/chdfe.do",
+          "anchor": "clear output, saved IDs, empty sample and rollback"
+        }
+      ]
+    },
+    "keepids": {
+      "kind": "differential",
+      "reason": "The command suite checks reference counts or residuals and saved results, with output and failure contracts for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/chdfe.do",
+          "anchor": "clear output, saved IDs, empty sample and rollback"
+        }
+      ]
+    },
+    "threads": {
+      "kind": "differential",
+      "reason": "The command suite checks reference counts or residuals and saved results, with output and failure contracts for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/chdfe.do",
+          "anchor": "solver choices, strings, pool size and threads"
+        }
+      ]
+    },
+    "poolsize": {
+      "kind": "differential",
+      "reason": "The command suite checks reference counts or residuals and saved results, with output and failure contracts for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/chdfe.do",
+          "anchor": "solver choices, strings, pool size and threads"
+        }
+      ]
+    },
+    "transform": {
+      "kind": "differential",
+      "reason": "The command suite checks reference counts or residuals and saved results, with output and failure contracts for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/chdfe.do",
+          "anchor": "solver choices, strings, pool size and threads"
+        }
+      ]
+    },
+    "acceleration": {
+      "kind": "differential",
+      "reason": "The command suite checks reference counts or residuals and saved results, with output and failure contracts for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/chdfe.do",
+          "anchor": "solver choices, strings, pool size and threads"
+        }
+      ]
+    },
+    "verbose": {
+      "kind": "contract",
+      "reason": "The command suite checks reference counts or residuals and saved results, with output and failure contracts for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/chdfe.do",
+          "anchor": "diagnostics, unlimited iterations, and version"
+        }
+      ]
+    },
+    "verbosity": {
+      "kind": "contract",
+      "reason": "The command suite checks reference counts or residuals and saved results, with output and failure contracts for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/chdfe.do",
+          "anchor": "diagnostics, unlimited iterations, and version"
+        }
+      ]
+    },
+    "timeit": {
+      "kind": "contract",
+      "reason": "The command suite checks reference counts or residuals and saved results, with output and failure contracts for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/chdfe.do",
+          "anchor": "diagnostics, unlimited iterations, and version"
+        }
+      ]
+    },
+    "version": {
+      "kind": "contract",
+      "reason": "The command suite checks reference counts or residuals and saved results, with output and failure contracts for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/chdfe.do",
+          "anchor": "diagnostics, unlimited iterations, and version"
+        }
+      ]
+    },
+    "maxiterations": {
+      "kind": "contract",
+      "reason": "The command suite checks reference counts or residuals and saved results, with output and failure contracts for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/chdfe.do",
+          "anchor": "diagnostics, unlimited iterations, and version"
+        }
+      ]
+    },
+    "groupvar": {
+      "kind": "differential",
+      "reason": "The command suite checks reference counts or residuals and saved results, with output and failure contracts for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/chdfe.do",
+          "anchor": "mobility group numbering and absent eligible pair"
+        }
+      ]
+    }
   }
 }

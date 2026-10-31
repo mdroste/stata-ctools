@@ -495,3 +495,134 @@ HDFE_SolveResult partial_out_columns(HDFE_State *S, ST_double *data, ST_int N, S
 
     return (HDFE_SolveResult){any_failed ? 430 : 0, !any_failed, max_iters};
 }
+
+/* Optional hdfe transforms. out is (I-T)y; scratch may not alias either.
+ * 0: symmetric Kaczmarz, 1: forward Kaczmarz, 2: Cimmino. */
+static void hdfe_map_complement(HDFE_State *S, const double *y, double *out, double *scratch,
+                                int tid, int transform)
+{
+    double **means = S->thread_fe_means;
+    if (transform == 0)
+    {
+        transform_sym_kaczmarz_threaded(S, y, out, means, tid);
+        return;
+    }
+    if (transform == 1)
+    {
+        project_from_source_fe(y, out, &S->factors[0], S->N, S->weights, means[tid * S->G]);
+        for (int g = 1; g < S->G; g++)
+            project_and_subtract_fe(out, &S->factors[g], S->N, S->weights, means[tid * S->G + g]);
+        for (int i = 0; i < S->N; i++)
+            out[i] = y[i] - out[i];
+    }
+    else
+    {
+        memset(out, 0, (size_t)S->N * sizeof(*out));
+        for (int g = 0; g < S->G; g++)
+        {
+            project_from_source_fe(y, scratch, &S->factors[g], S->N, S->weights,
+                                   means[tid * S->G + g]);
+            for (int i = 0; i < S->N; i++)
+                out[i] += (y[i] - scratch[i]) / S->G;
+        }
+    }
+}
+
+static double hdfe_map_dot(HDFE_State *S, const double *a, const double *b)
+{
+    return S->weights ? weighted_dot_product(a, b, S->weights, S->N) : dot_product(a, b, S->N);
+}
+
+HDFE_SolveResult partial_out_columns_options(HDFE_State *S, double *data, int N, int K,
+                                             int transform, int acceleration)
+{
+    if (!S || !data || N != S->N || K < 1 || S->num_threads < 1 || S->maxiter < 1 ||
+        !isfinite(S->tolerance) || S->tolerance <= 0 || transform < 0 || transform > 2 ||
+        acceleration < 0 || acceleration > 3 || (transform == 1 && acceleration == 1))
+        return (HDFE_SolveResult){198, 0, 0};
+    if (S->G == 0)
+        return (HDFE_SolveResult){0, 1, 0};
+    if (transform == 0 && acceleration == 1)
+        return partial_out_columns(S, data, N, K, S->num_threads);
+    int failed = 0, max_iterations = 0;
+#pragma omp parallel for num_threads(S->num_threads) schedule(dynamic) reduction(| : failed)       \
+    reduction(max : max_iterations)
+    for (int k = 0; k < K; k++)
+    {
+        int tid = 0;
+#ifdef _OPENMP
+        tid = omp_get_thread_num();
+#endif
+        double *y = data + (size_t)k * N;
+        double *r = S->thread_cg_r[tid], *u = S->thread_cg_u[tid], *v = S->thread_cg_v[tid];
+        /* Cimmino needs a distinct projection buffer. Allocate per active
+         * column, never through SPI on a worker thread. */
+        double *scratch = malloc((size_t)N * sizeof(*scratch));
+        if (!scratch)
+        {
+            failed |= 2;
+            continue;
+        }
+        double scale = hdfe_map_dot(S, y, y);
+        double threshold = S->tolerance * S->tolerance * scale;
+        double roundoff = 2.220446049250313e-16 * 2.220446049250313e-16 * scale;
+        hdfe_map_complement(S, y, r, scratch, tid, transform);
+        memcpy(u, r, (size_t)N * sizeof(*u));
+        double rr = hdfe_map_dot(S, r, r);
+        int iter = 0;
+        while (iter < S->maxiter && rr > threshold)
+        {
+            iter++;
+            double step = 1;
+            if (acceleration == 1 || acceleration == 2)
+            {
+                hdfe_map_complement(S, acceleration == 1 ? u : r, v, scratch, tid, transform);
+                double denom = hdfe_map_dot(S, acceleration == 1 ? u : r, v);
+                if (denom > 0)
+                    step = rr / denom;
+                if (!isfinite(step) || step <= 0)
+                    step = 1;
+            }
+            if (acceleration == 3)
+            {
+                /* Vector Aitken: every third step after five plain sweeps,
+                 * extrapolate along the last change using its second difference.
+                 * u retains the previous iterate. */
+                if (iter >= 6 && iter % 3 == 0)
+                {
+                    for (int i = 0; i < N; i++)
+                        v[i] = u[i] - y[i] - r[i];
+                    double denom = hdfe_map_dot(S, v, v);
+                    if (denom > 0)
+                        step = 1 + hdfe_map_dot(S, r, v) / denom;
+                    if (!isfinite(step))
+                        step = 1;
+                }
+                memcpy(u, y, (size_t)N * sizeof(*u));
+            }
+            for (int i = 0; i < N; i++)
+                y[i] -= step * (acceleration == 1 ? u[i] : r[i]);
+            if (acceleration == 1)
+            {
+                for (int i = 0; i < N; i++)
+                    r[i] -= step * v[i];
+                double next = hdfe_map_dot(S, r, r), beta = rr > 0 ? next / rr : 0;
+                for (int i = 0; i < N; i++)
+                    u[i] = r[i] + beta * u[i];
+                rr = next;
+            }
+            else
+            {
+                hdfe_map_complement(S, y, r, scratch, tid, transform);
+                rr = hdfe_map_dot(S, r, r);
+            }
+            threshold = fmax(roundoff, S->tolerance * S->tolerance * hdfe_map_dot(S, y, y));
+        }
+        if (!isfinite(rr) || rr > threshold)
+            failed |= 1;
+        if (iter > max_iterations)
+            max_iterations = iter;
+        free(scratch);
+    }
+    return (HDFE_SolveResult){(failed & 2) ? 920 : failed ? 430 : 0, !failed, max_iterations};
+}

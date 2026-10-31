@@ -9,7 +9,7 @@ High-performance C-accelerated high-dimensional fixed effects regression.
 ## Syntax
 
 ```stata
-creghdfe depvar indepvars [if] [in] [weight], absorb(varlist) [options]
+creghdfe depvar indepvars [if] [in] [weight] [, absorb(varlist) options]
 ```
 
 ## Options
@@ -17,7 +17,15 @@ creghdfe depvar indepvars [if] [in] [weight], absorb(varlist) [options]
 ### Model Options
 | Option | Description |
 |--------|-------------|
-| `absorb(varlist)` | **Required.** Categorical variables representing fixed effects to absorb |
+| `absorb(varlist)` | Categorical fixed effects; omission estimates a model with an intercept and no absorbed effects |
+| `absorb(varlist, savefe)` | Save individual fixed effects in new variables |
+| `residuals(newvar)` | Save residuals |
+| `groupvar(newvar)` | Save mobility-group identifiers |
+| `dofadjustments(string)` | Absorbed degrees-of-freedom adjustments; default `all` |
+| `tolerance(#)` | Projection tolerance; default `1e-8` |
+| `iterate(#)` | Maximum projection iterations; default 10,000 |
+| `threads(#)` | Maximum workers; zero uses the ctools thread setting |
+| `snapshot`, `fast` | Use a recovery snapshot, or skip recovery; mutually exclusive |
 
 ### Variance/Standard Error Options
 | Option | Description |
@@ -76,7 +84,7 @@ creghdfe y x1 x2, absorb(firm year industry)
 ### Speedup Tricks
 
 **CG Solver and HDFE Absorption:**
-- **Symmetric Kaczmarz transform**: Forward + backward sweep per CG iteration doubles convergence rate compared to a one-directional sweep
+- **Symmetric Kaczmarz transform**: Forward and backward projection sweeps provide the symmetric operator used by CG
 - **Pre-computed inverse group counts**: Multiplies by `1.0/count` instead of dividing, to avoid repeated division
 - **Counting sort for CSR index construction**: Builds compressed sparse row indices in O(N+L) instead of O(N log N), where L is the number of FE levels
 - **Queue-based singleton removal**: Counts rows per FE level once, then peels singleton levels from a queue until none remain, so chains where dropping one singleton creates another cost O(N·G) in total
@@ -161,9 +169,9 @@ where αᵢ represents the fixed effects for each absorbed variable.
 
 The residual degrees of freedom is computed as:
 ```
-df_r = N - K - df_absorbed + redundant_FEs
+df_r = N - K - e(df_a)
 ```
-where redundant FEs are fixed effects that are collinear with others.
+for an unclustered model, where K is the number of retained slope coefficients and `e(df_a)` already accounts for redundant fixed effects. Clustered inference uses the cluster degrees of freedom.
 
 Redundant coefficients are counted as `reghdfe` counts them. Effects nested within the cluster variable cost no degrees of freedom and are set aside. Each remaining effect after the first then loses the largest number of mobility groups it forms with any earlier remaining effect, and at least one coefficient. `dofadjustments()` takes `reghdfe`'s values: `all` (default), `none`, or any of `firstpair` or `pairwise`, `clusters` and `continuous`.
 

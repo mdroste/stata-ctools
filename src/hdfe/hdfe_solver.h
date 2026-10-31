@@ -42,4 +42,10 @@ typedef struct
 HDFE_SolveResult partial_out_columns(HDFE_State *S, ST_double *data, ST_int N, ST_int K,
                                      ST_int num_threads);
 
+/* Optional transforms: 0 symmetric Kaczmarz, 1 Kaczmarz, 2 Cimmino.
+ * Acceleration: 0 none, 1 CG, 2 steepest descent, 3 Aitken.
+ * Uses the same state/buffer and column-major ownership contract above. */
+HDFE_SolveResult partial_out_columns_options(HDFE_State *S, ST_double *data, ST_int N, ST_int K,
+                                            int transform, int acceleration);
+
 #endif /* CTOOLS_HDFE_SOLVER_H */

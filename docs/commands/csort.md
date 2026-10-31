@@ -160,7 +160,7 @@ The sorting algorithms are optimized for performance:
 - **Software prefetching**: `_mm_prefetch` hints hide memory latency during data transfer
 - **Non-temporal stores**: Bypasses cache for very large writes to avoid cache pollution
 - **Row-major staging**: Whole observations are read from Stata once and written once in sorted order (numeric and fixed-width string variables); datasets that cannot be staged are reordered one variable per thread
-- **Persistent thread pool**: Threads are reused across calls, avoiding creation/destruction overhead
+- **Persistent thread pool**: Workers are reused within a plugin call and stopped when it finishes
 
 ### Timing Breakdown
 
@@ -178,14 +178,19 @@ When using the `verbose` option, you'll see:
 
 ## Stored Results
 
-`csort` stores timing information in the following scalars (when `verbose` is specified):
+`csort` returns the following in `r()`; `verbose` also prints phase timings.
 
-| Scalar | Description |
+| Result | Description |
 |--------|-------------|
-| `_csort_time_load` | Data loading time (seconds) |
-| `_csort_time_sort` | Sort time (seconds) |
-| `_csort_time_store` | Data storing time (seconds) |
-| `_csort_time_total` | Total elapsed time (seconds) |
+| `r(N)` | Observations in the sorted dataset |
+| `r(time_load)`, `r(time_sort)`, `r(time_permute)` | Loading, ordering, and permutation times in seconds |
+| `r(time_store)`, `r(time_stream)`, `r(time_cleanup)` | Storage, streaming, and cleanup times in seconds |
+| `r(time_total)` | Total C plugin time in seconds |
+| `r(stream)` | Whether streaming was used |
+| `r(threads_max)`, `r(openmp_enabled)` | Worker limit and OpenMP availability |
+| `r(algorithm)`, `r(sortvars)`, `r(cmd)` | Algorithm, sort keys, and command name |
+
+Phase results can be missing when a path does not report that timing.
 
 ## Technical Notes
 
@@ -197,13 +202,13 @@ When using the `verbose` option, you'll see:
 
 | Feature | Stata `sort` | `csort` (LSD) | `csort` (MSD) | `csort` (Timsort) |
 |---------|--------------|---------------|---------------|-------------------|
-| Algorithm | Modified merge sort | LSD radix | MSD radix | Hybrid merge/insert |
+| Algorithm | Native Stata sort | LSD radix | MSD radix | Hybrid merge/insert |
 | Complexity | O(N log N) | O(N*k) | O(N*k) | O(N) to O(N log N) |
-| Parallelization | No | Yes (OpenMP) | Yes (OpenMP) | Partial |
+| Parallelization | Depends on Stata edition | Yes (OpenMP) | Yes (OpenMP) | Partial |
 | Best For | General | Numeric and short string keys | Long variable strings | Partially sorted |
 | Stable Sort | Yes (with `stable`) | Yes | Yes | Yes |
 
 ## See Also
 
 - [ctools Overview](../../README.md)
-- [cmerge](cmerge.md) - Fast dataset merging (uses csort internally)
+- [cmerge](cmerge.md) - Fast dataset merging using shared C sorting functions
