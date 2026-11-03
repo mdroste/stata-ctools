@@ -356,6 +356,44 @@ int main(void)
         double triple = stat == STAT_SKEWNESS ? 0.0 : 1.5;
         assert(crangestat_compute_window_stat_simple(stat, x, 0, 4, 0, 0) == triple);
     }
+    double cancelled[64];
+    double prefix_sum[65], prefix_sum2[65];
+    size_t prefix_count[65];
+    prefix_arrays pa = {0};
+    pa.prefix_sum = prefix_sum;
+    pa.prefix_sum2 = prefix_sum2;
+    pa.prefix_count = prefix_count;
+    for (int rotation = 0; rotation < 3; rotation++)
+    {
+        const double values[] = {1e16, 1, -1e16};
+        for (size_t i = 0; i < 64; i++)
+            cancelled[i] = i < 3 ? values[(i + rotation) % 3] : host.missval;
+        assert(crangestat_compute_window_stat_simple(STAT_MEAN, cancelled, 0, 3, 0, 0) == 1.0/3);
+        assert(crangestat_compute_window_stat_simple(STAT_MEAN, cancelled, 0, 64, 0, 0) == 1.0/3);
+        crangestat_build_prefix_arrays(cancelled, 0, 64, &pa);
+        assert(crangestat_compute_stat_with_prefix(STAT_MEAN, &pa, cancelled, 0, 0, 64, 0, 0) == 1.0/3);
+    }
+    cancelled[0] = 1e16;
+    for (size_t i = 1; i < 64; i++) cancelled[i] = 1;
+    assert(crangestat_compute_window_stat_simple(STAT_MEAN, cancelled, 0, 8, 0, 1) == 1);
+    crangestat_build_prefix_arrays(cancelled, 0, 64, &pa);
+    assert(crangestat_compute_stat_with_prefix(STAT_MEAN, &pa, cancelled, 0, 0, 64, 0, 1) == 1);
+    for (size_t i = 0; i < 64; i++) cancelled[i] = 8e307;
+    assert(crangestat_compute_window_stat_simple(STAT_MEAN, cancelled, 0, 64, 0, 0) == 8e307);
+    crangestat_build_prefix_arrays(cancelled, 0, 64, &pa);
+    assert(crangestat_compute_stat_with_prefix(STAT_MEAN, &pa, cancelled, 0, 0, 64, 0, 0) == 8e307);
+    for (int stat = STAT_COUNT; stat < STAT_COUNT_ALL; stat++)
+    {
+        assert(crangestat_stata_value(stat, NAN) == host.missval);
+        assert(crangestat_stata_value(stat, INFINITY) == host.missval);
+        assert(crangestat_stata_value(stat, -INFINITY) == host.missval);
+        assert(crangestat_stata_value(stat, -DBL_MAX) == host.missval);
+        assert(crangestat_stata_value(stat, 1.25) == 1.25);
+    }
+    double extended = nextafter(host.missval, INFINITY);
+    assert(crangestat_stata_value(STAT_FIRST, extended) == extended);
+    assert(crangestat_stata_value(STAT_LAST, extended) == extended);
+    assert(crangestat_stata_value(STAT_SUM, extended) == host.missval);
     return 0;
 }
 #endif

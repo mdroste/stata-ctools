@@ -1065,6 +1065,90 @@ do validation/stata/cppmlhdfe.do cppmlhdfe_compatibility_cases
 do validation/stata/cppmlhdfe.do cppmlhdfe_upstream_cases
 do validation/stata/cppmlhdfe.do cppmlhdfe_advanced_cases
 
+* Wide offsets: rows whose fitted means fall far below ppmlhdfe's 2^-46 mean
+* floor (in units of sd(y)). ppmlhdfe's own e(ll)/e(deviance) lose most digits
+* there (rounding of the huge IRLS working variable and the floored means),
+* and its b at +/-400, so the references are well-conditioned equivalents.
+* (a) Offsets +/-s alternating within each absorbed group: raising s by D
+* moves the negative-offset means by exp(-2D) and leaves the other rows and b
+* unchanged up to exp(-2s), so well-conditioned ppmlhdfe fits give the
+* references: ll(s) = ll(10) - 2(s-10)S and dev(s) = dev(10) + 4(s-10)S, with
+* S the sum of y over the negative-offset rows, and e(b) from s = 20 (where
+* ppmlhdfe's b is still exact; _cons, the weighted mean of the absorbed
+* effects, moves by -(s-20), and at s = 10 it is not yet settled to 7 sf).
+clear
+set seed 504
+set obs 1000
+gen i = ceil(_n/20)
+gen x = rnormal()
+gen z = runiform()
+gen y = rpoisson(exp(.3 + .5*x - .3*z))
+gen double ov = cond(mod(_n, 2), 10, -10)
+quietly ppmlhdfe y x z, absorb(i) offset(ov)
+local wide_ll10 = e(ll)
+local wide_dev10 = e(deviance)
+quietly summarize y if ov < 0 & e(sample), meanonly
+local wide_S = r(sum)
+replace ov = cond(mod(_n, 2), 20, -20)
+quietly ppmlhdfe y x z, absorb(i) offset(ov)
+matrix wide_b20 = e(b)
+foreach s in 20 50 100 400 {
+    replace ov = cond(mod(_n, 2), `s', -`s')
+    capture cppmlhdfe y x z, absorb(i) offset(ov)
+    if _rc {
+        test_fail "wide offset +/-`s'" "rc=`=_rc'"
+        continue
+    }
+    matrix wide_b = e(b)
+    matrix wide_bs = wide_b20
+    matrix wide_bs[1, 3] = wide_b20[1, 3] - (`s' - 20)
+    assert_matrix_equal wide_b wide_bs $DEFAULT_SIGFIGS "wide offset +/-`s': e(b)"
+    assert_scalar_equal `=e(ll)' `=`wide_ll10' - 2*(`s'-10)*`wide_S'' $DEFAULT_SIGFIGS "wide offset +/-`s': e(ll)"
+    assert_scalar_equal `=e(deviance)' `=`wide_dev10' + 4*(`s'-10)*`wide_S'' $DEFAULT_SIGFIGS "wide offset +/-`s': e(deviance)"
+}
+* (b) Normal offsets without absorb(), where ppmlhdfe's b also drifts (4 sf at
+* SD 30): the references are Stata's poisson at tight tolerances for y unrelated
+* to the offset, and glm's IRLS for y generated with it (where poisson does not
+* converge at tight tolerances); the deviance is 2*(saturated ll - ll), with the
+* saturated part by Stirling's series for y >= 10.
+foreach design in "unrelated 7" "unrelated 30" "fitted 8" {
+    gettoken kind sd : design
+    clear
+    set seed 504
+    set obs 1000
+    gen x = rnormal()
+    gen z = runiform()
+    gen y = rpoisson(exp(.3 + .5*x - .3*z))
+    set seed 505
+    gen double ov = rnormal()*`sd'
+    if "`kind'" == "fitted" replace y = rpoisson(exp(.3 + .5*x - .3*z + ov))
+    quietly generate double wide_sat = cond(y == 0, 0, cond(y < 10, ///
+        y*ln(y) - y - lngamma(y + 1), ///
+        -0.5*ln(2*_pi*y) - 1/(12*y) + 1/(360*y^3) - 1/(1260*y^5) + 1/(1680*y^7)))
+    quietly summarize wide_sat if !missing(y), meanonly
+    local wide_satsum = r(sum)
+    if "`kind'" == "unrelated" {
+        quietly poisson y x z, offset(ov) tolerance(1e-13) ltolerance(1e-15) nrtolerance(1e-13)
+        local wide_llref = e(ll)
+        local wide_devref = 2*(`wide_satsum' - e(ll))
+    }
+    else {
+        quietly glm y x z, family(poisson) offset(ov) irls
+        local wide_devref = e(deviance)
+        local wide_llref = `wide_satsum' - e(deviance)/2
+    }
+    matrix wide_bref = e(b)
+    capture cppmlhdfe y x z, offset(ov)
+    if _rc {
+        test_fail "normal offset `design'" "rc=`=_rc'"
+        continue
+    }
+    matrix wide_b = e(b)
+    assert_matrix_equal wide_b wide_bref $DEFAULT_SIGFIGS "normal offset `design': e(b)"
+    assert_scalar_equal `=e(ll)' `wide_llref' $DEFAULT_SIGFIGS "normal offset `design': e(ll)"
+    assert_scalar_equal `=e(deviance)' `wide_devref' $DEFAULT_SIGFIGS "normal offset `design': e(deviance)"
+}
+
 } // end quietly
 
 * Summary
@@ -1833,6 +1917,65 @@ gen double y=exp(40+x1+x2+u)
 ppml_native_compare y x1 x2, name("upstream large_y")
     global CTOOLS_CASE_COMPLETE "cppmlhdfe_upstream_cases"
     exit
+}
+
+if "`__case'" == "cppmlhdfe_publication" {
+do validation/support/validate_setup.do
+clear
+set seed 2411
+set obs 200
+generate double x = rnormal()
+generate g = ceil(_n/10)
+generate double y = rpoisson(exp(.4 + .3*x + .02*g))
+generate double _ppmlhdfe_d = 777 + _n
+generate double __hdfe1__ = -_n
+label variable _ppmlhdfe_d "previous fixed effects"
+format _ppmlhdfe_d %20.8f
+label variable __hdfe1__ "previous individual effects"
+sort x
+tempfile original before_failure
+save `original'
+foreach failure in negative absorb vce empty nonconvergence publish {
+    use `original', clear
+    local opts absorb(g, savefe) d2
+    local qualifier
+    if "`failure'" == "negative" replace y = -1 in 1
+    if "`failure'" == "absorb" local opts absorb(no_such_effect) d2
+    if "`failure'" == "vce" local opts `opts' vce(no_such_vce)
+    if "`failure'" == "empty" local qualifier if 0
+    if "`failure'" == "nonconvergence" local opts `opts' irlsmaxiter(1)
+    if "`failure'" == "publish" global CTOOLS_cppmlhdfe_fault publish
+    unab names_before : _all
+    local sort_before : sortedby
+    save `before_failure', replace
+    capture noisily cppmlhdfe y x `qualifier', `opts'
+    local failed_rc = _rc
+    macro drop CTOOLS_cppmlhdfe_fault
+    assert `failed_rc' != 0
+    if "`failure'" == "publish" assert `failed_rc' == 459
+    cf _all using `before_failure', all
+    unab names_after : _all
+    local sort_after : sortedby
+    assert "`names_before'" == "`names_after'"
+    assert "`sort_before'" == "`sort_after'"
+    assert "`: variable label _ppmlhdfe_d'" == "previous fixed effects"
+    assert "`: format _ppmlhdfe_d'" == "%20.8f"
+    assert "`: type _ppmlhdfe_d'" == "double"
+    assert "`: variable label __hdfe1__'" == "previous individual effects"
+    test_pass "failed `failure' preserves automatic PPML outputs"
+}
+use `original', clear
+quietly cppmlhdfe y x, absorb(g, savefe) d2
+assert "`e(d)'" == "_ppmlhdfe_d"
+assert _ppmlhdfe_d != 777 + _n if e(sample)
+quietly predict double fitted, mu
+assert fitted > 0 & !missing(fitted) if e(sample)
+quietly cppmlhdfe y x, absorb(g, savefe) d2
+test_pass "successful reruns replace automatic PPML outputs"
+print_summary "cppmlhdfe output publication"
+global CTOOLS_COMPONENT_COMPLETE "cppmlhdfe_publication"
+global CTOOLS_CASE_COMPLETE "cppmlhdfe_publication"
+exit
 }
 
 di as error "Unknown cppmlhdfe case: `__case'"

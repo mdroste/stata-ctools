@@ -227,6 +227,70 @@ int main(int argc,char **argv) {
     out=fopen(edited,"rb");assert(out);assert(!fseek(out,length,SEEK_SET));
     unsigned char preserved[512];assert(fread(preserved,1,512,out)==512);assert(!memcmp(preserved,raw+length,512));fclose(out);
     for(size_t n=0;n<20;n++) {size_t pos=0;xe_record r;unsigned char bad[20]={0};put16(bad+2,8225);assert(!xe_next(bad,n,&pos,&r));}
+    /* An embedded chart substream (nested BOF..EOF) in the edited sheet is
+     * copied verbatim; new cells join the cell table before it, and WINDOW2
+     * and the sheet's own EOF remain. */
+    unsigned char chart[80];size_t clen=0;
+    {
+        unsigned char body[16]={0};put16(body,0x600);put16(body+2,0x20);put16(body+4,0xdbb);put16(body+6,1997);
+        put16(chart,0x809);put16(chart+2,16);memcpy(chart+4,body,16);clen=20;
+        unsigned char dims[14]={0};put32(dims+4,3);put16(dims+10,1);
+        put16(chart+clen,0x200);put16(chart+clen+2,14);memcpy(chart+clen+4,dims,14);clen+=18;
+        unsigned char cell[14]={0};put16(cell,1);double v=42;uint64_t bits;memcpy(&bits,&v,8);put64(cell+6,bits);
+        put16(chart+clen,0x203);put16(chart+clen+2,14);memcpy(chart+clen+4,cell,14);clen+=18;
+        put16(chart+clen,0x0a);put16(chart+clen+2,0);clen+=4;
+    }
+    FILE *plain=book(a,0,0,0);long plen=ftell(plain);unsigned char *pbytes=malloc((size_t)plen+128);assert(pbytes);
+    rewind(plain);assert(fread(pbytes,1,(size_t)plen,plain)==(size_t)plen);fclose(plain);
+    FILE *charted=tmpfile();assert(charted);
+    assert(fwrite(pbytes,1,(size_t)plen-4,charted)==(size_t)plen-4);assert(fwrite(chart,1,clen,charted)==clen);
+    unsigned char w2[18]={0};put16(w2,0x6b6);assert(!record(charted,0x23e,w2,18));assert(!record(charted,0x0a,NULL,0));
+    free(pbytes);
+    char chartpath[4096],chartedit[4096];
+    snprintf(chartpath,sizeof(chartpath),"%s/chart.xls",argv[1]);snprintf(chartedit,sizeof(chartedit),"%s/chart_edit.xls",argv[1]);
+    out=fopen(chartpath,"wb");assert(out);assert(!compound(out,charted,(size_t)ftell(charted)));fclose(out);fclose(charted);
+    fresh=book(b,1,3,0);result=NULL;wb=NULL;
+    assert(!xe_edit(chartpath,"Data",1,0,1,3,1,1,fresh,&result,&wb));
+    size_t rlen;unsigned char *rbytes=xe_file(result,&rlen);assert(rbytes);
+    const unsigned char *kept=memmem(rbytes,rlen,chart,clen);assert(kept);
+    size_t pos=0,sheetpos=0;xe_record rec;
+    while(xe_next(rbytes,rlen,&pos,&rec)) if(rec.id==0x85){sheetpos=xe32(rec.data);break;}
+    pos=sheetpos;int depth=0,cell_at=-1,nested_at=-1,window_at=-1,eof_at=-1,index=0;
+    while(xe_next(rbytes,rlen,&pos,&rec)) {
+        if(rec.id==0x809 && ++depth==2) nested_at=index;
+        if(depth==1 && rec.id==0xfd && xe16(rec.data)==1 && xe16(rec.data+2)==3) cell_at=index;
+        if(depth==1 && rec.id==0x23e) window_at=index;
+        if(rec.id==0x0a && --depth==0){eof_at=index;break;}
+        index++;
+    }
+    assert(cell_at>=0 && nested_at>cell_at && window_at>nested_at && eof_at>window_at && pos==rlen);
+    assert(rbytes+sheetpos<kept);free(rbytes);
+    out=fopen(chartedit,"wb");assert(out);assert(!xe_compound(out,chartpath,wb,result,rlen));fclose(out);
+    fclose(result);fclose(fresh);xls_close_WB(wb);
+    wb=xls_open_file(chartedit,"UTF-8",&error);assert(wb);ws=xls_getWorkSheet(wb,0);assert(ws && !xls_parseWorkSheet(ws));
+    assert(!strcmp(xls_cell(ws,0,0)->str,a));assert(!strcmp(xls_cell(ws,1,3)->str,b));xls_close_WS(ws);xls_close_WB(wb);
+    /* Only the Workbook stream libxls read moves: a Workbook inside an embedded
+     * storage (MBD00000001) keeps its start, size and sectors. */
+    char embedpath[4096],embededit[4096];
+    snprintf(embedpath,sizeof(embedpath),"%s/embed.xls",argv[1]);snprintf(embededit,sizeof(embededit),"%s/embed_edit.xls",argv[1]);
+    old=book(a,0,0,0);out=fopen(embedpath,"wb");assert(out);assert(!compound(out,old,(size_t)ftell(old)));fclose(out);fclose(old);
+    out=fopen(embedpath,"r+b");assert(out);assert(!fseek(out,0,SEEK_END));length=ftell(out);
+    raw=malloc((size_t)length+512);assert(raw);rewind(out);assert(fread(raw,1,length,out)==(size_t)length);
+    sector=(unsigned)length/512-1;fatsector=xe32(raw+76);dirsector=xe32(raw+48);
+    directory_entry(raw+512*(1+dirsector)+256,"MBD00000001",1,3,0xfffffffe,0);
+    directory_entry(raw+512*(1+dirsector)+384,"Workbook",2,UINT32_MAX,sector,512);
+    put32(raw+512*(1+dirsector)+128+72,2);put32(raw+512*(1+fatsector)+sector*4,0xfffffffe);
+    memset(raw+length,0x6b,512);rewind(out);assert(fwrite(raw,1,length+512,out)==(size_t)length+512);fclose(out);
+    fresh=book(b,1,1,0);result=NULL;wb=NULL;assert(!xe_edit(embedpath,"Data",1,0,1,1,1,1,fresh,&result,&wb));
+    out=fopen(embededit,"wb");assert(out);assert(!xe_compound(out,embedpath,wb,result,(size_t)ftell(result)));fclose(out);
+    fclose(result);fclose(fresh);xls_close_WB(wb);
+    out=fopen(embededit,"rb");assert(out);assert(!fseek(out,0,SEEK_END));long elen=ftell(out);
+    unsigned char *edited_raw=malloc((size_t)elen);assert(edited_raw);rewind(out);assert(fread(edited_raw,1,(size_t)elen,out)==(size_t)elen);fclose(out);
+    const unsigned char *entries=edited_raw+512*(1+xe32(edited_raw+48));
+    assert(xe32(entries+128+116)==(uint32_t)length/512 && xe32(entries+384+116)==sector && xe32(entries+384+120)==512);
+    assert(!memcmp(edited_raw+length,raw+length,512));
+    wb=xls_open_file(embededit,"UTF-8",&error);assert(wb);ws=xls_getWorkSheet(wb,0);assert(ws && !xls_parseWorkSheet(ws));
+    assert(!strcmp(xls_cell(ws,1,1)->str,b));xls_close_WS(ws);xls_close_WB(wb);free(edited_raw);
     free(raw);free(a);free(b);return 0;
 }
 #endif
@@ -294,6 +358,26 @@ int main(void) {
         char *truncated=malloc(i+1);memcpy(truncated,lex,i);truncated[i]=0;
         got=xedit_translate_formula(truncated,1,1);assert(got);free(got);free(truncated);
     }
+    /* Rows and cells without r get the positions readers infer, so a merge
+     * keeps their cells, orders rows and recomputes the used range. */
+    char *noref=strdup("<worksheet><dimension ref='A1:C3'/><sheetData><row><c><v>1</v></c><c><v>2</v></c><c><v>3</v></c></row>"
+        "<row><c><v>4</v></c><c s='2'><v>5</v></c><c><v>6</v></c></row><row r='3'><c><v>7</v></c><c r='C3'><v>9</v></c><c/></row></sheetData></worksheet>");
+    char *placed=xedit_explicit_positions(noref);
+    assert(placed && placed!=noref);
+    assert(strstr(placed,"<row r=\"1\"><c r=\"A1\"><v>1</v></c><c r=\"B1\"><v>2</v></c><c r=\"C1\">"));
+    assert(strstr(placed,"<row r=\"2\"><c r=\"A2\"><v>4</v></c><c s='2' r=\"B2\"><v>5</v></c>"));
+    assert(strstr(placed,"<row r='3'><c r=\"A3\"><v>7</v></c><c r='C3'><v>9</v></c><c r=\"D3\"/></row>"));
+    got=xedit_worksheet(placed,"<worksheet><sheetData><row r='2'><c r='B2' s='1'><v>20</v></c></row></sheetData></worksheet>",0,0);
+    assert(got && strstr(got,"<c r=\"A2\"><v>4</v></c><c r='B2' s=\"1\"><v>20</v></c><c r=\"C2\"><v>6</v></c>"));
+    assert(strstr(got,"ref=\"A1:D3\"") && !strstr(got,"<v>5</v>"));
+    assert(strstr(got,"<v>3</v>")<strstr(got,"<v>20</v>") && strstr(got,"<v>20</v>")<strstr(got,"<v>7</v>"));
+    free(got);free(placed);free(noref);
+    char *invalid=strdup("<worksheet><sheetData><row r='x'><c r='?'><v>1</v></c></row></sheetData></worksheet>");
+    placed=xedit_explicit_positions(invalid);
+    assert(placed && !strcmp(placed,"<worksheet><sheetData><row r=\"1\"><c r=\"A1\"><v>1</v></c></row></sheetData></worksheet>"));
+    free(placed);free(invalid);
+    char *explicit_positions=strdup(old);
+    assert(xedit_explicit_positions(explicit_positions)==explicit_positions);free(explicit_positions);
     /* Truncated tags must be bounded: no reads past supplied lengths. */
     for(size_t i=0;i<strlen(old);i++) {
         char *truncated=malloc(i+1);memcpy(truncated,old,i);truncated[i]=0;
@@ -441,6 +525,31 @@ int main(int argc, char **argv)
         assert(!xlsx_scan_buffer(&ctx, large, used));
         assert(ctx.cm_numeric[0][0] == 1);
         if (!range) assert(ctx.cm_numeric[0][3999] == 4000);
+        xlsx_context_free(&ctx);
+    }
+    /* Dense storage over max_cells fails with r(909) before it is allocated,
+     * on the serial path and after a parallel overflow pass; a shape that
+     * fits only at its exact size still imports. */
+    const char *far = "<worksheet><sheetData><row r=\"1\"><c r=\"A1\"><v>1</v></c></row>"
+                      "<row r=\"1048576\"><c r=\"XFD1048576\"><v>2</v></c></row></sheetData></worksheet>";
+    const char *exact = "<worksheet><sheetData><row r=\"1\"><c r=\"A1\"><v>1</v></c></row>"
+                        "<row r=\"1000\"><c r=\"A1000\"><v>2</v></c></row></sheetData></worksheet>";
+    for (int which = 0; which < 3; which++) {
+        XLSXContext ctx; xlsx_context_init(&ctx);
+        ctx.max_cells = which == 2 ? 1000 : (size_t)1 << 20;
+        if (which == 1) {
+            char *tail = malloc(used + 128); assert(tail);
+            size_t n = used - strlen("</sheetData></worksheet>");
+            memcpy(tail, large, n);
+            n += (size_t)sprintf(tail + n, "<row r=\"1048576\"><c r=\"XFD1048576\"><v>2</v></c></row></sheetData></worksheet>");
+            assert(xlsx_scan_buffer(&ctx, tail, n) == 909);
+            free(tail);
+        } else {
+            const char *xml = which ? exact : far;
+            assert(xlsx_scan_buffer(&ctx, xml, strlen(xml)) == (which ? 0 : 909));
+            if (which) assert(ctx.cm_num_rows == 1000 && ctx.cm_numeric[0][999] == 2);
+        }
+        assert(ctx.cm_num_rows * (size_t)ctx.cm_num_cols <= ctx.max_cells);
         xlsx_context_free(&ctx);
     }
     large[used - 1] = 0; scan(large, 610); free(large);

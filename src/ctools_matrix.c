@@ -463,9 +463,10 @@ ST_retcode ctools_vce_cluster(const ctools_vce_data *d,
      * could overflow int on the last block) */
     for (ST_int c0 = 0, c1; c0 < num_clusters; c0 = c1) {
         c1 = (num_clusters - c0 < block_clusters) ? num_clusters : c0 + block_clusters;
+        #ifdef _OPENMP
         const size_t block_obs = (size_t)(boundaries[c1] - boundaries[c0]);
-
         #pragma omp parallel for schedule(static) if(K > 1 && block_obs * (size_t)K > 100000)
+        #endif
         for (k = 0; k < K; k++) {
             const ST_double *xk = d->X_eff + (size_t)k * N;
             for (ST_int c = c0; c < c1; c++) {

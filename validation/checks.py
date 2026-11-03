@@ -326,6 +326,7 @@ def run(out):
         ("build.incremental", "validation.check_build", "build_incremental_builds"),
         ("release.archive", "validation.check_build", "archive_main"),
         ("release.workflow", "validation.checks", "release_workflow_contract"),
+        ("release.macos_signing", "validation.check_macos_signing", "main"),
         ("release.integrity", "validation.checks", "release_packages"),
         ("release.cleanup", "validation.checks", "release_cleanup"),
         ("package.staging", "validation.checks", "package_packages"),

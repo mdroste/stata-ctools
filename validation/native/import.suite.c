@@ -155,7 +155,7 @@ static size_t stream_threshold;
 static uint64_t cache_budget;
 #define CIMPORT_STREAM_THRESHOLD stream_threshold
 #define CIMPORT_CACHE_BUDGET cache_budget
-static char first[32], last[32], strip[16], locale[32];
+static char first[32], last[32], strip[16], locale[32], startcol[32], endcol[32];
 static ST_retcode macro(char *key, char *out, ST_int cap)
 {
     const char *value = "";
@@ -167,6 +167,10 @@ static ST_retcode macro(char *key, char *out, ST_int cap)
         value = strip;
     if (!strcmp(key, "___cimport_parselocale"))
         value = locale;
+    if (!strcmp(key, "___cimport_startcol"))
+        value = startcol;
+    if (!strcmp(key, "___cimport_endcol"))
+        value = endcol;
     snprintf(out, (size_t)cap + 1, "%s", value);
     return 0;
 }
@@ -218,13 +222,15 @@ static ST_retcode string_store(ST_int col, ST_int obs, char *value)
 static Cell *load(CImportContext *ctx, int failure)
 {
     nobs = ctx->total_rows;
-    ncols = ctx->num_columns;
-    cells = calloc((nobs ? nobs : 1) * ncols, sizeof(*cells));
+    /* colrange() columns become variables 1..ncols; the rest are skipped. */
+    ncols = cimport_col_stop(ctx) - ctx->col_first;
+    cells = calloc((nobs ? nobs : 1) * (ncols ? ncols : 1), sizeof(*cells));
     assert(cells);
-    unsigned char *kind = malloc((size_t)ncols);
+    unsigned char *kind = malloc((size_t)ctx->num_columns);
     assert(kind);
-    for (int col = 0; col < ncols; col++)
-        kind[col] = ctx->columns[col].type == CIMPORT_COL_STRING
+    for (int col = 0; col < ctx->num_columns; col++)
+        kind[col] = !cimport_col_selected(ctx, col) ? CIMPORT_STORE_SKIP
+                    : ctx->columns[col].type == CIMPORT_COL_STRING
                         ? (ctx->columns[col].use_strl ? CIMPORT_STORE_STRL : CIMPORT_STORE_STRING)
                         : CIMPORT_STORE_NUMERIC;
     fail_col = failure;
@@ -296,7 +302,8 @@ static void compare(const char *path, int mode, int empty, bool header, int skip
         assert(allocated == (b->has_header ? cimport_row_size(b->num_columns) : 0));
     }
     Cell *left = load(a, 0), *right = load(b, 0);
-    size_t count = a->total_rows * a->num_columns;
+    int selected = cimport_col_stop(a) - a->col_first;
+    size_t count = a->total_rows * selected;
     for (size_t i = 0; i < count; i++)
     {
         assert(!memcmp(&left[i].number, &right[i].number, sizeof(double)));
@@ -331,8 +338,8 @@ static void compare(const char *path, int mode, int empty, bool header, int skip
         for (size_t i = 0; i < count; i++)
         {
             double want = left[i].number, got = actual[i].number;
-            if (a->columns[i % a->num_columns].num_subtype == CIMPORT_NUM_FLOAT &&
-                a->columns[i % a->num_columns].type == CIMPORT_COL_NUMERIC)
+            const CImportColumnInfo *column = &a->columns[a->col_first + (int)(i % selected)];
+            if (column->num_subtype == CIMPORT_NUM_FLOAT && column->type == CIMPORT_COL_NUMERIC)
             {
                 if (want < SV_missval)
                     want = (double)(float)want;
@@ -347,8 +354,8 @@ static void compare(const char *path, int mode, int empty, bool header, int skip
         free_cells(actual, count);
         if (compact->compact_rows && compact->total_rows >= 2)
         {
-            for (int col = 1; col <= compact->num_columns; col++)
-                if (!compact->columns[col - 1].use_strl)
+            for (int col = 1; col <= selected; col++)
+                if (!compact->columns[compact->col_first + col - 1].use_strl)
                     free_cells(load(compact, col), count);
         }
         cimport_free_context(compact);
@@ -357,9 +364,9 @@ static void compare(const char *path, int mode, int empty, bool header, int skip
     free_cells(left, count);
     if (b->stream_rows && b->total_rows >= 2)
     {
-        for (int col = 1; col <= b->num_columns; col++)
+        for (int col = 1; col <= selected; col++)
         {
-            if (!b->columns[col - 1].use_strl)
+            if (!b->columns[b->col_first + col - 1].use_strl)
                 free_cells(load(b, col), count);
         }
     }
@@ -501,6 +508,17 @@ int main(void)
     strcpy(locale, "en_US");
     compare(path, 0, 0, true, 0, true, 4);
     locale[0] = 0;
+    /* colrange(): retained, streamed and compact rows store the same selected
+     * columns as variables 1.., with or without an end column. */
+    const char *ranges[][2] = {{"2", "3"}, {"3", ""}, {"1", "1"}, {"2", "2"}};
+    for (size_t k = 0; k < sizeof(ranges) / sizeof(*ranges); k++)
+    {
+        strcpy(startcol, ranges[k][0]);
+        strcpy(endcol, ranges[k][1]);
+        for (int mode = 0; mode < 3; mode++)
+            compare(path, mode, 0, true, 0, mode != 2, 4);
+    }
+    startcol[0] = endcol[0] = 0;
     /* Later blocks change the final storage type: preserve original numeric
      * precision on double promotion and spelling on numeric-to-text promotion. */
     for (int text = 0; text < 2; text++)

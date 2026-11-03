@@ -34,6 +34,15 @@ program define civreghdfe_p, rclass
     local depvar "`e(depvar)'"
     local fixed_effects "`e(absorb)'"
 
+    * After partial(), e(b) omits the partialled-out terms. Without absorb()
+    * only residuals can be predicted, as ivreg2; with absorb() xb and stdp
+    * refer to the posted coefficients, as ivreghdfe's reghdfe_p
+    local partial_ct = cond(missing(e(partial_ct)), 0, e(partial_ct))
+    if `partial_ct' > 0 & "`fixed_effects'" == "" & "`residuals'" == "" {
+        di as error "option `xb'`stdp'`xbd' not supported with the partial() option"
+        exit 198
+    }
+
     if "`xb'" != "" {
         * xb: linear prediction X*beta (structural equation)
         PredictXB `varlist' `if' `in', xb
@@ -52,6 +61,25 @@ program define civreghdfe_p, rclass
         else if "`fixed_effects'" != "" {
             di as error "residual predictions with fixed effects require residuals() during estimation"
             exit 198
+        }
+        else if `partial_ct' > 0 {
+            * Frisch-Waugh-Lovell: the residual is y - Xb net of its
+            * projection on the partialled-out terms, on the estimation
+            * sample with its weights (the constant stays in e(b))
+            tempvar xbvar ypart esample rpart
+            tempname ivest
+            PredictXB `xbvar' `if' `in', xb
+            quietly gen double `ypart' = `depvar' - `xbvar'
+            quietly gen byte `esample' = e(sample)
+            local pwt
+            if "`e(wtype)'" != "" local pwt [`e(wtype)'`e(wexp)']
+            local pcons = cond(colnumb(e(b), "_cons") < ., "noconstant", "")
+            local pterms `e(partial)'
+            _estimates hold `ivest', restore
+            quietly regress `ypart' `pterms' `pwt' if `esample', `pcons'
+            quietly predict double `rpart' if `esample', residuals
+            _estimates unhold `ivest'
+            gen `typlist' `varlist' = `rpart' if `touse' & e(sample)
         }
         else {
             tempvar xbvar

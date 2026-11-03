@@ -1203,12 +1203,14 @@ standard_obs_loop:;
             /* Sequential reads from data[sorted_idx], scattered writes via obs_map */
             for (size_t sorted_idx = 0; sorted_idx < nobs; sorted_idx++) {
                 perm_idx_t orig_idx = fwd_perm[sorted_idx];
-                local_rc = SF_vstore(result_idx, (ST_int)obs_map[orig_idx], data[sorted_idx]);
+                local_rc = SF_vstore(result_idx, (ST_int)obs_map[orig_idx],
+                                    crangestat_stata_value(specs[s].type, data[sorted_idx]));
                 if (local_rc) break;
             }
         } else {
             for (size_t i = 0; i < nobs; i++) {
-                local_rc = SF_vstore(result_idx, (ST_int)obs_map[i], data[inv_perm[i]]);
+                local_rc = SF_vstore(result_idx, (ST_int)obs_map[i],
+                                    crangestat_stata_value(specs[s].type, data[inv_perm[i]]));
                 if (local_rc) break;
             }
         }

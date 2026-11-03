@@ -91,6 +91,12 @@ static inline const char *cio_xls_sheet_name(const xlsWorkBook *w, unsigned j)
     const char *name = w->sheets.sheet[j].name;
     return name ? name : "";
 }
+/* BoundSheet8 dt (0 worksheet, 1 macro, 2 chart, 6 VB module). libxls keeps
+   the record's bytes in order, so dt, the sixth byte, is in "visibility". */
+static inline int cio_xls_is_worksheet(const xlsWorkBook *w, unsigned j)
+{
+    return (w->sheets.sheet[j].visibility & 0x0f) == 0;
+}
 int cio_xls_nonempty(const xlsCell *c);
 void cio_xls_formula_record(XLSWORD id, XLSWORD len, XLSBYTE *record);
 int cio_xls_result_order(const void *a, const void *b);
@@ -112,6 +118,7 @@ int cio_xlsx_raw(XLSXContext *x, int row, int col, double *number, const char **
 uint8_t cio_xlsx_native_format(XLSXContext *x, int row, int col);
 int cio_xlsx_numeric(int type);
 int cio_scan_xlsx(cio_dataset *dataset, const char *path);
+size_t cio_xlsx_cell_limit(void);
 int cio_export_xpf(int nvar, const char *path, int replace, char (*mapped)[301], ctools_output *pending);
 int cio_export_sascode(int nvar, char (*mapped)[301], const char *path, const char *kind,
                        int replace, ctools_output *pending);

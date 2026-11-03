@@ -2,6 +2,12 @@
 
 program define creghdfe, eclass
     version 14.1
+    * Replay never enters the estimation transaction or clears existing e().
+    if replay() {
+        if "`e(cmd)'" != "creghdfe" error 301
+        ereturn display `0'
+        exit
+    }
     * A failed or interrupted regression leaves the data as they were without
     * a snapshot of the dataset: creghdfe only adds variables at the end
     * (residuals, groupvar(), savefe and temporary variables) and writes into
@@ -42,6 +48,13 @@ program define _creghdfe_impl, eclass
 
     * Drop whatever an interrupted run left behind
     _ctools_cleanup creghdfe
+
+    * A refit on the singleton-free sample (see after the plugin call) passes
+    * that sample and the first run's singleton count here
+    local __refit_sample : word 1 of $CTOOLS_creghdfe_refit_
+    local __refit_singletons : word 2 of $CTOOLS_creghdfe_refit_
+    global CTOOLS_creghdfe_refit_
+    local __creghdfe_args `"`0'"'
 
     syntax varlist(min=2 fv ts) [aw fw pw] [if] [in] [, Absorb(string) VCE(string) Verbose ///
         TOLerance(real 1e-8) ITERATE(integer 10000) NOSTANDardize RESID RESID2(name) RESIDuals(name) ///
@@ -85,6 +98,7 @@ program define _creghdfe_impl, eclass
 
     * Mark sample - include absorb and cluster variables
     marksample touse
+    if "`__refit_sample'" != "" quietly replace `touse' = 0 if !`__refit_sample'
 
     * One variable per absorbed effect, in order: the FE count and every
     * plugin variable position are computed from this list. A numeric
@@ -365,6 +379,29 @@ program define _creghdfe_impl, eclass
     * Retrieve results from scalars set by C plugin
     local N_final = __creghdfe_N
     local num_singletons = __creghdfe_num_singletons
+
+    * Factor variables were expanded on the sample before singleton removal.
+    * As reghdfe (which expands after its singleton pass), refit on the final
+    * sample when that changes the terms, e.g. a level or the base level that
+    * occurs only on singleton rows. Singletons are a fixed point, so the
+    * refit drops none; it reports the first run's count.
+    if `num_singletons' > 0 & "`indepvars'" != "" & "`__refit_sample'" == "" {
+        fvexpand `indepvars' if `final_sample'
+        if "`r(varlist)'" != "`coef_names_all'" {
+            if "`resid_varname'" != "" drop `resid_varname'
+            if "`groupvar'" != "" drop `groupvar'
+            if `savefe' {
+                forvalues g = 1/`nfe' {
+                    drop __hdfe`g'__
+                }
+            }
+            _ctools_cleanup creghdfe
+            global CTOOLS_creghdfe_refit_ "`final_sample' `num_singletons'"
+            _creghdfe_impl `__creghdfe_args'
+            exit
+        }
+    }
+    if "`__refit_singletons'" != "" local num_singletons = `__refit_singletons'
     local K_keep = __creghdfe_K_keep
     local df_a = __creghdfe_df_a
     capture local num_iters = __creghdfe_iterations
@@ -505,8 +542,25 @@ program define _creghdfe_impl, eclass
     * Record results building time
     _ctools_lap __time_build __ct_lap98 `__ct_lap98'
 
-    * Post results
-    ereturn post `b' `V', esample(`final_sample') depname(`depvar_orig') obs(`N_final')
+    * Post results. With factor variables, buildfvinfo lets margins check
+    * estimability, as after reghdfe.
+    * buildfvinfo costs a pass over the data and is only
+    * needed when a coefficient other than a base level is omitted; with a
+    * full-rank design every margin is estimable.
+    local bfv
+    _ms_op_info `b'
+    if r(fvops) {
+        local __bfv_names : colnames `b'
+        foreach __bfv_name of local __bfv_names {
+            if strpos("`__bfv_name'", "o.") & !strpos("`__bfv_name'", "b.") local bfv buildfvinfo
+        }
+    }
+    ereturn post `b' `V', esample(`final_sample') depname(`depvar_orig') obs(`N_final') `bfv'
+    * The weights, which margins and other postestimation commands reuse
+    if "`weight'" != "" {
+        ereturn local wtype "`weight'"
+        ereturn local wexp `"`exp'"'
+    }
 
     * Store additional e() results
     ereturn scalar N = `N_final'
@@ -540,7 +594,9 @@ program define _creghdfe_impl, eclass
     }
     local vcename = cond(`vcetype'==0, "unadjusted", cond(`vcetype'==1, "robust", "cluster"))
     local cluster_post
-    if `vcetype' == 2 local cluster_post clustvars(`clustervar_orig') nclust(`=__creghdfe_N_clust')
+    if `vcetype' == 2 {
+        local cluster_post clustvars(`clustervar_orig') nclust(`num_clusters')
+    }
     _ctools_hdfe_post, stub(__creghdfe) absvars(`absvars') nhdfe(`nfe') vce(`vcename') ///
         dofmethod(`dofmethods') `cluster_post'
     ereturn local title "HDFE Linear regression"

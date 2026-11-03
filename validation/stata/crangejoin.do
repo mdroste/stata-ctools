@@ -185,6 +185,47 @@ capture cf _all using `rb_copy', all
 if `rc' == 198 & !_rc test_pass "[rollback] snapshot and fast together refused"
 else test_fail "[rollback] snapshot and fast together refused" "rc=`rc', data changed=`=_rc!=0'"
 
+* rangejoin replaces the dataset: e(sample) is empty afterwards, the other
+* estimation results stay, and stored samples (_est_*) are joined like any
+* master variable. A failed join leaves e(sample) as it was.
+do "validation/support/esample_helpers.do"
+clear
+quietly set obs 6
+gen double k = _n
+gen double v = 10 * _n
+tempfile es_using
+quietly save `es_using'
+global CTOOLS_esample_using `es_using'
+capture program drop _crangejoin_esample_setup
+program define _crangejoin_esample_setup
+    clear
+    quietly set obs 12
+    gen long id = _n
+    gen double x = mod(_n * 7, 12)
+    gen double y = x + mod(_n * 5, 7)
+    gen byte g = mod(_n, 3) != 0
+    gen double lo = id - 1
+    gen double hi = id + 1
+    quietly regress y x if !g
+    estimates store m2
+    quietly regress y x if g
+    estimates store m1
+end
+foreach mode in "" "snapshot" "fast" {
+    _ctools_esample_case, setup(_crangejoin_esample_setup) ///
+        native(rangejoin k lo hi using $CTOOLS_esample_using) ///
+        ctools(crangejoin k lo hi using $CTOOLS_esample_using, `mode') ///
+        testname("e(sample) after crangejoin (`mode')")
+}
+foreach fault in schema post {
+    global CTOOLS_crangejoin_fault `fault'
+    _ctools_esample_case, setup(_crangejoin_esample_setup) native(error 1) ///
+        ctools(crangejoin k lo hi using $CTOOLS_esample_using) ///
+        testname("e(sample) after a failed crangejoin (`fault')")
+    global CTOOLS_crangejoin_fault
+}
+global CTOOLS_esample_using
+
 }
 print_summary "crangejoin"
 global CTOOLS_COMPONENT_COMPLETE "crangejoin"

@@ -263,6 +263,7 @@ def run_fixture(name, out):
             fixtures.shapefiles(folder)
             fixtures.codec_fixtures(folder)
             fixtures.failure_fixtures(folder)
+            fixtures.injection_fixtures(folder)
             args = [plugin]
         elif name == "io_delimited_options":
             fixtures.delimited_fixtures(folder)

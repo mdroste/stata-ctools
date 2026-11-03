@@ -77,6 +77,7 @@ void xlsx_context_init(XLSXContext *ctx)
     ctx->cell_range.end_row = -1;
     ctx->selected_sheet = 0;
     ctx->min_row = INT32_MAX;
+    ctx->area_max_col = -1;
     snprintf(ctx->workbook_path, sizeof(ctx->workbook_path), "%s", XLSX_PATH_WORKBOOK);
     snprintf(ctx->shared_strings_path, sizeof(ctx->shared_strings_path), "%s",
              XLSX_PATH_SHARED_STRINGS);
@@ -937,6 +938,13 @@ static bool xlsx_cm_reserve(XLSXContext *ctx, size_t rows, int cols)
     if (rows < old_rows) rows = old_rows;
     if (rows < 1) rows = 1;
     if (cols > XLSX_MAX_COLUMNS) return false;
+    size_t need_cols = (size_t)(cols > ctx->cm_num_cols ? cols : ctx->cm_num_cols);
+    if (ctx->max_cells && need_cols && rows > ctx->max_cells / need_cols) {
+        snprintf(ctx->error_message, sizeof(ctx->error_message),
+                 "worksheet too large: %zu rows by %zu columns exceed the memory available",
+                 rows, need_cols);
+        return false;
+    }
     if (!ctx->cm_numeric) {
         /* Column pointers cover every Excel column; data columns are
          * allocated only as cells reach them. */
@@ -1002,6 +1010,8 @@ static void xlsx_cm_clear(XLSXContext *ctx)
     ctx->max_col = 0;
     ctx->min_row = INT32_MAX;
     ctx->max_row = 0;
+    ctx->area_max_col = -1;
+    ctx->area_max_row = 0;
 }
 
 /* Mutable scan state. Each parallel worker owns one; the serial scan sets
@@ -1011,6 +1021,7 @@ typedef struct {
     ctools_arena *arena;        /* inline strings (ctx->parse_arena or _arena_storage) */
     ctools_arena _arena_storage;
     int max_col, min_row, max_row;  /* used range */
+    int area_max_col, area_max_row; /* whole worksheet, cellrange() ignored */
     int cell_rows, cell_cols;       /* storage that the cells require */
     size_t seen, stored;
     int own_first, own_last;    /* parallel workers: rows this chunk may store
@@ -1027,6 +1038,7 @@ static void xlsx_scan_local_init(xlsx_scan_local *loc)
     memset(loc, 0, sizeof(*loc));
     loc->max_col = -1;
     loc->min_row = INT32_MAX;
+    loc->area_max_col = -1;
 }
 
 /* Fold a finished scan into the used range of ctx and the totals. */
@@ -1036,6 +1048,8 @@ static void xlsx_scan_merge(XLSXContext *ctx, xlsx_scan_local *total,
     if (loc->max_col > ctx->max_col) ctx->max_col = loc->max_col;
     if (loc->min_row < ctx->min_row) ctx->min_row = loc->min_row;
     if (loc->max_row > ctx->max_row) ctx->max_row = loc->max_row;
+    if (loc->area_max_col > ctx->area_max_col) ctx->area_max_col = loc->area_max_col;
+    if (loc->area_max_row > ctx->area_max_row) ctx->area_max_row = loc->area_max_row;
     if (loc->cell_rows > total->cell_rows) total->cell_rows = loc->cell_rows;
     if (loc->cell_cols > total->cell_cols) total->cell_cols = loc->cell_cols;
     total->seen += loc->seen;
@@ -1077,6 +1091,9 @@ static void xlsx_store_cell(const XLSXContext *ctx, xlsx_scan_local *loc, int ro
             if (rows < 1024) rows = 1024;
             if (rows > XLSX_MAX_ROWS) rows = XLSX_MAX_ROWS;
             if (rows < (size_t)row) rows = (size_t)row;
+            /* Near the storage limit, grow only to the row needed. */
+            size_t cols = (size_t)(col >= ctx->cm_num_cols ? col + 1 : ctx->cm_num_cols);
+            if (grow->max_cells && cols && rows > grow->max_cells / cols) rows = (size_t)row;
         }
         if (!xlsx_cm_reserve(grow, rows, col >= ctx->cm_num_cols ? col + 1 : 0)) {
             loc->failed = true;
@@ -1205,6 +1222,10 @@ static const char *xlsx_scan_cell(const XLSXContext *ctx, xlsx_scan_local *loc,
         }
     }
 cell_value:
+    if (((v && vlen) || run_len) && row >= 1 && row <= XLSX_MAX_ROWS && col < XLSX_MAX_COLUMNS) {
+        if (col > loc->area_max_col) loc->area_max_col = col;
+        if (row > loc->area_max_row) loc->area_max_row = row;
+    }
     if (skip || outside) return p;
 
     const char *t = a[1].value;
@@ -1287,8 +1308,11 @@ static void xlsx_scan_rows(const XLSXContext *ctx, xlsx_scan_local *loc,
                 return;
             }
             prev_col = -1;
-            if (range->end_row > 0 && row > range->end_row) return;
-            skip = range->start_row > 0 && row < range->start_row;
+            if (row > loc->area_max_row) loc->area_max_row = row;
+            /* Rows after the range are still read for the data area's
+             * columns, which cellrange() is checked against. */
+            skip = (range->start_row > 0 && row < range->start_row) ||
+                   (range->end_row > 0 && row > range->end_row);
             if (!skip) {
                 if (row < loc->min_row) loc->min_row = row;
                 if (row > loc->max_row) loc->max_row = row;
@@ -1566,7 +1590,7 @@ ST_retcode xlsx_parse_worksheet(XLSXContext *ctx)
     free(xml);
 
     /* Never report an empty or partial sheet as a successful import */
-    if (rc == 909) {
+    if (rc == 909 && !ctx->error_message[0]) {
         snprintf(ctx->error_message, sizeof(ctx->error_message),
                  "Insufficient memory for worksheet cells");
     } else if (!rc && ctx->cells_stored < ctx->cells_seen) {

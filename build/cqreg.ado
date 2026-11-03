@@ -50,41 +50,6 @@ program define cqreg, eclass
     * Mark sample
     marksample touse
 
-    * Parse variable list
-    gettoken depvar indepvars : varlist
-
-    * Expand factor variables to temporary numeric variables
-    * This handles i.varname, c.varname, etc.
-    if "`indepvars'" != "" {
-        * Expand factor variables to temp numeric vars
-        fvrevar `indepvars' if `touse'
-        local __indepvars_all "`r(varlist)'"
-
-        * Get coefficient names (same count as fvrevar, one per level)
-        fvexpand `indepvars' if `touse'
-        local coef_names_all "`r(varlist)'"
-
-        * Base/omitted placeholders are not sent to the plugin, which also
-        * detects collinearity (detect_collinearity)
-        _ctools_fvsplit, names(`coef_names_all') vars(`__indepvars_all')
-        local indepvars_expanded "`r(vars)'"
-        local coef_names "`r(names)'"
-        local coef_is_base "`r(base)'"
-
-        * Build expanded varlist for plugin (only non-base vars)
-        local varlist_expanded "`depvar' `indepvars_expanded'"
-    }
-    else {
-        local indepvars_expanded ""
-        local varlist_expanded "`depvar'"
-        local coef_names ""
-        local coef_names_all ""
-        local coef_is_base ""
-    }
-
-    local nvars : word count `varlist_expanded'
-    local K_x = `nvars' - 1  // number of independent variables (after expansion)
-
     * Parse VCE option
     local vcetype = 0   // 0=iid, 1=robust, 2=cluster
     local clustervar ""
@@ -128,6 +93,41 @@ program define cqreg, eclass
             exit 198
         }
     }
+
+    * Parse variable list
+    gettoken depvar indepvars : varlist
+
+    * Expand factor variables to temporary numeric variables
+    * This handles i.varname, c.varname, etc.
+    if "`indepvars'" != "" {
+        * Expand factor variables to temp numeric vars
+        fvrevar `indepvars' if `touse'
+        local __indepvars_all "`r(varlist)'"
+
+        * Get coefficient names (same count as fvrevar, one per level)
+        fvexpand `indepvars' if `touse'
+        local coef_names_all "`r(varlist)'"
+
+        * Base/omitted placeholders are not sent to the plugin, which also
+        * detects collinearity (detect_collinearity)
+        _ctools_fvsplit, names(`coef_names_all') vars(`__indepvars_all')
+        local indepvars_expanded "`r(vars)'"
+        local coef_names "`r(names)'"
+        local coef_is_base "`r(base)'"
+
+        * Build expanded varlist for plugin (only non-base vars)
+        local varlist_expanded "`depvar' `indepvars_expanded'"
+    }
+    else {
+        local indepvars_expanded ""
+        local varlist_expanded "`depvar'"
+        local coef_names ""
+        local coef_names_all ""
+        local coef_is_base ""
+    }
+
+    local nvars : word count `varlist_expanded'
+    local K_x = `nvars' - 1  // number of independent variables (after expansion)
 
     * Parse bandwidth method
     local bwmethod_num = 0  // 0=hsheather, 1=bofinger, 2=chamberlain
@@ -315,8 +315,22 @@ program define cqreg, eclass
         stub(__cqreg) kkeep(`K_keep') vmatrix(__cqreg_V) cons(__cqreg_cons)
     local K_full = colsof(`b')
 
-    * Post results
+    * Assess covariance rank in normalized units. At extreme scales Stata's
+    * ereturn post can discard even a valid covariance; do not report a
+    * successful fit with a zero matrix substituted by that host check.
+    tempname rank_V rank_scale rank_inverse posted_scale
+    matrix `rank_V' = `V'
+    mata: st_numscalar("`rank_scale'", max(abs(st_matrix("`rank_V'"))))
+    if !missing(`rank_scale') & `rank_scale' > 0 ///
+        matrix `rank_V' = `rank_V' / `rank_scale'
     ereturn post `b' `V', esample(`touse') depname(`depvar') obs(`N_final')
+    mata: st_numscalar("`posted_scale'", max(abs(st_matrix("e(V)"))))
+    if !missing(`rank_scale') & `rank_scale' > 0 & `posted_scale' == 0 {
+        ereturn clear
+        _ctools_cleanup cqreg
+        di as error "cqreg: Stata cannot post the covariance at this response scale; rescale the dependent variable"
+        exit 498
+    }
 
     * Compute pseudo R-squared
     local r2_p = 1 - `sum_adev' / `sum_rdev'
@@ -324,12 +338,14 @@ program define cqreg, eclass
     * Compute density at quantile (f_r = 1/sparsity)
     local f_r = 1 / `sparsity'
 
-    * df_r for quantile regression
-    local df_r = `N_final' - `K_keep' - 1
-    if `df_r' < 1 local df_r = 1
-
     * Store scalar results (matching qreg)
-    _post_vce_rank
+    matrix `rank_inverse' = invsym(`rank_V')
+    ereturn scalar rank = rowsof(`rank_V') - diag0cnt(`rank_inverse')
+
+    * df_r as qreg: N - e(rank), so directions the VCE zeroes (no density)
+    * do not count
+    local df_r = `N_final' - e(rank)
+    if `df_r' < 1 local df_r = 1
     ereturn scalar sparsity = `sparsity'
     ereturn scalar bwidth = `bandwidth'
     if `denmethod_num' == 2 {

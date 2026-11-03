@@ -25,6 +25,10 @@ For Intel, substitute `x86_64` and `macos-intel`. The helper verifies source arc
 
 Linux distribution CI uses Ubuntu 22.04 and disables optional OpenBLAS. `USE_OPENBLAS=yes` enables detection for custom builds. Windows distribution CI uses MSYS2 GCC; dependency validation rejects external compiler DLLs.
 
+macOS branch and release builds require Developer ID Application signing and
+Apple notarization before packaging; see [macOS signing](MACOS_SIGNING.md) for
+Apple credentials, GitHub environment configuration, and online ticket lookup.
+
 Windows branch and release builds also require Azure Authenticode signing before
 validation and packaging; see [Windows signing](WINDOWS_SIGNING.md) for the Azure
 and GitHub environment configuration. Pull-request candidates remain unsigned.

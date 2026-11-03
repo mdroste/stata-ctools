@@ -3,56 +3,82 @@
 #include "cpsmatch_stats.h"
 #include "cpsmatch_index.h"
 
-/* Nearest-neighbor matching with ties(), with replacement, step by step as
- * psmatch2's match_pscore() does it (its weights are the reference):
+/* Nearest-neighbor matching step by step as psmatch2's match_pscore() does it
+ * (its matches and weights are the reference), with replacement and ties()
+ * or without replacement (noreplace, neighbor(1), with or without ties()):
  * - controls and treated are in psmatch2's order (pscore, ascending or
  *   descending, then observation), and treated are visited in that order;
  * - the nearest control is found by scanning on from the previous one in the
- *   current direction while the distance does not increase (the first of
- *   equal distances wins); once it reaches the last control, the direction
- *   turns backward and the scan no longer moves;
- * - ties() adds the controls that follow it in that direction at no greater
- *   distance, and neighbor(k) then adds the k-1 closest around it from both
- *   sides, so a control can enter a treated's list twice;
+ *   current direction, over controls not yet used when noreplace, while the
+ *   distance does not increase (the first of equal distances wins); once a
+ *   match is the last control, the direction turns backward;
+ * - ties() adds the (unused) controls that follow it in that direction at no
+ *   greater distance, and neighbor(k) then adds the k-1 closest around it
+ *   from both sides, so a control can enter a treated's list twice;
  * - every list entry gets 1/(list length), and a match needs a distance below
- *   caliper() (strict, as psmatch2). */
+ *   caliper() (strict, as psmatch2);
+ * - without replacement the matched controls are used up and the scan
+ *   resumes at the next unused control; once it runs off the controls the
+ *   remaining treated are off support. */
+static ssize_t cpsmatch_next_unused(ssize_t j, int forward, int noreplace,
+                                    const unsigned char *used, ssize_t j1)
+{
+    do {
+        j += forward ? 1 : -1;
+    } while (noreplace && j >= 0 && j <= j1 && used[j]);
+    return j;
+}
+
 static int cpsmatch_match_psmatch2_ties(const sorted_control_t *controls, size_t n_controls,
                                         const sorted_control_t *treated, size_t n_treated,
                                         const size_t *treated_idx, const size_t *control_idx,
                                         const perm_idx_t *obs_map,
-                                        int n_neighbors, double caliper,
+                                        int n_neighbors, double caliper, int ties, int noreplace,
                                         double *out_weight, double *out_match, double *out_nn,
                                         double *out_support, int *n_matched, int *n_off)
 {
-    if (n_controls == 0 || n_treated == 0) return 0;
+    if (n_treated == 0) return 0;
+    if (n_controls == 0) {
+        for (size_t t = 0; t < n_treated; t++) {
+            out_support[treated_idx[treated[t].orig_idx]] = 0.0;
+            (*n_off)++;
+        }
+        return 0;
+    }
     size_t *list = malloc((n_controls + (size_t)n_neighbors + 1) * sizeof(size_t));
-    if (!list) return 920;
+    unsigned char *used = calloc(n_controls, 1);
+    if (!list || !used) { free(list); free(used); return 920; }
     const ssize_t j1 = (ssize_t)n_controls - 1;
     const double cal = caliper != 0.0 ? caliper : INFINITY;
     ssize_t jmatch = 0;
     int forward = 1;
-    for (size_t t = 0; t < n_treated; t++) {
+    size_t t = 0;
+    for (; t < n_treated && jmatch >= 0 && jmatch <= j1; t++) {
         double p = treated[t].pscore;
         size_t obs_idx = treated_idx[treated[t].orig_idx];
         ssize_t j = jmatch;
         double dif0, dif1 = fabs(p - controls[j].pscore);
         while (j >= 0 && j < j1) {
-            j += forward ? 1 : -1;
+            j = cpsmatch_next_unused(j, forward, noreplace, used, j1);
             if (j < 0 || j > j1) break;
             dif0 = dif1;
             dif1 = fabs(p - controls[j].pscore);
             if (dif1 > dif0) j = j1;
             if (dif1 < dif0) jmatch = j;
         }
+        size_t n = 0;
         if (fabs(p - controls[jmatch].pscore) < cal) {
-            size_t n = 0;
             list[n++] = (size_t)jmatch;
+            used[jmatch] = 1;
             /* ties(): onward in the scan direction */
-            double tie = fabs(p - controls[jmatch].pscore);
-            for (ssize_t k = jmatch + (forward ? 1 : -1);
-                 k >= 0 && k <= j1 && fabs(p - controls[k].pscore) <= tie;
-                 k += forward ? 1 : -1) {
-                list[n++] = (size_t)k;
+            if (ties) {
+                double tie = fabs(p - controls[jmatch].pscore);
+                for (ssize_t k = cpsmatch_next_unused(jmatch, forward, noreplace, used, j1);
+                     k >= 0 && k <= j1 && fabs(p - controls[k].pscore) <= tie;
+                     k = cpsmatch_next_unused(k, forward, noreplace, used, j1)) {
+                    list[n++] = (size_t)k;
+                    if (noreplace) used[k] = 1;
+                }
             }
             /* neighbor(k): the k-1 closest around the nearest, left on equal
              * distance */
@@ -80,8 +106,15 @@ static int cpsmatch_match_psmatch2_ties(const sorted_control_t *controls, size_t
             (*n_off)++;
         }
         if (jmatch == j1 && t + 1 < n_treated) forward = 0;
+        if (noreplace && n > 0) jmatch = cpsmatch_next_unused(jmatch, forward, noreplace, used, j1);
+    }
+    /* the controls ran out: the remaining treated are off support */
+    for (; t < n_treated; t++) {
+        out_support[treated_idx[treated[t].orig_idx]] = 0.0;
+        (*n_off)++;
     }
     free(list);
+    free(used);
     return 0;
 }
 
@@ -201,7 +234,7 @@ ST_retcode cpsmatch_main(const char *args)
         for (size_t i=0; i<n_filtered && !rc; i++) {
             ST_int obs=(ST_int)obs_map[i];
             if (opts.out_nn_idx>0) rc=SF_vstore(opts.out_nn_idx,obs,SV_missval);
-            if (!rc && opts.out_weight_idx>0) rc=SF_vstore(opts.out_weight_idx,obs,0.0);
+            if (!rc && opts.out_weight_idx>0) rc=SF_vstore(opts.out_weight_idx,obs,SV_missval);
             if (!rc && opts.out_match_idx>0) rc=SF_vstore(opts.out_match_idx,obs,SV_missval);
             if (!rc && opts.out_support_idx>0) rc=SF_vstore(opts.out_support_idx,obs,1.0);
         }
@@ -390,22 +423,67 @@ ST_retcode cpsmatch_main(const char *args)
         }
     }
 
-    /* Count available controls for matching without replacement */
-    int n_controls_available = (int)n_controls;
-
     /* Matching loop - sequential for noreplacement, parallel otherwise */
     if (!opts.with_replace) {
         /* ================================================================
          * FAST sequential matching for noreplacement using sorted index
          * ================================================================ */
 
-        /* Build sorted control index for O(log n) lookups */
-        sorted_control_t *sorted_controls = malloc(n_controls * sizeof(sorted_control_t));
-        perm_idx_t *available = ctools_safe_malloc2(n_controls + 1, 2 * sizeof(*available));
-
-        if (!sorted_controls || !available) {
+        /* psmatch2's scan (match_pscore with noreplace): controls and
+         * treated in its order, ascending or descending */
+        int (*cmp)(const void *, const void *) = opts.descending ?
+            cpsmatch_compare_by_pscore_desc : cpsmatch_compare_by_pscore;
+        sorted_control_t *sorted_controls = malloc((n_controls ? n_controls : 1) * sizeof(sorted_control_t));
+        sorted_control_t *trt = malloc((n_treated ? n_treated : 1) * sizeof(sorted_control_t));
+        if (!sorted_controls || !trt) {
             free(sorted_controls);
-            free(available);
+            free(trt);
+            ctools_filtered_data_free(&filtered);
+            free(treated_idx);
+            free(control_idx);
+            free(treated_pscore);
+            free(control_pscore);
+            free(out_weight);
+            free(out_match);
+            free(out_support); free(out_nn);
+            free(treated_order);
+            SF_error("cpsmatch: memory allocation failed\n");
+            return 920;
+        }
+        for (size_t i = 0; i < n_controls; i++) {
+            sorted_controls[i].orig_idx = i;
+            sorted_controls[i].obs_idx = obs_map[control_idx[i]];  /* Stata observation number for stable sort */
+            sorted_controls[i].pscore = control_pscore[i];
+        }
+        qsort(sorted_controls, n_controls, sizeof(sorted_control_t), cmp);
+        size_t n_on = 0;
+        for (size_t t = 0; t < n_treated; t++) {
+            size_t obs_idx = treated_idx[t];
+            double ps = treated_pscore[t];
+            if (opts.common_support && (ps < common_min || ps > common_max)) {
+                out_support[obs_idx] = 0.0;
+                n_off_support++;
+                continue;
+            }
+            out_support[obs_idx] = 1.0;
+            trt[n_on].orig_idx = t;
+            trt[n_on].obs_idx = obs_map[obs_idx];
+            trt[n_on].pscore = ps;
+            n_on++;
+        }
+        qsort(trt, n_on, sizeof(sorted_control_t), cmp);
+
+        /* End sort phase, start matching phase */
+        t_sort = ctools_timer_seconds() - t_sort;
+        t_match = ctools_timer_seconds();
+
+        rc = cpsmatch_match_psmatch2_ties(sorted_controls, n_controls, trt, n_on, treated_idx,
+                                          control_idx, obs_map, 1, caliper, opts.ties, 1,
+                                          out_weight, out_match, out_nn, out_support,
+                                          &n_matched_treated, &n_off_support);
+        free(trt);
+        if (rc) {
+            free(sorted_controls);
             ctools_filtered_data_free(&filtered);
             free(treated_idx);
             free(control_idx);
@@ -419,104 +497,7 @@ ST_retcode cpsmatch_main(const char *args)
             return 920;
         }
 
-        /* Populate and sort control array */
-        for (size_t i = 0; i < n_controls; i++) {
-            sorted_controls[i].orig_idx = i;
-            sorted_controls[i].obs_idx = obs_map[control_idx[i]];  /* Stata observation number for stable sort */
-            sorted_controls[i].pscore = control_pscore[i];
-        }
-        qsort(sorted_controls, n_controls, sizeof(sorted_control_t), cpsmatch_compare_by_pscore);
-        perm_idx_t *predecessor = available;
-        perm_idx_t *successor = available + n_controls + 1;
-        for (size_t i = 0; i <= n_controls; i++) {
-            predecessor[i] = (perm_idx_t)i;
-            successor[i] = (perm_idx_t)i;
-        }
-
-        /* End sort phase, start matching phase */
-        t_sort = ctools_timer_seconds() - t_sort;
-        t_match = ctools_timer_seconds();
-
-        /* Sequential matching using binary search */
-        for (size_t t_idx = 0; t_idx < n_treated; t_idx++) {
-            size_t t = treated_order[t_idx];
-            size_t obs_idx = treated_idx[t];
-            double ps = treated_pscore[t];
-
-            /* Check common support */
-            if (opts.common_support) {
-                if (ps < common_min || ps > common_max) {
-                    out_support[obs_idx] = 0.0;
-                    n_off_support++;
-                    continue;
-                }
-            }
-
-            /* Check if any controls are available */
-            if (n_controls_available <= 0) {
-                /* No more controls - treated is off support */
-                out_support[obs_idx] = 0.0;
-                n_off_support++;
-                continue;
-            }
-
-            out_support[obs_idx] = 1.0;
-
-            /* Binary search to find insertion point */
-            size_t insert_pos = cpsmatch_binary_search_left(sorted_controls, n_controls, ps);
-
-            /* Compare the nearest available control on each side of insertion.
-             * Equal distances choose the left candidate deterministically. */
-            perm_idx_t previous = cpsmatch_available_find(predecessor, (perm_idx_t)insert_pos);
-            ssize_t left = (ssize_t)previous - 1;
-            size_t right = cpsmatch_available_find(successor, (perm_idx_t)insert_pos);
-            size_t best_idx = SIZE_MAX;
-            double best_dist = DBL_MAX;
-            if (left >= 0) {
-                double dist = fabs(ps - sorted_controls[left].pscore);
-                if (caliper <= 0.0 || dist <= caliper) {
-                    best_idx = (size_t)left;
-                    best_dist = dist;
-                }
-            }
-            if (right < n_controls) {
-                double dist = fabs(ps - sorted_controls[right].pscore);
-                if (dist < best_dist && (caliper <= 0.0 || dist <= caliper)) {
-                    best_idx = right;
-                    best_dist = dist;
-                }
-            }
-
-            if (best_idx != SIZE_MAX) {
-                n_matched_treated++;
-                out_nn[obs_idx] = 1.0;
-                n_controls_available--;
-
-                /* Mark control as used */
-                predecessor[best_idx + 1] =
-                    cpsmatch_available_find(predecessor, (perm_idx_t)best_idx);
-                successor[best_idx] =
-                    cpsmatch_available_find(successor, (perm_idx_t)(best_idx + 1));
-
-                /* Get original control index in filtered array */
-                size_t orig_ctrl_idx = sorted_controls[best_idx].orig_idx;
-                size_t match_filtered_idx = control_idx[orig_ctrl_idx];
-
-                /* Store match ID - use obs_map to get Stata observation number */
-                out_match[obs_idx] = (double)obs_map[match_filtered_idx];
-
-                /* Set weights - index by filtered position */
-                out_weight[match_filtered_idx] = 1.0;
-                out_weight[obs_idx] = 1.0;
-            } else {
-                /* No match found (e.g., caliper constraint) - treated is off support */
-                out_support[obs_idx] = 0.0;
-                n_off_support++;
-            }
-        }
-
         free(sorted_controls);
-        free(available);
     } else {
         /* ================================================================
          * FAST matching for with-replacement using sorted control index
@@ -582,6 +563,7 @@ ST_retcode cpsmatch_main(const char *args)
                 qsort(trt, n_on, sizeof(sorted_control_t), cmp);
                 rc = cpsmatch_match_psmatch2_ties(ctrl, n_controls, trt, n_on, treated_idx,
                                                   control_idx, obs_map, opts.n_neighbors, caliper,
+                                                  1, 0,
                                                   out_weight, out_match, out_nn, out_support,
                                                   &n_matched_treated, &n_off_support);
                 free(ctrl); free(trt);
@@ -692,9 +674,10 @@ ST_retcode cpsmatch_main(const char *args)
                             break;
 
                         case MATCH_KERNEL:
+                            /* psmatch2's kernel matching ignores caliper() */
                             match_rc = cpsmatch_find_kernel_matches_fast(
                                 ps, sorted_controls, control_idx, n_controls,
-                                opts.bandwidth, opts.kernel, caliper, ws, &result);
+                                opts.bandwidth, opts.kernel, 0.0, ws, &result);
                             break;
 
                         default:
@@ -808,7 +791,11 @@ ST_retcode cpsmatch_main(const char *args)
         if (rc) goto cleanup;
 
         if (opts.out_weight_idx > 0) {
-            rc = SF_vstore(opts.out_weight_idx, obs, out_weight[i]);
+            /* Unused controls and rows off support get a missing weight, as
+             * psmatch2's replace _weight = . if _weight==0 | _support==0 */
+            double weight = out_weight[i];
+            if (weight == 0.0 || out_support[i] == 0.0) weight = SV_missval;
+            rc = SF_vstore(opts.out_weight_idx, obs, weight);
             if (rc) goto cleanup;
         }
 

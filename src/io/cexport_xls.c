@@ -362,9 +362,9 @@ ST_retcode cexport_xls_main(const char *args) {
         for (int j = 0; j < k; j++)
             if ((rc = sst_string(&sst, names[j])))
                 goto done;
-    for (int i = SF_in1(); i <= SF_in2(); i++)
-        if (SF_ifobs(i))
-            for (int j = 0; j < k; j++)
+    for (int i = SF_in1(); i <= SF_in2(); i++) {
+        if (SF_ifobs(i)) {
+            for (int j = 0; j < k; j++) {
                 if (SF_var_is_string(j + 1)) {
                     if ((rc = string_value(j + 1, i, &text, &textcap)))
                         goto done;
@@ -377,6 +377,9 @@ ST_retcode cexport_xls_main(const char *args) {
                     if (SF_is_missing(value) && (rc = sst_string(&sst, missing)))
                         goto done;
                 }
+            }
+        }
+    }
     if ((rc = sst_flush(&sst)))
         goto done;
     long aftersst = ftell(biff);

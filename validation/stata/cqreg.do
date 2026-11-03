@@ -53,14 +53,16 @@ end
 
 capture program drop benchmark_qreg_altopt
 program define benchmark_qreg_altopt
-    syntax varlist(min=2 fv) [if] [in], [Quantile(real 0.5) testname(string) minsf(real 7)]
+    syntax varlist(min=2 fv) [if] [in], [Quantile(real 0.5) testname(string) minsf(real 7) vce(string)]
 
     gettoken depvar indepvars : varlist
     if "`testname'" == "" local testname "qreg `depvar' `indepvars', q(`quantile')"
+    local vceopt
+    if "`vce'" != "" local vceopt vce(`vce')
 
     preserve
 
-    capture quietly qreg `depvar' `indepvars' `if' `in', quantile(`quantile')
+    capture quietly qreg `depvar' `indepvars' `if' `in', quantile(`quantile') `vceopt'
     if _rc != 0 {
         local rc = _rc
         restore
@@ -75,7 +77,7 @@ program define benchmark_qreg_altopt
     tempvar touse
     quietly gen byte `touse' = e(sample)
 
-    capture quietly cqreg `depvar' `indepvars' `if' `in', quantile(`quantile')
+    capture quietly cqreg `depvar' `indepvars' `if' `in', quantile(`quantile') `vceopt'
     if _rc != 0 {
         local rc = _rc
         restore
@@ -1315,6 +1317,38 @@ test_error_match, stata_cmd(qreg price mpg if price > 100000) ctools_cmd(cqreg p
 sysuse auto, clear
 test_error_match, stata_cmd(qreg make mpg) ctools_cmd(cqreg make mpg) testname("string dependent variable")
 
+* Fitted-density robust VCE with directions that carry no density: qreg's
+* invsym(X'DX) zeroes them (a 0 row for _cons, rank 1), where a Cholesky
+* inverse with a ridge gave SEs of order 1e15.
+clear
+set seed 2024
+set obs 400
+gen treat = _n > 200
+gen y = cond(treat, rpoisson(3), rpoisson(.3))
+benchmark_qreg y treat, vce(robust) testname("robust fitted: zero-density constant direction")
+quietly qreg y treat, vce(robust)
+local qrank = e(rank)
+quietly cqreg y treat, vce(robust)
+if e(rank) == `qrank' test_pass "robust fitted: e(rank) matches qreg"
+else test_fail "robust fitted: e(rank) matches qreg" "cqreg `=e(rank)' vs qreg `qrank'"
+* Discrete outcome with N > 1000 and factor levels
+clear
+set seed 2026
+set obs 5000
+gen g = 1 + mod(_n, 6)
+gen y = rpoisson(1 + .5*g)
+gen x = rnormal()
+benchmark_qreg y i.g, vce(robust) testname("robust fitted: discrete outcome, i.g, N=5000")
+* (x must enter the model: with y independent of x the solution has b_x = 0,
+* which qreg reports as roundoff of order 1e-15)
+gen y2 = rpoisson(exp(.2 + .1*g + .5*x))
+foreach q in .25 .75 {
+    benchmark_qreg y2 i.g x, quantile(`q') vce(robust) testname("robust fitted: discrete outcome, i.g x, q=`q'")
+}
+* At q=.5 this sample has several optima with equal sum of deviations, so
+* e(b) is checked by optimality; e(V) and the other results by value.
+benchmark_qreg_altopt y2 i.g x, quantile(.5) vce(robust) testname("robust fitted: discrete outcome, i.g x, q=.5")
+
 * Summary
 
 * End of cqreg validation
@@ -1331,6 +1365,7 @@ if "`__case'" == "cqreg_performance" {
 * Small end-to-end checks for cqreg performance changes (at most 603 obs).
 * Optional argument selects an isolated plugin/ado build directory.
 args builddir
+if `"`builddir'"' == "" local builddir : environment CTOOLS_TEST_PLUGIN_DIR
 if `"`builddir'"' == "" local builddir "build"
 adopath ++ "`builddir'"
 clear all
@@ -1381,6 +1416,172 @@ assert _rc == 430
 display "cqreg performance smoke checks passed"
     global CTOOLS_CASE_COMPLETE "cqreg_performance"
     exit
+}
+
+if "`__case'" == "cqreg_sample_scale" {
+do validation/support/validate_setup.do
+clear
+set seed 1122
+set obs 300
+generate double x = rnormal()
+generate double y = 1 + 2*x + rnormal()
+generate long category = cond(_n<=240, _n, mod(_n,3))
+generate long cluster = ceil(_n/10) if _n>240
+generate str8 string_cluster = string(cluster) if !missing(cluster)
+foreach cl in cluster string_cluster {
+    quietly cqreg y x i.category if !missing(`cl'), vce(cluster `cl')
+    matrix sample_b = e(b)
+    matrix sample_V = e(V)
+    local sample_names : colfullnames sample_b
+    generate byte sample_explicit = e(sample)
+    quietly cqreg y x i.category, vce(cluster `cl')
+    assert e(N) == 60 & e(N_clust) == 6
+    assert e(sample) == sample_explicit
+    matrix sample_actual = e(b)
+    local sample_actual_names : colfullnames sample_actual
+    assert "`sample_names'" == "`sample_actual_names'"
+    assert mreldif(e(b),sample_b) == 0 & mreldif(e(V),sample_V) == 0
+    drop sample_explicit
+    test_pass "cluster sample precedes factors: `cl'"
+}
+
+clear
+set seed 1122
+set obs 100
+generate double x = rnormal()
+generate double y = 1 + 2*x + rnormal()
+generate double scaled_y = y
+generate int scale_cluster = ceil(_n/10)
+foreach vce in iid robust "cluster scale_cluster" {
+    foreach density in fitted residual kernel {
+        if "`vce'" != "iid" & "`density'" == "residual" continue
+        * Use qreg in ordinary response units as the reference. Its own
+        * robust VCE and numerical rank can change at extreme response scales.
+        if "`vce'" != "cluster scale_cluster" ///
+            benchmark_qreg y x, vce(`vce') denmethod(`density') ///
+                testname("scale reference `vce' `density'")
+        quietly cqreg y x, vce(`vce') denmethod(`density')
+        matrix scale_b = e(b)
+        matrix scale_V = e(V)
+        foreach stat in sum_adev sum_rdev q_v sparsity kbwidth {
+            scalar scale_`stat' = e(`stat')
+        }
+        quietly predict double unit_prediction, xb
+        foreach factor in 1 1e-8 1e-14 1e8 1e-50 1e50 1e100 {
+            replace scaled_y = y * `factor'
+            quietly cqreg scaled_y x, vce(`vce') denmethod(`density')
+            matrix restored_b = e(b) / `factor'
+            matrix restored_V = e(V) / (`factor'^2)
+            assert_matrix_equal restored_b scale_b $DEFAULT_SIGFIGS "scale b `vce' `density' `factor'"
+            assert_matrix_equal restored_V scale_V $DEFAULT_SIGFIGS "scale V `vce' `density' `factor'"
+            foreach stat in sum_adev sum_rdev q_v sparsity kbwidth {
+                if !missing(scale_`stat') {
+                    local restored = e(`stat') / `factor'
+                    assert_scalar_equal `restored' `=scale_`stat'' $DEFAULT_SIGFIGS "scale `stat' `vce' `density' `factor'"
+                }
+                else assert missing(e(`stat'))
+            }
+            quietly predict double scaled_prediction, xb
+            replace scaled_prediction = scaled_prediction / `factor'
+            assert_var_equal scaled_prediction unit_prediction $DEFAULT_SIGFIGS "scale predictions `vce' `density' `factor'"
+            drop scaled_prediction
+            assert e(df_r) == 98 & e(N) == 100 & e(convcode) == 0 & e(rank) == 2
+        }
+        drop unit_prediction
+    }
+}
+
+* Dynamic range: one large response, or a large level, must not turn qreg's
+* absolute density and residual cutoffs into cutoffs relative to max|y|.
+preserve
+clear
+set seed 20261102
+set obs 500
+generate double x = rnormal()
+generate int range_cluster = ceil(_n/25)
+generate double wage = exp(3 + .1*x + .5*rnormal())
+generate double range_y = .
+foreach case in "outlier 999999999" "outlier 1e13" "level 1e9" {
+    gettoken kind value : case
+    replace range_y = wage
+    if "`kind'" == "outlier" replace range_y = `value' in 1
+    else replace range_y = `value' + wage
+    foreach vce in iid robust {
+        benchmark_qreg range_y x, vce(`vce') testname("dynamic range `kind'`value' `vce'")
+    }
+    * At a level of 1e9, qreg's own excluster VCE is wrong in its leading
+    * digit (up to 20%), while its iid and robust VCEs keep seven figures.
+    * The level case therefore takes the cluster reference from qreg on the
+    * exactly shifted response: the same model with the intercept moved.
+    if "`kind'" == "outlier" quietly qreg range_y x, vce(excluster range_cluster)
+    else {
+        generate double range_shifted = range_y - `value'
+        quietly qreg range_shifted x, vce(excluster range_cluster)
+        drop range_shifted
+    }
+    matrix range_reference_b = e(b)
+    matrix range_reference_V = e(V)
+    if "`kind'" == "level" matrix range_reference_b[1,2] = range_reference_b[1,2] + `value'
+    quietly cqreg range_y x, vce(cluster range_cluster)
+    matrix range_b = e(b)
+    matrix range_V = e(V)
+    assert_matrix_equal range_b range_reference_b $DEFAULT_SIGFIGS "dynamic range b `kind'`value' cluster"
+    assert_matrix_equal range_V range_reference_V $DEFAULT_SIGFIGS "dynamic range V `kind'`value' cluster"
+}
+* Above N=1000 the auxiliary fits skip crossover, so their gap tolerance
+* alone sets the density accuracy; a large level must not loosen it.
+clear
+set obs 1200
+generate double x = rnormal()
+generate double range_y = 1e4 + x + rnormal()
+foreach vce in iid robust {
+    benchmark_qreg range_y x, vce(`vce') testname("auxiliary accuracy at level 1e4 `vce'")
+}
+restore
+
+* A one-cluster covariance is intentionally undefined. Preserve the
+* scalar-extraction convention tested by oct22: the host's matrix posting
+* does not accept canonical Stata missing entries in e(V).
+replace scale_cluster = 1
+foreach density in fitted kernel {
+    quietly qreg y x, vce(excluster scale_cluster, `density')
+    matrix single_cluster_reference = r(table)
+    foreach factor in 1e-14 1 1e100 {
+        replace scaled_y = y * `factor'
+        quietly cqreg scaled_y x, vce(cluster scale_cluster) denmethod(`density')
+        matrix single_cluster_table = r(table)
+        matrix single_cluster_V = e(V)
+        scalar single_cluster_variance = single_cluster_V[1,1]
+        scalar single_cluster_constant_variance = single_cluster_V[2,2]
+        assert missing(single_cluster_variance) & missing(single_cluster_constant_variance)
+        assert e(N) == 100 & e(N_clust) == 1 & e(convcode) == 0
+        forvalues row = 2/6 {
+            scalar reference_uncertainty = single_cluster_reference[`row',1]
+            scalar actual_uncertainty = single_cluster_table[`row',1]
+            assert missing(reference_uncertainty) & missing(actual_uncertainty)
+        }
+        test_pass "undefined one-cluster VCE `density' scale `factor'"
+    }
+}
+
+* Stata itself discards V at this scale, even for an exactly symmetric
+* nonsingular 2x2 matrix. Return an error rather than publish zero covariance.
+foreach factor in 1e-100 {
+    replace scaled_y = y * `factor'
+    capture cqreg scaled_y x
+    assert _rc == 498
+    capture matrix discarded_V = e(V)
+    assert _rc == 301
+    test_pass "reject covariance discarded by host at scale `factor'"
+}
+replace scaled_y = 1e-14
+capture cqreg scaled_y x
+assert _rc == 198
+test_pass "truly constant response remains rejected"
+print_summary "cqreg sample and response scales"
+global CTOOLS_COMPONENT_COMPLETE "cqreg_sample_scale"
+global CTOOLS_CASE_COMPLETE "cqreg_sample_scale"
+exit
 }
 
 di as error "Unknown cqreg case: `__case'"

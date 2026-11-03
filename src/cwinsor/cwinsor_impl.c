@@ -278,6 +278,16 @@ static size_t extract_nonmissing(const double *data, size_t nobs, double *work)
     return n;
 }
 
+/* A cutoff as egen <type> stores it: t truncates toward zero (byte, int,
+ * long), f rounds to float, d keeps the double. */
+static double cwinsor_storage_bound(double bound, char kind)
+{
+    if (bound >= SV_missval) return bound;
+    if (kind == 't') return trunc(bound);
+    if (kind == 'f') return (double)(float)bound;
+    return bound;
+}
+
 static void apply_winsor_bounds(double *data, size_t nobs, double lower, double upper)
 {
     ctools_simd_clamp(data, nobs, lower, upper, SV_missval);
@@ -693,6 +703,7 @@ ST_retcode cwinsor_main(const char *args)
      * exact quantiles here for the ado's winsor2-compatible macro expansion. */
     int store_rc = STATA_OK;
     double *bounds = NULL;
+    char *rounding = NULL;
     if (config.return_bounds) {
         bounds = ctools_safe_malloc2(nvars, 2 * sizeof(double));
         if (!bounds) {
@@ -700,6 +711,21 @@ ST_retcode cwinsor_main(const char *args)
             goto cleanup;
         }
         for (size_t v = 0; v < 2 * nvars; v++) bounds[v] = SV_missval;
+    }
+    /* With by(), winsor2 stores each group's cutoffs with egen in the source's
+     * storage type before using them; with option rounding, local
+     * cwinsor_rounding gives one code per variable (cwinsor_storage_bound). */
+    if (nby > 0 && ctools_parse_bool_option(args, "rounding")) {
+        rounding = (char *)calloc(nvars + 2, 1);
+        if (!rounding) {
+            store_rc = STATA_ERR_MEMORY;
+            goto cleanup;
+        }
+        if (SF_macro_use("_cwinsor_rounding", rounding, (int)nvars + 2) ||
+            strlen(rounding) != nvars || strspn(rounding, "tfd") != nvars) {
+            store_rc = STATA_ERR_INVALID_INPUT;
+            goto cleanup;
+        }
     }
 
     if (ngroups == 1) {
@@ -730,6 +756,11 @@ ST_retcode cwinsor_main(const char *args)
                 double tmp = lower;
                 lower = upper;
                 upper = tmp;
+            }
+
+            if (rounding) {
+                lower = cwinsor_storage_bound(lower, rounding[v]);
+                upper = cwinsor_storage_bound(upper, rounding[v]);
             }
 
             if (config.return_bounds) {
@@ -773,6 +804,11 @@ ST_retcode cwinsor_main(const char *args)
                 double tmp = lower;
                 lower = upper;
                 upper = tmp;
+            }
+
+            if (rounding) {
+                lower = cwinsor_storage_bound(lower, rounding[v]);
+                upper = cwinsor_storage_bound(upper, rounding[v]);
             }
 
             if (config.trim) {
@@ -849,6 +885,7 @@ ST_retcode cwinsor_main(const char *args)
     /* === Cleanup === */
 cleanup:
     free(bounds);
+    free(rounding);
     for (int t = 0; t < nwork; t++) {
         free(work_arrays[t]);
     }

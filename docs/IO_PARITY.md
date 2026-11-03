@@ -30,7 +30,9 @@ Metadata preservation depends on the file format and options. Statistical format
 - automatic encoding detection, using the same ICU detectors as Stata
 - `parselocale()` with 1,016 names from the pinned OpenJDK locale tables, so numbers like `1.234,5` parse correctly
 
-`cexport delimited` handles strL variables.
+A column with non-integer values is stored as `float`, with or without `asfloat`, unless one of its integer values (every value beyond 2^53 is one) lies outside the `long` range; then it is `double`, as with `import delimited`. `cimport` reads every row for this choice. In files of more than about 262,144 rows, `import delimited` can miss such a value in a later part of the file and store the column as `float`.
+
+`cexport delimited` handles strL variables. With `datafmt`, a comma format such as `%12.0gc` is written without thousands separators and a decimal-comma format such as `%9,2f` with a decimal point, as `export delimited` writes them.
 
 ## Excel
 
@@ -51,6 +53,7 @@ Dates and numbers are handled as in `import excel`:
 - **Non-data sheets.** Chart, dialog, and macro sheets can't be imported (error 601), and `describe` lists them by name.
 - **Content Stata loses.** It keeps emoji and other characters outside Unicode's Basic Multilingual Plane, cell text longer than 32,766 bytes, cells and rows that don't record their own position, and worksheets stored outside the workbook's usual folder.
 - **Files Stata rejects.** It reads XLSX files that Stata rejects with error 603, such as files missing SpreadsheetML content types or with an empty phonetic run.
+- **Worksheets too large for memory.** An XLSX worksheet whose used range would need more than about half of physical memory to import (at roughly 26 bytes a cell, counted from column A) fails at once with error 909, and the data in memory is kept. A single value at `XFD1048576` is such a worksheet. More columns than `maxvar` fail with error 900, as in Stata, also without replacing the data.
 
 ### Export
 
@@ -60,6 +63,7 @@ Dates and numbers are handled as in `import excel`:
 - If you overwrite part of a shared formula, the cells that remain keep their formula.
 - After an XLSX edit, Excel recalculates formulas the next time the workbook is opened.
 - XLS output uses the Excel 97–2003 (BIFF8) format. Older BIFF5 workbooks can't be edited.
+- Charts and objects embedded in an edited worksheet are kept. A chart sheet can't be the target of `sheet()` (error 601).
 
 ## dBase
 
@@ -72,12 +76,13 @@ Dates and numbers are handled as in `import excel`:
 - **XPORT v5:** supports `member()` for files with several datasets, `novallabels`, and `describe`. Value labels round-trip through a `formats.xpf` file.
 - **XPORT v8:** like `import sasxport8`, a nonempty companion file isn't applied. The import stops with error 4 and leaves the companion's contents in memory.
 
-Missing values and dates follow Stata's own handling for each format. For example, XPORT v5 imports keep SAS special missing values and SAS and XPORT v8 imports don't, just as with Stata's commands.
+Missing values and dates follow Stata's own handling for each format. For example, XPORT v5 imports keep SAS special missing values and SAS and XPORT v8 imports don't, just as with Stata's commands. SPSS and XPORT v8 exports write `%tC` values without leap seconds, and monthly, quarterly, weekly and half-yearly dates as the first day of the period with a matching date format, as `export spss` and `export sasxport8` do.
 
-Two cases get different display formats than in Stata, because Stata's own choice is invalid:
+These cases get different display formats than in Stata, because Stata's own choice is invalid:
 
 - Some long-string SAS and SPSS variables come with formats like `%2104s`, which Stata can't assign. `cimport` stores them as strL with `%9s`.
 - For numeric SPSS variables in Z format, Stata assigns the string format `%8s`. `cimport` uses `%10.0g`.
+- For business-calendar (`%tb`) variables, `export spss` writes a string format on a numeric variable, so its file reads back as garbled strings, and `export sasxport8` writes a `$8` format. `cexport` writes the business-day numbers as plain numbers.
 
 ## Shapefiles
 

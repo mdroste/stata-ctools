@@ -2319,6 +2319,47 @@ if `stata_rc' == `cexport_rc' test_pass "[error] file exists without replace (rc
 else test_fail "[error] file exists without replace" "stata rc=`stata_rc', cexport rc=`cexport_rc'"
 capture erase "temp/exist_test.csv"
 
+* datafmt with comma formats: export delimited writes a decimal-comma format
+* with a decimal point and drops other formats' thousands separators.
+print_section "datafmt comma formats"
+clear
+set seed 3
+set obs 300
+local i 0
+foreach f in %12.0gc %15.2fc %-10.2fc %9,2f %9,2fc %8.0gc %12,3g %20,4fc %-9,2f %10.0fc %021.3fc %-08.2f %-09,2f %-012.0gc %tc %td {
+    local ++i
+    gen double v`i' = rnormal() * 10^runiformint(0, 7)
+    if "`f'" == "%tc" replace v`i' = abs(v`i') * 1000
+    if "`f'" == "%td" replace v`i' = round(abs(v`i')) / 100
+    replace v`i' = . in `i'
+    replace v`i' = .b in `=`i' + 20'
+    format v`i' `f'
+}
+gen str12 s = "a" + string(_n)
+gen byte lab = mod(_n, 3)
+label define cx_datafmt 0 "zero" 1 "one, two"
+label values lab cx_datafmt
+tempfile cx_native cx_ctools
+foreach o in "datafmt" "datafmt quote" `"datafmt delimiter(";")"' `"datafmt quote delimiter(";")"' "datafmt nolabel" {
+    export delimited using "`cx_native'", `o' replace
+    cexport delimited using "`cx_ctools'", `o' replace
+    checksum "`cx_native'"
+    local sum = "`r(checksum)' `r(filelen)'"
+    checksum "`cx_ctools'"
+    local same = ("`sum'" == "`r(checksum)' `r(filelen)'")
+    if `same' test_pass `"datafmt comma formats bytes: `o'"'
+    else test_fail `"datafmt comma formats bytes: `o'"' "file differs from export delimited"
+}
+sysuse auto, clear
+export delimited using "`cx_native'", datafmt replace
+cexport delimited using "`cx_ctools'", datafmt replace
+checksum "`cx_native'"
+local sum = "`r(checksum)' `r(filelen)'"
+checksum "`cx_ctools'"
+local same = ("`sum'" == "`r(checksum)' `r(filelen)'")
+if `same' test_pass "datafmt bytes: auto (price %8.0gc)"
+else test_fail "datafmt bytes: auto (price %8.0gc)" "file differs from export delimited"
+
 * Cleanup and summary
 
 local files : dir "temp" files "*.csv"

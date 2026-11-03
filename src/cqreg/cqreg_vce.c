@@ -590,7 +590,6 @@ static ST_int cqreg_vce_robust_fitted(ST_double *V,
     ST_double *XDX = NULL;      /* X' D X where D = diag(obs_density) */
     ST_double *XDX_inv = NULL;  /* (X'DX)^{-1} */
     ST_double *XtX = NULL;      /* X' X */
-    ST_double *L = NULL;        /* Cholesky factor */
     ST_int rc = 0;
 
     /* Compute size with overflow check */
@@ -604,9 +603,8 @@ static ST_int cqreg_vce_robust_fitted(ST_double *V,
     XDX = (ST_double *)ctools_cacheline_alloc(kk_size);
     XDX_inv = (ST_double *)ctools_cacheline_alloc(kk_size);
     XtX = (ST_double *)ctools_cacheline_alloc(kk_size);
-    L = (ST_double *)ctools_cacheline_alloc(kk_size);
 
-    if (XDX == NULL || XDX_inv == NULL || XtX == NULL || L == NULL) {
+    if (XDX == NULL || XDX_inv == NULL || XtX == NULL) {
         vce_debug_log("  ERROR: allocation failed\n");
         rc = -1;
         goto cleanup;
@@ -622,24 +620,13 @@ static ST_int cqreg_vce_robust_fitted(ST_double *V,
 
     vce_debug_log("  XtX[0,0] = %.6e\n", XtX[0]);
 
-    /* Compute (X'DX)^{-1} using Cholesky */
-    memcpy(L, XDX, kk_size);
-
-    if (cqreg_cholesky(L, K) != 0) {
-        /* Try again with regularization for numerical stability */
-        vce_debug_log("  Cholesky failed, retrying with regularization...\n");
-        memcpy(L, XDX, kk_size);
-        for (j = 0; j < K; j++) {
-            L[j * K + j] += 1e-10;
-        }
-        if (cqreg_cholesky(L, K) != 0) {
-            vce_debug_log("  ERROR: Cholesky of XDX failed even with regularization\n");
-            rc = -1;
-            goto cleanup;
-        }
+    /* H = invsym(X'DX), as qreg's VCE_fitted: directions without density
+       (a level or the constant whose observations all have f_i = 0) are
+       zeroed rather than inverted, so V has qreg's zero rows there */
+    if (cqreg_invsym(XDX, K, XDX_inv) != 0) {
+        rc = -1;
+        goto cleanup;
     }
-
-    cqreg_invert_cholesky(XDX_inv, L, K);
 
     vce_debug_log("  XDX_inv[0,0] = %.6e\n", XDX_inv[0]);
 
@@ -687,7 +674,6 @@ cleanup:
     ctools_aligned_free(XDX);
     ctools_aligned_free(XDX_inv);
     ctools_aligned_free(XtX);
-    ctools_aligned_free(L);
 
     return rc;
 }

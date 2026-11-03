@@ -39,7 +39,8 @@ the build checks pass. The version comes from `config/release.json`. Pushes to
 requires a manual **Build Plugins** run on `main` with **publish_plugins** selected.
 Actions runs retain the ZIP in the `ctools-<version>` artifact, including
 candidate builds from development branches and pull requests. Pull-request
-Windows plugins are unsigned. Downloading that
+Windows plugins are unsigned, and Mac plugins lack Developer ID signing and
+notarization. Downloading that
 artifact adds an outer Actions ZIP; extract it to obtain the install ZIP.
 
 A source checkout's `build/` is not necessarily an installable distribution: it
@@ -48,7 +49,10 @@ may contain only the locally compiled binary. After building from source, use
 produce a complete package for the host platform. Install from that staged
 directory. Its manifest explicitly identifies the platform and `BUILD_INFO.json`
 records the release version, date, source revision, and file checksums. Full release
-packages contain all four platform plugins, including the signed Windows plugin.
+packages contain all four platform plugins, including the signed Windows plugin
+and Developer ID signed, notarized Mac plugins. Mac plugins use Apple's online
+notarization tickets; first use may require internet access. See
+[macOS signing](development/MACOS_SIGNING.md) for verification and setup details.
 
 
 ## Building from Source Files
@@ -76,8 +80,10 @@ See [docs/development/README.md](development/README.md) for additional informati
 
 Publication requires successful builds for Mac ARM, Mac Intel, Windows, and Linux,
 the native CI checks, platform dependency checks, and a verified, timestamped
-Windows signature. See [Windows signing](development/WINDOWS_SIGNING.md) for Azure
-and GitHub configuration. GitHub Actions does not require self-hosted runners or
+Windows signature, and verified Developer ID signatures and notarization for both
+Mac plugins. See [Windows signing](development/WINDOWS_SIGNING.md) and
+[macOS signing](development/MACOS_SIGNING.md) for credential and GitHub configuration.
+GitHub Actions does not require self-hosted runners or
 run licensed Stata tests. Stata correctness suites remain available for local testing.
 
 Exports normally publish with atomic rename. Multi-file SHP and XPORT exports

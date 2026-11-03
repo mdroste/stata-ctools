@@ -1,7 +1,9 @@
 *! version 1.2.3 20261030 github.com/mdroste/stata-ctools
 *! Shared plugin loader and identity contract
-program define _ctools_load, rclass
+program define _ctools_load
     version 14.1
+    * Not rclass, and findfile's r() is undone, so the caller's r() survives;
+    * identity comes back through c_local.
     local __os = c(os)
     local __machine = c(machine_type)
     local __is_mac = 0
@@ -47,8 +49,12 @@ program define _ctools_load, rclass
         local __plugin "ctools.plugin"
     }
 
+    tempname __rhold
+    _return hold `__rhold'
     capture findfile `__plugin'
-    if _rc & "`__plugin'" != "ctools.plugin" local __plugin "ctools.plugin"
+    local __found = (_rc == 0)
+    _return restore `__rhold'
+    if !`__found' & "`__plugin'" != "ctools.plugin" local __plugin "ctools.plugin"
     capture program ctools_plugin, plugin using("`__plugin'")
     if _rc != 0 & _rc != 110 {
         di as error "ctools: Could not load ctools plugin"
@@ -56,7 +62,7 @@ program define _ctools_load, rclass
     }
     c_local __ctools_plugin "`__plugin'"
     plugin call ctools_plugin, "version"
-    return local plugin_version "`ctools_plugin_version'"
-    return local plugin_revision "`ctools_plugin_revision'"
+    c_local __ctools_plugin_version "`ctools_plugin_version'"
+    c_local __ctools_plugin_revision "`ctools_plugin_revision'"
     capture confirm number 0
 end

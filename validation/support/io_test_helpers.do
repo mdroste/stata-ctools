@@ -5,6 +5,7 @@ set more off
 set linesize 255
 adopath ++ "build"
 args pluginpath
+if `"`pluginpath'"' == "" local pluginpath : environment CTOOLS_TEST_PLUGIN_DIR
 if `"`pluginpath'"' != "" adopath ++ `"`pluginpath'"'
 global IO_FORMATS_PASSED 0
 global IO_FORMATS_FAILED 0

@@ -444,6 +444,27 @@ int cio_scan(cio_dataset *dataset, const char *kind)
     for (int j = 0; j < dataset->nvar; j++)
         if (dataset->cols[j].is_string)
             cio_import_format(&dataset->cols[j], kind);
+    /* Stata labels only integers within +-2,147,483,647. Like native, skip
+     * other values rather than letting a truncated one replace an integer
+     * code's label. */
+    size_t kept = 0;
+    for (size_t i = 0; i < dataset->nlabels; i++)
+    {
+        cio_label *l = &dataset->labels[i];
+        if (!SF_is_missing(l->value) &&
+            (l->value != floor(l->value) || fabs(l->value) > 2147483647.0))
+        {
+            char note[400];
+            snprintf(note, sizeof(note), "note: may not label %.17g in value label %s; skipped\n",
+                     l->value, l->set);
+            SF_display(note);
+            free(l->set);
+            free(l->text);
+            continue;
+        }
+        dataset->labels[kept++] = *l;
+    }
+    dataset->nlabels = kept;
     int rc = cio_save_number("__cio_nobs", dataset->nobs);
     if (!rc)
         rc = cio_save_number("__cio_nvar", (size_t)dataset->nvar);
@@ -616,6 +637,10 @@ int cio_do_export(const char *kind, const char *selection)
         cio_export_meta(j + 1, "name", name, sizeof(name));
         cio_export_meta(j + 1, "type", type, sizeof(type));
         cio_export_meta(j + 1, "format", format, sizeof(format));
+        /* Left justification does not change the date unit. Native export
+         * writes the legacy %d format as a plain number, so it is not a date. */
+        if (format[0] == '%' && format[1] == '-' && format[2] == 't')
+            memmove(format + 1, format + 2, strlen(format + 2) + 1);
         cio_export_meta(j + 1, "label", label, sizeof(label));
         if (!strcmp(kind, "sasxport5"))
             cio_copy_text(name, sizeof(name), names[j]);
@@ -690,16 +715,28 @@ int cio_do_export(const char *kind, const char *selection)
                 dates[j] = 1;
             else if (!strncmp(format, "%tc", 3) || !strncmp(format, "%tC", 3))
                 dates[j] = 2;
+            /* _cio_export passes these periods as the date of their first
+             * day; native gives them period formats in these two writers. */
+            else if ((!strcmp(kind, "spss") || !strcmp(kind, "sasxport8")) && format[0] == '%' &&
+                     format[1] == 't' && format[2] && strchr("mqwh", format[2]))
+                dates[j] = format[2] == 'm' ? 3 : format[2] == 'q' ? 4 : format[2] == 'w' ? 5 : 6;
             if (!strcmp(kind, "spss"))
             {
-                if (dates[j] == 1)
+                if (dates[j] == 1 || dates[j] == 6)
                     cio_copy_text(fmt, sizeof(fmt), "DATE11");
                 else if (dates[j] == 2)
                     cio_copy_text(fmt, sizeof(fmt), "DATETIME23.2");
+                else if (dates[j] >= 3)
+                    cio_copy_text(fmt, sizeof(fmt), dates[j] == 3 ? "MOYR8" : dates[j] == 4 ? "QYR8" : "WKYR10");
                 else
                 {
+                    /* Native export sizes from the width without its
+                     * left-justification sign, and uses Stata's default
+                     * width 9 when the format states none, as %d does. */
                     int fw = 0, dec = 0;
-                    sscanf(format, "%%%d.%d", &fw, &dec);
+                    sscanf(format + (format[1] == '-' ? 2 : 1), "%d.%d", &fw, &dec);
+                    if (fw == 0)
+                        fw = 9;
                     if (fw < 8)
                         fw = 8;
                     snprintf(fmt, sizeof(fmt), "F%d.%d", fw + 3, dec);
@@ -707,10 +744,12 @@ int cio_do_export(const char *kind, const char *selection)
             }
             else
             {
-                if (dates[j] == 1)
+                if (dates[j] == 1 || dates[j] >= 5)
                     cio_copy_text(fmt, sizeof(fmt), "DATE");
                 else if (dates[j] == 2)
                     cio_copy_text(fmt, sizeof(fmt), !strcmp(kind, "sasxport5") ? "" : "DATETIME");
+                else if (dates[j] >= 3)
+                    cio_copy_text(fmt, sizeof(fmt), dates[j] == 3 ? "MONTH" : "QTR");
                 else
                     cio_copy_text(fmt, sizeof(fmt), "");
             }
@@ -843,8 +882,8 @@ int cio_do_export(const char *kind, const char *selection)
                 else
                 {
                     if (!strcmp(kind, "spss") && dates[j])
-                        x = ((dates[j] == 1 ? x * 86400000 : x) + 11903760000000.0) / 1000;
-                    else if (!strcmp(kind, "sasxport8") && dates[j] == 1)
+                        x = ((dates[j] != 2 ? x * 86400000 : x) + 11903760000000.0) / 1000;
+                    else if (!strcmp(kind, "sasxport8") && dates[j] && dates[j] != 2)
                         x *= 86400000;
                     else if (!strncmp(kind, "sasxport", 8))
                     { /* Transport preserves Stata numeric units. */

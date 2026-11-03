@@ -3540,6 +3540,56 @@ if `rc' == 198 & !_rc test_pass "[rollback] snapshot and fast together refused"
 else test_fail "[rollback] snapshot and fast together refused" "rc=`rc', data changed=`=_rc!=0'"
 matrix drop rb_b rb_V
 
+* Factor variables are expanded on the singleton-free sample, as reghdfe: a
+* base level or a level that occurs only on singleton rows changes the e(b)
+* columns and the parameterization.
+clear
+set seed 12345
+input id grp
+1 2
+1 3
+2 2
+2 3
+3 2
+3 3
+4 1
+end
+gen x = rnormal()
+gen y = x + rnormal()
+foreach extra in "" "resid(fv_resid) groupvar(fv_group)" {
+    quietly reghdfe y x i.grp, absorb(id)
+    local ref_names : colfullnames e(b)
+    local ref_N = e(N)
+    local ref_singletons = e(num_singletons)
+    quietly creghdfe y x i.grp, absorb(id) `extra'
+    local ct_names : colfullnames e(b)
+    if "`ct_names'" == "`ref_names'" & e(N) == `ref_N' & e(num_singletons) == `ref_singletons' ///
+        test_pass "FV after singletons, base level on a singleton row: names `extra'"
+    else test_fail "FV after singletons, base level on a singleton row: names `extra'" ///
+        "`ct_names' (N=`=e(N)', singletons=`=e(num_singletons)') vs `ref_names'"
+    capture drop fv_resid fv_group
+}
+benchmark_reghdfe y x i.grp, absorb(id) testname("FV after singletons, base level on a singleton row")
+clear
+set seed 12345
+set obs 2000
+gen id = ceil(_n/4)
+gen x = rnormal()
+gen grp = mod(_n, 3) + 1
+gen y = x + 0.5*grp + rnormal()
+set obs 2010
+replace id = 10000 + _n if id == .
+replace grp = 9 if grp == .
+replace x = rnormal() if x == .
+replace y = rnormal() if y == .
+quietly reghdfe y x i.grp, absorb(id)
+local ref_names : colfullnames e(b)
+quietly creghdfe y x i.grp, absorb(id)
+local ct_names : colfullnames e(b)
+if "`ct_names'" == "`ref_names'" test_pass "FV after singletons, level only on singleton rows: names"
+else test_fail "FV after singletons, level only on singleton rows: names" "`ct_names' vs `ref_names'"
+benchmark_reghdfe y x i.grp, absorb(id) vce(robust) testname("FV after singletons, level only on singleton rows")
+
 * End of creghdfe validation
 noi print_summary "creghdfe"
 }
@@ -3548,6 +3598,45 @@ noi print_summary "creghdfe"
 global CTOOLS_COMPONENT_COMPLETE "creghdfe"
     global CTOOLS_CASE_COMPLETE "creghdfe"
     exit
+}
+
+if "`__case'" == "creghdfe_replay" {
+do validation/support/validate_setup.do
+clear
+set seed 1199
+set obs 100
+generate double x = rnormal()
+generate double y = 1 + 2*x + rnormal()
+generate g = ceil(_n/10)
+quietly creghdfe y x, absorb(g) residuals(saved_residual)
+matrix replay_b = e(b)
+matrix replay_V = e(V)
+local replay_N = e(N)
+local replay_cmdline `"`e(cmdline)'"'
+generate byte replay_sample = e(sample)
+tempfile replay_data
+save `replay_data'
+foreach options in "" ", level(90)" ", cformat(%9.3f)" {
+    quietly creghdfe `options'
+    assert mreldif(e(b),replay_b) == 0 & mreldif(e(V),replay_V) == 0
+    assert e(N) == `replay_N' & e(sample) == replay_sample
+    assert `"`e(cmdline)'"' == `"`replay_cmdline'"'
+    cf _all using `replay_data', all
+    test_pass "replay preserves data and estimates: `options'"
+}
+quietly regress y x
+matrix replay_b = e(b)
+capture creghdfe
+assert _rc == 301
+assert "`e(cmd)'" == "regress" & mreldif(e(b),replay_b) == 0
+ereturn clear
+capture creghdfe
+assert _rc == 301
+test_pass "replay rejects absent or unrelated estimates without clearing them"
+print_summary "creghdfe replay"
+global CTOOLS_COMPONENT_COMPLETE "creghdfe_replay"
+global CTOOLS_CASE_COMPLETE "creghdfe_replay"
+exit
 }
 
 di as error "Unknown creghdfe case: `__case'"

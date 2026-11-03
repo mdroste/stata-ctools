@@ -78,6 +78,8 @@ jobs:
           python3 scripts/sync_release.py --check
           python3 validation/run.py --checks package build --metadata-only
           python3 validation/run.py --checks docs
+          python3 -m validation.check_macos_signing
+          python3 -c 'from validation.check_build import archive_main; archive_main()'
           CC=gcc python3 validation/run.py --native
 
       - name: Check adaptive transport memory ownership
@@ -128,7 +130,7 @@ jobs:
       - name: Upload macOS ARM plugin
         uses: actions/upload-artifact@v4
         with:
-          name: ctools_mac_arm
+          name: ${{ github.event_name == 'pull_request' && 'ctools_mac_arm' || 'macos-arm-unsigned' }}
           path: build/ctools_mac_arm.plugin
           if-no-files-found: error
 
@@ -157,8 +159,61 @@ jobs:
       - name: Upload macOS Intel plugin
         uses: actions/upload-artifact@v4
         with:
-          name: ctools_mac_x86
+          name: ${{ github.event_name == 'pull_request' && 'ctools_mac_x86' || 'macos-intel-unsigned' }}
           path: build/ctools_mac_x86.plugin
+          if-no-files-found: error
+
+  # Only this job may provide distributable macOS artifacts outside PRs.
+  sign-macos:
+    if: >-
+      github.event_name != 'pull_request' &&
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' ||
+       github.ref == 'refs/heads/develop' ||
+       (github.event_name == 'release' && startsWith(github.ref, 'refs/tags/v')))
+    needs: [build-macos-arm, build-macos-intel]
+    runs-on: macos-15
+    timeout-minutes: 45
+    environment: macos-signing
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download this run's unsigned macOS plugins
+        uses: actions/download-artifact@v4
+        with:
+          pattern: macos-*-unsigned
+          merge-multiple: true
+          path: signing
+
+      - name: Sign and notarize both macOS plugins
+        env:
+          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+        run: bash scripts/sign_macos.sh signing "$RUNNER_TEMP/macos-notarization"
+
+      - name: Upload notarization results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-notarization
+          path: ${{ runner.temp }}/macos-notarization/*.json
+          if-no-files-found: ignore
+
+      - name: Upload signed macOS ARM plugin
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctools_mac_arm
+          path: signing/ctools_mac_arm.plugin
+          if-no-files-found: error
+
+      - name: Upload signed macOS Intel plugin
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctools_mac_x86
+          path: signing/ctools_mac_x86.plugin
           if-no-files-found: error
 
   # ===========================================================================
@@ -301,13 +356,15 @@ jobs:
   # Combine all artifacts into single release package
   # ===========================================================================
   package:
-    needs: [build-linux, build-macos-arm, build-macos-intel, build-windows, sign-windows]
+    needs: [build-linux, build-macos-arm, build-macos-intel, sign-macos, build-windows, sign-windows]
     if: >-
       always() && !cancelled() &&
       needs.build-linux.result == 'success' &&
       needs.build-macos-arm.result == 'success' &&
       needs.build-macos-intel.result == 'success' &&
       needs.build-windows.result == 'success' &&
+      (needs.sign-macos.result == 'success' ||
+       (github.event_name == 'pull_request' && needs.sign-macos.result == 'skipped')) &&
       (needs.sign-windows.result == 'success' ||
        (github.event_name == 'pull_request' && needs.sign-windows.result == 'skipped'))
     runs-on: ubuntu-22.04

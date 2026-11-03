@@ -25,7 +25,7 @@ In the Weights column, `aw`, `fw`, `pw`, and `iw` are Stata weight types. A dash
 | `crangestat` | `rangestat` | — | User-written Mata functions aren't supported. |
 | `creghdfe` | `reghdfe` | aw/fw/pw | `absorb()` takes variables, `i.var`, and `var1#var2`, but not heterogeneous slopes (`c.var`), `##`, or `newvar=` terms. Clustering is one-way only. Not every `reghdfe` solver or degrees-of-freedom option is available. |
 | `civreghdfe` | `ivreghdfe` | aw/fw/pw | `absorb()` doesn't take heterogeneous slopes, and `center` isn't supported. Some estimator and VCE combinations aren't available; see the help file. |
-| `cqreg` | `qreg` | — | Adds clustered standard errors. Different solver and density estimator can produce slightly different coefficients and standard errors. Errors on nonconvergence. |
+| `cqreg` | `qreg` | — | Adds clustered standard errors. Different solver and density estimator can produce slightly different coefficients and standard errors. Errors on nonconvergence. Centers the response before fitting, so at a large level (around 1e9) its clustered covariance stays accurate where `qreg`'s `vce(excluster)` is wrong in the leading digit. |
 | `cpsmatch` | `psmatch2` | — | ATT for one outcome only; no ATE/ATU or `ai()`. Matching without replacement requires `neighbor(1)`. |
 | `cppmlhdfe` | `ppmlhdfe` | aw/fw/pw | Undocumented debugging options aren't available. The iteration path can differ even when final estimates agree. See [cppmlhdfe details](commands/cppmlhdfe.md). |
 

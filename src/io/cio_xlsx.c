@@ -3,6 +3,19 @@
 /* Reuse the streaming ZIP/XML parser, then transfer metadata and values through
    the same bounded interface as XLS and statistical formats. */
 #include "cimport/cimport_xlsx.h"
+#include "ctools_platform.h"
+/* Dense import costs about 26 bytes a cell: 10 in the parser's storage, 8 in
+ * the staged column and 8 in Stata. A shape beyond half of physical memory
+ * fails with r(909) before any of it is allocated; a lone value at XFD1048576
+ * would otherwise ask for 17 billion cells (about 450 GB). */
+size_t cio_xlsx_cell_limit(void)
+{
+    uint64_t memory = ctools_physical_memory_bytes();
+    if (!memory)
+        memory = UINT64_C(16) << 30;
+    uint64_t cells = memory / 2 / 26;
+    return cells > SIZE_MAX ? SIZE_MAX : (size_t)cells;
+}
 /* Every stored cell lives in the parser's column-major arrays. */
 int cio_xlsx_stored(XLSXContext *x, int row, int col)
 {
@@ -48,7 +61,9 @@ int cio_scan_xlsx(cio_dataset *dataset, const char *path)
     XLSXContext x;
     xlsx_context_init(&x);
     int rc = 0;
-    char sheet[1024], range[100], first[8], all[8], allfmt[80];
+    char sheet[1024], range[100], first[8], all[8], allfmt[80], maxvar[40];
+    x.max_cells = cio_xlsx_cell_limit();
+    cio_local_text("__cio_maxvar", maxvar, sizeof(maxvar));
     cio_local_text("__cio_sheet", sheet, sizeof(sheet));
     cio_local_text("__cio_cellrange", range, sizeof(range));
     cio_local_text("__cio_firstrow", first, sizeof(first));
@@ -84,6 +99,19 @@ int cio_scan_xlsx(cio_dataset *dataset, const char *path)
     if ((rc = xlsx_parse_shared_strings(&x)) || (rc = xlsx_parse_styles(&x)) ||
         (rc = xlsx_parse_worksheet(&x)))
         goto done;
+    /* Like native, a cellrange() must lie within the worksheet's data area. */
+    const XLSXCellRange *cr = &x.cell_range;
+    const char *outside = cr->start_col > x.area_max_col ? "column range in option cellrange();\n    The upper left column is right of the data area in the worksheet."
+                          : cr->end_col > x.area_max_col ? "column range in option cellrange();\n    The lower right column is right of the data area in the worksheet."
+                          : cr->start_row > x.area_max_row ? "row range in option cellrange();\n    The upper left row is after the data area in the worksheet."
+                          : cr->end_row > x.area_max_row ? "row range in option cellrange();\n    The lower right row is after the data area in the worksheet."
+                                                         : NULL;
+    if (outside)
+    {
+        snprintf(x.error_message, sizeof(x.error_message), "invalid %s", outside);
+        rc = 198;
+        goto done;
+    }
     int r0 = x.cell_range.start_row < 0 ? x.min_row : x.cell_range.start_row,
         r1 = x.cell_range.end_row < 0 ? x.max_row : x.cell_range.end_row;
     int c0 = x.cell_range.start_col < 0 ? 0 : x.cell_range.start_col,
@@ -92,8 +120,10 @@ int cio_scan_xlsx(cio_dataset *dataset, const char *path)
     if (x.cell_range.start_col < 0)
     {
         c0 = c1 + 1;
+        /* Rows beyond storage hold no cells. */
+        int stored = r1 < (int)x.cm_num_rows ? r1 : (int)x.cm_num_rows;
         for (int c = 0; c <= c1; c++)
-            for (int r = r0; r <= r1; r++)
+            for (int r = r0; r <= stored; r++)
             {
                 double value;
                 const char *text;
@@ -108,6 +138,30 @@ int cio_scan_xlsx(cio_dataset *dataset, const char *path)
     }
     if (r0 < 1 || r1 < r0 || c1 < c0)
         goto done;
+    /* Fail before staging: too many variables (as native, r(900)), or more
+     * cells than memory can hold. */
+    int limit = atoi(maxvar);
+    if (limit > 0 && c1 - c0 + 1 > limit)
+    {
+        char shown[40];
+        if (limit >= 1000)
+            snprintf(shown, sizeof(shown), "%d,%03d", limit / 1000, limit % 1000);
+        else
+            snprintf(shown, sizeof(shown), "%d", limit);
+        snprintf(x.error_message, sizeof(x.error_message),
+                 "no room to add more variables\n    Up to %s variables are currently allowed, although you could reset the\n    maximum using set maxvar; see help memory.",
+                 shown);
+        rc = 900;
+        goto done;
+    }
+    if ((size_t)(r1 - r0 + 1) > x.max_cells / (size_t)(c1 - c0 + 1))
+    {
+        snprintf(x.error_message, sizeof(x.error_message),
+                 "worksheet too large: %d rows by %d columns exceed the memory available", r1 - r0 + 1,
+                 c1 - c0 + 1);
+        rc = 909;
+        goto done;
+    }
     dataset->nvar = c1 - c0 + 1;
     dataset->cols = calloc((size_t)dataset->nvar, sizeof(cio_column));
     if (!dataset->cols)

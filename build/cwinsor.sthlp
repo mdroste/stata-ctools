@@ -159,8 +159,13 @@ local macros, which can round values at a cutoff.
 
 {pstd}
 New variables from grouped winsorization use Stata's default numeric storage
-type. Other outputs retain the source storage type. Missing source values do not
-enter percentile calculations; generated outputs use system missing for them.
+type. Other outputs retain the source storage type, except that winsorizing a
+byte, int, or long variable in place to a fractional cutoff promotes it to
+float (byte, int) or double (long), as {cmd:replace} does. With {opt by()},
+each group's cutoffs are first stored in the source's type, as {cmd:winsor2}
+stores them: truncated for byte, int, and long, and rounded for float. Missing
+source values do not enter percentile calculations; generated outputs use
+system missing for them.
 
 
 {marker examples}{...}

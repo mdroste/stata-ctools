@@ -33,6 +33,11 @@ int cio_excel_workbook(const char *kind)
         rc = cio_save_number("__cio_nworksheets", book->sheets.count);
         for (unsigned j = 0; !rc && j < book->sheets.count; j++)
         {
+            if (!cio_xls_is_worksheet(book, j))
+            {
+                rc = cio_excel_sheet_info((int)j + 1, cio_xls_sheet_name(book, j), 0, 0, -1, -1);
+                continue;
+            }
             xlsWorkSheet *sheet = xls_getWorkSheet(book, (int)j);
             if (!sheet)
             {
@@ -88,6 +93,7 @@ int cio_excel_workbook(const char *kind)
         }
         XLSXContext sheet;
         xlsx_context_init(&sheet);
+        sheet.max_cells = cio_xlsx_cell_limit();
         if (!(rc = xlsx_open_file(&sheet, path)) && !(rc = xlsx_parse_workbook(&sheet)))
         {
             sheet.selected_sheet = j;

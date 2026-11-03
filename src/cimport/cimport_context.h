@@ -62,6 +62,8 @@ typedef struct {
     bool is_integer;
     double min_value;
     double max_value;
+    double int_min_value;    /* Extrema over the integer-valued entries */
+    double int_max_value;
     bool column_has_quotes;  /* Aggregated from all chunks: any quotes in this column */
 } CImportColumnInfo;
 
@@ -74,6 +76,8 @@ typedef struct {
     uint64_t decoded_bytes;  /* Sum of decoded lengths (strL width heuristic) */
     double num_min;       /* Numeric extrema over parsed values */
     double num_max;
+    double int_min;       /* Extrema over integer-valued parsed values */
+    double int_max;
 } CImportColumnParseStats;
 
 typedef struct {
@@ -163,6 +167,12 @@ typedef struct CImportContext {
     int *force_string_cols;      /* Array of 1-based column indices to force string */
     int num_force_string;
     unsigned char *col_force;    /* Per column: CIMPORT_FORCE_* */
+    /* colrange(): file columns [col_first, col_last) become variables 1.. in
+     * order (col_last 0 = through the last column). Header detection,
+     * generated names and the numericcols()/stringcols() numbers refer to
+     * the selected columns only, as in native. */
+    int col_first;
+    int col_last;
     bool plain_numbers;          /* Default grammar: single-pass plain number parser applies */
 
     /* Encoding support */

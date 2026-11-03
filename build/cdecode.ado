@@ -77,17 +77,13 @@ program define cdecode, rclass
 
     * Stata answers an if one observation at a time, so the plugin is passed
     * the sample as a marker variable, last, and reads it in parallel. An if
-    * that names a numeric variable other than a source is that marker.
-    * Several outputs otherwise share one marked sample, evaluated once. A
-    * single output marks its if after its destination exists: the marker is
-    * then the last variable, and dropping it after the call is free. With
-    * in, which limits the range, a single output keeps any other if (marking
-    * covers every observation).
+    * that names a numeric variable other than a source is that marker. Any
+    * other if is marked here, once, before a helper can replace the r() or
+    * e() results it may name.
     local sample `"`if' `in'"'
     local plugin_sample `"`sample'"'
     local ifflag = cond(`"`if'"' != "", "ifcond", "")
     local touse ""
-    local mark_each = 0
     if `"`if'"' != "" {
         local touse = strtrim(substr(`"`if'"', 3, .))
         capture confirm numeric variable `touse', exact
@@ -97,14 +93,9 @@ program define cdecode, rclass
             local plugin_sample `"`in'"'
             local ifflag "ifcond touse"
         }
-        else if `nvars' > 1 {
+        else {
             marksample touse, novarlist
             local sample "if `touse'"
-            local plugin_sample ""
-            local ifflag "ifcond touse"
-        }
-        else if `"`in'"' == "" {
-            local mark_each = 1
             local plugin_sample ""
             local ifflag "ifcond touse"
         }
@@ -141,15 +132,9 @@ program define cdecode, rclass
         }
         if `__cd_ok' {
             mata: (void) st_addvar("str`__cd_width'", "`decoded'", "`fill'" != "")
-            local marker "`touse'"
-            if `mark_each' {
-                tempvar marker
-                mark `marker' `if'
-            }
-            capture plugin call ctools_plugin `v' `decoded' `marker' `plugin_sample', ///
+            capture plugin call ctools_plugin `v' `decoded' `touse' `plugin_sample', ///
                 "cdecode `threads_code' v2 maplen=`__cd_len' width=`__cd_width' `ifflag' `fill'"
             local plugin_rc = _rc
-            if `mark_each' drop `marker'
             if `plugin_rc' == 1 exit 1
             if `plugin_rc' {
                 drop `decoded'

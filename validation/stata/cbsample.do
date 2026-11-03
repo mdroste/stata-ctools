@@ -503,6 +503,75 @@ gen id = _n
 gen bsweight = .
 test_error_match, stata_cmd(bsample, weight(bsweight) strata(nonexistent_var)) ctools_cmd(cbsample, weight(bsweight) strata(nonexistent_var)) testname("nonexistent strata variable")
 
+* Empty selection semantics differ from empty data and empty strata.
+foreach mode in empty ifzero nstrata sstrata {
+    foreach weighted in 0 1 {
+        clear
+        if "`mode'" != "empty" set obs 10
+        gen id = _n
+        gen w = 99
+        gen sn = .
+        gen str1 ss = ""
+        local select
+        local opts
+        if "`mode'" == "ifzero" local select if 0
+        if "`mode'" == "nstrata" local opts strata(sn)
+        if "`mode'" == "sstrata" local opts strata(ss)
+        if `weighted' local opts `opts' weight(w)
+        preserve
+        capture bsample `select', `opts'
+        local reference_rc = _rc
+        * Native stratified bsample sorts ties; compare by original row ID.
+        sort id
+        tempfile expected
+        save `expected'
+        restore
+        * Prior successful-call output must not masquerade as this draw.
+        scalar _cbsample_total_weight = 123
+        local rng_before `c(rngstate)'
+        capture cbsample `select', `opts'
+        local rc = _rc
+        assert `rc' == `reference_rc'
+        cf _all using `expected'
+        assert "`c(rngstate)'" == "`rng_before'"
+        if `rc' {
+            capture confirm scalar _cbsample_total_weight
+            assert _rc == 111
+        }
+        else assert scalar(_cbsample_total_weight) == 0
+        test_pass "empty sample parity: `mode', weight=`weighted'"
+    }
+}
+clear
+set obs 3
+gen id = _n
+gen str1 w = "a"
+foreach count in 0 invalid {
+    capture cbsample `count' if 0
+    assert _rc == 198
+    assert _N == 3 & id == _n & w == "a"
+}
+capture cbsample if 0, weight(w)
+assert _rc == 7
+assert _N == 3 & id == _n & w == "a"
+test_pass "empty selection still validates count and weight type"
+
+* Even on zero rows, native's explicit selection/count paths can error.
+foreach command in "if 0" "if 1" "1" ", strata(sn)" ", cluster(id)" {
+    clear
+    gen id = .
+    gen sn = .
+    preserve
+    capture bsample `command'
+    local reference_rc = _rc
+    restore
+    capture cbsample `command'
+    local rc = _rc
+    assert `rc' == `reference_rc'
+    assert _N == 0 & c(k) == 2
+    test_pass "zero-row explicit syntax parity: `command'"
+}
+
 * End of cbsample validation
 noi print_summary "cbsample"
 }

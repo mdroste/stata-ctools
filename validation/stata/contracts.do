@@ -44,6 +44,7 @@ global CTOOLS_COMPONENT_COMPLETE "contracts"
 if "`__case'" == "bigdata" {
 * args: directory containing the plugin and ado files, output log path
 args plugin_dir
+if `"`plugin_dir'"' == "" local plugin_dir : environment CTOOLS_TEST_PLUGIN_DIR
 if `"`plugin_dir'"' == "" local plugin_dir "build"
 clear all
 set more off
@@ -248,6 +249,8 @@ if "`__case'" == "data_io" {
 * Minimal test for data I/O refactoring
 clear all
 adopath ++ "build"
+local candidate : environment CTOOLS_TEST_PLUGIN_DIR
+if `"`candidate'"' != "" adopath ++ `"`candidate'"'
 set obs 10
 
 * Test 1: cencode with 1 variable (string)
@@ -556,6 +559,8 @@ di "PERFORMANCE_PATHS_COMPLETE"
 
 if "`__case'" == "refactor_timing" {
 adopath ++ build
+local candidate : environment CTOOLS_TEST_PLUGIN_DIR
+if `"`candidate'"' != "" adopath ++ `"`candidate'"'
 clear
 set obs 200
 gen double x = mod(_n, 17)

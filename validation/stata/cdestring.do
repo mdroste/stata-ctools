@@ -1670,6 +1670,99 @@ set obs 5
 gen str10 x = "abc"
 test_error_match, stata_cmd(destring x, generate(test)) ctools_cmd(cdestring x, generate(test)) testname("non-numeric string without force")
 
+* Output staging: name/option/plugin failures must not publish destinations.
+clear
+set obs 3
+gen str2 s = "12"
+gen str2 t = "no"
+label variable s "source label"
+char s[note1] "source note"
+capture cdestring s t, generate(x x)
+local rc = _rc
+assert `rc' == 110
+assert c(k) == 2
+assert s == "12" & t == "no"
+test_pass "duplicate generate names leave no output"
+foreach mode in "generate(x)" "replace" {
+    capture cdestring s, `mode' threads(257)
+    local rc = _rc
+    assert `rc' == 198
+    assert c(k) == 2
+    assert s == "12" & t == "no"
+    test_pass "invalid threads preserve data: `mode'"
+}
+cdestring s t, generate(x y)
+assert x == 12
+capture confirm variable y
+assert _rc == 111
+local label : variable label x
+local note : char x[note1]
+assert "`label'" == "source label" & "`note'" == "source note"
+test_pass "staging preserves metadata and skips only nonnumeric columns"
+drop x
+cdestring s t, replace
+assert s == 12 & t == "no"
+unab names : _all
+assert "`names'" == "s t"
+test_pass "replace staging preserves untouched columns and variable order"
+clear
+set obs 3
+generate str3 a = string(_n)
+generate str3 b = string(_n + 10)
+generate str3 native_a = a
+generate str3 native_b = b
+destring native_a native_a native_b, replace
+cdestring a a b, replace
+assert a == native_a & b == native_b
+assert "`: type a'" == "`: type native_a'" & "`: type b'" == "`: type native_b'"
+test_pass "replace converts a repeated variable once, as destring does"
+
+* The plugin rejects unsupported long strL values after output staging.
+* Exercise a real transfer failure without a test-only implementation hook.
+clear
+set obs 1
+gen str2 s = "12"
+gen strL t = "1" * 3000
+foreach mode in "generate(x y)" "replace" {
+    capture cdestring s t, `mode'
+    local rc = _rc
+    assert `rc' == 109
+    assert c(k) == 2
+    confirm string variable s t
+    assert s == "12" & t == "1" * 3000
+}
+test_pass "post-staging plugin failure removes all temporary outputs"
+
+* Control characters in ignore() must survive the ado/plugin wire format.
+foreach code in 9 10 13 {
+    clear
+    set obs 3
+    gen str8 s = "1x2y"
+    local separator = char(`code')
+    destring s, gen(expected) ignore("x`separator'y")
+    cdestring s, gen(actual) ignore("x`separator'y")
+    assert actual == expected & actual == 12
+    drop expected actual
+    replace s = "1x2y%"
+    destring s, gen(expected) ignore("x`separator'y") percent force
+    cdestring s, gen(actual) ignore("x`separator'y") percent force
+    assert actual == expected
+    drop expected actual
+    cdestring s if _n==2 in 1/2, gen(actual) ignore("x`separator'y") percent
+    assert actual == .12 if _n==2
+    assert missing(actual) if _n!=2
+    test_pass "ignore control character `code' with options and selection"
+}
+clear
+set obs 2
+local slash = char(92)
+local tab = char(9)
+gen str20 s = "1`slash't2€y"
+destring s, gen(expected) ignore("`slash't€`tab'y")
+cdestring s, gen(actual) ignore("`slash't€`tab'y")
+assert actual == expected & actual == 12
+test_pass "ignore distinguishes literal backslashes, tabs, and Unicode"
+
 * SUMMARY
 * End of cdestring validation
 noi print_summary "cdestring"

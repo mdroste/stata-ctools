@@ -626,6 +626,44 @@ double crangestat_stable_window_variance(const double *data, size_t start, size_
     return (double)((ss - correction * correction / n) / (n - 1));
 }
 
+/* Compensate before dividing: averaging a rounded sum can lose the entire
+ * mean. Skip self while accumulating instead of subtracting it afterward.
+ * Retry with power-of-two scaling only if the unscaled sum overflows. */
+static double stable_window_mean(const double *data, size_t start, size_t end,
+                                 size_t self, int exclude_self)
+{
+    double sum = 0.0, correction = 0.0, largest = 0.0;
+    size_t n = 0;
+    for (size_t i = start; i < end; i++)
+    {
+        if ((exclude_self && i == self) || !(data[i] < SV_missval))
+            continue;
+        double x = data[i], next = sum + x;
+        correction += fabs(sum) >= fabs(x) ? (sum - next) + x : (x - next) + sum;
+        sum = next;
+        largest = fmax(largest, fabs(x));
+        n++;
+    }
+    if (!n)
+        return SV_missval;
+    double total = sum + correction;
+    if (isfinite(total))
+        return total / (double)n;
+
+    int exponent;
+    frexp(largest, &exponent);
+    sum = correction = 0.0;
+    for (size_t i = start; i < end; i++)
+    {
+        if ((exclude_self && i == self) || !(data[i] < SV_missval))
+            continue;
+        double x = scalbn(data[i], -exponent), next = sum + x;
+        correction += fabs(sum) >= fabs(x) ? (sum - next) + x : (x - next) + sum;
+        sum = next;
+    }
+    return scalbn((sum + correction) / (double)n, exponent);
+}
+
 double crangestat_compute_stat_with_prefix(stat_type type, const prefix_arrays *pa,
                                            const double *data, size_t g_start, size_t win_start,
                                            size_t win_end, size_t self_idx, int exclude_self)
@@ -667,7 +705,19 @@ double crangestat_compute_stat_with_prefix(stat_type type, const prefix_arrays *
         double total = sum + (double)n * pa->origin;
         double scale = fabs(pa->prefix_sum[win_end-g_start]) +
                        fabs(pa->prefix_sum[win_start-g_start]) + fabs((double)n*pa->origin);
+        if (type == STAT_MEAN) {
+            /* A prefix can itself cancel even when its final total is small.
+             * Cauchy-Schwarz bounds its absolute sum from the squared sum. */
+            size_t a = win_start-g_start, b = win_end-g_start;
+            scale += sqrt(pa->prefix_sum2[b]) * sqrt((double)pa->prefix_count[b]) +
+                     sqrt(pa->prefix_sum2[a]) * sqrt((double)pa->prefix_count[a]);
+            /* Squared deviations may underflow on very small scales. */
+            if (pa->prefix_sum2[b] == 0.0 && fabs(total) < sqrt(DBL_MIN))
+                return stable_window_mean(data, win_start, win_end, self_idx, exclude_self);
+        }
         if (!isfinite(total) || fabs(total) <= sqrt(DBL_EPSILON)*scale) {
+            if (type == STAT_MEAN)
+                return stable_window_mean(data, win_start, win_end, self_idx, exclude_self);
             /* Local Neumaier sum avoids both prefix subtraction and the
              * cancellation from adding back a distant group origin. */
             double local=0.0, correction=0.0;
@@ -897,6 +947,8 @@ double crangestat_compute_window_stat_simple(stat_type type, const double *data,
     /* Window without rows (or inverted interval): missing, as in rangestat */
     if (win_end <= win_start)
         return SV_missval;
+    if (type == STAT_MEAN)
+        return stable_window_mean(data, win_start, win_end, self_idx, exclude_self);
     /* rangestat's first/last retain endpoint missing values. excludeself
      * replaces the self row with ordinary missing; it does not remove it. */
     if (type == STAT_FIRST || type == STAT_LAST)

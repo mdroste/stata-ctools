@@ -365,6 +365,117 @@ def excel_fixtures(directory: Path):
         bytes(header) + stream.ljust(size, b"\0") + ole_directory + struct.pack("<128I", *fat)
     )
 
+    # A1:D10 without the optional cell and row positions (r attributes), as
+    # some writers save it, and a workbook with no styles part.
+    for name, rows_r, cells_r, styled in (
+        ("nostyles", 1, 1, 0),
+        ("norcells", 1, 0, 1),
+        ("norboth", 0, 0, 1),
+    ):
+        body = "".join(
+            (f'<row r="{i}">' if rows_r else "<row>")
+            + "".join(
+                (f'<c r="{"ABCD"[j]}{i}">' if cells_r else "<c>") + f"<v>{i * 100 + j}</v></c>"
+                for j in range(4)
+            )
+            + "</row>"
+            for i in range(1, 11)
+        )
+        book = {**parts, "xl/workbook.xml": parts["xl/workbook.xml"].replace('name="Formats"', 'name="Sheet1"')}
+        book["xl/worksheets/sheet1.xml"] = (
+            f'<worksheet xmlns="{ns}"><dimension ref="A1:D10"/><sheetData>{body}</sheetData></worksheet>'
+        )
+        if not styled:
+            book["[Content_Types].xml"] = parts["[Content_Types].xml"].replace(
+                '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>',
+                "",
+            )
+            book["xl/_rels/workbook.xml.rels"] = parts["xl/_rels/workbook.xml.rels"].replace(
+                '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>',
+                "",
+            )
+            del book["xl/styles.xml"]
+        with ZipFile(directory / f"positions_{name}.xlsx", "w", compression=ZIP_DEFLATED) as out:
+            for part, text in book.items():
+                out.writestr(part, text)
+    xls_sheet_fixtures(directory)
+
+
+def xls_sheet_fixtures(directory: Path):
+    """BIFF8 workbooks with a chart substream inside a worksheet and a chart sheet first."""
+
+    def record(kind, body=b""):
+        return struct.pack("<HH", kind, len(body)) + body
+
+    def bof(kind):
+        return record(0x809, struct.pack("<4H2I", 0x600, kind, 0xDBB, 1997, 0x41, 6))
+
+    def number(row, col, value):
+        return record(0x203, struct.pack("<HHHd", row, col, 0, value))
+
+    def window2():
+        return record(0x23E, struct.pack("<HHHHHHHHH", 0x6B6, 0, 0, 64, 0, 0, 0, 0, 0))
+
+    # A chart's cached series values: DIMENSIONS and NUMBER records of its own.
+    chart = bof(0x20) + record(0x200, struct.pack("<IIHHH", 0, 3, 0, 1, 0)) + number(1, 0, 42) + record(0x0A)
+
+    def sheet(values, embedded=b""):
+        cells = b"".join(number(r, c, v) for r, c, v in values)
+        rows = 1 + max(r for r, _, _ in values)
+        cols = 1 + max(c for _, c, _ in values)
+        return (
+            bof(0x10)
+            + record(0x200, struct.pack("<IIHHH", 0, rows, 0, cols, 0))
+            + cells
+            + embedded
+            + window2()
+            + record(0x0A)
+        )
+
+    def workbook(sheets):
+        globals_ = bof(5) + record(0x42, struct.pack("<H", 1200)) + record(0x22, struct.pack("<H", 0))
+        globals_ += b"".join(record(0xE0, struct.pack("<HH", 0, 0) + bytes(16)) for _ in range(16))
+        bounds = [
+            record(0x85, struct.pack("<IBBBB", 0, 0, kind, len(name), 0) + name.encode()) for name, kind, _ in sheets
+        ]
+        offset = len(globals_) + sum(map(len, bounds)) + 4
+        stream, fixed = b"", []
+        for (name, kind, body), bound in zip(sheets, bounds):
+            fixed.append(struct.pack("<HHI", 0x85, len(bound) - 4, offset + len(stream)) + bound[8:])
+            stream += body
+        stream = globals_ + b"".join(fixed) + record(0x0A) + stream
+        size = max(4096, (len(stream) + 511) // 512 * 512)
+        n = size // 512
+        header = bytearray(512)
+        header[:8] = bytes.fromhex("d0cf11e0a1b11ae1")
+        struct.pack_into("<HHHHH", header, 24, 0x3E, 3, 0xFFFE, 9, 6)
+        struct.pack_into("<IIIII", header, 40, 0, 1, n, 0, 4096)
+        struct.pack_into("<4I", header, 60, 0xFFFFFFFE, 0, 0xFFFFFFFE, 0)
+        struct.pack_into("<109I", header, 76, n + 1, *([0xFFFFFFFF] * 108))
+
+        def entry(name, kind, start, length, child=0xFFFFFFFF):
+            out = bytearray(128)
+            encoded = (name + "\0").encode("utf-16le")
+            out[: len(encoded)] = encoded
+            struct.pack_into("<HBBIII", out, 64, len(encoded), kind, 1, 0xFFFFFFFF, 0xFFFFFFFF, child)
+            struct.pack_into("<IQ", out, 116, start, length)
+            return out
+
+        ole_directory = entry("Root Entry", 5, 0xFFFFFFFE, 0, 1) + entry("Workbook", 2, 0, size) + bytes(256)
+        fat = [i + 1 for i in range(n)]
+        fat[-1] = 0xFFFFFFFE
+        fat += [0xFFFFFFFE, 0xFFFFFFFD] + [0xFFFFFFFF] * (128 - n - 2)
+        return bytes(header) + stream.ljust(size, b"\0") + ole_directory + struct.pack("<128I", *fat)
+
+    data = [(r, c, 10 * r + c + 1) for r in range(4) for c in range(2)]
+    other = [(r, 0, 100 + r) for r in range(3)]
+    (directory / "chart_in_sheet.xls").write_bytes(
+        workbook([("Data", 0, sheet(data, chart)), ("Other", 0, sheet(other))])
+    )
+    (directory / "chart_sheet_first.xls").write_bytes(
+        workbook([("Chart1", 2, chart), ("Data", 0, sheet(data)), ("Other", 0, sheet(other))])
+    )
+
 
 NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 
@@ -548,6 +659,54 @@ def integrity_fixtures(p):
     (p / "partial.shx").write_text("old index sentinel")
     (p / "corrupt.dbf").write_bytes(b"not a dbf")
     (p / "transport.sas").write_text("old SAS sentinel")
+
+
+def injection_fixtures(directory):
+    """Headers, sheet names and labels whose text would run as Stata code if a
+    wrapper pasted it into a command line: one closes compound quotes, one is a
+    macro expression, one holds a global and a local reference. Each code
+    payload would write a marker file in the working directory."""
+    payloads = [
+        'x"\'+string(filewrite("fio_m1.txt","x"))+`"y',
+        '`=filewrite("fio_m2.txt","x")\'',
+        'cost $HOME `c(os)\' "q"',
+    ]
+
+    def csv_cell(text):
+        return '"' + text.replace('"', '""') + '"'
+
+    (directory / "inj_header.csv").write_text(
+        "a," + ",".join(csv_cell(p) for p in payloads) + "\n1,2,3,4\n5,6,7,8\n"
+    )
+    (directory / "inj_header.tsv").write_text("a\t" + payloads[0] + "\n1\t2\n")
+    ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    rns = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    pns = "http://schemas.openxmlformats.org/package/2006/relationships"
+    header = "".join(
+        f'<c r="{col}1" t="inlineStr"><is><t>{escape(text)}</t></is></c>'
+        for col, text in zip("ABC", payloads)
+    )
+    values = "".join(f'<c r="{col}2"><v>{i}</v></c>' for i, col in enumerate("ABC", 1))
+    sheet = escape(payloads[1], {'"': "&quot;"})
+    parts = {
+        "[Content_Types].xml": '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+        '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        "</Types>",
+        "_rels/.rels": f'<Relationships xmlns="{pns}"><Relationship Id="rId1" '
+        f'Type="{rns}/officeDocument" Target="xl/workbook.xml"/></Relationships>',
+        "xl/workbook.xml": f'<workbook xmlns="{ns}" xmlns:r="{rns}"><sheets>'
+        f'<sheet name="{sheet}" sheetId="1" r:id="rId1"/></sheets></workbook>',
+        "xl/_rels/workbook.xml.rels": f'<Relationships xmlns="{pns}"><Relationship Id="rId1" '
+        f'Type="{rns}/worksheet" Target="worksheets/sheet1.xml"/></Relationships>',
+        "xl/worksheets/sheet1.xml": f'<worksheet xmlns="{ns}"><dimension ref="A1:C2"/><sheetData>'
+        f'<row r="1">{header}</row><row r="2">{values}</row></sheetData></worksheet>',
+    }
+    with ZipFile(directory / "inj_text.xlsx", "w", ZIP_DEFLATED) as archive:
+        for key, value in parts.items():
+            archive.writestr(key, value)
 
 
 def regression_fixtures(folder):

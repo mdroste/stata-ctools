@@ -142,6 +142,29 @@ static ST_retcode ppml_normal_equations(const ST_double *data, ST_int N, const S
     return failed ? 920 : 0;
 }
 
+/* Replace eta (N, without the offset) by Xb + P f, where f = eta - Xb is
+   its fixed-effect part and P the fixed-effect projection with the current
+   weights. f is moderate even where the working variable is huge, so this
+   recovers eta for rows whose z - M z subtraction lost its digits. fe and
+   xb are N-length scratch. Returns 0 or the projection status. */
+static ST_retcode ppml_refit_fixed_effects(const PPML_Options *options, HDFE_State *S,
+                                           const ST_double *X, ST_int N, ST_int K,
+                                           const ST_double *beta, ST_double *eta,
+                                           ST_double *fe, ST_double *xb, int threads)
+{
+    memset(xb, 0, (size_t)N * sizeof(ST_double));
+    ctools_matvec_add(X, N, K, beta, xb);
+    for (ST_int i = 0; i < N; i++) fe[i] = eta[i] - xb[i];
+    HDFE_SolveResult projection = ppml_partial(options, S, fe, N, 1, threads);
+    if (projection.status) {
+        SF_error("cppmlhdfe: fixed-effect projection did not converge\n");
+        return projection.status;
+    }
+    /* fe holds the residual f - P f */
+    for (ST_int i = 0; i < N; i++) eta[i] -= fe[i];
+    return 0;
+}
+
 /* Global state pointer for CG solver (same pattern as creghdfe) */
 static HDFE_State *g_ppml_state = NULL;
 
@@ -195,7 +218,7 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
     ST_double *mu = NULL, *eta = NULL, *irls_w = NULL, *z_orig = NULL, *aug_copy = NULL;
     ST_double *xtx = NULL, *xty = NULL, *irls_beta = NULL, *inv_xx = NULL;
     ST_int *sep_m = NULL;
-    ST_double *xb_work = NULL;
+    ST_double *xb_work = NULL, *fe_work = NULL;
     dd_real *xty_dd = NULL;
     ST_double *stdev_x = NULL;
     ST_int *irls_keep_idx = NULL;
@@ -553,9 +576,10 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
     inv_xx = (ST_double *)malloc(K_x * K_x * sizeof(ST_double));
     sep_m = (ST_int *)malloc(N * sizeof(ST_int));
     xb_work = (ST_double *)malloc(N * sizeof(ST_double));
+    fe_work = (ST_double *)malloc(N * sizeof(ST_double));
 
     if (!mu || !eta || !irls_w || !z_orig || !aug_copy ||
-        !xtx || !xty || !irls_beta || !inv_xx || !sep_m || !xb_work) {
+        !xtx || !xty || !irls_beta || !inv_xx || !sep_m || !xb_work || !fe_work) {
         output_rc = 920;
         goto ppml_cleanup;
     }
@@ -926,8 +950,8 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
         /* X~ * beta, each row accumulated over the regressors in order */
         memset(xb_work, 0, (size_t)N * sizeof(ST_double));
         ctools_matvec_add(aug_copy + N, N, K_x, irls_beta, xb_work);
-        int eta_not_finite = 0;
-        #pragma omp parallel for schedule(static) reduction(max : max_eta_change) reduction(| : eta_not_finite) if (N > 100000)
+        int eta_not_finite = 0, mu_overflow = 0;
+        #pragma omp parallel for schedule(static) reduction(max : max_eta_change) reduction(| : eta_not_finite, mu_overflow) if (N > 100000)
         for (i = 0; i < N; i++) {
             /* FE component: original z minus partialled z */
             ST_double fe_part = z_orig[i] - aug_copy[i];
@@ -942,11 +966,21 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
                 max_eta_change = fmax(max_eta_change, fabs(z_hat - eta[i]));
             eta[i] = z_hat;
             mu[i] = exp(eta[i] + off);
-            /* Clamp mu to prevent overflow/underflow */
-            if (mu[i] > 1e18) mu[i] = 1e18;
-            if (mu[i] < 1e-18) mu[i] = 1e-18;
+            /* As ppmlhdfe: floor mu for the weights only, never cap it (a
+               capped mean no longer agrees with eta and can stall the
+               deviance at a wrong point); an overflowing mean stops the fit */
+            if (!isfinite(mu[i])) mu_overflow |= 1;
+            if (mu[i] < PPML_MU_FLOOR) mu[i] = PPML_MU_FLOOR;
         }
         if (eta_not_finite) output_rc = 430;
+        if (mu_overflow && !output_rc) {
+            char msg[200];
+            snprintf(msg, sizeof(msg),
+                     "cppmlhdfe: the fitted mean overflows on iteration %d; check the scale of "
+                     "offset() or exposure() and of the regressors\n", (int)irls_iter + 1);
+            SF_error(msg);
+            output_rc = 430;
+        }
 
         if (output_rc) break;
         if(options->check_mu) {
@@ -960,7 +994,7 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
         }
 
         /* (g) Compute deviance */
-        deviance = ppml_compute_deviance(y, mu, w_user_compact, N) / user_weight_scale;
+        deviance = ppml_compute_deviance(y, eta, offset_compact, w_user_compact, N) / user_weight_scale;
 
         /* (h) Check convergence (matching ppmlhdfe's criterion) */
         if (irls_iter > 0) {
@@ -1071,6 +1105,19 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
 
     if (!irls_converged && !output_rc) {
         SF_error("cppmlhdfe: IRLS did not converge\n");
+        /* Positive outcomes with fitted means below the floor have working
+           variables above 1/PPML_MU_FLOOR whose rounding can keep the
+           deviance from settling */
+        ST_int n_floored = 0;
+        for (i = 0; i < N; i++)
+            if (y[i] > 0 && eta[i] + (offset_compact ? offset_compact[i] : 0.0) < log(PPML_MU_FLOOR)) n_floored++;
+        if (n_floored > 0) {
+            char msg[256];
+            snprintf(msg, sizeof(msg),
+                     "cppmlhdfe: %d positive outcome(s) have fitted means below %.3g times sd(y); "
+                     "check the scale of offset() or exposure()\n", (int)n_floored, PPML_MU_FLOOR);
+            SF_error(msg);
+        }
         output_rc = 430;
     }
     if (output_rc) goto ppml_cleanup;
@@ -1234,6 +1281,26 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
                 }
             }
         }
+    }
+
+    /* Recompute eta for the posted coefficients from its fixed-effect part
+       (see the IRLS update): at convergence the fixed effects of z - eta
+       vanish, so the fitted fixed effects of f = eta - Xb are those of the
+       final fit. The log likelihood, deviance and constant then refer to the
+       posted b, free of the rounding of huge working variables. */
+    {
+        ST_double *beta_full = (ST_double *)calloc((size_t)(K_x > 0 ? K_x : 1), sizeof(ST_double));
+        if (!beta_full) { output_rc = 920; goto ppml_cleanup; }
+        for (k = 0; k < K_keep; k++) beta_full[keep_idx[k]] = beta_final[k];
+        output_rc = ppml_refit_fixed_effects(options, g_ppml_state, X, N, K_x, beta_full,
+                                             eta, fe_work, xb_work, num_threads);
+        free(beta_full);
+        if (output_rc) goto ppml_cleanup;
+        for (i = 0; i < N; i++) {
+            mu[i] = exp(eta[i] + (offset_compact ? offset_compact[i] : 0.0));
+            if (mu[i] < PPML_MU_FLOOR) mu[i] = PPML_MU_FLOOR;
+        }
+        deviance = ppml_compute_deviance(y, eta, offset_compact, w_user_compact, N) / user_weight_scale;
     }
 
     /* ================================================================
@@ -1602,7 +1669,7 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
                 V_keep[i * K_keep + j] /= stdev_x[keep_idx[i]] * stdev_x[keep_idx[j]];
     }
 
-    ST_double ll = ppml_compute_loglik(y, mu, w_user_compact, N);
+    ST_double ll = ppml_compute_loglik(y, eta, offset_compact, log(stdev_y), w_user_compact, N);
 
     /* Compute log-likelihood of null model (intercept only): ll_0 */
     ST_double y_mean = 0.0, w_sum = 0.0;
@@ -1613,15 +1680,9 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
     }
     y_mean /= w_sum;
     if (y_mean < 1e-18) y_mean = 1e-18;
-    ST_double ll_0 = 0.0;
-    for (i = 0; i < N; i++) {
-        ST_double w_u = (w_user_compact != NULL) ? w_user_compact[i] : 1.0;
-        if (y[i] > 0.0) {
-            ll_0 += w_u * (y[i] * log(y_mean) - y_mean - lgamma(y[i] + 1.0));
-        } else {
-            ll_0 += w_u * (-y_mean);
-        }
-    }
+    /* the same evaluation as ll, so that 1 - ll/ll_0 cancels consistently */
+    for (i = 0; i < N; i++) fe_work[i] = log(y_mean);
+    ST_double ll_0 = ppml_compute_loglik(y, fe_work, NULL, 0.0, w_user_compact, N);
 
     if (SF_scal_use("__cppmlhdfe_sample_idx", &val) == 0)
         sample_var_idx = (ST_int)val;
@@ -1678,7 +1739,7 @@ ppml_cleanup:
     free(cluster_raw_values);
     free(mu); free(eta);
     free(z_orig); free(aug_copy);
-    free(xtx); free(xty); free(irls_beta); free(inv_xx); free(sep_m); free(xb_work);
+    free(xtx); free(xty); free(irls_beta); free(inv_xx); free(sep_m); free(xb_work); free(fe_work);
     free(xty_dd);
     if (irls_keep_idx) free(irls_keep_idx);
     if (xtx_k) free(xtx_k);

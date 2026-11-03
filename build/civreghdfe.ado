@@ -132,66 +132,73 @@ program define civreghdfe, eclass
     * Format: depvar [exog_before] (endog1 endog2 = inst1 inst2 inst3) [exog_after]
     local 0 `"`0'"'
 
-    * First get everything before the opening parenthesis
-    gettoken before_paren rest : 0, parse("(")
-    local before_paren = strtrim("`before_paren'")
-
-    * First token of before_paren is depvar, rest is exogenous vars before parentheses
-    gettoken depvar exog_before : before_paren
+    * FV groups and lag ranges also contain parentheses. Only a balanced
+    * outer group with an equals sign at its own depth is an IV equation.
+    gettoken depvar model : 0
     local depvar = strtrim("`depvar'")
-    local exog_before = strtrim("`exog_before'")
-
-    * Check for parentheses containing endogenous = instruments
-    * If no parentheses, treat remaining vars as exogenous and run as OLS (no IV)
-    local is_iv_model = 0
-    if strpos("`rest'", "(") == 0 {
-        * No IV specification - treat rest as exogenous vars, run as OLS
-        local exog_after = strtrim("`rest'")
-        local paren_content ""
-        local endogvars ""
-        local instruments ""
-    }
-    else {
-        local is_iv_model = 1
-
-        * Extract content within parentheses
-        local rest = strtrim("`rest'")
-        if substr("`rest'", 1, 1) == "(" {
-            local rest = substr("`rest'", 2, .)
-        }
-
-        local paren_end = 0
-        local paren_depth = 1
-        forvalues pos = 1/`=strlen("`rest'")' {
-            local char = substr("`rest'", `pos', 1)
-            if "`char'" == "(" local ++paren_depth
-            if "`char'" == ")" local --paren_depth
-            if `paren_depth' == 0 {
-                local paren_end = `pos'
-                continue, break
+    local depth = 0
+    local group_eq = 0
+    local eq_count = 0
+    local iv_start = 0
+    local iv_end = 0
+    local iv_eq = 0
+    local model_length = strlen("`model'")
+    if `model_length' > 0 {
+        forvalues pos = 1/`model_length' {
+            local char = substr("`model'", `pos', 1)
+            if "`char'" == "(" {
+                if `depth' == 0 {
+                    local group_start = `pos'
+                    local group_eq = 0
+                }
+                local ++depth
+            }
+            else if "`char'" == "=" {
+                if `depth' != 1 | `group_eq' != 0 error 198
+                local group_eq = `pos'
+            }
+            else if "`char'" == ")" {
+                local --depth
+                if `depth' < 0 error 198
+                if `depth' == 0 & `group_eq' == 0 {
+                    * Without "=", the group must belong to an operator, as in
+                    * c.(x1 x2), i.a#(b c) or L(1/2).x; otherwise an IV
+                    * equation is missing its equals sign.
+                    local before = cond(`group_start' > 1, substr("`model'", `group_start'-1, 1), "")
+                    local after = substr("`model'", `pos'+1, 1)
+                    if !inlist("`before'", ".", "#") & "`after'" != "." {
+                        di as error "Must specify instruments after '=' in parentheses"
+                        exit 198
+                    }
+                }
+                if `depth' == 0 & `group_eq' != 0 {
+                    local ++eq_count
+                    if `eq_count' > 1 error 198
+                    local iv_start = `group_start'
+                    local iv_end = `pos'
+                    local iv_eq = `group_eq'
+                }
             }
         }
-        if `paren_end' == 0 {
-            di as error "Unmatched parenthesis in variable specification"
-            exit 198
-        }
-
-        local paren_content = substr("`rest'", 1, `paren_end' - 1)
-        local exog_after = strtrim(substr("`rest'", `paren_end' + 1, .))
-
-        * Parse endogenous = instruments
-        local eq_pos = strpos("`paren_content'", "=")
-        if `eq_pos' == 0 {
-            di as error "Must specify instruments after '=' in parentheses"
-            exit 198
-        }
-
-        local endogvars = strtrim(substr("`paren_content'", 1, `eq_pos' - 1))
-        local instruments = strtrim(substr("`paren_content'", `eq_pos' + 1, .))
     }
-
-    * Combine exogenous variables from before and after parentheses
-    local exogvars `exog_before' `exog_after'
+    if `depth' != 0 {
+        di as error "Unmatched parenthesis in variable specification"
+        exit 198
+    }
+    local is_iv_model = (`eq_count' == 1)
+    local endogvars
+    local instruments
+    local exogvars `model'
+    if `is_iv_model' {
+        local endogvars = strtrim(substr("`model'", `iv_start'+1, `iv_eq'-`iv_start'-1))
+        local instruments = strtrim(substr("`model'", `iv_eq'+1, `iv_end'-`iv_eq'-1))
+        * (=z) adds excluded instruments without endogenous regressors, as
+        * ivreghdfe allows; an equation without instruments is an error.
+        if "`instruments'" == "" error 198
+        local exog_before = substr("`model'", 1, `iv_start'-1)
+        local exog_after = substr("`model'", `iv_end'+1, .)
+        local exogvars `exog_before' `exog_after'
+    }
     local exogvars = strtrim("`exogvars'")
 
     * Validate dependent variable exists and is numeric (error 109 for string vars)
@@ -936,8 +943,10 @@ program define civreghdfe, eclass
         local fe_nested_`g' = 0
     }
 
-    * Read nested FE detection from C plugin (computed during plugin call)
-    if `vce_type' == 2 & "`cluster_var'" != "" {
+    * Read nested FE detection from C plugin (computed during plugin call):
+    * an effect nested in either cluster dimension (or in the Driscoll-Kraay
+    * time clusters)
+    if inlist(`vce_type', 2, 3, 4) {
         forval g = 1/`G' {
             capture local fe_nested_`g' = __civreghdfe_fe_nested_`g'
             if _rc != 0 local fe_nested_`g' = 0
@@ -1074,7 +1083,17 @@ program define civreghdfe, eclass
     * Post results
     ereturn clear
     local depname_use = cond("`depname'" != "", "`depname'", "`depvar'")
+    * No buildfvinfo, as in ivreghdfe: the constant is partialled out, and
+    * without _cons in e(b) Stata's estimability check rejects estimable
+    * margins such as dydx() over factor interactions.
     ereturn post `b_temp' `V_temp', esample(`touse') depname(`depname_use')
+    * The weights and margins permissions, which postestimation commands reuse
+    if `has_weights' {
+        ereturn local wtype "`weight'"
+        ereturn local wexp `"=`weight_expr'"'
+    }
+    ereturn local marginsok "XB default"
+    if `K_endog' > 0 ereturn local marginsnotok "Residuals SCores"
 
     * Store scalars
     ereturn scalar N = `N_used'
@@ -1126,6 +1145,9 @@ program define civreghdfe, eclass
     ereturn local exogvars "`exogvars'"
     ereturn local instruments "`instruments'"
     ereturn local absorb "`absorb_names'"
+    * partial(): the partialled-out terms, which e(b) leaves out (predict needs them)
+    ereturn scalar partial_ct = `n_partial'
+    if `n_partial' > 0 ereturn local partial "`partial_terms'"
 
     * Set title and estimation method based on est_method
     if `est_method' == 1 {
@@ -1427,8 +1449,12 @@ program define civreghdfe, eclass
         di as text "{hline 78}"
         di as text "First-stage regression summary statistics"
         di as text "{hline 78}"
+        * denominator df of the first-stage F (G-1 with clusters, as ivreg2)
+        local fs_df_r = `df_r'
+        capture confirm scalar __civreghdfe_F1df_r_1
+        if _rc == 0 local fs_df_r = scalar(__civreghdfe_F1df_r_1)
         di as text _col(20) "Partial" _col(32) "F(" as result `K_inst_excl' as text "," ///
-            as result `df_r' as text ")" _col(52) "Prob > F"
+            as result `fs_df_r' as text ")" _col(52) "Prob > F"
 
         forvalues e = 1/`K_endog' {
             local endogvar : word `e' of `endogvars'
@@ -1437,7 +1463,7 @@ program define civreghdfe, eclass
             if _rc == 0 {
                 local F_val = `temp_F'
                 local r2_val = `temp_r2'
-                local p_val = Ftail(`K_inst_excl', `df_r', `F_val')
+                local p_val = Ftail(`K_inst_excl', `fs_df_r', `F_val')
                 di as text abbrev("`endogvar'", 15) _col(20) as result %8.4f `r2_val' ///
                     _col(32) as result %12.2f `F_val' _col(52) as result %10.4f `p_val'
 
@@ -1782,41 +1808,21 @@ program define civreghdfe, eclass
     di as text " Absorbed FE {c |} Categories  - Redundant  = Num. Coefs {c |}"
     di as text "{hline 13}{c +}{hline 39}{c RT}"
 
-    * Display each FE with its components
-    * Redundancy calculation uses connected components (mobility groups) from C:
-    * - G == 1: no redundancy (0)
-    * - G >= 2: second FE gets mobility_groups redundant (from connected components)
-    * - G > 2: each additional FE gets 1 redundant
-    * - Nested FEs: all levels are redundant
+    * Display each FE with its components: the redundant coefficients the
+    * plugin counted as reghdfe does (nested FEs: all levels are redundant)
     local total_coefs = 0
     local has_nested = 0
     forval g = 1/`G' {
         local fevar : word `g' of `absorb_names'
         local cats = `fe_levels_`g''
-        * For nested FEs: all levels are redundant
+        capture local redundant = scalar(__civreghdfe_fe_redundant_`g')
+        if _rc local redundant = 0
         if `fe_nested_`g'' == 1 {
             local redundant = `cats'
             local has_nested = 1
             local nested_marker "*"
         }
         else {
-            if `g' == 1 {
-                * First FE: no redundancy
-                local redundant = 0
-            }
-            else if `g' == 2 {
-                * Second FE: redundancy = mobility_groups (connected components)
-                local redundant = `mobility_groups'
-                * For G > 2, mobility_groups includes (G-2) extra, but we want
-                * the second FE to show only the base mobility groups
-                if `G' > 2 {
-                    local redundant = `mobility_groups' - (`G' - 2)
-                }
-            }
-            else {
-                * Third+ FE: 1 redundant each
-                local redundant = 1
-            }
             local nested_marker " "
         }
         local coefs = `cats' - `redundant'

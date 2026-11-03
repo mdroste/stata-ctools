@@ -164,6 +164,21 @@ int cio_scan_xls(cio_dataset *dataset, const char *path)
             rc = 601;
             goto done;
         }
+        /* Chart, macro and module sheets hold no worksheet data. */
+        if (!cio_xls_is_worksheet(w, (unsigned)which))
+        {
+            ctools_error("cimport", "%s is not a worksheet", sheet);
+            rc = 601;
+            goto done;
+        }
+    }
+    else
+    {
+        /* Without sheet(), the first worksheet; only non-worksheets: no data. */
+        while ((unsigned)which < w->sheets.count && !cio_xls_is_worksheet(w, (unsigned)which))
+            which++;
+        if (w->sheets.count && (unsigned)which == w->sheets.count)
+            goto done;
     }
     if (!w->sheets.count)
     {
@@ -208,6 +223,7 @@ int cio_scan_xls(cio_dataset *dataset, const char *path)
                     c1 = c;
             }
     /* Explicit blank cells and ROW records also belong to the used range. */
+    int used_r1 = r1;
     if (r1 >= 0)
     {
         r1 = ws->rows.lastrow;
@@ -227,6 +243,19 @@ int cio_scan_xls(cio_dataset *dataset, const char *path)
         }
         if (*end || r1 < r0 || c1 < c0)
         {
+            rc = 198;
+            goto done;
+        }
+        /* Like native, the range must lie within the worksheet's data area. */
+        int last_row = used_r1 < 0 ? -1 : ws->rows.lastrow, last_col = used_r1 < 0 ? -1 : ws->rows.lastcol;
+        const char *outside = c0 > last_col ? "column range in option cellrange();\n    The upper left column is right of the data area in the worksheet."
+                              : c1 > last_col ? "column range in option cellrange();\n    The lower right column is right of the data area in the worksheet."
+                              : r0 > last_row ? "row range in option cellrange();\n    The upper left row is after the data area in the worksheet."
+                              : r1 > last_row ? "row range in option cellrange();\n    The lower right row is after the data area in the worksheet."
+                                              : NULL;
+        if (outside)
+        {
+            ctools_error("cimport", "invalid %s", outside);
             rc = 198;
             goto done;
         }

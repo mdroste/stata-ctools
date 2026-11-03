@@ -842,6 +842,194 @@ foreach sample in unequal singleton_treated singleton_control {
 }
 set linesize `caller_linesize'
 
+* _weight is missing for unused controls and rows off support, as psmatch2
+* leaves it, so "if _weight<." selects the matched sample.
+print_section "_weight missing pattern"
+clear
+set obs 600
+set seed 4242
+gen x1 = rnormal()
+gen x2 = rnormal()
+gen treat = (0.3*x1 + 0.2*x2 + rnormal() > 0)
+gen y = 2*treat + x1 + 0.5*x2 + rnormal()
+gen byte half = mod(_n, 2)
+foreach opts in "" "neighbor(3)" "caliper(0.01)" "radius caliper(0.1)" "kernel" ///
+    "kernel kerneltype(biweight)" "kernel kerneltype(uniform)" "kernel kerneltype(tricube)" ///
+    "common" "logit" "neighbor(3) common logit" "kernel common" "radius caliper(0.05) common" {
+    foreach sample in "" "if half" {
+        capture drop _pscore _weight _treated _support _nn _id _n1 _n2 _n3 _pdif _y
+        capture drop ref_weight
+        quietly psmatch2 treat x1 x2 `sample', outcome(y) `opts'
+        quietly gen double ref_weight = _weight
+        capture drop _pscore _weight _treated _support _nn _id _n1 _n2 _n3 _pdif _y
+        quietly cpsmatch treat x1 x2 `sample', outcome(y) `opts'
+        assert_var_equal _weight ref_weight $DEFAULT_SIGFIGS "_weight equals psmatch2: `opts' `sample'"
+    }
+}
+capture drop _pscore _weight _treated _support _nn _id _n1 _n2 _n3 _pdif _y ref_weight
+* SECTION: psmatch2's matching rules, match by match
+* _cpsm_parity runs psmatch2 and cpsmatch with the same options and compares
+* r(att) and its standard error, _support, the control weights (psmatch2's
+* missing as 0), and for nearest-neighbor matching each treated row's first
+* match and number of matches. psmatch2 itself is the reference: without
+* replacement its greedy forward scan (match_pscore), the first control of a
+* tied run, a strict caliper, and kernel weights over every control with
+* caliper() ignored.
+capture program drop _cpsm_parity
+program define _cpsm_parity
+    syntax varlist(numeric), testname(string) [OUTcome(varname) OPTions(string)]
+    gettoken treat covars : varlist
+    tempvar obs ref_w ref_s ref_nn ref_m byid
+    quietly gen long `obs' = _n
+    local outopt = cond("`outcome'" != "", "outcome(`outcome')", "")
+    capture quietly psmatch2 `treat' `covars', `outopt' `options'
+    local rc_ref = _rc
+    local att_ref = r(att)
+    local se_ref = r(seatt)
+    local has_nn = 0
+    if !`rc_ref' {
+        quietly gen double `ref_w' = cond(missing(_weight), 0, _weight)
+        quietly gen byte `ref_s' = _support
+        capture confirm variable _n1
+        if !_rc {
+            local has_nn = 1
+            quietly gen double `ref_nn' = cond(missing(_nn), 0, _nn)
+            sort _id
+            quietly gen long `byid' = `obs'
+            quietly gen long `ref_m' = `byid'[_n1] if _n1 < .
+            sort `obs'
+        }
+    }
+    capture drop _pscore _weight _treated _support _nn _id _pdif
+    capture drop _n*
+    if "`outcome'" != "" capture drop _`outcome'
+    capture quietly cpsmatch `treat' `covars', `outopt' `options'
+    local rc_ct = _rc
+    if `rc_ref' | `rc_ct' {
+        if `rc_ref' == `rc_ct' test_pass "`testname': same error"
+        else test_fail "`testname'" "rc psmatch2=`rc_ref' cpsmatch=`rc_ct'"
+        exit
+    }
+    local att_ct = r(att)
+    local se_ct = r(att_se)
+    local bad
+    foreach stat in att se {
+        if missing(``stat'_ref') | missing(``stat'_ct') {
+            if missing(``stat'_ref') != missing(``stat'_ct') local bad `bad' `stat':`=``stat'_ref''!=`=``stat'_ct''
+        }
+        else {
+            sigfigs ``stat'_ref' ``stat'_ct'
+            if r(sigfigs) < $DEFAULT_SIGFIGS local bad `bad' `stat':`=``stat'_ref''!=`=``stat'_ct''
+        }
+    }
+    quietly count if _support != `ref_s'
+    if r(N) local bad `bad' _support:`r(N)'
+    tempvar wsf
+    quietly gen double `wsf' = cond(missing(_weight), 0, _weight)
+    quietly count if _treated == 0 & reldif(`wsf', `ref_w') > 10^-$DEFAULT_SIGFIGS
+    if r(N) local bad `bad' _weight:`r(N)'
+    if `has_nn' {
+        quietly count if _treated == 1 & cond(missing(_nn), 0, _nn) != `ref_nn'
+        if r(N) local bad `bad' _nn:`r(N)'
+        quietly count if _treated == 1 & `ref_m' < . & _id != `ref_m'
+        if r(N) local bad `bad' match:`r(N)'
+        quietly count if _treated == 1 & `ref_m' >= . & _id < .
+        if r(N) local bad `bad' unmatched:`r(N)'
+    }
+    if "`bad'" == "" test_pass "`testname'"
+    else test_fail "`testname'" "`bad'"
+    capture drop _pscore _weight _treated _support _nn _id
+end
+
+* Without replacement: the 5-row case where the forward scan passes over a
+* closer control on the left
+clear
+input t ps y
+0 .25 10
+0 .30 20
+0 .50 40
+1 .29 100
+1 .31 200
+end
+_cpsm_parity t, outcome(y) options(pscore(ps) noreplacement) testname("norepl: forward scan")
+_cpsm_parity t, outcome(y) options(pscore(ps) noreplacement descending) testname("norepl: forward scan, descending")
+* Ordinary continuous data, many seeds
+forvalues s = 1/20 {
+    clear
+    quietly set obs 500
+    set seed `s'
+    gen x1 = rnormal()
+    gen x2 = rnormal()
+    gen treat = (0.8*x1 + 0.5*x2 + rnormal() > 0.3)
+    gen y = 2*treat + x1 + 0.5*x2 + rnormal()
+    _cpsm_parity treat x1 x2, outcome(y) options(noreplacement) testname("norepl: seed `s'")
+    if mod(`s', 4) == 0 {
+        _cpsm_parity treat x1 x2, outcome(y) options(noreplacement descending) testname("norepl descending: seed `s'")
+        _cpsm_parity treat x1 x2, outcome(y) options(noreplacement caliper(.01)) testname("norepl caliper: seed `s'")
+    }
+}
+* Tied scores: noreplacement with and without ties, default and neighbor(k)
+foreach s in 12345 2 3 {
+    clear
+    set seed `s'
+    quietly set obs 2000
+    gen t = runiform() < .3
+    gen ps = round(runiform()*.6 + .2*t, .01)
+    gen y = rnormal() + 2*t + 10*ps
+    foreach o in "" "ties" "noreplacement" "noreplacement ties" "neighbor(3)" "caliper(.005)" "noreplacement caliper(.005)" {
+        _cpsm_parity t, outcome(y) options(pscore(ps) `o') testname("tied scores `s': `o'")
+    }
+}
+* Tied runs and the caliper boundary
+clear
+input t ps y
+0 .2 10
+0 .2 20
+1 .3 50
+end
+foreach o in "" "noreplacement" "ties" {
+    _cpsm_parity t, outcome(y) options(pscore(ps) `o') testname("tied run below: `o'")
+}
+clear
+input t ps y
+0 .2 10
+0 .2 20
+0 .2 40
+1 .3 50
+end
+_cpsm_parity t, outcome(y) options(pscore(ps) neighbor(2)) testname("tied run below: neighbor(2)")
+clear
+input t ps y
+0 .25 10
+1 .5 50
+end
+foreach o in "" "noreplacement" {
+    _cpsm_parity t, outcome(y) options(pscore(ps) caliper(.25) `o') testname("caliper boundary: `o'")
+}
+* Kernel matching: the normal kernel over every control, caliper() ignored
+clear
+input t ps y
+0 .1 0
+0 .2 10
+1 .7 5
+end
+_cpsm_parity t, outcome(y) options(pscore(ps) kernel kerneltype(normal)) testname("normal kernel: far control")
+clear
+quietly set obs 102
+gen t = _n == 102
+gen ps = cond(_n == 1, .5 - 5.9*.06, cond(_n <= 101, .5 - 6.5*.06, .5))
+gen y = cond(_n == 1, 0, cond(_n <= 101, 100, 1000))
+_cpsm_parity t, outcome(y) options(pscore(ps) kernel kerneltype(normal)) testname("normal kernel: weight beyond 6 bandwidths")
+clear
+set seed 1
+quietly set obs 400
+gen t = runiform() < .4
+gen ps = runiform()*.5 + .2*t
+gen y = rnormal() + ps*5 + t
+_cpsm_parity t, outcome(y) options(pscore(ps) kernel caliper(.02)) testname("kernel ignores caliper")
+_cpsm_parity t, outcome(y) options(pscore(ps) kernel kerneltype(normal)) testname("normal kernel: dense")
+_cpsm_parity t, outcome(y) options(pscore(ps) kernel kerneltype(normal) caliper(.02)) testname("normal kernel ignores caliper")
+
 * SUMMARY
 noi print_summary "cpsmatch"
 }

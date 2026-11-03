@@ -1064,6 +1064,30 @@ typedef struct {
 } xlsx_chunk_args_t;
 
 
+/* Well-formed UTF-8 (no overlong forms, surrogates or values past U+10FFFF),
+ * without U+FFFE and U+FFFF, which XML cannot carry. */
+static bool xlsx_valid_utf8(const char *text)
+{
+    const unsigned char *p = (const unsigned char *)text;
+    if (!p) return true;
+    while (*p) {
+        unsigned c = *p;
+        if (c < 0x80) { p++; continue; }
+        int n = c >= 0xC2 && c <= 0xDF ? 1 : c >= 0xE0 && c <= 0xEF ? 2 : c >= 0xF0 && c <= 0xF4 ? 3 : 0;
+        if (!n) return false;
+        unsigned code = c & (0x3F >> n);
+        for (int k = 1; k <= n; k++) {
+            if ((p[k] & 0xC0) != 0x80) return false;
+            code = (code << 6) | (p[k] & 0x3F);
+        }
+        if ((n == 2 && (code < 0x800 || (code >= 0xD800 && code <= 0xDFFF) || code >= 0xFFFE)) ||
+            (n == 3 && (code < 0x10000 || code > 0x10FFFF)))
+            return false;
+        p += n + 1;
+    }
+    return true;
+}
+
 /* Native Excel readers decode ST_Xstring in the shared-string table only.
  * Keep ordinary text inline, and intern text requiring OOXML escapes. */
 static int xlsx_collect_string(XLSXExportContext *ctx, const char *text)
@@ -1735,6 +1759,23 @@ ST_retcode cexport_xlsx_main(const char *args) {
         ctools_filtered_data_free(&filtered);xlsx_context_free(&ctx);return 198;
     }
 
+    /* Text that is not valid UTF-8 cannot be written as XML; native export
+     * excel fails with r(9901) and leaves the destination as it was. */
+    for (int j=0;j<ctx.nvars && !rc;j++) {
+        if (ctx.firstrow && !xlsx_valid_utf8(ctx.varnames[j])) rc=9901;
+        if (ctx.vartypes[j]==0)
+            for (size_t i=0;i<filtered.data.nobs && !rc;i++)
+                if (!xlsx_valid_utf8(filtered.data.vars[j].data.str[i])) rc=9901;
+        if (rc) {
+            char msg[160];
+            snprintf(msg,sizeof(msg),"cexport excel: text in exported column %d is not valid UTF-8\n",j+1);
+            SF_error(msg);
+        }
+    }
+    if (!rc && (!xlsx_valid_utf8(ctx.missing_value) || !xlsx_valid_utf8(ctx.sheet_name))) {
+        SF_error("cexport excel: missing() or sheet() text is not valid UTF-8\n");
+        rc=9901;
+    }
     for (int j=0;j<ctx.nvars && !rc;j++) {
         if (ctx.firstrow) rc=xlsx_collect_string(&ctx,ctx.varnames[j]);
         if (ctx.vartypes[j]==0)

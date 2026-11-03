@@ -81,7 +81,7 @@ based on their propensity score distance from the treated observation.{p_end}
 
 {p2colset 8 20 22 2}{...}
 {p2col:{bf:_pscore}}the propensity score{p_end}
-{p2col:{bf:_weight}}matching weights for each observation{p_end}
+{p2col:{bf:_weight}}matching weights for each observation; missing for unused controls and observations off support{p_end}
 {p2col:{bf:_id}}original observation number of the first matched control{p_end}
 {p2col:{bf:_support}}common support indicator (1 = on support){p_end}
 {p2col:{bf:_treated}}copy of treatment indicator{p_end}
@@ -118,7 +118,8 @@ may be included if there are ties at the boundary.
 valid match. Observations without matches within the caliper are left
 unmatched. The caliper is specified in absolute units of the propensity
 score (e.g., {cmd:caliper(0.05)} means a maximum distance of 0.05 on the
-propensity score scale).
+propensity score scale). As in {cmd:psmatch2}, a match needs a distance
+strictly below the caliper, and kernel matching ignores {opt caliper()}.
 
 {phang}
 {opt radius} specifies radius matching, where each treated observation is
@@ -157,8 +158,15 @@ match also receive {cmd:_support=0}.
 {opt noreplacement} specifies matching without replacement. Each control
 can only be matched to one treated observation. The default is matching
 with replacement. Without replacement, only nearest-neighbor matching with
-{cmd:neighbor(1)} is supported. Equal distances choose the control below the
-treated score before the control above it.
+{cmd:neighbor(1)} is supported. Matching follows {cmd:psmatch2}'s greedy scan:
+treated observations are taken in propensity-score order (see
+{opt descending}), and the search for each starts at the next unused control
+after the previous match and moves in one direction until the distance
+increases, turning backward once the last control is used; treated
+observations left when the scan runs off the controls are off support. With
+replacement or without, the nearest control is the first of equally distant
+controls in score order (the lower score on equal distance), as in
+{cmd:psmatch2}.
 
 {phang}
 {opt ties} specifies that when there are tied matches at the boundary
@@ -286,7 +294,7 @@ least-squares regression of the outcome on treatment, as in {cmd:psmatch2}.
 {synoptset 12 tabbed}{...}
 {p2col 5 12 16 2: Variables}{p_end}
 {synopt:{cmd:_pscore}}estimated or provided propensity score{p_end}
-{synopt:{cmd:_weight}}matching weight for each observation{p_end}
+{synopt:{cmd:_weight}}matching weight for each observation; missing for unused controls and observations off support, as with {cmd:psmatch2}{p_end}
 {synopt:{cmd:_id}}original observation number of the first matched control (treated observations){p_end}
 {synopt:{cmd:_support}}common support indicator (1 = on support, 0 = off){p_end}
 {synopt:{cmd:_treated}}copy of treatment indicator{p_end}

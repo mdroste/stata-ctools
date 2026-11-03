@@ -81,6 +81,21 @@ static void companion(const char *path) {
     }
     checked(readstat_end_writing(w));readstat_writer_free(w);if(fclose(file))exit(1);
 }
+/* A non-integer value label sorted between the integer codes it truncates to. */
+static void nonint(const char *path) {
+    FILE *file=fopen(path,"wb");if(!file)exit(1);
+    readstat_writer_t *w=readstat_writer_init();readstat_set_data_writer(w,output);
+    readstat_variable_t *x=readstat_add_variable(w,"x",READSTAT_TYPE_DOUBLE,0);
+    readstat_label_set_t *labels=readstat_add_label_set(w,READSTAT_TYPE_DOUBLE,"often");
+    readstat_label_double_value(labels,1,"Never");readstat_label_double_value(labels,1.5,"Once or twice");
+    readstat_label_double_value(labels,2,"Often");readstat_label_double_value(labels,3e9,"Too large");
+    readstat_variable_set_label_set(x,labels);
+    checked(readstat_begin_writing_sav(w,file,2));
+    for(int i=0;i<2;i++) {
+        checked(readstat_begin_row(w));checked(readstat_insert_double_value(w,x,i+1));checked(readstat_end_row(w));
+    }
+    checked(readstat_end_writing(w));readstat_writer_free(w);if(fclose(file))exit(1);
+}
 int main(int argc,char **argv) {
     if(argc!=2)return 1;char path[4096];
     snprintf(path,sizeof(path),"%s/fixture.zsav",argv[1]);dataset(path,1);
@@ -89,5 +104,6 @@ int main(int argc,char **argv) {
     snprintf(path,sizeof(path),"%s/formats.sav",argv[1]);formats(path,1);
     snprintf(path,sizeof(path),"%s/formats.sas7bdat",argv[1]);formats(path,0);
     snprintf(path,sizeof(path),"%s/raw.v8xpt",argv[1]);companion(path);
+    snprintf(path,sizeof(path),"%s/nonint.sav",argv[1]);nonint(path);
     return 0;
 }

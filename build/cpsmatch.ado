@@ -23,6 +23,9 @@ program define cpsmatch, rclass sortpreserve
     else if _rc != 0 {
         exit _rc
     }
+    * The if is evaluated now, before any helper replaces the r() or e()
+    * results it may name; the matching sample is completed below.
+    marksample touse
 
     * =========================================================================
     * UPFRONT VALIDATION
@@ -157,7 +160,6 @@ program define cpsmatch, rclass sortpreserve
     * Matching sample as psmatch2 builds it: treatment, covariates and the
     * outcome nonmissing, restricted to the score model's e(sample), then a
     * nonmissing score.
-    marksample touse
     capture markout `touse' `outcome'
 
     if "`pscore'" != "" {
@@ -280,8 +282,6 @@ program define cpsmatch, rclass sortpreserve
 
             * psmatch2 default ATT variance: unweighted group variances,
             * with squared match-frequency weights for reused controls.
-            * cpsmatch stores unused controls with zero weight; psmatch2
-            * stores them as missing. Exclude both representations.
             local var0 = scalar(_cpsmatch_var0)
             local sum_weight_squared = scalar(_cpsmatch_w2)
             local att_se = sqrt(`var1'/`n1' + `var0'*`sum_weight_squared'/`n1'^2)

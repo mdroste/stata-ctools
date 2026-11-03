@@ -328,6 +328,17 @@ and use the checked SPI function for numerics. The temporary rows require
 `nobs * stride` bytes: 8 bytes per numeric variable and `width + 1` per string.
 An in-order write (`source == NULL`) copies these rows without another allocation.
 
+Stata keeps `e(sample)` in a hidden column that the plugin cannot reach, so a
+plugin that moves or replaces observations would leave it on the old rows
+(stored `_est_*` samples are ordinary variables and move anyway). When
+`: e(functions)` contains `sample`, `csort` and `cmerge` run
+`_estimates hold <name>, copy varname(<tempvar>)`, include the copy in the
+plugin varlist and `_estimates unhold` afterwards, also after a failure
+(`cmerge` sets using-only rows to 0, as `merge` does). `crangejoin` matches
+`rangejoin`, whose `use` empties `e(sample)`: it holds, drops the copy and
+unholds. `validation/support/esample_helpers.do` compares each against the
+native command.
+
 `cmerge` keeps the copied master rows so it can undo a failed merge. If strings
 are too wide for row storage, it keeps full columns instead. The steps are:
 
@@ -1396,6 +1407,11 @@ returns its results. `_ctools_load.ado` selects the platform's plugin and checks
 its identity. Each wrapper registers that plugin itself because Stata keeps
 registration local to the calling ado. If the platform file is missing, the
 helper may use `ctools.plugin`; an incompatible plugin returns an error.
+The loader is not rclass and leaves the caller's `r()` in place; it returns the
+plugin file and identity in the caller's locals `__ctools_plugin`,
+`__ctools_plugin_version` and `__ctools_plugin_revision`. A wrapper marks its
+`if` straight after `syntax`, before any helper can replace the `r()` or `e()`
+results the condition names, and passes that marker to the plugin.
 
 `_ctools_newvars.ado` checks all proposed output names before creating variables.
 `_ctools_weight.ado` evaluates weight expressions into temporary variables; each

@@ -35,6 +35,13 @@ program define _cencode_impl, rclass
     }
 
     syntax varlist [if] [in], [Generate(string) replace Label(name) NOExtend Verbose THReads(integer 0)]
+    * The if is evaluated now, as encode does, before any helper replaces
+    * the r() or e() results it may name.
+    if `"`if'"' != "" {
+        tempvar __iftouse
+        mark `__iftouse' `if' `in'
+        local if "if `__iftouse'"
+    }
 
     * =========================================================================
     * UPFRONT VALIDATION
@@ -131,12 +138,9 @@ program define _cencode_impl, rclass
     * can be created without first filling it with missing values.
     local __fill = cond(`"`if'`in'"' == "", "fillall", "")
     local __ifflag = cond(`"`if'"' != "", "ifcond", "")
-    * For each plugin call an if is marked and passed last, as a sample
-    * marker the plugin reads in parallel; Stata would answer the if one
-    * observation at a time. The marker is the last variable until it is
-    * dropped after the call, which is then free. With in, which limits the
-    * range, the plugin keeps the if (marking covers every observation).
-    local __ifcond = cond(`"`in'"' == "", "", `"`if'"')
+    * An if was marked once after syntax; the marker is passed last to each
+    * plugin call, which reads it in parallel (Stata would answer the if one
+    * observation at a time).
 
     * =========================================================================
     * Process each variable
@@ -212,13 +216,11 @@ program define _cencode_impl, rclass
         }
         capture scalar drop _cencode_max_len _cencode_protocol _cencode_fallback _cencode_n_new
         local __marker ""
-        if `"`if'"' != "" & `"`in'"' == "" {
-            tempvar __marker
-            mark `__marker' `if'
+        if `"`if'"' != "" {
+            local __marker "`__iftouse'"
             local __ifflag "ifcond touse"
         }
-        plugin call ctools_plugin `srcvar' `destvar' `__marker' `__ifcond' `in', "cencode `threads_code' 1 2 `labelfile_code' stream `__fill' `__ifflag' `__labelmap'"
-        if "`__marker'" != "" drop `__marker'
+        plugin call ctools_plugin `srcvar' `destvar' `__marker' `in', "cencode `threads_code' 1 2 `labelfile_code' stream `__fill' `__ifflag' `__labelmap'"
         local __ce_map ""
         local __ce_labelfile ""
         if `__do_timing' {

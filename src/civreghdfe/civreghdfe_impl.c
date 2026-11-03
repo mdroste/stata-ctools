@@ -323,6 +323,7 @@ static ST_retcode do_iv_regression(void)
     ST_int *cluster_ids = NULL, *cluster2_ids = NULL, *valid_mask = NULL, *singleton_mask = NULL;
     ST_int **fe_levels_c = NULL;
     ST_int *level_max = NULL, *is_partial = NULL, *is_collinear_x = NULL, *test_idx = NULL, *ts_int = NULL;
+    ST_int *fe_redundant = NULL, *fe_nested = NULL;
     ST_double *y_c = NULL, *X_endog_c = NULL, *X_exog_c = NULL, *Z_c = NULL, *weights_c = NULL;
     ST_int *cluster_ids_c = NULL, *cluster2_ids_c = NULL;
     ST_double *all_data = NULL, *beta = NULL, *V = NULL, *first_stage_F = NULL;
@@ -989,12 +990,25 @@ static ST_retcode do_iv_regression(void)
            maps the remaining X_exog columns back to X_exog_c */
     }
 
-    /* Compute df_a (absorbed degrees of freedom) and mobility groups */
+    /* Compute df_a (absorbed degrees of freedom) and mobility groups. The
+       redundant coefficients of each effect are counted as reghdfe counts
+       them (the HDFE object behind ivreghdfe's absorb_ct), with every pair of
+       effects examined; the counts are redone below once the cluster nesting
+       is known. */
     ST_int df_a = 0;
     ST_int df_a_nested = 0;  /* Levels from FE nested within cluster */
     ST_int mobility_groups = 0;
 
-    ctools_compute_hdfe_dof(state->factors, G, N, 0, &df_a, &mobility_groups);
+    fe_redundant = (ST_int *)ctools_safe_calloc2((size_t)(G > 0 ? G : 1), sizeof(ST_int));
+    fe_nested = (ST_int *)ctools_safe_calloc2((size_t)(G > 0 ? G : 1), sizeof(ST_int));
+    if (!fe_redundant || !fe_nested ||
+        ctools_hdfe_redundant_intercepts(state->factors, G, N, NULL, CTOOLS_DOF_PAIRWISE, fe_redundant)) {
+        SF_error("civreghdfe: Memory allocation failed for the absorbed degrees of freedom\n");
+        iv_rc = 920;
+        goto iv_cleanup;
+    }
+    for (ST_int g = 0; g < G; g++) df_a += state->factors[g].num_levels - fe_redundant[g];
+    if (G >= 2) mobility_groups = fe_redundant[1] + (G - 2);
 
     for (ST_int g = 0; g < G; g++) {
         /* Save per-FE num_levels to Stata scalars for absorbed DOF table */
@@ -1042,30 +1056,57 @@ static ST_retcode do_iv_regression(void)
     }
 
     /* Detect FEs nested within cluster variable using data-based check.
-     * This works for both numeric and string cluster variables. */
+     * This works for both numeric and string cluster variables. As in
+     * reghdfe, an effect nested in either dimension of a two-way cluster is
+     * wholly redundant, and the redundant coefficients of the other effects
+     * are counted with the nested ones set aside. df_a keeps the nested
+     * levels; df_a_for_vce = df_a - df_a_nested is reghdfe's df_a. Kiefer's
+     * "cluster" is the panel variable of the HAC lag structure, not a
+     * clustering, so nothing is nested there (ivreghdfe's absorb_ct is the
+     * full df_a). */
     /* A failed allocation must not silently skip the detection: it changes
      * the cluster dof */
-    if (has_cluster) {
+    if (has_cluster && !kiefer) {
         df_a_nested = 0;
         for (ST_int g = 0; g < G; g++) {
             ST_int is_nested = ctools_fe_nested_in_cluster(
                 state->factors[g].levels, state->factors[g].num_levels,
                 cluster_ids_c, N);
+            if (is_nested == 0 && has_cluster2)
+                is_nested = ctools_fe_nested_in_cluster(
+                    state->factors[g].levels, state->factors[g].num_levels,
+                    cluster2_ids_c, N);
             if (is_nested < 0) {
                 SF_error("civreghdfe: Memory allocation failed for the nesting check\n");
                 iv_rc = 920;
                 goto iv_cleanup;
             }
+            fe_nested[g] = is_nested;
             if (is_nested) df_a_nested += state->factors[g].num_levels;
-
-            char scalar_name[64];
-            snprintf(scalar_name, sizeof(scalar_name), "__civreghdfe_fe_nested_%d", (int)(g + 1));
-            if ((iv_rc = ctools_scal_save(scalar_name, (ST_double)is_nested)))
+        }
+        if (df_a_nested > 0) {
+            if (ctools_hdfe_redundant_intercepts(state->factors, G, N, fe_nested,
+                                                 CTOOLS_DOF_PAIRWISE, fe_redundant)) {
+                SF_error("civreghdfe: Memory allocation failed for the absorbed degrees of freedom\n");
+                iv_rc = 920;
                 goto iv_cleanup;
+            }
+            df_a = 0;
+            for (ST_int g = 0; g < G; g++)
+                df_a += state->factors[g].num_levels - (fe_nested[g] ? 0 : fe_redundant[g]);
         }
         /* Recompute VCE DOF with data-based nesting results */
         df_a_for_vce = df_a - df_a_nested;
         nested_adj = (df_a_nested > 0) ? 1 : 0;
+    }
+    for (ST_int g = 0; g < G; g++) {
+        char scalar_name[64];
+        snprintf(scalar_name, sizeof(scalar_name), "__civreghdfe_fe_nested_%d", (int)(g + 1));
+        if ((iv_rc = ctools_scal_save(scalar_name, (ST_double)fe_nested[g])))
+            goto iv_cleanup;
+        snprintf(scalar_name, sizeof(scalar_name), "__civreghdfe_fe_redundant_%d", (int)(g + 1));
+        if ((iv_rc = ctools_scal_save(scalar_name, (ST_double)fe_redundant[g])))
+            goto iv_cleanup;
     }
 
     /* For Kiefer, the panel variable is set as "cluster" for HAC lag structure,
@@ -1202,7 +1243,34 @@ static ST_retcode do_iv_regression(void)
          * flagged; the rest are screened on the equilibrated X'X, which keeps
          * mixed-scale variables (e.g., x_tiny / x_huge) from producing false
          * positives. */
-        ST_int num_chol_collinear = detect_collinearity_scaled(XtX, K_total, is_collinear_x, verbose);
+        /* Without absorbed effects the constant is the last exogenous
+           column; ivreg2 screens it first, so a regressor that is constant
+           on the sample (or a full set of dummies) is omitted, not _cons.
+           Screen in the order [_cons, other exog, endog], then map back. */
+        ST_double has_cons_flag = 0;
+        SF_scal_use("__civreghdfe_has_cons", &has_cons_flag);
+        ST_int num_chol_collinear;
+        if (G == 0 && has_cons_flag != 0 && K_exog > 1) {
+            ST_int *perm = (ST_int *)malloc((size_t)K_total * sizeof(ST_int));
+            ST_int *flags_p = (ST_int *)malloc((size_t)K_total * sizeof(ST_int));
+            ST_double *XtX_p = (ST_double *)ctools_safe_malloc3((size_t)K_total, (size_t)K_total, sizeof(ST_double));
+            num_chol_collinear = -1;
+            if (perm && flags_p && XtX_p) {
+                perm[0] = K_exog - 1;
+                for (ST_int k = 1; k < K_exog; k++) perm[k] = k - 1;
+                for (ST_int k = K_exog; k < K_total; k++) perm[k] = k;
+                for (ST_int jj = 0; jj < K_total; jj++) {
+                    flags_p[jj] = is_collinear_x[perm[jj]];
+                    for (ST_int ii = 0; ii < K_total; ii++)
+                        XtX_p[(size_t)jj * K_total + ii] = XtX[(size_t)perm[jj] * K_total + perm[ii]];
+                }
+                num_chol_collinear = detect_collinearity_scaled(XtX_p, K_total, flags_p, verbose);
+                for (ST_int jj = 0; jj < K_total; jj++) is_collinear_x[perm[jj]] = flags_p[jj];
+            }
+            free(perm); free(flags_p); free(XtX_p);
+        } else {
+            num_chol_collinear = detect_collinearity_scaled(XtX, K_total, is_collinear_x, verbose);
+        }
         free(XtX);
 
         if (num_chol_collinear < 0) {
@@ -1638,6 +1706,7 @@ iv_cleanup:
         free(fe_levels_c);
     }
     free(level_max); free(is_partial); free(is_collinear_x); free(test_idx); free(ts_int);
+    free(fe_redundant); free(fe_nested);
     free(all_data); free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
     free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
     free(beta); free(V); free(first_stage_F);

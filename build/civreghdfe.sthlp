@@ -63,7 +63,7 @@
 {synopt:{opt first}}report first-stage regression statistics{p_end}
 {synopt:{opt ffir:st}}report full first-stage statistics (partial R², F-stat){p_end}
 {synopt:{opt rf}}report reduced-form estimates{p_end}
-{synopt:{opt coviv}}display covariance matrix of IV estimators{p_end}
+{synopt:{opt coviv}}LIML and k-class covariance from the 2SLS form (X'P_Z X)^-1{p_end}
 {synopt:{opt v:erbose}}display progress and elapsed times{p_end}
 
 {syntab:Display}
@@ -281,7 +281,10 @@ to display a formatted first-stage summary table.
 tabular format. For each endogenous variable, displays the partial R-squared
 (the R² from regressing the endogenous variable on all instruments after
 partialling out exogenous regressors) and the first-stage F-statistic with
-its p-value. These statistics are also stored in {cmd:e()} for each
+its p-value. As in {cmd:ivreg2}, the F-statistic tests the excluded instruments
+under the model's covariance estimator (robust, cluster or kernel when one is
+specified), and its denominator degrees of freedom are G-1 with G clusters.
+These statistics are also stored in {cmd:e()} for each
 endogenous variable (e.g., {cmd:e(partial_r2_1)}, {cmd:e(F_first1)}).
 
 {phang}
@@ -294,7 +297,10 @@ The first-stage and reduced-form regressions of {opt first}, {opt rf},
 dimension only; with two-way clustering these options are an error.
 
 {phang}
-{opt coviv} displays the covariance matrix of the IV estimators.
+{opt coviv} computes the covariance of the LIML, Fuller and k-class estimators
+with the 2SLS form: (X'P_Z X)^-1 replaces the k-class (X'(I-kM_Z)X)^-1 in the
+classical covariance and in the robust, cluster and kernel sandwiches, as in
+{cmd:ivreg2}. It has no effect on other estimators.
 
 {phang}
 {opt verbose} displays progress and elapsed times.
@@ -438,6 +444,14 @@ specify {opt residuals(newvar)} during estimation first. The option
 {pstd}
 {cmd:predict newvar, xbd} returns y minus the saved residual, including absorbed
 effects. It requires saved residuals and is missing outside {cmd:e(sample)}.
+
+{pstd}
+After {opt partial()}, {cmd:e(b)} omits the partialled-out terms
+({cmd:e(partial)}, {cmd:e(partial_ct)}). Without {opt absorb()}, as with
+{cmd:ivreg2}, only {opt residuals} can be predicted: y - Xb net of its
+projection on the partialled-out terms, which equals the full model's
+residual. With {opt absorb()}, {opt xb} and {opt stdp} refer to the posted
+coefficients, as with {cmd:ivreghdfe}.
 
 {marker examples}{...}
 {title:Examples}
@@ -583,6 +597,9 @@ effects. It requires saved residuals and is missing outside {cmd:e(sample)}.
 {synopt:{cmd:e(kernel)}}kernel of a kernel-based VCE: Bartlett, Parzen, Quadratic Spectral, Truncated or Tukey-Hanning{p_end}
 {synopt:{cmd:e(tvar)}}tsset time variable (kernel-based VCE){p_end}
 {synopt:{cmd:e(ivar)}}tsset panel variable (kernel-based VCE with panel data){p_end}
+{synopt:{cmd:e(wtype)}, {cmd:e(wexp)}}weight type and expression (if weighted){p_end}
+{synopt:{cmd:e(marginsok)}}predictions allowed by {cmd:margins}{p_end}
+{synopt:{cmd:e(marginsnotok)}}predictions disallowed by {cmd:margins} (with endogenous regressors){p_end}
 
 {p2col 5 20 24 2: DOF adjustment scalars (if specified)}{p_end}
 {synopt:{cmd:e(dofminus)}}user-specified DOF adjustment (if {cmd:dofminus()} specified){p_end}

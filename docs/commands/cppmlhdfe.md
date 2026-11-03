@@ -35,6 +35,16 @@ Response standardization uses centered variance. Tight fits additionally check
 stability of identified fitted log-means. Projection failure or exhausted IRLS
 iterations returns 430 instead of posting a converged fit.
 
+Fitted means are floored at 2^-46 (in units of sd(y)) for the IRLS weights
+only, as in `ppmlhdfe`, and never capped; a fitted mean that overflows stops
+the fit with error 430. The log likelihood and deviance are evaluated
+from the linear predictor of the posted coefficients, with the fixed effects
+recovered by one extra projection, the unit deviance in its cancellation-free
+form and the saturated part by Stirling's series. With very wide `offset()` or
+`exposure()` spreads, where some positive outcomes have fitted means far below
+the floor, `ppmlhdfe`'s `e(ll)` and `e(deviance)` (and at the extreme its `b`)
+lose digits; `cppmlhdfe` keeps them, so the two can differ there.
+
 ## Advanced controls
 
 | Purpose | Options and defaults |

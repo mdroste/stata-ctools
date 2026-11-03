@@ -2395,6 +2395,108 @@ else {
         "rc `stata_rc'/`cmerge_rc', N `stata_N'/`cmerge_N', _merge `has_merge'"
 }
 
+* Failed assertions commit updated values, so their sort marker must be valid.
+clear
+set obs 2
+gen byte id = _n
+gen byte x = cond(_n==1,9,1)
+tempfile assert_using
+save `assert_using'
+foreach mode in "" snapshot fast {
+    foreach filtering in "" "keep(master)" {
+        clear
+        set obs 2
+        gen byte id = _n
+        gen byte x = _n
+        sort x
+        capture cmerge 1:1 id using `assert_using', update replace nogenerate ///
+            assert(match) `filtering' `mode' noreport
+        local rc = _rc
+        local marked : sortedby
+        capture assert _N == 2 & id == _n & x == cond(_n == 1, 9, 1)
+        local values_rc = _rc
+        if `rc' == 9 & !`values_rc' & "`marked'" == "" ///
+            test_pass "assert failure keeps replacements and clears sort (`mode' `filtering')"
+        else test_fail "assert failure keeps replacements and clears sort (`mode' `filtering')" ///
+            "rc=`rc', values rc=`values_rc', sortedby=`marked'"
+        csort x
+        capture assert x == cond(_n == 1, 1, 9)
+        if !_rc test_pass "sort after failed assert (`mode' `filtering')"
+        else test_fail "sort after failed assert (`mode' `filtering')" "stale marker skipped sorting"
+    }
+    clear
+    set obs 2
+    gen byte id = _n
+    gen byte x = _n
+    sort x
+    capture cmerge 1:1 id using `assert_using', update replace nogenerate ///
+        assert(5) `mode' noreport
+    local rc = _rc
+    capture assert _N == 2 & id == _n & x == cond(_n == 1, 9, 1)
+    if !`rc' & !_rc test_pass "successful assertion after replacement (`mode')"
+    else test_fail "successful assertion after replacement (`mode')" "rc=`rc', values rc=`=_rc'"
+}
+
+* e(sample) and stored estimation samples follow the master observations, as
+* with merge (0 on using-only observations), also after a failed merge
+do "validation/support/esample_helpers.do"
+clear
+quietly set obs 30
+gen long id = 3 * _n - 20
+gen long grp = mod(_n, 4)
+gen double w = _n / 10
+tempfile es_using es_mgrp
+quietly save `es_using'
+keep in 1/4
+keep grp w
+rename w gw
+quietly save `es_mgrp'
+global CTOOLS_esample_using `es_using'
+global CTOOLS_esample_mgrp `es_mgrp'
+capture program drop _cmerge_esample_setup
+program define _cmerge_esample_setup
+    clear
+    quietly set obs 30
+    gen long id = mod(_n * 11, 31) - 4
+    gen long grp = mod(_n, 4)
+    gen double x = mod(_n * 17, 41) + _n / 100
+    gen double y = x + mod(_n * 7, 5)
+    gen byte g = mod(_n, 3) != 0
+    quietly regress y x if !g
+    estimates store m2
+    quietly regress y x if g
+    estimates store m1
+end
+foreach spec in "1:1 id using $CTOOLS_esample_using" ///
+    "1:1 id using $CTOOLS_esample_using, keep(match)" ///
+    "1:1 id using $CTOOLS_esample_using, keep(master using) nogenerate" ///
+    "1:1 id using $CTOOLS_esample_using, update keepusing(grp)" ///
+    "m:1 grp using $CTOOLS_esample_mgrp" ///
+    "1:1 _n using $CTOOLS_esample_using, keepusing(w)" ///
+    "1:1 id using $CTOOLS_esample_using, assert(match)" {
+    foreach mode in "" "snapshot" "fast" {
+        local cspec `"`spec'"'
+        if "`mode'" != "" {
+            if strpos(`"`spec'"', ",") local cspec `"`spec' `mode'"'
+            else local cspec `"`spec', `mode'"'
+        }
+        _ctools_esample_case, setup(_cmerge_esample_setup) native(merge `spec') ///
+            ctools(cmerge `cspec') testname(`"e(sample) after cmerge `cspec'"') ///
+            sortby(id grp)
+    }
+}
+foreach fault in schema post keep {
+    foreach mode in "" "snapshot" {
+        global CTOOLS_cmerge_fault `fault'
+        _ctools_esample_case, setup(_cmerge_esample_setup) native(error 1) ///
+            ctools(cmerge 1:1 id using $CTOOLS_esample_using, keep(match) `mode') ///
+            testname("e(sample) after a failed cmerge (`fault' `mode')")
+        global CTOOLS_cmerge_fault
+    }
+}
+global CTOOLS_esample_using
+global CTOOLS_esample_mgrp
+
 * End of cmerge validation
 noi print_summary "cmerge"
 }

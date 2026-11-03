@@ -2884,6 +2884,51 @@ foreach ext in csv xlsx xls v8xpt {
     capture erase "`rb_file'.`ext'"
 }
 
+* Float or double for non-integer columns, as import delimited chooses: float
+* unless an integer value (every value past 2^53 is one) leaves the long range.
+print_section "Float and double storage"
+tempname fh
+file open `fh' using "temp/float_range.csv", write text replace
+file write `fh' "a,b,c,d,e,f,g,h,i,j,k,l,m" _n
+file write `fh' "1.5e300,1,2.5,2.5,2.5,2.5,2.5,2.5,2.5,2.5,2.5,2.5,2.5" _n
+file write `fh' "2.5,1e39,3000000000.5,1e38,1e37,1e12,123456789012.5,1e-300,2147483620,2147483621,-2147483647,-2147483648,16777217.5" _n
+file write `fh' "-3e50,5.5,1,2,3,4,5,6,7,8,9,10,11" _n
+file write `fh' "12345678.5,1e38,1,2,3,4,5,6,7,8,9,10,11" _n
+file close `fh'
+* A late integer extreme after many float-cached rows. Above about 262,144
+* rows import delimited no longer honors such a late value (it stores float);
+* cimport keeps double there, so this file stays below that size.
+clear
+set seed 7
+set obs 200000
+gen double u = rnormal() * 1e6
+gen double v = runiform()
+replace v = 4e9 in l
+export delimited u v using "temp/float_late.csv", replace
+foreach file in float_range float_late {
+    foreach t in float double {
+        set type `t'
+        foreach o in "" asfloat asdouble {
+            import delimited using "temp/`file'.csv", clear `o'
+            local ntypes
+            foreach v of varlist _all {
+                local ntypes `ntypes' `: type `v''
+            }
+            tempfile native_float
+            save `native_float', replace
+            cimport delimited using "temp/`file'.csv", clear `o'
+            local ctypes
+            foreach v of varlist _all {
+                local ctypes `ctypes' `: type `v''
+            }
+            capture cf _all using `native_float', all
+            if !_rc & "`ntypes'" == "`ctypes'" test_pass "float storage: `file' type(`t') `o'"
+            else test_fail "float storage: `file' type(`t') `o'" "types `ctypes' vs `ntypes', cf rc=`=_rc'"
+        }
+    }
+}
+set type float
+
 * Cleanup and summary
 
 local files : dir "temp" files "*.csv"

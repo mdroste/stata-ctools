@@ -135,7 +135,10 @@ program p1_matching
     assert y == saved_y
     assert inrange(_pscore,0,1)
     assert _support == 1
-    assert !missing(_weight, r(att))
+    * As psmatch2, unused controls have a missing weight; used rows a positive one
+    assert !missing(r(att))
+    assert !missing(_weight) if _treated == 1
+    assert missing(_weight) | _weight > 0
 end
 
 program p1_labels
@@ -998,7 +1001,8 @@ replace t=2*t
 cpsmatch t, pscore(p) outcome(y)
 assert missing(r(att))
 assert missing(_nn)
-assert _weight==0
+* psmatch2 leaves the controls' _weight missing
+assert missing(_weight) if t==0
 noi di "OCT22_REGRESSIONS_COMPLETE"
     global CTOOLS_CASE_COMPLETE "oct22"
     exit
@@ -1990,10 +1994,10 @@ capture erase "temp/sep24_wide.xlsx"
 
 capture noisily {
     _ctools_load
-    assert "`r(plugin_version)'" != ""
-    local revision "`r(plugin_revision)'"
+    assert "`__ctools_plugin_version'" != ""
+    local revision "`__ctools_plugin_revision'"
     _ctools_load
-    assert "`r(plugin_revision)'" == "`revision'"
+    assert "`__ctools_plugin_revision'" == "`revision'"
 }
 if _rc test_fail "A20 repeated shared plugin loading" "r(`=_rc')"
 else test_pass "A20 repeated shared plugin loading"

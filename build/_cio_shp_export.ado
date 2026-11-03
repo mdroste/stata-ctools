@@ -9,8 +9,11 @@ program define _cio_shp_export, rclass
     if "`id'"=="" local id _ID
     confirm numeric variable `id' _X _Y
     confirm string variable rec_header
-    local shape : char _dta[shp_type]
-    if "`shape'"=="" exit 198
+    * The characteristic may come from someone else's file: read it in Mata
+    * and accept only a number, never re-expanding its text.
+    mata: st_local("shape",strtrim(st_global("_dta[shp_type]")))
+    mata: st_local("shape",st_local("shape")=="" ? "" : strofreal(strtoreal(st_local("shape")),"%12.0g"))
+    if "`shape'"=="" | "`shape'"=="." exit 198
     local __cio_shp_type "`shape'"
     foreach field in xmin ymin xmax ymax zmin zmax mmin mmax {
         local __cio_shp_`field' : char _dta[shp_`field']

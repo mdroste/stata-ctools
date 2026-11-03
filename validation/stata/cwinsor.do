@@ -623,6 +623,72 @@ winsor2 x, by(g) suffix(_expected)
 cwinsor x, by(g) suffix(_actual)
 assert x_actual==x_expected
 local ++cases
+* Integer sources whose cutoff is a midpoint: in place, winsor2's replace
+* promotes the storage; with by(), its cutoffs take the source's type.
+foreach storage in byte int long float double {
+    foreach cuts in "1 99" "10 90" {
+        foreach trim in "" "trim" {
+            foreach by in "" "by(g)" {
+                clear
+                set obs 200
+                gen `storage' x = cond("`storage'" == "byte", mod(_n, 100), _n)
+                if "`storage'" == "long" replace x = 3 * x
+                if inlist("`storage'", "float", "double") replace x = x - .3
+                gen g = _n > 100
+                gen long id = _n
+                quietly winsor2 x, cuts(`cuts') `trim' `by' suffix(_expected)
+                quietly cwinsor x, cuts(`cuts') `trim' `by' suffix(_actual)
+                assert x_actual == x_expected
+                assert "`: type x_actual'" == "`: type x_expected'"
+                drop x_actual x_expected
+                local ++cases
+                preserve
+                quietly winsor2 x, cuts(`cuts') `trim' `by' replace
+                local expected_type : type x
+                rename x x_expected
+                tempfile expected
+                quietly save `expected', replace
+                restore
+                quietly cwinsor x, cuts(`cuts') `trim' `by' replace
+                assert "`: type x'" == "`expected_type'"
+                quietly merge 1:1 id using `expected', nogen
+                assert x == x_expected
+                local ++cases
+            }
+        }
+    }
+}
+clear
+set obs 200
+gen byte x = mod(_n, 100)
+gen byte h = mod(_n, 2)
+gen long id = _n
+preserve
+quietly winsor2 x if h, replace
+local expected_type : type x
+rename x x_expected
+tempfile expected
+quietly save `expected', replace
+restore
+quietly cwinsor x if h, replace
+assert "`: type x'" == "`expected_type'"
+quietly merge 1:1 id using `expected', nogen
+assert x == x_expected
+local ++cases
+* A failure after the promotion restores the original storage and values.
+clear
+set obs 200
+gen int x = _n
+tempfile original
+quietly save `original'
+global CTOOLS_cwinsor_fault "post"
+capture cwinsor x, replace
+local rc = _rc
+global CTOOLS_cwinsor_fault
+assert `rc' == 1
+assert "`: type x'" == "int"
+cf _all using `original', all
+local ++cases
 noi di "WINSOR_ROUNDING_CASES=`cases'"
 noi di "WINSOR_ROUNDING_COMPLETE"
     global CTOOLS_CASE_COMPLETE "winsor_rounding"

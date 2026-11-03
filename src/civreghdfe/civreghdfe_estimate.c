@@ -687,6 +687,61 @@ cue_done:
 }
 
 /*
+    Wald statistic of the excluded instruments in one first-stage regression
+    under the model's non-iid VCE (ivreg2's s_ffirst "robustified" Wald):
+    Rb' (R Vr R')^-1 Rb with Vr = (Z'Z)^-1 S (Z'Z)^-1, S the raw moment
+    covariance (civ_omega_build) of the first-stage residuals. Z holds the
+    K_exog included instruments first; fs_coef are the first-stage
+    coefficients and fitted holds Z*fs_coef on entry (overwritten with the
+    residuals). Returns 0 or 920; *wald is NaN when R Vr R' is unusable.
+*/
+static ST_retcode civ_first_stage_robust_wald(
+    const civ_omega *om, const ST_double *Z, const ST_double *X_e,
+    ST_double *fitted, const ST_double *fs_coef, const ST_double *ZtZ_inv,
+    ST_int N, ST_int K_iv, ST_int K_exog, ST_double *wald)
+{
+    ST_int L1 = K_iv - K_exog;
+    *wald = NAN;
+    if (L1 <= 0) return 0;
+    for (ST_int i = 0; i < N; i++) fitted[i] = X_e[i] - fitted[i];
+
+    ST_double *S = (ST_double *)calloc((size_t)K_iv * K_iv, sizeof(ST_double));
+    ST_double *T = (ST_double *)calloc((size_t)K_iv * L1, sizeof(ST_double));
+    ST_double *RVR = (ST_double *)calloc((size_t)L1 * L1, sizeof(ST_double));
+    ST_double *sol = (ST_double *)calloc((size_t)L1, sizeof(ST_double));
+    ST_retcode rc = (S && T && RVR && sol) ? 0 : 920;
+    if (!rc && civ_omega_build(om, fitted, 1, Z, K_iv, S) != 0) rc = 920;
+    if (!rc) {
+        /* T = S (Z'Z)^-1 R', then R Vr R' = R (Z'Z)^-1 T */
+        for (ST_int b = 0; b < L1; b++) {
+            const ST_double *zinv_b = ZtZ_inv + (size_t)(K_exog + b) * K_iv;
+            for (ST_int k = 0; k < K_iv; k++) {
+                ST_double s = 0.0;
+                for (ST_int j = 0; j < K_iv; j++) s += S[(size_t)j * K_iv + k] * zinv_b[j];
+                T[(size_t)b * K_iv + k] = s;
+            }
+        }
+        for (ST_int b = 0; b < L1; b++) {
+            for (ST_int a = 0; a < L1; a++) {
+                const ST_double *zinv_a = ZtZ_inv + (size_t)(K_exog + a) * K_iv;
+                ST_double s = 0.0;
+                for (ST_int k = 0; k < K_iv; k++) s += zinv_a[k] * T[(size_t)b * K_iv + k];
+                RVR[(size_t)b * L1 + a] = s;
+            }
+        }
+        if (civ_sym_solve(RVR, L1, fs_coef + K_exog, 1, sol) != 0) {
+            rc = 920;
+        } else {
+            ST_double q = 0.0;
+            for (ST_int a = 0; a < L1; a++) q += fs_coef[K_exog + a] * sol[a];
+            if (isfinite(q)) *wald = q;
+        }
+    }
+    free(S); free(T); free(RVR); free(sol);
+    return rc;
+}
+
+/*
     Compute k-class IV estimation (includes 2SLS, LIML, Fuller, etc.)
 
     The k-class estimator is:
@@ -749,7 +804,7 @@ ST_retcode ivest_compute_2sls(
     ST_double *X_hat = NULL, *ZtZ_inv_Zty = NULL;
     ST_double *XtX = NULL, *Xty = NULL, *XkX = NULL, *Xky = NULL;
     ST_double *XkX_copy = NULL, *beta_temp = NULL, *S_main = NULL;
-    ST_double *gmm_hessian_inv = NULL, *XkX_inv = NULL;
+    ST_double *gmm_hessian_inv = NULL, *XkX_inv = NULL, *coviv_bread = NULL;
     civ_omega om;
     memset(&om, 0, sizeof(om));
 
@@ -1419,6 +1474,24 @@ ST_retcode ivest_compute_2sls(
 
     if (!small) dof_adj_s = 1.0;
 
+    /* coviv: LIML, Fuller and k-class take the 2SLS bread (X'PzX)^-1 in
+       place of the k-class (X'(I - kMz)X)^-1, in the iid VCE and in every
+       sandwich (ivreg2's s_liml); other estimators ignore it, as ivreg2 */
+    ST_double *vce_bread_k = XkX_inv;
+    {
+        ST_double coviv_flag = 0;
+        SF_scal_use("__civreghdfe_coviv", &coviv_flag);
+        if (coviv_flag != 0 && est_method >= 1 && est_method <= 3) {
+            coviv_bread = (ST_double *)calloc((size_t)K_total * K_total, sizeof(ST_double));
+            if (!coviv_bread || civ_sym_inverse(XtPzX, K_total, coviv_bread) != 0) {
+                SF_error("civreghdfe: Memory allocation failed for the coviv VCE\n");
+                est_rc = 920;
+                goto est_cleanup;
+            }
+            vce_bread_k = coviv_bread;
+        }
+    }
+
     if (gmm_hessian_inv != NULL) {
         /*
            Efficient GMM2S / CUE VCE (ivreg2's s_egmm, s_gmmcue): with the
@@ -1442,7 +1515,7 @@ ST_retcode ivest_compute_2sls(
         if (df_a == 0 && nested_adj == 1) effective_df_a = 1;
         effective_df_a += n_absorbed_x;
         ST_retcode vce_rc = ivvce_compute_twoway(
-            Z, resid, temp1, XkX_inv,
+            Z, resid, temp1, vce_bread_k,
             weights, weight_type,
             N, N_eff, K_total, K_iv,
             cluster_ids, num_clusters,
@@ -1471,7 +1544,7 @@ ST_retcode ivest_compute_2sls(
                      (int)s_kernel, (int)om.max_lag);
             SF_display(buf);
         }
-        ST_retcode vce_rc = ivvce_compute_sandwich(temp1, S_main, XkX_inv, K_total, K_iv, dof_adj_s, V);
+        ST_retcode vce_rc = ivvce_compute_sandwich(temp1, S_main, vce_bread_k, K_total, K_iv, dof_adj_s, V);
         if (vce_rc) {
             est_rc = vce_rc;
             goto est_cleanup;
@@ -1483,7 +1556,7 @@ ST_retcode ivest_compute_2sls(
         */
         /* For homoskedastic CUE, use 2SLS projection (X'PzX)^{-1} not (XkX)^{-1}
            because CUE VCE = σ²(X'Z(Z'Z)^{-1}Z'X)^{-1} even when coefficients = LIML */
-        ST_double *vce_bread = XkX_inv;
+        ST_double *vce_bread = vce_bread_k;
         ST_double *XtPzX_inv_cue = NULL;
         if (est_method == 5 && !s_noniid) {
             XtPzX_inv_cue = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
@@ -1556,6 +1629,7 @@ ST_retcode ivest_compute_2sls(
                the observation, so they are formed once; P_Z X_e then
                accumulates over the instruments in order. */
             ST_double xpx_full = 0.0;
+            ST_double wald_robust = NAN;
             {
                 ST_double *fs_coef = (ST_double *)calloc((size_t)(K_iv > 0 ? K_iv : 1), sizeof(ST_double));
                 ST_double *pz_xe = (ST_double *)ctools_safe_malloc2((size_t)(N > 0 ? N : 1), sizeof(ST_double));
@@ -1576,7 +1650,18 @@ ST_retcode ivest_compute_2sls(
                     ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
                     xpx_full += w * X_e[i] * pz_xe[i];
                 }
+                /* ivreg2 robustifies the first-stage F under robust, cluster
+                   and kernel VCEs (s_ffirst) */
+                ST_retcode fs_rc = s_noniid
+                    ? civ_first_stage_robust_wald(&om, Z, X_e, pz_xe, fs_coef, ZtZ_inv,
+                                                  N, K_iv, K_exog, &wald_robust)
+                    : 0;
                 free(fs_coef); free(pz_xe);
+                if (fs_rc) {
+                    SF_error("civreghdfe: Memory allocation failed for the first-stage F\n");
+                    est_rc = fs_rc;
+                    goto est_cleanup;
+                }
             }
             ST_double r2_full = xpx_full / xx;
             if (r2_full > 1.0) r2_full = 1.0;
@@ -1662,6 +1747,29 @@ ST_retcode ivest_compute_2sls(
 
             first_stage_F[e] = (partial_r2 / (ST_double)L) / denom;
             if (first_stage_F[e] < 0) first_stage_F[e] = 0;
+
+            /* Non-iid VCE: ivreg2's robust Wald, scaled as its e(first)["F",]:
+               Wald/(N-dofminus)*df_r/L, or with clusters
+               Wald/(N-1)*(N-L_all-sdofminus)*(G-1)/G/L. The moment covariance
+               carries the N/(N-dofminus) factor of m_omega without clusters. */
+            if (s_noniid) {
+                ST_double fs_df_a = (vce_type == CIVREGHDFE_VCE_CLUSTER && df_a == 0 && nested_adj == 1) ? 1 : df_a;
+                ST_double fs_resid_df = N_eff - Kiv_dof - fs_df_a;
+                ST_double wald = wald_robust;
+                if (!s_cluster) {
+                    if (dofminus != 0) wald *= (N_eff - dofminus) / N_eff;
+                    first_stage_F[e] = wald / (N_eff - dofminus) * (fs_resid_df - dofminus) / (ST_double)L;
+                } else {
+                    first_stage_F[e] = wald / (N_eff - 1.0) * fs_resid_df
+                                       * (ST_double)(s_nclust - 1) / (ST_double)s_nclust / (ST_double)L;
+                }
+                if (!isfinite(first_stage_F[e])) first_stage_F[e] = SV_missval;
+            }
+            /* denominator degrees of freedom of the reported F */
+            char fdf_name[64];
+            snprintf(fdf_name, sizeof(fdf_name), "__civreghdfe_F1df_r_%d", (int)(e + 1));
+            ctools_scal_save(fdf_name, s_cluster ? (ST_double)(s_nclust - 1)
+                                       : (ST_double)(N_eff - Kiv_dof - df_a - dofminus));
 
             /* Save the partial R² for ffirst display: ivreg2's pr2 from the
                classical Wald statistic, (R²_full - R²_reduced)/(1 - R²_reduced) */
@@ -1826,7 +1934,7 @@ est_cleanup:
     free(ZtZ); free(ZtZ_inv); free(ZtX); free(Zty);
     free(XtPzX); free(XtPzy); free(temp1); free(X_all); free(resid);
     free(X_hat); free(ZtZ_inv_Zty);
-    free(XkX_copy); free(beta_temp); free(XkX_inv); free(gmm_hessian_inv);
+    free(XkX_copy); free(beta_temp); free(XkX_inv); free(gmm_hessian_inv); free(coviv_bread);
     free(XtX); free(Xty); free(XkX); free(Xky);
 
     return est_rc;

@@ -286,6 +286,68 @@ static void xedit_merge_row(StringBuffer *sb, const xedit_node *old,
   else
     strbuf_append(sb, "</row>");
 }
+/* Give every old row and cell an explicit r, as readers infer it (a row
+   without r follows the previous row, a cell without r the previous cell in
+   its row), so the merge, the used range and shared formulas see each cell
+   where Excel does. Returns xml itself when every position is explicit. */
+static char *xedit_explicit_positions(char *xml) {
+  xedit_node sd, n;
+  int closing, missing = 0;
+  const char *a, *b, *v;
+  size_t vl, len = strlen(xml);
+  if (!xedit_find(xml, xml + len, "sheetData", &sd) || sd.empty)
+    return xml;
+  for (const char *p = sd.open_end;
+       !missing && (p = xedit_tag(p, sd.close, &n, &closing));) {
+    int col, row;
+    if (!closing && xedit_is(&n, "row"))
+      missing = xedit_row(&n) <= 0;
+    else if (!closing && xedit_is(&n, "c"))
+      missing = !xedit_cell(&n, &col, &row);
+  }
+  if (!missing)
+    return xml;
+  StringBuffer sb;
+  if (!strbuf_init(&sb, len + len / 4 + 64))
+    return NULL;
+  const char *copied = xml;
+  int row = 0, col = -1;
+  for (const char *p = sd.open_end; (p = xedit_tag(p, sd.close, &n, &closing));) {
+    char text[32] = "";
+    if (closing)
+      continue;
+    if (xedit_is(&n, "row")) {
+      int i = xedit_row(&n);
+      row = i > 0 ? i : row + 1;
+      col = -1;
+      if (i <= 0)
+        snprintf(text, sizeof(text), "%d", row);
+    } else if (xedit_is(&n, "c")) {
+      int c, r;
+      if (xedit_cell(&n, &c, &r))
+        col = c;
+      else {
+        char letters[16];
+        xlsx_col_to_letters(++col + 1, letters);
+        snprintf(text, sizeof(text), "%s%d", letters, row);
+      }
+    }
+    if (!*text)
+      continue;
+    /* Replace an unusable r, or add one before the end of the start tag. */
+    const char *cut = n.open_end - (n.empty ? 2 : 1), *resume = cut;
+    int present = xedit_attr_span(&n, "r", &a, &b, &v, &vl);
+    if (present) {
+      cut = a;
+      resume = b;
+    }
+    strbuf_append_n(&sb, copied, (size_t)(cut - copied));
+    strbuf_appendf(&sb, "%sr=\"%s\"", present ? "" : " ", text);
+    copied = resume;
+  }
+  strbuf_append(&sb, copied);
+  return sb.data;
+}
 #include "cexport_xlsx_formula.inc"
 static char *xedit_worksheet(const char *oldxml, const char *newxml, int keep,
                              unsigned base) {
@@ -465,6 +527,7 @@ static ST_retcode xlsx_edit_file(XLSXExportContext *ctx,
   rels = xedit_zip_text(&in, "xl/_rels/workbook.xml.rels");
   types = xedit_zip_text(&in, "[Content_Types].xml");
   styles = xedit_zip_text(&in, "xl/styles.xml");
+  int had_styles = styles != NULL;
   if (!book || !rels || !types)
     goto done;
   if (!styles)
@@ -525,6 +588,15 @@ static ST_retcode xlsx_edit_file(XLSXExportContext *ctx,
     sheet = xedit_zip_text(&in, target);
     if (!sheet)
       goto done;
+    char *positioned = xedit_explicit_positions(sheet);
+    if (!positioned) {
+      rc = 920;
+      goto done;
+    }
+    if (positioned != sheet) {
+      free(sheet);
+      sheet = positioned;
+    }
   } else {
     unsigned id = maxid + 1;
     do {
@@ -682,6 +754,33 @@ static ST_retcode xlsx_edit_file(XLSXExportContext *ctx,
     }
     free(merged);
     merged = updated;
+  }
+  /* Our cell styles need a styles part that the workbook references. */
+  if (!had_styles) {
+    char *withrel = xedit_insert(
+        newrels ? newrels : rels, "Relationships",
+        "<Relationship "
+        "xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\" "
+        "Id=\"ctoolsStyles\" "
+        "Type=\"http://schemas.openxmlformats.org/officeDocument/2006/"
+        "relationships/styles\" Target=\"styles.xml\"/>");
+    char *withtype = xedit_insert(
+        newtypes ? newtypes : types, "Types",
+        "<Override "
+        "xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\" "
+        "PartName=\"/xl/styles.xml\" "
+        "ContentType=\"application/"
+        "vnd.openxmlformats-officedocument.spreadsheetml.styles+xml\"/>");
+    if (!withrel || !withtype) {
+      free(withrel);
+      free(withtype);
+      rc = 920;
+      goto done;
+    }
+    free(newrels);
+    newrels = withrel;
+    free(newtypes);
+    newtypes = withtype;
   }
   char *cleanrels =
       xedit_remove_chain(newrels ? newrels : rels, "Relationship", "Type",

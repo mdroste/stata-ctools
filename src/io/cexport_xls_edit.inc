@@ -170,6 +170,26 @@ static int xe_globals(FILE *f, const unsigned char *old, size_t oldlen,
   }
   return record(f, 0x0a, NULL, 0);
 }
+/* Records of a worksheet's cell table (MS-XLS CELLTABLE). */
+static int xe_cell_table(unsigned id) {
+  return xe_cell_id(id) || id == 0x208 || id == 0xbd || id == 0xbe ||
+         id == 0xd7 || id == 0x207 || id == 0x3c || id == 0x4bc ||
+         id == 0x221 || id == 0x236;
+}
+/* The generated sheet's cells, with SST and style indices relocated. */
+static int xe_new_cells(FILE *f, const unsigned char *fresh, size_t freshlen,
+                        size_t newstart, unsigned strings, unsigned styles,
+                        int keep, xlsWorkSheet *ws) {
+  size_t p = newstart;
+  xe_record r;
+  int rc;
+  while (xe_next(fresh, freshlen, &p, &r) && r.id != 0x0a)
+    if (xe_cell_id(r.id))
+      if ((rc = xe_new_cell(f, &r, strings, styles, ws, keep,
+                            ws ? ws->workbook->is1904 : 0)))
+        return rc;
+  return 0;
+}
 static int xe_sheet(FILE *f, const unsigned char *old, size_t oldlen,
                     size_t start, const unsigned char *fresh, size_t freshlen,
                     size_t newstart, unsigned strings, unsigned styles,
@@ -177,13 +197,33 @@ static int xe_sheet(FILE *f, const unsigned char *old, size_t oldlen,
                     xlsWorkSheet *ws) {
   size_t p = start;
   xe_record r = {0}; /* an unreadable first record fails the r.id check */
-  int rc, skip_string = 0;
+  int rc, skip_string = 0, depth = 0, dimensions = 0, written = 0;
   while (xe_next(old, oldlen, &p, &r)) {
+    /* New cells join the cell table: after DIMENSIONS, before the first
+       record that follows it (window settings, drawings, an embedded chart). */
+    if (depth == 1 && dimensions && !written && !xe_cell_table(r.id)) {
+      if ((rc = xe_new_cells(f, fresh, freshlen, newstart, strings, styles,
+                             keep && action == 1, ws)))
+        return rc;
+      written = 1;
+    }
+    if (r.id == 0x809)
+      depth++;
+    /* Embedded chart and object substreams (nested BOF..EOF) are copied
+       verbatim: their DIMENSIONS and cells are not the worksheet's. */
+    if (depth > 1) {
+      if ((rc = xe_copy(f, &r)))
+        return rc;
+      if (r.id == 0x0a)
+        depth--;
+      continue;
+    }
     if (r.id == 0x0a)
       break;
     if (r.id == 0x20b || r.id == 0xd7)
       continue; /* INDEX/DBCELL byte offsets */
     if (r.id == 0x200 && r.len >= 14) {
+      dimensions = 1;
       unsigned char b[14];
       memcpy(b, r.data, 14);
       if ((uint32_t)r0 < xe32(b))
@@ -231,12 +271,9 @@ static int xe_sheet(FILE *f, const unsigned char *old, size_t oldlen,
   }
   if (r.id != 0x0a)
     return 610;
-  p = newstart;
-  while (xe_next(fresh, freshlen, &p, &r) && r.id != 0x0a)
-    if (xe_cell_id(r.id))
-      if ((rc = xe_new_cell(f, &r, strings, styles, ws, keep && action == 1,
-                            ws ? ws->workbook->is1904 : 0)))
-        return rc;
+  if (!written && (rc = xe_new_cells(f, fresh, freshlen, newstart, strings,
+                                     styles, keep && action == 1, ws)))
+    return rc;
   return record(f, 0x0a, NULL, 0);
 }
 /* Keep all original sectors/streams and install a new FAT for the appended
@@ -306,13 +343,17 @@ static int xe_compound(FILE *out, const char *path, xlsWorkBook *wb, FILE *biff,
         continue;
       for (unsigned j = 0; j + 1 < chars; j++)
         name[j] = entry[2 * j + 1] ? '?' : (char)entry[2 * j];
-      if (!strcmp(name, "Workbook") || !strcmp(name, "Book")) {
+      /* Only the stream libxls read: an embedded workbook object keeps its
+         own Workbook stream inside its storage. */
+      if ((!strcmp(name, "Workbook") || !strcmp(name, "Book")) && !found &&
+          xe32(entry + 116) == wb->olestr->start &&
+          xe32(entry + 120) == (uint32_t)wb->olestr->size) {
         put32(entry + 116, (uint32_t)original_sectors);
         put64(entry + 120, stream);
         found = 1;
       }
     }
-    if (dir >= ole->SecIDCount)
+    if (found || dir >= ole->SecIDCount)
       break;
     dir = xlsIntVal(ole->SecID[dir]);
   }
@@ -389,13 +430,19 @@ static int xe_edit(const char *path, const char *sheet, int action, int keep,
     return 610;
   *book = wb;
   /* libxls leaves a name it cannot decode NULL; it matches no sheet(). */
+  /* BoundSheet8 dt, the record's sixth byte, is libxls' "visibility". */
   for (unsigned i = 0; i < wb->sheets.count; i++)
-    if (!*sheet ? i == 0
+    if (!*sheet ? which < 0 && !(wb->sheets.sheet[i].visibility & 0x0f)
                 : wb->sheets.sheet[i].name &&
                       !strcasecmp(sheet, wb->sheets.sheet[i].name))
       which = (int)i;
   if (which >= 0 && !action)
     return 602;
+  /* Chart, macro and module sheets are not worksheets to write. */
+  if (which >= 0 && (wb->sheets.sheet[which].visibility & 0x0f)) {
+    ctools_error("cexport", "%s is not a worksheet", sheet);
+    return 601;
+  }
   if (wb->is5ver)
     return 610;
   size_t oldlen = wb->olestr->size, freshlen;

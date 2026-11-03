@@ -5,6 +5,13 @@ program define csplit, rclass
     syntax varname(string) [if] [in], [Generate(string) noTrim Parse(string asis) ///
         DESTRING force float Ignore(string asis) percent Limit(numlist int >0 max=1) ///
         Verbose THReads(integer 0)]
+    * The if is evaluated now, as split does, before any helper replaces
+    * the r() or e() results it may name.
+    if `"`if'"' != "" {
+        tempvar iftouse
+        mark `iftouse' `if' `in'
+        local if "if `iftouse'"
+    }
     if "`limit'" == "" local limit 0
     if `threads' < 0 exit 198
     if _N > 2147483647 exit 920

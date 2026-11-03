@@ -219,6 +219,52 @@ static ST_int load_clusters_from_data(cqreg_state *state,
  * ============================================================================ */
 
 /* qreg's r(498) messages when the density/sparsity step cannot be completed */
+/*
+ * Location and power-of-two scale for the response. The shift is the median:
+ * with the constant in every model, shifting y moves only the intercept and
+ * the sample quantile, and y - median is exact for values within a factor of
+ * two of the median. Fitting at a level such as 1e9 otherwise loses digits
+ * in every basis solve, because the information is in differences far
+ * smaller than the level.
+ *
+ * The scale is the spread: the median absolute deviation, or the mean
+ * absolute deviation when more than half the values tie. A spread near one
+ * gives exponent 0, so ordinary data keep qreg's absolute thresholds. The
+ * exponent is raised when needed so the largest scaled |y| stays below
+ * 2^400 and its squares remain finite. The caller has already rejected a
+ * constant response.
+ */
+static ST_retcode cqreg_response_transform(const ST_double *y, ST_int N,
+                                           ST_double *shift, int *exponent)
+{
+    *shift = 0.0;
+    *exponent = 0;
+    ST_double *work = (ST_double *)malloc((size_t)N * sizeof(ST_double));
+    if (work == NULL) return 920;
+
+    memcpy(work, y, (size_t)N * sizeof(ST_double));
+    ST_double median = cqreg_select(work, N, (N - 1) / 2);
+    ST_double max_abs = 0.0, mean_dev = 0.0;
+    for (ST_int i = 0; i < N; i++) {
+        work[i] = fabs(y[i] - median);
+        mean_dev += work[i];
+        max_abs = fmax(max_abs, work[i]);
+    }
+    mean_dev /= N;
+    ST_double spread = cqreg_select(work, N, (N - 1) / 2);
+    free(work);
+    if (!(spread > 0.0) || !isfinite(spread)) spread = mean_dev;
+    if (!(spread > 0.0) || !isfinite(spread)) spread = max_abs;
+
+    int spread_exponent = 0, max_exponent = 0;
+    frexp(spread, &spread_exponent);
+    frexp(max_abs, &max_exponent);
+    *exponent = spread_exponent - 1;
+    if (max_exponent - *exponent > 400) *exponent = max_exponent - 400;
+    *shift = median;
+    return 0;
+}
+
 static void cqreg_vce_bandwidth_error(void)
 {
     ctools_error("cqreg", "VCE computation failed; try a different bandwidth or bsqreg");
@@ -271,13 +317,11 @@ static ST_retcode cqreg_auxiliary_fits(const ST_double *y, const ST_double *X,
     cqreg_ipm_config aux_config;
     cqreg_ipm_config_init(&aux_config);
     aux_config.maxiter = main_ipm->config.maxiter;  /* qreg passes iterate() to the auxiliary fits */
-    /* The duality gap is in units of y. Tighten the 1e-6 gap for small-scale
-     * outcomes so the fits keep the same relative accuracy (y ~ 1e-6 would
-     * otherwise stop at a gap near the objective itself). Never loosened. */
-    ST_double y_scale = 0.0;
-    for (ST_int i = 0; i < N; i++) y_scale += fabs(y[i]);
-    y_scale = (N > 0) ? y_scale / N : 0.0;
-    aux_config.tol_gap = 1e-6 * ((y_scale > 0.0 && y_scale < 1.0) ? y_scale : 1.0);
+    /* Density is a difference of two fitted quantiles. The response is in
+     * units of its spread here, so solve more tightly than the
+     * seven-significant-figure output contract so that this subtraction
+     * does not dominate VCE error. */
+    aux_config.tol_gap = 1e-8;
     aux_config.verbose = 0;
     aux_config.skip_crossover = skip_cross;
 
@@ -333,9 +377,9 @@ static ST_retcode cqreg_auxiliary_fits(const ST_double *y, const ST_double *X,
  * 2. Evaluate predicted quantiles at X̄ (mean of X)
  * 3. Sparsity = (Q̂(τ+h|X̄) - Q̂(τ-h|X̄)) / (2h)
  *
- * OPTIMIZATION: The auxiliary solves use relaxed tolerance (1e-6 vs 1e-12)
- * and early stopping since we only need ~3 decimal places of accuracy for
- * the sparsity estimate. This typically reduces iterations by 30-50%.
+ * Auxiliary fits use a 1e-8 gap in units of the response spread,
+ * compared with the main fit's default 1e-12. The VCE comparisons in
+ * validation/stata/cqreg.do check seven significant figures of accuracy.
  *
  * Reference: Hendricks and Koenker (1992), Koenker (2005, sec. 3.4)
  */
@@ -518,7 +562,8 @@ static ST_retcode estimate_fitted_per_obs_density(ST_double *obs_density,
      * OPTIMIZATION: Parallelize over observations with reduction for total_density.
      * Each observation's density is independent.
      */
-    ST_double eps_sqrt = sqrt(2.2e-16);  /* sqrt of machine epsilon */
+    /* qreg's sqrt(c(epsdouble)), applied in the scaled response units */
+    ST_double eps_sqrt = sqrt(DBL_EPSILON);
     ST_double total_density = 0.0;
     ST_double two_h = 2.0 * h;
 
@@ -660,6 +705,8 @@ ST_retcode cqreg_full_regression(const char *args)
     cqreg_state *state = NULL;
     cqreg_ipm_config ipm_config;
     ST_retcode rc = 0;
+    int response_exponent = 0;
+    ST_double response_shift = 0.0;
 
 
     /* Timer */
@@ -816,7 +863,7 @@ ST_retcode cqreg_full_regression(const char *args)
             if (state->y[i] < y_min) y_min = state->y[i];
             if (state->y[i] > y_max) y_max = state->y[i];
         }
-        if (y_max - y_min < 1e-12) {
+        if (y_max == y_min) {
             ctools_error("cqreg", "Dependent variable has no variation (constant)");
             cqreg_state_free(state);
             ctools_filtered_data_free(&filtered);
@@ -824,6 +871,22 @@ ST_retcode cqreg_full_regression(const char *args)
             return 198;
         }
     }
+
+    /* Keep all fits, crossover checks and density/VCE calculations in the
+     * same centered, scaled response units. The scale is the spread of y,
+     * not its magnitude: qreg's thresholds are absolute, so dividing by
+     * max|y| would make them relative to one outlier or to the level.
+     * Convert every response-dimensional result back after the VCE. */
+    rc = cqreg_response_transform(state->y, N, &response_shift, &response_exponent);
+    if (rc) {
+        ctools_error_alloc("cqreg");
+        cqreg_state_free(state);
+        ctools_filtered_data_free(&filtered);
+        main_debug_close();
+        return rc;
+    }
+    for (ST_int i = 0; i < N; i++)
+        state->y[i] = scalbn(state->y[i] - response_shift, -response_exponent);
 
     /* Compute sample quantile and raw sum of deviations for pseudo R^2 */
     state->q_v = cqreg_compute_quantile(state->y, N, quantile);
@@ -1185,6 +1248,27 @@ ST_retcode cqreg_full_regression(const char *args)
     /* ========================================================================
      * Step 6: Store results to Stata
      * ======================================================================== */
+
+    for (ST_int k = 0; k < K; k++)
+        state->beta[k] = scalbn(state->beta[k], response_exponent);
+    /* The constant is the last column: only it and the sample quantile move
+     * with the location shift; deviations, densities and V do not. */
+    state->beta[K - 1] += response_shift;
+    for (size_t j = 0; j < (size_t)K * K; j++) {
+        /* Undefined one-cluster covariance uses the existing NaN matrix
+         * convention: ereturn post rejects canonical Stata missing entries.
+         * Rescaling must leave that representation and missing sentinels alone. */
+        ST_double value = state->V[j];
+        if (isfinite(value) && !SF_is_missing(value))
+            state->V[j] = scalbn(value, 2 * response_exponent);
+    }
+    state->sum_adev = scalbn(state->sum_adev, response_exponent);
+    state->sum_rdev = scalbn(state->sum_rdev, response_exponent);
+    state->q_v = scalbn(state->q_v, response_exponent) + response_shift;
+    if (!SF_is_missing(state->sparsity))
+        state->sparsity = scalbn(state->sparsity, response_exponent);
+    if (state->density_method == CQREG_DENSITY_KERNEL)
+        state->kbwidth = scalbn(state->kbwidth, response_exponent);
 
     main_debug_log("Step 6: Storing results to Stata...\n");
     rc = store_results(state);

@@ -119,6 +119,20 @@ program define csort, rclass
     if _rc != 0 & _rc != 110 exit 601
     capture confirm number 0
 
+    * Stata keeps e(sample) in a hidden column that sort moves with each
+    * observation but the plugin cannot reach. When it is set, hold the
+    * estimates with e(sample) copied into a variable the plugin reorders,
+    * and unhold them afterwards (stored _est_* samples are ordinary
+    * variables and move anyway).
+    local __esample : e(functions)
+    local __esample : list posof "sample" in __esample
+    if `__esample' {
+        tempname __eshold
+        tempvar __esvar
+        _estimates hold `__eshold', copy varname(`__esvar')
+        local allvars `allvars' `__esvar'
+    }
+
     * Find indices of sort variables within all variables (1-based). A
     * repeated key adds nothing to the order (sorting by x x is sorting by x),
     * so the plugin gets each key once; the final sort keeps varlist as typed.
@@ -167,7 +181,15 @@ program define csort, rclass
     }
 
     * Call the C plugin with ALL variables (so it can sort the entire dataset)
-    plugin call ctools_plugin `allvars' `if' `in', "csort `threads_code' `var_indices' `alg_code' `stream_code' `nostream_code' `strw_code'"
+    if `__esample' {
+        capture noisily plugin call ctools_plugin `allvars' `if' `in', "csort `threads_code' `var_indices' `alg_code' `stream_code' `nostream_code' `strw_code'"
+        local __rc = _rc
+        if `__rc' {
+            _estimates unhold `__eshold'
+            exit `__rc'
+        }
+    }
+    else plugin call ctools_plugin `allvars' `if' `in', "csort `threads_code' `var_indices' `alg_code' `stream_code' `nostream_code' `strw_code'"
 
     * End plugin timer, start post-plugin timer
     if `__do_timing' {
@@ -187,6 +209,7 @@ program define csort, rclass
         * sort marker, which by, merge and csort's own early exit trust.
         _csort_clear_sortedby
     }
+    if `__esample' _estimates unhold `__eshold'
 
     * End post-plugin timer (wall-clock timer 90 stays running)
     if `__do_timing' {

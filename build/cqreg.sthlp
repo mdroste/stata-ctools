@@ -43,7 +43,7 @@
 {synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
 
 {syntab:Optimization}
-{synopt:{opt tol:erance(#)}}convergence tolerance; default is {cmd:tolerance(1e-12)}{p_end}
+{synopt:{opt tol:erance(#)}}convergence tolerance in normalized response units; default is {cmd:tolerance(1e-12)}{p_end}
 {synopt:{opt max:iter(#)}}maximum iterations; default is {cmd:maxiter(200)}{p_end}
 {synopt:{opt nopreprocess(#)}}accepted for backward compatibility; has no effect{p_end}
 {synoptline}
@@ -140,7 +140,19 @@ The default follows the {help ctools##threads:ctools thread setting}.
 
 {phang}
 {opt tolerance(#)} specifies the convergence tolerance for the IPM solver.
-The default is {cmd:tolerance(1e-12)}.
+The default is {cmd:tolerance(1e-12)}. The response is centered at its median
+and scaled by a power of two before fitting, so its median absolute deviation
+is between 1 and 2
+(the mean absolute deviation when most values are tied).
+Data whose spread is already in that range are only centered.
+Centering keeps full precision when the response has a large level, such as
+1e9: there {cmd:qreg}'s {cmd:vce(excluster)} covariance can be wrong in its
+leading digit, while {cmd:cqreg} matches the computation on the centered response.
+Convergence is assessed in these normalized units. Coefficients, covariance,
+sparsity and deviation statistics are returned in the original response units.
+If Stata discards a covariance because its entries are too small or too large
+for its posting checks, {cmd:cqreg} returns error 498; rescale the dependent
+variable and refit.
 
 {phang}
 {opt maxiter(#)} specifies the maximum number of IPM iterations. The default
@@ -209,7 +221,7 @@ method with {cmd:vce(robust)} or {cmd:vce(cluster)}, as in {cmd:qreg}{p_end}
 {synopt:{cmd:e(kbwidth)}}kernel bandwidth (kernel method){p_end}
 {synopt:{cmd:e(iterations)}}number of IPM iterations{p_end}
 {synopt:{cmd:e(convcode)}}0 for a successfully converged fit{p_end}
-{synopt:{cmd:e(df_r)}}residual degrees of freedom{p_end}
+{synopt:{cmd:e(df_r)}}residual degrees of freedom, N - {cmd:e(rank)}{p_end}
 {synopt:{cmd:e(df_m)}}model degrees of freedom{p_end}
 {synopt:{cmd:e(N_clust)}}number of clusters (if {opt vce(cluster)}){p_end}
 

@@ -120,6 +120,13 @@ typedef struct XLSXContext {
     int max_col;              /* Maximum column index seen (0-based) */
     int min_row;              /* Minimum row number (1-based) */
     int max_row;              /* Maximum row number (1-based) */
+    /* Extent of the whole worksheet, including cells outside cellrange():
+     * the data area that native checks cellrange() against. */
+    int area_max_col;         /* last column with a value (0-based), -1 if none */
+    int area_max_row;         /* last row element or valued cell (1-based) */
+    /* Most cells the dense storage may hold (0 = no limit); set by callers
+     * so an impossible shape fails with r(909) before memory is touched. */
+    size_t max_cells;
 
     /* Column-major cell storage, grown to fit every cell with a value */
     double **cm_numeric;      /* cm_numeric[col][row] — values or (double)ss_index */

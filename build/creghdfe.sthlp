@@ -276,6 +276,7 @@ must be distinct new variables.
 {synopt:{cmd:e(clustvar1)}}name of cluster variable (if {cmd:vce(cluster)}){p_end}
 {synopt:{cmd:e(resid)}}name of residual variable (if {cmd:resid} or {cmd:resid2()} specified){p_end}
 {synopt:{cmd:e(predict)}}program used to implement {cmd:predict}{p_end}
+{synopt:{cmd:e(wtype)}, {cmd:e(wexp)}}weight type and expression (if weighted){p_end}
 
 {synoptset 24 tabbed}{...}
 {p2col 5 24 28 2: Matrices}{p_end}

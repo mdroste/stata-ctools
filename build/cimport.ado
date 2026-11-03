@@ -229,6 +229,9 @@ program define cimport, rclass
         local startcol = r(first)
         local endcol = r(last)
     }
+    * C applies colrange() before header detection and naming, as native does.
+    local __cimport_startcol `startcol'
+    local __cimport_endcol `endcol'
 
     * Validate asfloat/asdouble - mutually exclusive
     if "`asfloat'" != "" & "`asdouble'" != "" {
@@ -502,10 +505,10 @@ program define cimport, rclass
         }
 
         local seen_names `seen_names' `vname'
-        local header : copy global _cimport_label_`i'
-        if `"`macval(header)'"' != "`vname'" {
-            label variable `vname' `"`macval(header)'"'
-        }
+        * Header text comes from the file: it is compared and stored in Mata
+        * only, never pasted into a Stata expression or command line.
+        * (A new variable has no label, so "" leaves it as it is.)
+        mata: st_varlabel(st_local("vname"), st_global("_cimport_label_`i'") != st_local("vname") ? st_global("_cimport_label_`i'") : "")
         capture macro drop _cimport_label_`i'
         if `vtype' == 1 format `vname' %`=cond(`vlong',9,max(9,`vlen'))'s
         else {
@@ -564,31 +567,6 @@ program define cimport, rclass
     quietly _ctools_clock __ct_now
 
     local __ct_elapsed13 = `__ct_elapsed13' + (`__ct_now' - `__ct_start13')
-
-    * Apply colrange filtering (post-import)
-    if `startcol' > 0 | `endcol' > 0 {
-        local first_col = max(1, `startcol')
-        local total_cols = c(k)
-        if `endcol' > 0 {
-            local last_col = min(`endcol', `total_cols')
-        }
-        else {
-            local last_col = `total_cols'
-        }
-        * Drop columns outside range
-        if `last_col' < `total_cols' {
-            forvalues i = `total_cols'(-1)`=`last_col'+1' {
-                local vname : word `i' of `allvars'
-                quietly drop `vname'
-            }
-        }
-        if `first_col' > 1 {
-            forvalues i = `=`first_col'-1'(-1)1 {
-                local vname : word `i' of `allvars'
-                quietly drop `vname'
-            }
-        }
-    }
 
     * Like native, explicit names rename imported variables 1..k as typed
     * (no case conversion; header labels are kept). Errors restore the data.

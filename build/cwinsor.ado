@@ -13,7 +13,7 @@ program define cwinsor
     _ctools_mode `0'
     * Break is recognized only inside _cwinsor_impl.
     nobreak {
-        macro drop CTOOLS_cwinsor_plugin CTOOLS_cwinsor_targets
+        macro drop CTOOLS_cwinsor_plugin CTOOLS_cwinsor_targets CTOOLS_cwinsor_recast
         if "`mode'" == "snapshot" preserve
         else if "`mode'" == "" _ctools_undo record CTOOLS_u_cwinsor_
         capture noisily break _cwinsor_impl `0'
@@ -26,6 +26,14 @@ program define cwinsor
                     capture noisily plugin call ctools_plugin $CTOOLS_cwinsor_targets, "cwinsor rollback"
                     if _rc di as error "cwinsor: the original values could not be restored"
                 }
+                * Storage promoted for fractional cutoffs goes back too (recast
+                * refuses if a value would change)
+                local recast "$CTOOLS_cwinsor_recast"
+                while "`recast'" != "" {
+                    gettoken target recast : recast
+                    gettoken vtype recast : recast
+                    capture recast `vtype' `target'
+                }
                 _ctools_undo rollback CTOOLS_u_cwinsor_
             }
             else if "`mode'" == "snapshot" restore
@@ -33,14 +41,14 @@ program define cwinsor
                 capture program ctools_plugin, plugin using("$CTOOLS_cwinsor_plugin")
                 capture plugin call ctools_plugin, "cwinsor commit"
             }
-            macro drop CTOOLS_cwinsor_plugin CTOOLS_cwinsor_targets
+            macro drop CTOOLS_cwinsor_plugin CTOOLS_cwinsor_targets CTOOLS_cwinsor_recast
             exit `rc'
         }
         if "$CTOOLS_cwinsor_plugin" != "" {
             capture program ctools_plugin, plugin using("$CTOOLS_cwinsor_plugin")
             capture plugin call ctools_plugin, "cwinsor commit"
         }
-        macro drop CTOOLS_cwinsor_plugin CTOOLS_cwinsor_targets
+        macro drop CTOOLS_cwinsor_plugin CTOOLS_cwinsor_targets CTOOLS_cwinsor_recast
         if "`mode'" == "snapshot" restore, not
         else if "`mode'" == "" _ctools_undo clear CTOOLS_u_cwinsor_
     }
@@ -210,6 +218,17 @@ program define _cwinsor_impl
         matrix `cwinsor_bounds' = J(`nvars', 2, .)
         local opts "`opts' deferbounds"
     }
+    else {
+        * winsor2 stores by() cutoffs with egen in the source's type: the
+        * plugin truncates them for byte, int and long (t) and rounds them to
+        * float for float (f); double cutoffs are used as computed (d).
+        local cwinsor_rounding
+        foreach v of local varlist {
+            local vtype : type `v'
+            local cwinsor_rounding = "`cwinsor_rounding'" + cond(inlist("`vtype'", "byte", "int", "long"), "t", cond("`vtype'" == "float", "f", "d"))
+        }
+        local opts "`opts' rounding"
+    }
 
     if "`verbose'" != "" local opts "`opts' verbose"
 
@@ -256,6 +275,15 @@ program define _cwinsor_impl
             local upper = `cwinsor_bounds'[`bound_index',2]
             matrix `cwinsor_bounds'[`bound_index',1] = `lower'
             matrix `cwinsor_bounds'[`bound_index',2] = `upper'
+            * winsor2's replace promotes an integer variable that receives a
+            * fractional cutoff: byte and int to float, long to double.
+            local vtype : type `target'
+            if `inplace' & "`trim'" == "" & inlist("`vtype'", "byte", "int", "long") & ///
+                (`lower' != floor(`lower') | `upper' != floor(`upper')) {
+                local promoted = cond("`vtype'" == "long", "double", "float")
+                global CTOOLS_cwinsor_recast "$CTOOLS_cwinsor_recast `target' `vtype'"
+                recast `promoted' `target'
+            }
         }
         capture noisily plugin call ctools_plugin `plugin_varlist', "cwinsor `threads_opt' apply"
         local apply_rc = _rc

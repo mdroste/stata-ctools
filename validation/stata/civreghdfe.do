@@ -1749,6 +1749,191 @@ sysuse auto, clear
 gen z = runiform()
 test_error_match, stata_cmd(ivreghdfe price (mpg = z) if price > 100000, absorb(foreign)) ctools_cmd(civreghdfe price (mpg = z) if price > 100000, absorb(foreign)) testname("no observations after if")
 
+* Absorbed degrees of freedom as ivreghdfe counts them (reghdfe's HDFE.df_a):
+* an effect nested in either dimension of a two-way cluster, two effects
+* nested in one cluster, an effect coarser than the cluster, and three or
+* more effects whose later pairs have several mobility groups. e(df_a) must
+* be equal; benchmark_ivreghdfe compares e(V), e(F), e(rmse), e(r2_a) and
+* e(widstat) (and the rest) at $DEFAULT_SIGFIGS.
+capture program drop _civ_dfa_case
+program define _civ_dfa_case
+    syntax anything(name=spec) [aw], Absorb(varlist) [vce(string) SMALL testname(string)]
+    local wt
+    if "`weight'" != "" local wt [`weight'`exp']
+    local vceopt
+    if "`vce'" != "" local vceopt vce(`vce')
+    benchmark_ivreghdfe `spec' `wt', absorb(`absorb') `vceopt' `small' testname("`testname'")
+    capture ivreghdfe `spec' `wt', absorb(`absorb') `vceopt' `small'
+    local rc_ref = _rc
+    local df_a_ref = e(df_a)
+    capture civreghdfe `spec' `wt', absorb(`absorb') `vceopt' `small'
+    local rc_ct = _rc
+    if !`rc_ref' & !`rc_ct' & `df_a_ref' == e(df_a) test_pass "`testname': e(df_a)"
+    else test_fail "`testname': e(df_a)" "ivreghdfe `df_a_ref' (rc `rc_ref'), civreghdfe `=e(df_a)' (rc `rc_ct')"
+end
+clear
+set seed 20261102
+set obs 1200
+gen long firm = ceil(_n / 10)
+gen int year = mod(_n - 1, 10) + 1
+* firm in ind in sector; occ moves across firms and years; ind#year as one id
+gen int ind = ceil(firm / 12)
+gen byte sector = ceil(ind / 4)
+gen int occ = mod(firm * 7 + year * 3, 9) + 1
+gen int indyear = (ind - 1) * 10 + year
+gen double z1 = rnormal()
+gen double z2 = rnormal()
+gen double w = rnormal()
+gen double x = z1 + .5 * z2 + .3 * w + rnormal() + firm / 100
+gen double y = x - .5 * w + rnormal() + firm / 50 + year / 10
+gen double aw = 1 + runiform()
+foreach wt in "" "[aw=aw]" {
+    local tag = cond("`wt'" == "", "unweighted", "aweights")
+    _civ_dfa_case y (x = z1 z2) w `wt', absorb(firm) vce(cluster year firm) ///
+        testname("df_a: absorb(firm) cluster(year firm), `tag'")
+    _civ_dfa_case y (x = z1 z2) w `wt', absorb(firm) vce(cluster firm year) ///
+        testname("df_a: absorb(firm) cluster(firm year), `tag'")
+    _civ_dfa_case y (x = z1 z2) w `wt', absorb(firm year) vce(cluster firm year) ///
+        testname("df_a: absorb(firm year) cluster(firm year), `tag'")
+    _civ_dfa_case y (x = z1 z2) w `wt', absorb(firm ind) vce(cluster sector) ///
+        testname("df_a: absorb(firm ind) cluster(sector), `tag'")
+    _civ_dfa_case y (x = z1 z2) w `wt', absorb(ind firm) vce(cluster firm) ///
+        testname("df_a: absorb(ind firm) cluster(firm), `tag'")
+    _civ_dfa_case y (x = z1 z2) w `wt', absorb(indyear firm) vce(cluster ind) ///
+        testname("df_a: absorb(ind#year firm) cluster(ind), `tag'")
+    _civ_dfa_case y (x = z1 z2) w `wt', absorb(firm year ind) small ///
+        testname("df_a: absorb(firm year ind) small, `tag'")
+    _civ_dfa_case y (x = z1 z2) w `wt', absorb(firm year occ) small ///
+        testname("df_a: absorb(firm year occ) small, `tag'")
+    _civ_dfa_case y (x = z1 z2) w `wt', absorb(year occ ind) vce(cluster firm) small ///
+        testname("df_a: absorb(year occ ind) cluster(firm) small, `tag'")
+}
+
+* SECTION: First-stage F under non-iid VCEs
+* ivreg2 robustifies e(first)["F",] (Wald test of the excluded instruments
+* under the model's VCE); e(F_first#) must match it, including an instrument
+* that varies only at the cluster level and FEs nested in the cluster.
+print_section "First-stage F under robust, cluster and kernel VCEs"
+clear
+set seed 101
+set obs 2000
+gen int c = ceil(_n/20)
+gen int fe = ceil(runiform()*40)
+gen int t = mod(_n-1, 20) + 1
+gen int c2 = ceil(runiform()*30)
+bysort c: gen double zc = rnormal() if _n == 1
+bysort c: replace zc = zc[1]
+gen double z2 = rnormal()
+gen double z3 = rnormal()
+gen double u = rnormal()
+bysort c: gen double uc = rnormal() if _n == 1
+bysort c: replace uc = uc[1]
+gen double d = .25*zc + .3*z2 + uc + u + rnormal()
+gen double d2 = .2*z3 + .4*z2 + u + rnormal()
+gen double x = rnormal()
+gen double w = 1 + runiform()
+gen double y = d + d2 + x + uc + rnormal()
+xtset c t
+foreach spec in "y x (d=zc)|absorb(fe) robust" "y x (d=zc)|absorb(fe) cluster(c)" ///
+    "y x (d=zc)|cluster(c)" "y x (d=zc)|absorb(fe) robust bw(2)" ///
+    "y x (d=zc) [pw=w]|absorb(fe)" "y x (d d2=zc z2 z3)|absorb(fe) robust" ///
+    "y x (d d2=zc z2 z3)|absorb(fe) cluster(c)" "y x (d d2=zc z2 z3) [aw=w]|absorb(fe) cluster(c)" ///
+    "y x (d d2=zc z2 z3)|absorb(fe) cluster(c c2)" "y x (d d2=zc z2 z3)|absorb(fe) kernel(parzen) bw(3) robust" ///
+    "y x (d d2=zc z2 z3)|absorb(fe) dkraay(2)" "y x (d d2=z2 z3)|absorb(c) cluster(c)" ///
+    "y x (d d2=zc z2 z3)|absorb(fe) robust dofminus(3)" "y x (d d2=zc z2 z3) [pw=w]|absorb(fe) liml" {
+    gettoken model opts : spec, parse("|")
+    local opts : subinstr local opts "|" ""
+    capture quietly ivreghdfe `model', `opts' ffirst
+    local rc_ref = _rc
+    if !`rc_ref' matrix fs_ref = e(first)
+    capture quietly civreghdfe `model', `opts'
+    if `rc_ref' | _rc {
+        test_fail "first-stage F: `model', `opts'" "rc ivreghdfe=`rc_ref' civreghdfe=`=_rc'"
+        continue
+    }
+    forvalues e = 1/`=colsof(fs_ref)' {
+        local F_ref = el(fs_ref, rownumb(fs_ref, "F"), `e')
+        assert_scalar_equal `=e(F_first`e')' `F_ref' $DEFAULT_SIGFIGS "first-stage F`e': `model', `opts'"
+    }
+}
+
+* SECTION: Constant screened first without absorb() (vs ivreg2)
+* A regressor that is constant on the sample, or a full set of dummies, is
+* omitted and _cons kept, so e(df_m) and e(F) test the slopes only.
+print_section "Collinearity with the constant without absorb()"
+sysuse auto, clear
+generate byte d1 = rep78 >= 3 if rep78 < .
+generate byte d2 = 1 - d1
+foreach spec in "price (mpg = weight) foreign if foreign==1" "price (mpg = weight) d1 d2" {
+    quietly ivreg2 `spec'
+    local ref_names : colfullnames e(b)
+    matrix ref_b = e(b)
+    matrix ref_V = e(V)
+    local ref_df_m = e(df_m)
+    local ref_F = e(F)
+    capture quietly civreghdfe `spec'
+    if _rc {
+        test_fail "constant first: `spec'" "civreghdfe rc=`=_rc'"
+        continue
+    }
+    local ct_names : colfullnames e(b)
+    if "`ct_names'" == "`ref_names'" test_pass "constant first: names `spec'"
+    else test_fail "constant first: names `spec'" "`ct_names' vs ivreg2 `ref_names'"
+    matrix ct_b = e(b)
+    matrix ct_V = e(V)
+    assert_matrix_equal ct_b ref_b $DEFAULT_SIGFIGS "constant first: e(b) `spec'"
+    assert_matrix_equal ct_V ref_V $DEFAULT_SIGFIGS "constant first: e(V) `spec'"
+    assert_scalar_equal `=e(df_m)' `ref_df_m' $DEFAULT_SIGFIGS "constant first: e(df_m) `spec'"
+    assert_scalar_equal `=e(F)' `ref_F' $DEFAULT_SIGFIGS "constant first: e(F) `spec'"
+}
+
+* SECTION: coviv (vs ivreghdfe)
+* LIML, Fuller and k-class with coviv use the 2SLS bread (X'PzX)^-1.
+print_section "coviv"
+clear
+set seed 55
+set obs 1500
+generate int firm = ceil(_n/15)
+generate int t = mod(_n-1, 15) + 1
+generate double z1 = rnormal()
+generate double z2 = rnormal()
+generate double z3 = rnormal()
+generate double u = rnormal()
+generate double x1 = .5*z1 + .3*z2 + .2*z3 + u + rnormal()
+generate double w = rnormal()
+generate double y = 1 + x1 + w + u + rnormal()
+xtset firm t
+benchmark_ivreghdfe y w (x1 = z1 z2 z3), absorb(firm) liml coviv testname("coviv: liml")
+benchmark_ivreghdfe y w (x1 = z1 z2 z3), absorb(firm) fuller(1) coviv vce(robust) testname("coviv: fuller(1) robust")
+benchmark_ivreghdfe y w (x1 = z1 z2 z3), absorb(firm) kclass(.5) coviv vce(cluster firm) testname("coviv: kclass(.5) cluster")
+benchmark_ivreghdfe y w (x1 = z1 z2 z3), absorb(firm) liml coviv vce(robust) bw(2) testname("coviv: liml HAC")
+quietly civreghdfe y w (x1 = z1 z2 z3), absorb(firm) kclass(.5) vce(cluster firm)
+matrix nocoviv_V = e(V)
+quietly civreghdfe y w (x1 = z1 z2 z3), absorb(firm) kclass(.5) coviv vce(cluster firm)
+if mreldif(e(V), nocoviv_V) > 1e-6 test_pass "coviv changes the k-class VCE"
+else test_fail "coviv changes the k-class VCE" "V equals the run without coviv"
+
+* SECTION: predict after partial() (vs ivreg2)
+* e(b) omits the partialled-out terms: residuals are y - Xb net of their
+* projection on those terms (the full-model residuals); xb, stdp and xbd exit
+* 198 as in ivreg2.
+print_section "predict after partial()"
+sysuse auto, clear
+* (civreghdfe keeps _cons in e(b), so its count leaves out ivreg2's partialled constant)
+quietly ivreg2 price (mpg = weight) length turn i.rep78, partial(turn i.rep78)
+local ref_partial_ct = e(partial_ct) - e(partialcons)
+quietly ivreg2 price (mpg = weight) length turn i.rep78
+predict double ref_resid, resid
+quietly civreghdfe price (mpg = weight) length turn i.rep78, partial(turn i.rep78)
+assert_scalar_equal `=e(partial_ct)' `ref_partial_ct' $DEFAULT_SIGFIGS "partial(): e(partial_ct)"
+predict double ct_resid, resid
+assert_var_equal ct_resid ref_resid $DEFAULT_SIGFIGS "partial(): predict residuals"
+foreach stat in xb stdp xbd {
+    capture predict double ct_`stat', `stat'
+    if _rc == 198 test_pass "partial(): predict `stat' refused"
+    else test_fail "partial(): predict `stat' refused" "rc=`=_rc'"
+}
+
 * Summary
 
 * Cleanup to prevent state corruption before next validation script
@@ -1765,6 +1950,55 @@ noi print_summary "civreghdfe"
 global CTOOLS_COMPONENT_COMPLETE "civreghdfe"
     global CTOOLS_CASE_COMPLETE "civreghdfe"
     exit
+}
+
+if "`__case'" == "civreghdfe_grouped_syntax" {
+do validation/support/validate_setup.do
+clear
+set seed 1122
+set obs 300
+generate t = _n
+tsset t
+generate g = ceil(_n/30)
+generate double z = rnormal()
+generate double x1 = rnormal()
+generate double x2 = rnormal()
+generate double d = z + rnormal()
+generate double y = 1 + d + x1 + x2 + rnormal()
+foreach position in before after {
+    if "`position'" == "before" local spec y c.(x1 x2) (d=z)
+    else local spec y (d=z) c.(x1 x2)
+    benchmark_ivreghdfe `spec', absorb(g) testname("grouped FV `position' IV equation")
+    if "`position'" == "before" local spec y L(1/2).x1 (d=z) x2
+    else local spec y (d=z) L(1/2).x1 x2
+    benchmark_ivreghdfe `spec', absorb(g) testname("lag range `position' IV equation")
+}
+foreach terms in "c.(x1 x2)" "L(1/2).x1 x2" {
+    quietly civreghdfe y `terms'
+    matrix grouped_b = e(b)
+    matrix grouped_V = e(V)
+    if "`terms'" == "c.(x1 x2)" local explicit x1 x2
+    else local explicit L.x1 L2.x1 x2
+    quietly civreghdfe y `explicit'
+    assert mreldif(e(b),grouped_b) == 0 & mreldif(e(V),grouped_V) == 0
+    test_pass "OLS grouped syntax: `terms'"
+}
+benchmark_ivreghdfe y c.(x1 x2) (d=L(1/2).z), absorb(g) testname("nested lag ranges in IV equation")
+* (=z) adds an excluded instrument without endogenous regressors.
+benchmark_ivreghdfe y (=z) x1, absorb(g) testname("instruments without endogenous regressors")
+generate byte group_a = mod(_n, 2)
+generate byte group_b = mod(_n, 3)
+benchmark_ivreghdfe y i.group_a#i.(group_b) (d=z) x1, absorb(g) testname("FV group after an interaction")
+* A group without "=" that no operator owns is an IV equation missing its equals sign.
+foreach invalid in "y (d=z) (x1=x2)" "y (d=) x1" "y (d=z=z) x1" "y (d=z" "y d=z" "y (d z) x1" "y x1 (d z)" "y (d) (d=z)" {
+    capture civreghdfe `invalid'
+    assert _rc == 198
+    test_pass "reject malformed IV equation `invalid'"
+}
+print_summary "civreghdfe grouped syntax"
+global CTOOLS_COMPONENT_COMPLETE "civreghdfe_grouped_syntax"
+global CTOOLS_CASE_COMPLETE "civreghdfe_grouped_syntax"
+exit
 }
 
 di as error "Unknown civreghdfe case: `__case'"

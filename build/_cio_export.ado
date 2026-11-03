@@ -87,6 +87,26 @@ program define _cio_export, rclass
     }
     local __cio_nmeta `j' 
     local exportvars `varlist'
+    * SPSS and SAS version 8 transport timestamps exclude leap seconds, and
+    * both store monthly, quarterly, weekly and half-yearly dates as the date
+    * of the period's first day. Keep source metadata and convert only the
+    * values passed to the writer; version 5 transport retains Stata units.
+    if inlist("`kind'","spss","sasxport8") {
+        local exportvars ""
+        foreach v of local varlist {
+            local fmt : format `v'
+            local unit ""
+            if regexm("`fmt'","^%-?t([Cmqwh])") local unit = regexs(1)
+            if "`unit'" != "" {
+                local convert = cond("`unit'"=="C","cofC",cond("`unit'"=="m","dofm",cond("`unit'"=="q","dofq",cond("`unit'"=="w","dofw","dofh"))))
+                tempvar ordinary_time
+                quietly gen double `ordinary_time' = `convert'(`v') if !missing(`v')
+                quietly replace `ordinary_time' = `v' if missing(`v')
+                local exportvars `exportvars' `ordinary_time'
+            }
+            else local exportvars `exportvars' `v'
+        }
+    }
     if "`kind'"=="dbase" & "`datafmt'"!="" {
         local j=0
         local formatted ""

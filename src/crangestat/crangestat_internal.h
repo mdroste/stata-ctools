@@ -79,6 +79,17 @@ typedef enum
     STAT_COUNT_ALL /* Total number of statistic types */
 } stat_type;
 
+/* Computed overflow is Stata missing, never an IEEE NaN/Inf or a number in
+ * Stata's reserved missing range. Endpoint statistics preserve .a-.z. */
+static inline double crangestat_stata_value(stat_type type, double value)
+{
+    if (!isfinite(value) || value <= -SV_missval)
+        return SV_missval;
+    if (value >= SV_missval && type != STAT_FIRST && type != STAT_LAST)
+        return SV_missval;
+    return value;
+}
+
 /* Configuration */
 typedef struct
 {

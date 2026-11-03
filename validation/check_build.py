@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from itertools import product
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -333,7 +334,7 @@ def archive_main(argv=None):
     package_condition = re.search(r"    if: >-\n(.*?)\n    runs-on:", package_block, re.S).group(1)
     build_jobs = ("build-linux", "build-macos-arm", "build-macos-intel", "build-windows")
     for event in ("push", "release", "workflow_dispatch", "pull_request"):
-        for signing in ("success", "failure", "skipped", "cancelled"):
+        for signing, mac_signing in product(("success", "failure", "skipped", "cancelled"), repeat=2):
             for failed_build in (None, *build_jobs):
                 expression = package_condition.replace("always()", "True").replace(
                     "!cancelled()", "True"
@@ -343,10 +344,13 @@ def archive_main(argv=None):
                         f"needs.{job}.result", repr("failure" if job == failed_build else "success")
                     )
                 expression = expression.replace("needs.sign-windows.result", repr(signing))
+                expression = expression.replace("needs.sign-macos.result", repr(mac_signing))
                 expression = expression.replace("github.event_name", repr(event))
                 expression = " ".join(expression.replace("&&", "and").replace("||", "or").split())
                 allowed = failed_build is None and (
                     signing == "success" or (event == "pull_request" and signing == "skipped")
+                ) and (
+                    mac_signing == "success" or (event == "pull_request" and mac_signing == "skipped")
                 )
                 assert eval(expression, {"__builtins__": {}}, {}) == allowed
     block = workflow.split("\n  release:\n")[-1]

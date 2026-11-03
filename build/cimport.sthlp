@@ -199,14 +199,18 @@ UTF-16LE/BE, UTF-32LE/BE, ASCII, Latin-1/9, Windows code pages and Mac Roman.
 {phang}
 {opt rowrange([start][:end])} specifies a range of rows to import. As in
 {cmd:import delimited}, rows are lines of the file: the variable-names line,
-blank lines, and lines inside quoted fields all count. Use
+blank lines, and lines inside quoted fields all count. Lines end at LF, CRLF,
+or a lone CR. Use
 {opt rowrange(100:200)} to import lines 100-200, and {opt rowrange(100:)} or
 {opt rowrange(100)} to import from line 100 to the end.
 
 {phang}
 {opt colrange([start][:end])} specifies a range of columns to import.
 Use {opt colrange(2:5)} to import columns 2-5, or {opt colrange(3:)}
-to import from column 3 to the last column.
+to import from column 3 to the last column. As in {cmd:import delimited}, the
+other columns play no part: the header is detected, generated names are
+numbered, and {opt numericcols()} and {opt stringcols()} count columns within
+the range.
 
 {phang}
 {opt emptylines(option)} specifies how empty lines in the file are handled.
@@ -274,7 +278,8 @@ Chart, dialog, and macro sheets contain no importable worksheet data.
 {phang}
 {opt cellrange(range)} selects a rectangular range, for example {cmd:A1:F100}.
 A single cell such as {cmd:B5} sets the upper-left corner and reads through
-the worksheet's remaining used range.
+the worksheet's remaining used range. As with {cmd:import excel}, a range that
+extends beyond the worksheet's data area is an error.
 
 {phang}
 {opt firstrow} uses the first imported row as variable names. Without it, names

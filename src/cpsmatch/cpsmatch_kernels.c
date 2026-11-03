@@ -197,6 +197,60 @@ int cpsmatch_find_nearest_neighbors_fast(double pscore_treated,
     /* Binary search to find insertion point */
     size_t insert_pos = cpsmatch_binary_search_left(sorted_controls, n_controls, pscore_treated);
 
+    if (!handle_ties)
+    {
+        /* psmatch2's match_pscore with replacement: the nearest control is
+         * the closer of those just below and at or above the score, the
+         * lower on equal distance, and the first of a run of equal scores
+         * (its scan keeps the first of equal distances); neighbor(k) then
+         * adds the k-1 closest around it (match2, left on equal distance).
+         * Every distance must be below caliper (strict; 0 = none). */
+        const double p = pscore_treated;
+        const double cal = caliper != 0.0 ? caliper : INFINITY;
+        size_t jmatch = insert_pos;
+        if (insert_pos == n_controls ||
+            (insert_pos > 0 && fabs(p - sorted_controls[insert_pos - 1].pscore) <=
+                                   fabs(p - sorted_controls[insert_pos].pscore)))
+        {
+            jmatch = cpsmatch_binary_search_left(sorted_controls, n_controls,
+                                                 sorted_controls[insert_pos - 1].pscore);
+        }
+        if (!(fabs(p - sorted_controls[jmatch].pscore) < cal))
+        {
+            result->n_matches = 0;
+            result->on_support = 0;
+            return 0;
+        }
+        if (cpsmatch_match_workspace_ensure_match(ws, (size_t)n_neighbors) != 0)
+            return -1;
+        int n = 0;
+        ws->match_ids[n++] = control_indices[sorted_controls[jmatch].orig_idx];
+        ssize_t pos0 = (ssize_t)jmatch - 1;
+        size_t pos1 = jmatch + 1;
+        while (n < n_neighbors)
+        {
+            size_t jm;
+            if (pos0 >= 0 && (pos1 >= n_controls ||
+                              fabs(p - sorted_controls[pos0].pscore) <=
+                                  fabs(p - sorted_controls[pos1].pscore)))
+                jm = (size_t)pos0--;
+            else if (pos1 < n_controls)
+                jm = pos1++;
+            else
+                break;
+            if (!(fabs(p - sorted_controls[jm].pscore) < cal))
+                break;
+            ws->match_ids[n++] = control_indices[sorted_controls[jm].orig_idx];
+        }
+        for (int i = 0; i < n; i++)
+            ws->match_weights[i] = 1.0 / (double)n;
+        result->match_ids = ws->match_ids;
+        result->match_weights = ws->match_weights;
+        result->n_matches = n;
+        result->on_support = 1;
+        return 0;
+    }
+
     /* For k-NN, we need to find k nearest neighbors around insert_pos
      * Use two pointers expanding outward from insert_pos */
 
@@ -365,7 +419,10 @@ int cpsmatch_find_kernel_matches_fast(double pscore_treated,
     double search_radius = bandwidth; /* Most kernels have support [-1, 1] */
     if (kernel == KERNEL_NORMAL)
     {
-        search_radius = 6.0 * bandwidth; /* Normal has infinite support, use 6 SD for precision */
+        /* psmatch2 weighs every control by normalden(u); exp(-u^2/2)
+         * underflows to exactly 0 beyond |u| = 38.6, so this window loses
+         * nothing */
+        search_radius = 38.7 * bandwidth;
     }
     if (caliper != 0.0 && caliper < search_radius)
     {

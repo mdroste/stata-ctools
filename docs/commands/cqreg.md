@@ -114,7 +114,9 @@ V = sparsity² * q*(1-q) * (X'X)⁻¹
 ```
 
 ### Robust
-Uses the Powell sandwich estimator for heteroskedasticity-robust inference.
+Uses the Powell sandwich estimator for heteroskedasticity-robust inference. As in `qreg`, the
+Hessian is inverted with `invsym()`, so directions without density (a level or the constant whose
+observations all have zero fitted density) get zero rows in `e(V)`, and `e(df_r)` is N - `e(rank)`.
 
 ### Density Methods
 The sparsity 1/f(0) (or, for robust standard errors, the per-observation densities) is estimated as in `qreg`:

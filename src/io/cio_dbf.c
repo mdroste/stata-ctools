@@ -257,7 +257,7 @@ int cio_export_dbf(const char *selection)
                 goto done;
             }
         }
-        else if (!strncmp(format, "%td", 3) || !strcmp(format, "%d"))
+        else if (!strncmp(format, "%td", 3))
         {
             width = 8;
             f[11] = 'D';

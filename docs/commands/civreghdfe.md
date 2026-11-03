@@ -125,7 +125,11 @@ With the `first` option, `civreghdfe` reports:
 - First-stage F-statistics for each endogenous variable
 - Reports excluded-instrument relevance; interpretation depends on the model and covariance estimator
 
-Computed from the partial R-squared of excluded instruments in first-stage regressions.
+With the unadjusted covariance this is the classical F from the partial R-squared of the
+excluded instruments. With robust, cluster, kernel (HAC/AC, Driscoll-Kraay, Kiefer) or
+probability-weighted fits it is the Wald test of the excluded instruments under that
+covariance, scaled as `ivreg2`'s `e(first)["F",]`; with clusters its denominator degrees of
+freedom are G-1.
 
 ## Variance-Covariance Estimation
 
@@ -202,7 +206,9 @@ For valid 2SLS estimation:
 - Iteratively projects out factor means
 - Convergence controlled by `tolerance()` and `maxiter()`
 - Regressors and instruments absorbed by the fixed effects (sum of squares after absorption at most min(1e-6, `tolerance()`/10) times the sum of squared deviations before it) are omitted. `ivreghdfe` checks collinearity before absorbing, so it keeps such a column as partialling noise in its ranks unless its solver removes it exactly; to match its degrees of freedom, `civreghdfe` still counts an omitted column in K and in the residual and overidentification degrees of freedom when the fixed effects do not remove it exactly (it is absorbed only jointly by several unbalanced fixed effects, e.g. age = year - birth year with `absorb(id year)`), and absorbed exogenous regressors count among the instruments in the Cragg-Donald and Kleibergen-Paap Wald F degrees of freedom
-- `partial()` variables are partialled out of the demeaned data with the estimation weights; collinear or absorbed `partial()` variables are dropped with a note
+- `partial()` variables are partialled out of the demeaned data with the estimation weights; collinear or absorbed `partial()` variables are dropped with a note. `e(partial)` and `e(partial_ct)` record them; without `absorb()`, `predict` returns only residuals (the full model's), as `ivreg2`
+- Without `absorb()`, the constant is screened for collinearity first, so a regressor that is constant on the sample, or a full set of dummies, is omitted instead of `_cons`, as in `ivreg2`
+- `coviv` gives LIML, Fuller and k-class the 2SLS covariance form (X'P_Z X)^-1 in every covariance estimator, as `ivreg2`
 
 ### Diagnostic-test options
 - `orthog()`, `endogtest()`, `redundant()` and `partial()` accept factor-variable and time-series varlists, matched against the expanded model terms; repeated names count once and base levels are skipped

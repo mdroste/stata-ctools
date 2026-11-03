@@ -641,6 +641,49 @@ static ST_retcode partition_by_group(ST_double **y, ST_double **x, ST_double **w
     return CBINSCATTER_OK;
 }
 
+/* binscatter treats x as discrete, one bin per value, when the estimation
+ * sample (pooled over by-groups) has at most nquantiles distinct values of
+ * the x it bins (residualized under controls() or absorb()). Returns 1 if
+ * it does, 0 if not, -1 when memory runs out. A small open-addressing set
+ * stops at the first value past the limit, so the cost is one pass over x
+ * whatever the number of distinct values. */
+static int x_has_few_values(const ST_double *x, ST_int N, ST_int limit)
+{
+    size_t cap = 16;
+    while (cap < 2 * ((size_t)limit + 1)) cap <<= 1;
+    ST_double *table = (ST_double *)malloc(cap * sizeof(ST_double));
+    unsigned char *used = (unsigned char *)calloc(cap, 1);
+    if (!table || !used) {
+        free(table);
+        free(used);
+        return -1;
+    }
+    ST_int count = 0;
+    int few = 1;
+    for (ST_int i = 0; i < N && few; i++) {
+        /* -0 and 0 are one value, as in binscatter's sorted comparison */
+        ST_double v = x[i] == 0 ? 0.0 : x[i];
+        unsigned long long bits;
+        memcpy(&bits, &v, sizeof(bits));
+        bits ^= bits >> 33;
+        bits *= 0xff51afd7ed558ccdULL;
+        bits ^= bits >> 33;
+        size_t h = (size_t)bits & (cap - 1);
+        while (used[h] && table[h] != v) h = (h + 1) & (cap - 1);
+        if (!used[h]) {
+            if (++count > limit) {
+                few = 0;
+            } else {
+                used[h] = 1;
+                table[h] = v;
+            }
+        }
+    }
+    free(table);
+    free(used);
+    return few;
+}
+
 /* ========================================================================
  * Main Computation Function
  * ======================================================================== */
@@ -858,6 +901,18 @@ static ST_retcode do_compute_bins(void) {
                              ((config.has_controls && config.num_controls > 0) ||
                               config.has_absorb));
     double t_group_fit = 0.0;
+
+    /* Like binscatter (classic method), an x with no more distinct values
+     * than nquantiles is binned as with option discrete, also under by() and
+     * weights: each group's own values become its bins */
+    if (config.method == 0 && !config.discrete) {
+        int few = x_has_few_values(x, N_valid, config.nquantiles);
+        if (few < 0) {
+            rc = CBINSCATTER_ERR_MEMORY;
+            goto cleanup;
+        }
+        config.discrete = few;
+    }
 
     /* binscatter's by() bins every group on the quantiles of the pooled
      * (residualized) x; binsreg's method bins each group separately */

@@ -52,6 +52,14 @@ program define cexport, rclass
     syntax [anything] [using/] [if] [in], [Delimiter(string) NOVARNames QUOTE ///
         NOQUOTEif REPLACE DATAfmt DATEString(string) NOLabel Verbose ///
         MMAP NOFSYNC DIRECT PREFAULT CRLF NOPARALLEL THReads(integer 0)]
+    * The if is evaluated now, as export delimited does, before any helper
+    * replaces the r() or e() results it may name.
+    local iftouse ""
+    if `"`if'"' != "" {
+        tempvar iftouse
+        mark `iftouse' `if' `in'
+        local if "if `iftouse'"
+    }
 
     * Handle filename - can come from using/ or as last positional argument
     if `"`using'"' == "" & `"`anything'"' != "" {
@@ -69,9 +77,7 @@ program define cexport, rclass
     }
     mata: st_local("__basename", pathbasename(st_local("using")))
     if !strpos(`"`__basename'"', ".") local using `"`using'.csv"'
-    * Resolve varlist from anything.
-    * Must happen BEFORE marksample, which creates a touse tempvar
-    * that ds would include in the variable list.
+    * Resolve varlist from anything, leaving out the sample marker.
     if strtrim(`"`anything'"') != "" {
         unab varlist : `anything'
     }
@@ -79,9 +85,7 @@ program define cexport, rclass
         qui ds
         local varlist `r(varlist)'
     }
-
-    * Mark sample
-    marksample touse, novarlist
+    local varlist : list varlist - iftouse
 
     * Validate file
     if "`replace'" == "" {
@@ -111,6 +115,8 @@ program define cexport, rclass
             di as error "cexport: delimiter must be a single character"
             exit 198
         }
+        * A byte token survives whitespace and quote parsing in the dispatcher.
+        mata: st_local("plugin_delim", "byte="+strofreal(ascii(st_local("delimiter"))))
     }
 
     * Handle value labels: decode labeled variables unless nolabel specified
@@ -168,8 +174,27 @@ program define cexport, rclass
         capture confirm numeric variable `var'
         if !_rc & ("`datafmt'" != "" | `is_time') {
             if `"`datestring'"' != "" & `is_time' local fmt `"`datestring'"'
+            * As export delimited does, a decimal-comma format is written with
+            * a decimal point (%9,2fc as %9.2fc) and only leading blanks
+            * removed; any other comma format loses its thousands separators
+            * and zero padding (%012.0gc as %12.0g), and a left-justified one
+            * is not zero padded (%-08.2f).
+            local trim strtrim
+            if !`is_time' {
+                if strpos("`fmt'", ",") {
+                    local fmt = subinstr("`fmt'", ",", ".", 1)
+                    local trim strltrim
+                }
+                else {
+                    if substr("`fmt'", 1, 3) == "%-0" local fmt = "%-" + substr("`fmt'", 4, .)
+                    if substr("`fmt'", -1, 1) == "c" {
+                        local fmt = substr("`fmt'", 1, length("`fmt'") - 1)
+                        if substr("`fmt'", 1, 2) == "%0" local fmt = "%" + substr("`fmt'", 3, .)
+                    }
+                }
+            }
             tempvar formatted
-            quietly gen `formatted' = cond(`var' == ., "", strtrim(string(`var', `"`fmt'"')))
+            quietly gen `formatted' = cond(`var' == ., "", `trim'(string(`var', `"`fmt'"')))
             local new_export_varlist `new_export_varlist' `formatted'
             local formatted_vars `formatted_vars' `formatted'
         }
@@ -252,8 +277,8 @@ program define cexport, rclass
         local __cexport_name_`metadata_i' : word `metadata_i' of `varlist'
         if "`firstrow'" == "varlabels" {
             local header_var : word `metadata_i' of `varlist'
-            local header_label : variable label `header_var'
-            if `"`macval(header_label)'"' != "" local __cexport_name_`metadata_i' `"`macval(header_label)'"'
+            * Labels may come from someone else's file: Mata only
+            mata: st_local("__cexport_name_`metadata_i'", st_varlabel("`header_var'") != "" ? st_varlabel("`header_var'") : st_local("__cexport_name_`metadata_i'"))
         }
         local __cexport_type_`metadata_i' : word `metadata_i' of `vartypes'
         local __cexport_date_`metadata_i' : word `metadata_i' of `date_cols'
@@ -276,21 +301,14 @@ program define cexport, rclass
     _ctools_strw `export_varlist'
 
     * Stata answers an if one observation at a time. Without one the plugin
-    * skips the check; an if is marked first and passed last, as a sample
-    * marker the plugin reads in parallel, unless in limits the range
-    * (marking covers every observation). The marker is the last variable
-    * until it is dropped after the call, which is then free.
+    * skips the check; the if marked after syntax is passed last, as a
+    * sample marker the plugin reads in parallel.
     local opt_select "skipif"
     local marker ""
-    local ifcond `"`if'"'
-    if `"`if'"' != "" & `"`in'"' == "" {
-        tempvar marker
-        mark `marker' `if'
+    local ifcond ""
+    if `"`if'"' != "" {
+        local marker "`iftouse'"
         local opt_select "touse"
-        local ifcond ""
-    }
-    else if `"`if'"' != "" {
-        local opt_select ""
     }
 
     * Call the C plugin
@@ -300,7 +318,6 @@ program define cexport, rclass
         "cexport `threads_code' `plugin_delim' `opt_replace' `opt_noheader' `opt_quote' `opt_noquoteif' `opt_verbose' `opt_mmap' `opt_nofsync' `opt_direct' `opt_prefault' `opt_crlf' `opt_noparallel' `opt_select'"
 
     local export_rc = _rc
-    if "`marker'" != "" drop `marker'
 
     * Clean up global macros
 
@@ -410,6 +427,14 @@ program define cexport_excel, rclass
         REPLACE DATAfmt DATEString(string) NOLabel Verbose ///
         CELL(string) MISSING(string) KEEPCELLfmt THReads(integer 0) ///
         SHEETMODify SHEETREPlace LOCALE(string)]
+    * The if is evaluated now, as export excel does, before any helper
+    * replaces the r() or e() results it may name.
+    local iftouse ""
+    if `"`if'"' != "" {
+        tempvar iftouse
+        mark `iftouse' `if' `in'
+        local if "if `iftouse'"
+    }
 
     _cexport_excel_sheet `macval(sheet)'
     local sheet `"`r(sheet)'"'
@@ -462,6 +487,7 @@ program define cexport_excel, rclass
         qui ds
         local varlist `r(varlist)'
     }
+    local varlist : list varlist - iftouse
 
     * Mark sample
     marksample touse, novarlist
@@ -718,8 +744,8 @@ program define cexport_excel, rclass
         local __cexport_name_`metadata_i' : word `metadata_i' of `varlist'
         if "`firstrow'" == "varlabels" {
             local header_var : word `metadata_i' of `varlist'
-            local header_label : variable label `header_var'
-            if `"`macval(header_label)'"' != "" local __cexport_name_`metadata_i' `"`macval(header_label)'"'
+            * Labels may come from someone else's file: Mata only
+            mata: st_local("__cexport_name_`metadata_i'", st_varlabel("`header_var'") != "" ? st_varlabel("`header_var'") : st_local("__cexport_name_`metadata_i'"))
         }
         local __cexport_type_`metadata_i' : word `metadata_i' of `vartypes'
         local __cexport_date_`metadata_i' : word `metadata_i' of `date_cols'

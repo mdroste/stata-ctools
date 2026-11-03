@@ -83,10 +83,21 @@ program define cmerge, rclass
     * exceeds c(max_preservemem)); option fast keeps no copy at all.
     _cmerge_mode `0'
     tempname snapframe
+    * Stata keeps e(sample) in a hidden column that merge moves with each
+    * master observation (0 on using-only ones) but the plugin cannot reach.
+    * When it is set, hold the estimates with e(sample) copied into a master
+    * variable, which the merge carries, and unhold them afterwards.
+    local esample : e(functions)
+    local esample : list posof "sample" in esample
+    if `esample' {
+        tempname eshold
+        tempvar esvar
+    }
     * Break is recognized only inside _cmerge_impl.
     nobreak {
         macro drop CTOOLS_cmu_* CTOOLS_cmerge_plugin
         global CTOOLS_cmerge_snapframe `snapframe'
+        if `esample' _estimates hold `eshold', copy varname(`esvar')
         if "`mode'" == "snapshot" preserve
         capture noisily break _cmerge_impl `0'
         local rc = _rc
@@ -97,18 +108,35 @@ program define cmerge, rclass
             global CTOOLS_cmerge_assert_failed
             _cmerge_commit
             if "`mode'" == "snapshot" restore, not
+            if `esample' _cmerge_esample `eshold' `esvar'
             exit 9
         }
         global CTOOLS_cmerge_assert_failed
         if `rc' {
             _cmerge_rollback
             if "`mode'" == "snapshot" restore
+            if `esample' _cmerge_esample `eshold' `esvar'
             exit `rc'
         }
         return add
         _cmerge_commit
         if "`mode'" == "snapshot" restore, not
+        if `esample' _cmerge_esample `eshold' `esvar'
     }
+end
+
+* Unhold the estimates cmerge held, with e(sample) taken from the master
+* variable the merge carried: 0 on using-only observations, as merge leaves
+* them. Without that variable (option fast after a failure) the estimates
+* return with an empty e(sample).
+program define _cmerge_esample
+    args hold var
+    capture confirm variable `var', exact
+    if !_rc {
+        quietly count if missing(`var')
+        if r(N) quietly replace `var' = 0 if missing(`var')
+    }
+    _estimates unhold `hold'
 end
 
 * The undo mode requested in cmerge's options: local mode in the caller is
@@ -1374,7 +1402,10 @@ program define _cmerge_impl, rclass
     * =========================================================================
 
     * merge checks assert() before applying keep()
+    * An assertion failure keeps the merged values, including replacements of
+    * sort variables. Make their metadata safe before that early commit.
     if "`assert'" != "" {
+        if !`same_order' nobreak _cmerge_clear_sortedby
         _cmerge_assert "`assert_codes'" `merge_master' `merge_using' ///
             `merge_matched' `merge_updated' `merge_conflict'
     }

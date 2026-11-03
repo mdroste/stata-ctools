@@ -97,6 +97,31 @@ foreach opt in "encoding(bogus)" "delimiters(foo)" "delimiters(|)" {
     local cr=_rc
     cio_record "CSV empty option error `opt'" `=cond(`nr'==`cr',0,9)'
 }
+* Lone CR line endings end rows as in native: classic Mac files, mixed CR and
+* LF, CR inside quotes, blank CR lines and CR before CRLF.
+foreach pair in `"cr_only id,value<CR>1,100<CR>2,200<CR>"' `"cr_mixed id,value<CR>1,100<LF>2,200<CR>3,300<LF>"' `"cr_quoted id,text<CR>1,"a<CR>b"<CR>2,"c"<CR>"' `"cr_blank id,value<CR><CR>1,100<CR><CR>2,200<CR>"' `"cr_crlf id,value<CR><CR><LF>1,100<CR><CR><LF>2,200<CR><CR><LF>"' `"cr_noend id<TAB>value<CR>1<TAB>100<CR>2<TAB>200"' {
+    gettoken file text : pair
+    mata: _p = st_local("root") + "/`file'.csv"; _t = subinstr(subinstr(subinstr(strtrim(st_local("text")), "<CR>", char(13)), "<LF>", char(10)), "<TAB>", char(9)); if (fileexists(_p)) unlink(_p); _f = fopen(_p, "w"); fwrite(_f, _t); fclose(_f)
+    foreach opt in "" "bindquotes(strict)" "rowrange(2:3)" "varnames(nonames)" "bindquotes(nobind)" {
+        cio_import_test using "`root'/`file'.csv", kind(delimited) name("CSV lone CR `file' `opt'") opts(`opt')
+    }
+}
+* colrange() selects columns before header detection, naming and
+* numericcols()/stringcols() numbering, as in native.
+foreach pair in "cr_dup id,x,x<LF>1,2,3<LF>4,5,6<LF>" "cr_hdr a,b<LF>1,x<LF>2,y<LF>" "cr_force a,b,c<LF>1,2,3<LF>4,x,6<LF>" "cr_force2 a,b,c<LF>q,2,3<LF>4,5,6<LF>" "cr_ragged a,b<LF>1,2,3<LF>4,5<LF>" "cr_nohdr 1,2,3<LF>4,5,6<LF>" "cr_emptyhdr a,,c<LF>1,2,3<LF>" {
+    gettoken file text : pair
+    mata: _p = st_local("root") + "/`file'.csv"; _t = subinstr(subinstr(subinstr(strtrim(st_local("text")), "<CR>", char(13)), "<LF>", char(10)), "<TAB>", char(9)); if (fileexists(_p)) unlink(_p); _f = fopen(_p, "w"); fwrite(_f, _t); fclose(_f)
+}
+foreach case in "dup colrange(3)" "dup colrange(2:3)" "dup colrange(2:3) varnames(1)" "hdr colrange(2)" "hdr colrange(2) varnames(1)" "hdr colrange(3:4)" "hdr colrange(5)" "force colrange(2:3) numericcols(1)" "force colrange(2:3) stringcols(3)" "force2 colrange(2:3) stringcols(1)" "ragged colrange(2)" "ragged colrange(3)" "nohdr colrange(2:3)" "nohdr colrange(2:3) varnames(nonames)" "emptyhdr colrange(2:3)" {
+    gettoken file opt : case
+    cio_import_test using "`root'/cr_`file'.csv", kind(delimited) name("CSV colrange `file' `opt'") opts(`opt')
+}
+* A file wider than maxvar imports with a narrow colrange().
+local file cr_wide
+mata: st_local("text", invtokens(strofreal(1..(c("maxvar") + 10)), ",") + "<LF>" + invtokens(strofreal(1..(c("maxvar") + 10)), ",") + "<LF>")
+mata: _p = st_local("root") + "/`file'.csv"; _t = subinstr(subinstr(subinstr(strtrim(st_local("text")), "<CR>", char(13)), "<LF>", char(10)), "<TAB>", char(9)); if (fileexists(_p)) unlink(_p); _f = fopen(_p, "w"); fwrite(_f, _t); fclose(_f)
+cio_import_test using "`root'/cr_wide.csv", kind(delimited) name("CSV colrange on a file wider than maxvar") opts(colrange(1:10) varnames(nonames))
+mata: mata drop _p _t _f
 di "CSV_OPTIONS_PASSED=$IO_FORMATS_PASSED FAILED=$IO_FORMATS_FAILED"
 if $IO_FORMATS_FAILED exit 9
     global CTOOLS_CASE_COMPLETE "io_delimited_options"
@@ -276,6 +301,47 @@ foreach ext in xls xlsx {
 foreach ext in xls xlsx {
     cio_import_test using "`root'/headers.`ext'", kind(excel) name("`ext' duplicate/numeric/reserved/Unicode names") opts(firstrow)
 }
+* Header fallbacks can displace earlier names, including collision chains.
+foreach headers in "B B C" "B C C" "B C B" "C C A" "B 123 C" "B B A" "X X X" "A A A" {
+    clear
+    set obs 2
+    forvalues j=1/3 {
+        gen double v`j'=`j'+_n/7
+        local header : word `j' of `headers'
+        label var v`j' "`header'"
+    }
+    foreach ext in xls xlsx {
+        export excel using "`root'/collisions.`ext'", firstrow(varlabels) replace
+    }
+    foreach ext in xls xlsx {
+        foreach case in preserve lower upper {
+            cio_import_test using "`root'/collisions.`ext'", kind(excel) name("`ext' fallback chain `headers' `case'") opts(firstrow case(`case'))
+        }
+    }
+}
+* Native resolves raw names before case conversion; a new collision is an
+* error. Our error contract also preserves the caller's original dataset.
+clear
+set obs 2
+gen a=_n
+gen b=_n+1
+label var a "x"
+label var b "X"
+export excel using "`root'/case_collision.xlsx", firstrow(varlabels) replace
+capture noisily import excel using "`root'/case_collision.xlsx", firstrow case(lower) clear
+local native_rc=_rc
+clear
+set obs 2
+gen double sentinel=99
+label var sentinel "Original label"
+format sentinel %12.0g
+capture noisily cimport excel using "`root'/case_collision.xlsx", firstrow case(lower) clear
+assert _rc==`native_rc' & `native_rc'==110
+assert _N==2 & c(k)==1
+assert sentinel==99
+assert "`: variable label sentinel'"=="Original label"
+assert "`: format sentinel'"=="%12.0g"
+cio_record "Excel case collision preserves original data" 0
 foreach opt in "allstring allstring(%9.2f)" "allstring(%9s)" "allstring(bad)" "case(p)" "cellrange(B2:)" {
     capture noisily import excel using "`root'/numbers.xlsx", `opt' clear
     local nr=_rc
@@ -335,6 +401,125 @@ foreach ext in xls xlsx {
         cio_import_state_test using "`root'/`ext'_`corruption'.`ext'", kind(excel) state(changed) opts(describe)
     }
 }
+* cellrange() must lie within the worksheet's data area, as in native. Column
+* B has a value only below the range, so A1:B2 is still inside it.
+clear
+set obs 5
+gen a=_n
+gen b=cond(_n==5,9,.)
+quietly export excel using "`root'/late_column.xls", replace
+quietly export excel using "`root'/late_column.xlsx", replace
+foreach ext in xls xlsx {
+    cio_import_test using "`root'/late_column.`ext'", kind(excel) name("`ext' cellrange inside a later data column") opts(cellrange(A1:B2))
+    foreach range in "A1:C2" "A1:B6" "C1:C2" "A6:B6" "A1:IV3" "A1:A65536" "C3" {
+        capture noisily import excel using "`root'/late_column.`ext'", clear cellrange(`range')
+        local nr=_rc
+        capture noisily cimport excel using "`root'/late_column.`ext'", clear cellrange(`range')
+        cio_record "`ext' cellrange(`range') outside the data area" `=cond(`nr'==_rc & _rc==198,0,9)'
+    }
+}
+* More columns than maxvar, and a lone value at XFD1048576 (17 billion dense
+* cells), fail before the data in memory is replaced.
+quietly putexcel set "`root'/wide.xlsx", replace
+quietly putexcel A1 = 1
+quietly putexcel XFD1 = 2
+quietly putexcel save
+quietly putexcel set "`root'/far.xlsx", replace
+quietly putexcel A1 = 1
+quietly putexcel XFD1048576 = 2
+quietly putexcel save
+capture noisily import excel using "`root'/wide.xlsx", clear
+local nr=_rc
+foreach book in wide far {
+    clear
+    quietly set obs 2
+    gen long sentinel=99
+    capture noisily cimport excel using "`root'/`book'.xlsx", clear
+    local cr=_rc
+    local kept=c(k)==1 & _N==2 & sentinel[1]==99
+    if "`book'"=="wide" cio_record "xlsx columns beyond maxvar keep the data" `=cond(`nr'==900 & `cr'==900 & `kept',0,9)'
+    else cio_record "xlsx cell at XFD1048576 fails with r(909)" `=cond(`cr'==909 & `kept',0,9)'
+}
+* sheet(..., modify) on workbooks whose rows or cells omit their optional r
+* attributes, and on one with no styles part: compare with native's edit.
+foreach book in norcells norboth nostyles {
+    foreach who in export cexport {
+        copy "`root'/positions_`book'.xlsx" "`root'/positions_`book'_`who'.xlsx", replace
+        clear
+        quietly set obs 3
+        gen x=9000+_n
+        quietly `who' excel x using "`root'/positions_`book'_`who'.xlsx", sheet("Sheet1", modify) cell(B2)
+    }
+    quietly import excel using "`root'/positions_`book'_export.xlsx", clear
+    tempfile edited
+    quietly save `edited'
+    capture noisily import excel using "`root'/positions_`book'_cexport.xlsx", clear
+    local rc=_rc
+    if !`rc' {
+        capture cf _all using `edited', all
+        local rc=_rc
+    }
+    cio_record "xlsx modify of positions_`book' matches native" `rc'
+}
+* Text that is not valid UTF-8 fails like native, keeping the destination.
+clear
+quietly set obs 2
+gen str10 s=cond(_n==1,"caf"+char(233),"ok")
+capture noisily export excel using "`root'/invalid_utf8_native.xlsx", replace
+local nr=_rc
+quietly export excel using "`root'/invalid_utf8.xlsx" in 2, replace
+quietly checksum "`root'/invalid_utf8.xlsx"
+local before=r(checksum)
+foreach mode in replace modify {
+    local opt replace
+    if "`mode'"=="modify" local opt `"sheet("Sheet1", modify)"'
+    capture noisily cexport excel using "`root'/invalid_utf8.xlsx", `opt'
+    local cr=_rc
+    quietly checksum "`root'/invalid_utf8.xlsx"
+    cio_record "xlsx invalid UTF-8 `mode' fails like native" `=cond(`nr'==9901 & `cr'==9901 & r(checksum)==`before',0,9)'
+}
+* XLS modify of a worksheet that embeds a chart substream: the chart is kept
+* and both sheets stay readable. (Native's own edit of this file empties them.)
+copy "`root'/chart_in_sheet.xls" "`root'/chart_in_sheet_edit.xls", replace
+clear
+quietly set obs 2
+gen c=_n+6
+capture noisily cexport excel c using "`root'/chart_in_sheet_edit.xls", sheet("Data", modify) cell(D2)
+local rc=_rc
+if !`rc' {
+    capture noisily import excel using "`root'/chart_in_sheet_edit.xls", sheet("Data") clear
+    local rc=_rc
+    if !`rc' local rc=cond(_N==4 & c(k)==4 & A[2]==11 & B[4]==32 & D[2]==7 & D[3]==8 & missing(D[1]),0,9)
+}
+if !`rc' {
+    capture noisily import excel using "`root'/chart_in_sheet_edit.xls", sheet("Other") clear
+    local rc=cond(_rc,_rc,cond(_N==3 & A[3]==102,0,9))
+}
+cio_record "xls modify keeps an embedded chart substream" `rc'
+* A chart sheet first: cimport reads the first worksheet, rejects sheet("Chart1")
+* (error 601) for import and export, and describe lists it without a range.
+quietly import excel using "`root'/chart_sheet_first.xls", sheet("Data") clear
+tempfile first_worksheet
+quietly save `first_worksheet'
+capture noisily cimport excel using "`root'/chart_sheet_first.xls", clear
+local rc=_rc
+if !`rc' {
+    capture cf _all using `first_worksheet', all
+    local rc=_rc
+}
+cio_record "xls default sheet skips a chart sheet" `rc'
+capture noisily cimport excel using "`root'/chart_sheet_first.xls", sheet("Chart1") clear
+cio_record "xls sheet() naming a chart sheet fails" `=cond(_rc==601,0,9)'
+cio_workbook_test using "`root'/chart_sheet_first.xls", name("xls describe lists a chart sheet without a range")
+quietly checksum "`root'/chart_sheet_first.xls"
+local before=r(checksum)
+clear
+quietly set obs 1
+gen c=9
+capture noisily cexport excel c using "`root'/chart_sheet_first.xls", sheet("Chart1", modify) cell(B2)
+local cr=_rc
+quietly checksum "`root'/chart_sheet_first.xls"
+cio_record "xls modify of a chart sheet fails and keeps the file" `=cond(`cr'==601 & r(checksum)==`before',0,9)'
 di "IO_OPTIONS_PASSED=$IO_FORMATS_PASSED FAILED=$IO_FORMATS_FAILED"
 if $IO_FORMATS_FAILED exit 9
     global CTOOLS_CASE_COMPLETE "io_excel_options"
@@ -376,6 +561,78 @@ cio_import_test using "temp/io_allformats/native/fixture.sav", kind(spss) name("
 use "temp/io_allformats/source.dta", clear
 cio_export_test, kind(spss) ext(sav) name("SPSS no value labels") opts(novallabels)
 cio_export_test, kind(spss) ext(sav) name("SPSS subset including missing") select(small precise text if small>2)
+preserve
+clear
+set obs 6
+gen double day=cond(_n==1,td(01jan1960),cond(_n==2,td(01jan1973),td(01jan2020)))
+gen double leftday=day
+gen double clock=day*86400000+43200000+.125
+gen double leftclk=clock
+gen double leap=Cofc(clock)
+gen double leftleap=leap
+foreach v of varlist _all {
+    replace `v'=. in 5
+    replace `v'=.z in 6
+    label var `v' "Preserved `v' label"
+}
+format day %td
+format leftday %-td
+format clock %tc
+format leftclk %-tc
+format leap %tC
+format leftleap %-tC
+cio_export_test, kind(spss) ext(sav) name("SPSS left-justified dates and leap-second clocks")
+cio_export_test, kind(spss) ext(sav) name("SPSS selected leap-second clocks") select(leap leftleap if _n!=2)
+* The source values and formats must survive both success and publication failure.
+assert leap==Cofc(clock) if !missing(clock)
+assert "`: format leftleap'"=="%-tC"
+capture noisily cexport spss using "temp/io_allformats/result/output.sav", replace
+assert _rc==0
+capture noisily cexport spss using "temp/io_allformats/result/output.sav"
+assert _rc==602
+assert leap==Cofc(clock) if !missing(clock)
+assert leap==.z & leftleap==.z in 6
+foreach pair in "sasxport5 xpt" "sasxport8 v8xpt" {
+    gettoken kind ext : pair
+    local ext=strtrim("`ext'")
+    cio_export_test, kind(`kind') ext(`ext') name("`kind' left date formats retain transport units") select(day leftday clock leftclk)
+}
+* Native export writes the legacy %d format as a plain number, not a date.
+gen double legacy=day
+gen double leftlegacy=day
+format legacy %d
+format leftlegacy %-d
+foreach pair in "spss sav" "sasxport8 v8xpt" "dbase dbf" {
+    gettoken kind ext : pair
+    local ext=strtrim("`ext'")
+    cio_export_test, kind(`kind') ext(`ext') name("`kind' legacy %d format is numeric") select(legacy leftlegacy)
+}
+* Native SPSS and XPORT8 writers store period dates as the first day of the
+* period with a period format, and store %tC clocks without leap seconds.
+gen double month=cond(missing(day),day,mofd(day)+_n)
+replace month=month+.5 in 4
+gen double leftmonth=month
+gen double quarter=cond(missing(day),day,qofd(day)-_n)
+gen double leftquarter=quarter
+gen double week=cond(missing(day),day,wofd(day)+13*_n)
+gen double leftweek=week
+gen double half=cond(missing(day),day,hofd(day)+_n)
+gen double lefthalf=half
+format month %tm
+format leftmonth %-tm
+format quarter %tq
+format leftquarter %-tqCCYY!qq
+format week %tw
+format leftweek %-tw
+format half %th
+format lefthalf %-th
+foreach pair in "spss sav" "sasxport8 v8xpt" {
+    gettoken kind ext : pair
+    local ext=strtrim("`ext'")
+    cio_export_test, kind(`kind') ext(`ext') name("`kind' period dates use first-day date formats") select(month leftmonth quarter leftquarter week leftweek half lefthalf)
+}
+cio_export_test, kind(sasxport8) ext(v8xpt) name("sasxport8 leap-second clocks") select(leap leftleap)
+restore
 replace text="café Ω" in 1
 label define yesno 1 "Oui café" 2 "Non Ω" 3 "Autre", replace
 label variable text "Texte Ω"
@@ -472,6 +729,7 @@ cio_import_test using "temp/io_allformats/long.sas7bdat", kind(sas) name("SAS lo
 cio_import_test using "temp/io_allformats/long.sas7bdat", kind(sas) name("SAS catalogue definitions; valid display format") longstring opts(bcat("temp/io_allformats/labels.sas7bcat"))
 cio_import_test using "temp/io_allformats/formats.sav", kind(spss) name("SPSS display formats and user-defined missing values") nativebadfmt
 cio_import_test using "temp/io_allformats/formats.sas7bdat", kind(sas) name("SAS standard and custom format names")
+cio_import_test using "temp/io_allformats/nonint.sav", kind(spss) name("SPSS non-integer and out-of-range value labels are skipped")
 
 use "temp/io_allformats/source.dta", clear
 drop stamp
@@ -581,6 +839,103 @@ foreach pair in "delimited temp/io_allformats/memory.csv" "excel temp/io_allform
         cio_import_state_test using "`path'", kind(`kind') state(`state')
     }
 }
+/* Text from a file (CSV/TSV headers, XLSX sheet names and header cells, XPORT
+   labels, .dta variable labels exported as headers) is data. Each payload
+   would write fio_m1.txt or fio_m2.txt if it ran as Stata code; one closes
+   compound quotes, one is a macro expression, one holds $ and local
+   references. The ctools command must give native's rc, variable names,
+   labels, values and r() text, and create no marker. The payloads are built
+   and compared in Mata only, so the test itself never expands them. */
+capture mata: mata drop _fio_meta()
+mata:
+string rowvector _fio_meta(real scalar names)
+{
+    real scalar j
+    string rowvector m
+    m = J(1, 0, "")
+    for (j = 1; j <= st_nvar(); j++) {
+        m = m, (names ? st_varname(j) : ""), st_varlabel(j),
+            (st_isstrvar(j) ? invtokens(st_sdata(., j)') : invtokens(strofreal(st_data(., j))'))
+    }
+    return(m)
+}
+_fio_q = char(34); _fio_b = char(96); _fio_a = char(39)
+_fio_p = ("x" + _fio_q + _fio_a + "+string(filewrite(" + _fio_q + "fio_m1.txt" + _fio_q + "," + _fio_q + "x" + _fio_q + "))+" + _fio_b + _fio_q + "y",
+    _fio_b + "=filewrite(" + _fio_q + "fio_m2.txt" + _fio_q + "," + _fio_q + "x" + _fio_q + ")" + _fio_a,
+    "cost " + char(36) + "HOME " + _fio_b + "c(os)" + _fio_a + " " + _fio_q + "q" + _fio_q)
+end
+capture program drop _fio_case
+program define _fio_case
+    syntax, native(string asis) ctools(string asis) name(string) [rmacros(string) NONAMES]
+    foreach side in native ctools {
+        clear
+        capture ``side''
+        local rc_`side' = _rc
+        mata: _fio_r_`side' = J(1, 0, "")
+        foreach r of local rmacros {
+            mata: _fio_r_`side' = _fio_r_`side', st_global("r(`r')")
+        }
+        mata: _fio_m_`side' = _fio_meta("`nonames'" == "")
+    }
+    local rc = 0
+    if `rc_native' != `rc_ctools' local rc = 9
+    mata: st_local("same", strofreal(_fio_m_native == _fio_m_ctools & _fio_r_native == _fio_r_ctools))
+    if !`same' local rc = 9
+    foreach marker in fio_m1.txt fio_m2.txt {
+        capture confirm file "`marker'"
+        if !_rc local rc = 9
+        capture erase "`marker'"
+    }
+    if `rc' di as error "`name': rc native `rc_native' ctools `rc_ctools', same `same'"
+    cio_record "`name'" `rc'
+end
+* A dataset whose variable labels carry the payloads, exported with them as
+* the header row, then read back as text by native import excel
+capture program drop _fio_export
+program define _fio_export
+    args command file
+    clear
+    quietly set obs 2
+    foreach v in a b c {
+        quietly gen double `v' = _n
+    }
+    mata: st_varlabel("a", _fio_p[1]); st_varlabel("b", _fio_p[2]); st_varlabel("c", _fio_p[3])
+    `command' excel using "`file'", firstrow(varlabels) replace
+    import excel using "`file'", allstring clear
+end
+_fio_case, native(import delimited using "temp/io_allformats/inj_header.csv", clear) ///
+    ctools(cimport delimited using "temp/io_allformats/inj_header.csv", clear) ///
+    name("file text: CSV header cells")
+_fio_case, native(import delimited using "temp/io_allformats/inj_header.tsv", clear delimiters(tab)) ///
+    ctools(cimport delimited using "temp/io_allformats/inj_header.tsv", clear delimiters(tab)) ///
+    name("file text: TSV header cell")
+_fio_case, native(import excel using "temp/io_allformats/inj_text.xlsx", describe) ///
+    ctools(cimport excel using "temp/io_allformats/inj_text.xlsx", describe) ///
+    name("file text: XLSX sheet name in describe") rmacros(worksheet_1 range_1)
+_fio_case, native(import excel using "temp/io_allformats/inj_text.xlsx", firstrow clear) ///
+    ctools(cimport excel using "temp/io_allformats/inj_text.xlsx", firstrow clear) ///
+    name("file text: XLSX header cells") nonames
+* Names are left out above: native import excel derives the first header's
+* name as xstringfilewritefio_m1txt, cimport as xstringfilewritefio_m1txtxy
+* (a separate naming difference for headers holding compound quotes).
+clear
+quietly set obs 2
+gen double a = _n
+gen double b = _n
+mata: st_varlabel("a", _fio_p[2]); st_varlabel("b", _fio_p[3])
+export sasxport5 a b using "temp/io_allformats/inj_label.xpt", replace
+_fio_case, native(import sasxport5 "temp/io_allformats/inj_label.xpt", describe) ///
+    ctools(cimport sasxport5 "temp/io_allformats/inj_label.xpt", describe) ///
+    name("file text: XPORT labels in describe") rmacros(members)
+_fio_case, native(import sasxport5 "temp/io_allformats/inj_label.xpt", clear) ///
+    ctools(cimport sasxport5 "temp/io_allformats/inj_label.xpt", clear) ///
+    name("file text: XPORT labels")
+_fio_case, native(_fio_export export "temp/io_allformats/native/inj_header.xlsx") ///
+    ctools(_fio_export cexport "temp/io_allformats/result/inj_header.xlsx") ///
+    name("file text: variable labels as exported headers")
+mata: mata drop _fio_q _fio_b _fio_a _fio_p
+capture mata: mata drop _fio_r_native _fio_r_ctools _fio_m_native _fio_m_ctools
+
 di "IO_FORMATS_PASSED=$IO_FORMATS_PASSED FAILED=$IO_FORMATS_FAILED"
 if $IO_FORMATS_FAILED exit 9
     global CTOOLS_CASE_COMPLETE "io_formats"
@@ -689,9 +1044,9 @@ program define io_import_case
 end
 
 program define io_export_case
-    syntax, NAME(string) [OPTS(string asis)]
-    quietly export delimited using "temp/io_parity/reference.csv", replace `opts'
-    capture noisily cexport delimited using "temp/io_parity/result.csv", replace `opts'
+    syntax, NAME(string) [OPTS(string asis) SELECT(string asis)]
+    quietly export delimited `select' using "temp/io_parity/reference.csv", replace `opts'
+    capture noisily cexport delimited `select' using "temp/io_parity/result.csv", replace `opts'
     local rc = _rc
     if !`rc' {
         mata: st_local("identical", strofreal(io_samefile("temp/io_parity/reference.csv", "temp/io_parity/result.csv")))
@@ -740,6 +1095,16 @@ quietly replace s = 200 * (char(34) + "ab,") in 5
 io_export_case, name("default CSV bytes, precision, long quotes")
 io_export_case, name("forced quoting") opts(quote)
 io_export_case, name("tab delimiter") opts(delimiter(tab))
+* Compare bytes: auto-detecting an import can conceal the wrong delimiter.
+local tab=char(9)
+foreach delimiter in " " "`tab'" "tab" "," ";" {
+    io_export_case, name("literal delimiter bytes") opts(delimiter("`delimiter'"))
+    io_export_case, name("literal delimiter quoted selected bytes") opts(delimiter("`delimiter'") novarnames quote) select(d s if _n>1 in 1/5)
+    quietly export delimited d s using "temp/io_parity/reference.csv", delimiter("`delimiter'") replace
+    capture erase "temp/io_parity/new.csv"
+    cexport delimited d s using "temp/io_parity/new.csv", delimiter("`delimiter'") threads(2)
+    mata: assert(io_samefile("temp/io_parity/reference.csv","temp/io_parity/new.csv"))
+}
 format d %20.5f
 io_export_case, name("numeric display formats") opts(datafmt)
 io_export_case, name("numeric display formats and quote") opts(datafmt quote)

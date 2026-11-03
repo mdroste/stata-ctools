@@ -19,18 +19,25 @@ program define cbsample
     syntax [anything(name=n)] [if] [in], [STRata(varlist) CLuster(varlist) Weight(varname) Verbose THReads(integer 0)]
     local __wgtvar `weight'
     local weight
+    _ctools_cleanup cbsample
+    if !inrange(`threads', 0, 256) exit 198
 
     local __do_timing = ("`verbose'" != "")
 
-    * Mark sample
-    marksample touse, novarlist
-    markout `touse' `strata', strok
-
-    * Count observations
-    quietly count if `touse'
-    local nobs_sample = r(N)
-    if `nobs_sample' == 0 {
-        exit 0
+    * With no rows, native bsample distinguishes its fast no-option path
+    * from explicit count/if/strata/cluster syntax. Let it validate those
+    * empty-data cases; no random draws or C transfers are required.
+    if _N == 0 {
+        local empty_opts
+        if "`strata'" != "" local empty_opts `empty_opts' strata(`strata')
+        if "`cluster'" != "" local empty_opts `empty_opts' cluster(`cluster')
+        if "`__wgtvar'" != "" local empty_opts `empty_opts' weight(`__wgtvar')
+        quietly bsample `n' `if' `in', `empty_opts'
+        foreach result in nobs n_selected total_weight nclusters nstrata {
+            scalar _cbsample_`result' = 0
+        }
+        scalar _cbsample_threads = 1
+        exit
     }
 
     * Parse n (positional argument, defaults to _N)
@@ -52,6 +59,30 @@ program define cbsample
     * Validate weight variable exists if specified (matches bsample behavior)
     if "`__wgtvar'" != "" {
         confirm numeric variable `__wgtvar'
+    }
+
+    * A stratified draw with no eligible strata has zero weight. An empty
+    * unstratified selection in nonempty data is an error instead.
+    marksample touse, novarlist
+    markout `touse' `strata', strok
+    * bsample leaves the caller's r() in place.
+    tempname __rhold
+    _return hold `__rhold'
+    quietly count if `touse'
+    local nobs_sample = r(N)
+    _return restore `__rhold'
+    if `nobs_sample' == 0 {
+        if "`strata'" == "" {
+            di as error "cbsample: no observations in sampling sample"
+            exit 198
+        }
+        if "`__wgtvar'" != "" quietly replace `__wgtvar' = 0
+        else quietly drop if 1
+        foreach result in nobs n_selected total_weight nclusters nstrata {
+            scalar _cbsample_`result' = 0
+        }
+        scalar _cbsample_threads = 1
+        exit
     }
 
     * Load plugin

@@ -1472,6 +1472,43 @@ foreach N in 1000 450000 {
     }
 }
 
+* e(sample) and stored estimation samples follow the observations, as with sort
+do "validation/support/esample_helpers.do"
+capture program drop _csort_esample_setup
+program define _csort_esample_setup
+    clear
+    quietly set obs 40
+    gen long id = _n
+    gen double x = mod(_n * 17, 41) + _n / 100
+    gen double y = x + mod(_n * 7, 5)
+    gen str3 s = char(65 + mod(_n * 13, 26)) + string(_n)
+    gen byte g = mod(_n, 3) != 0
+    quietly regress y x if !g
+    estimates store m2
+    quietly regress y x if g
+    estimates store m1
+    if "$CTOOLS_esample_unnamed" == "1" quietly regress y x if g & id > 5
+end
+foreach unnamed in 0 1 {
+    global CTOOLS_esample_unnamed `unnamed'
+    foreach spec in "x" "s" "g x" "x, stream(1)" "x, algorithm(msd)" "x, nosortedby" {
+        local nspec : subinstr local spec ", nosortedby" ""
+        local nspec : subinstr local nspec ", stream(1)" ""
+        local nspec : subinstr local nspec ", algorithm(msd)" ""
+        _ctools_esample_case, setup(_csort_esample_setup) native(sort `nspec') ///
+            ctools(csort `spec') testname("e(sample) after csort `spec' (unnamed=`unnamed')")
+    }
+}
+global CTOOLS_esample_unnamed
+* Without estimation results nothing changes
+clear
+quietly set obs 5
+gen double x = 6 - _n
+csort x
+local f : e(functions)
+if "`f'" == "" & x[1] == 1 test_pass "csort without estimation results"
+else test_fail "csort without estimation results" "functions=[`f']"
+
 * End of csort validation
 noi print_summary "csort"
 }

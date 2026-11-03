@@ -47,50 +47,60 @@ void ppml_update_fe_weights(HDFE_State *S, const ST_double *irls_w, ST_int N)
     }
 }
 
-ST_double ppml_compute_deviance(const ST_double *y, const ST_double *mu, const ST_double *w_user,
-                                ST_int N)
+/* y*log(y/mu) - (y - mu) for mu = exp(eta_total). When y is close to a
+   large mean the two terms nearly cancel and y*(log(y) - eta) keeps only
+   about eps*|log y|/|y/mu - 1| of its digits; mu*((1+r)*log1p(r) - r) with
+   r = y/mu - 1 is exact to rounding. y = 0 gives mu. */
+static ST_double ppml_unit_deviance(ST_double y, ST_double eta_total)
 {
-    ST_int i;
-    ST_double dev = 0.0;
-
-    for (i = 0; i < N; i++)
-    {
-        ST_double w = (w_user != NULL) ? w_user[i] : 1.0;
-        ST_double d;
-        if (y[i] > 0.0)
-        {
-            d = y[i] * log(y[i] / mu[i]) - (y[i] - mu[i]);
+    ST_double mu = exp(eta_total);
+    if (y <= 0.0) return mu;
+    ST_double r = (y - mu) / mu;
+    if (fabs(r) < 1e-2) {
+        /* (1+r)log1p(r) - r = sum_{k>=2} (-1)^k r^k / (k(k-1)) */
+        ST_double term = r * r, sum = 0.0;
+        for (int k = 2; k <= 12; k++) {
+            sum += ((k % 2) ? -term : term) / (ST_double)(k * (k - 1));
+            term *= r;
         }
-        else
-        {
-            d = mu[i]; /* 0*log(0/mu) - (0 - mu) = mu */
-        }
-        dev += w * d;
+        return mu * sum;
     }
-
-    return 2.0 * dev;
+    if (fabs(r) < 1.0) return mu * ((1.0 + r) * log1p(r) - r);
+    return y * (log(y) - eta_total) - (y - mu);
 }
 
-ST_double ppml_compute_loglik(const ST_double *y, const ST_double *mu, const ST_double *w_user,
-                              ST_int N)
+/* y*log(y) - y - lngamma(y+1), the saturated Poisson log likelihood of one
+   outcome; Stirling's series avoids the cancellation of its large terms */
+static ST_double ppml_saturated_loglik(ST_double y)
 {
-    ST_int i;
-    ST_double ll = 0.0;
+    if (y <= 0.0) return 0.0;
+    if (y < 10.0) return y * log(y) - y - lgamma(y + 1.0);
+    ST_double inv = 1.0 / y, inv2 = inv * inv;
+    return -0.5 * (1.8378770664093454836 + log(y))   /* log(2*pi) */
+           - inv * (1.0 / 12.0 - inv2 * (1.0 / 360.0 - inv2 * (1.0 / 1260.0 - inv2 / 1680.0)));
+}
 
-    for (i = 0; i < N; i++)
-    {
+ST_double ppml_compute_deviance(const ST_double *y, const ST_double *eta, const ST_double *offset,
+                                const ST_double *w_user, ST_int N)
+{
+    dd_real dev = {0.0, 0.0};
+    for (ST_int i = 0; i < N; i++) {
         ST_double w = (w_user != NULL) ? w_user[i] : 1.0;
-        ST_double contrib;
-        if (y[i] > 0.0)
-        {
-            contrib = y[i] * log(mu[i]) - mu[i] - lgamma(y[i] + 1.0);
-        }
-        else
-        {
-            contrib = -mu[i];
-        }
-        ll += w * contrib;
+        ST_double eta_total = eta[i] + (offset != NULL ? offset[i] : 0.0);
+        dev = dd_add_d(dev, w * ppml_unit_deviance(y[i], eta_total));
     }
+    return 2.0 * (dev.hi + dev.lo);
+}
 
-    return ll;
+/* ll = sum of y*log(mu) - mu - lngamma(y+1) = saturated ll - deviance/2 */
+ST_double ppml_compute_loglik(const ST_double *y, const ST_double *eta, const ST_double *offset,
+                              ST_double log_scale, const ST_double *w_user, ST_int N)
+{
+    dd_real ll = {0.0, 0.0};
+    for (ST_int i = 0; i < N; i++) {
+        ST_double w = (w_user != NULL) ? w_user[i] : 1.0;
+        ST_double eta_total = eta[i] + (offset != NULL ? offset[i] : 0.0) + log_scale;
+        ll = dd_add_d(ll, w * (ppml_saturated_loglik(y[i]) - ppml_unit_deviance(y[i], eta_total)));
+    }
+    return ll.hi + ll.lo;
 }

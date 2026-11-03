@@ -87,6 +87,43 @@ static int cimport_normalize_delimiters(CImportContext *ctx) {
   return 0;
 }
 
+/* Native ends a line at a lone CR as at LF. Rewrite each CR that is not
+   followed by LF to LF, keeping every byte offset, so the row parser, chunk
+   boundaries and rowrange() line counts see native lines. Under
+   bindquotes(strict) a CR inside quotes stays part of the field. */
+static int cimport_normalize_line_endings(CImportContext *ctx) {
+  const char *data = ctx->file_data;
+  size_t n = ctx->file_size, i = 0;
+  for (const char *cr; (cr = memchr(data + i, '\r', n - i)); i = (size_t)(cr - data) + 1)
+    if ((size_t)(cr - data) + 1 == n || cr[1] != '\n')
+      break;
+  if (i >= n || !memchr(data + i, '\r', n - i))
+    return 0;
+  char *out = ctx->converted_data;
+  if (out != data) {
+    out = n < SIZE_MAX ? malloc(n + 1) : NULL;
+    if (!out)
+      return 920;
+    memcpy(out, data, n);
+    out[n] = 0;
+    free(ctx->converted_data);
+  }
+  int strict = ctx->bindquotes == CIMPORT_BINDQUOTES_STRICT, quoted = 0;
+  for (size_t j = 0; j < n; j++) {
+    char ch = out[j];
+    if (strict && ch == '"') {
+      if (quoted && j + 1 < n && out[j + 1] == '"')
+        j++;
+      else
+        quoted = !quoted;
+    } else if (ch == '\r' && !quoted && (j + 1 == n || out[j + 1] != '\n'))
+      out[j] = '\n';
+  }
+  ctx->file_data = ctx->converted_data = out;
+  ctx->converted_size = n;
+  return 0;
+}
+
 static int cimport_check_quoted_rows(const CImportContext *ctx) {
   if (ctx->bindquotes != CIMPORT_BINDQUOTES_STRICT || ctx->max_quoted_rows <= 0)
     return 0;

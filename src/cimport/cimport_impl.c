@@ -191,6 +191,15 @@ static void cimport_row_range(size_t *first, size_t *last) {
 
 /* Native reads a row within rowrange() when the row ends on or after the first
  * line and the row read before it (or the header) ended before the last line. */
+/* colrange() as file columns [col_first, cimport_col_stop) */
+static int cimport_col_stop(const CImportContext *ctx) {
+    return ctx->col_last > 0 && ctx->col_last < ctx->num_columns ? ctx->col_last : ctx->num_columns;
+}
+
+static bool cimport_col_selected(const CImportContext *ctx, int col) {
+    return col >= ctx->col_first && col < cimport_col_stop(ctx);
+}
+
 static bool cimport_line_in_range(size_t first, size_t last, size_t prev, size_t line) {
     return (!last || prev < last) && (!first || line >= first);
 }
@@ -275,7 +284,12 @@ static void cimport_sanitize_varname(const char *input, int len, char *output) {
  * ============================================================================ */
 
 static CImportNumericSubtype cimport_determine_numeric_subtype(CImportColumnInfo *col, bool use_double_for_decimals) {
-    if (col->min_value < -2147483647.0 || col->max_value > 2147483620.0) {
+    /* As native import does, a column with non-integers is double only when
+     * one of its integer values (every value beyond 2^53 is one) leaves the
+     * long range; non-integers alone keep float storage. */
+    double low = col->is_integer ? col->min_value : col->int_min_value;
+    double high = col->is_integer ? col->max_value : col->int_max_value;
+    if (low < -2147483647.0 || high > 2147483620.0) {
         return CIMPORT_NUM_DOUBLE;
     }
 
@@ -353,7 +367,7 @@ static int cimport_parse_header(CImportContext *ctx) {
         if (!candidates) { free(fields); return -1; }
         for (int i = 0; i < ctx->num_columns; i++) {
             int len = CIMPORT_FIELD_LENGTH(fields[i]);
-            candidates[i] = len && !cimport_context_numeric(ctx,&fields[i]);
+            candidates[i] = len && cimport_col_selected(ctx, i) && !cimport_context_numeric(ctx,&fields[i]);
         }
         size_t first, last, prev = 0;
         cimport_row_range(&first, &last);
@@ -394,9 +408,9 @@ static int cimport_parse_header(CImportContext *ctx) {
             cimport_extract_field_fast(ctx->file_data, &fields[i], name_buf, sizeof(name_buf), cimport_extract_quote(ctx));
             cimport_sanitize_varname(name_buf, strlen(name_buf), ctx->columns[i].name);
             if (!ctx->columns[i].name[0])
-                snprintf(ctx->columns[i].name, sizeof(ctx->columns[i].name), "v%d", i + 1);
+                snprintf(ctx->columns[i].name, sizeof(ctx->columns[i].name), "v%d", i + 1 - ctx->col_first);
         } else {
-            snprintf(ctx->columns[i].name, CTOOLS_MAX_VARNAME_LEN, "v%d", i + 1);
+            snprintf(ctx->columns[i].name, CTOOLS_MAX_VARNAME_LEN, "v%d", i + 1 - ctx->col_first);
         }
         ctx->columns[i].type = CIMPORT_COL_UNKNOWN;
         ctx->columns[i].max_strlen = 0;
@@ -416,6 +430,8 @@ static bool cimport_col_in_list(int col_1based, int *list, int count) {
 
 /* String overrides take precedence over numeric overrides. */
 static int cimport_column_force(const CImportContext *ctx, int col) {
+    if (!cimport_col_selected(ctx, col)) return CIMPORT_FORCE_NONE;
+    col -= ctx->col_first;
     if (ctx->force_string_cols && cimport_col_in_list(col + 1, ctx->force_string_cols, ctx->num_force_string))
         return CIMPORT_FORCE_STRING;
     if (ctx->force_numeric_cols && cimport_col_in_list(col + 1, ctx->force_numeric_cols, ctx->num_force_numeric))
@@ -437,6 +453,8 @@ static void cimport_init_col_stats(CImportColumnParseStats *stats, int count) {
     for (int i = 0; i < count; i++) {
         stats[i].num_min = DBL_MAX;
         stats[i].num_max = -DBL_MAX;
+        stats[i].int_min = DBL_MAX;
+        stats[i].int_max = -DBL_MAX;
     }
 }
 
@@ -485,6 +503,10 @@ static inline uint64_t cimport_accumulate_field(CImportContext *ctx, CImportColu
         return cached;
     }
     if (floor(val) != val) stats->num_nonint = true;
+    else {
+        if (val < stats->int_min) stats->int_min = val;
+        if (val > stats->int_max) stats->int_max = val;
+    }
     if (val < stats->num_min) stats->num_min = val;
     if (val > stats->num_max) stats->num_max = val;
     return cached;
@@ -512,6 +534,8 @@ static void cimport_infer_column_types(CImportContext *ctx) {
         colinfo->is_integer = true;
         colinfo->min_value = DBL_MAX;
         colinfo->max_value = -DBL_MAX;
+        colinfo->int_min_value = DBL_MAX;
+        colinfo->int_max_value = -DBL_MAX;
         colinfo->num_subtype = CIMPORT_NUM_DOUBLE;
         for (int c = 0; c < ctx->num_chunks; c++) {
             CImportParsedChunk *chunk = &ctx->chunks[c];
@@ -525,6 +549,8 @@ static void cimport_infer_column_types(CImportContext *ctx) {
             if (stats->num_nonint) colinfo->is_integer = false;
             if (stats->num_min < colinfo->min_value) colinfo->min_value = stats->num_min;
             if (stats->num_max > colinfo->max_value) colinfo->max_value = stats->num_max;
+            if (stats->int_min < colinfo->int_min_value) colinfo->int_min_value = stats->int_min;
+            if (stats->int_max > colinfo->int_max_value) colinfo->int_max_value = stats->int_max;
         }
 
         colinfo->column_has_quotes = has_quotes;
@@ -552,9 +578,7 @@ static void cimport_infer_column_types(CImportContext *ctx) {
         }
 
         colinfo->type = CIMPORT_COL_NUMERIC;
-        if (!colinfo->is_integer && ctx->numeric_type_mode == CIMPORT_NUMTYPE_FLOAT) {
-            colinfo->num_subtype = CIMPORT_NUM_FLOAT;
-        } else if (!colinfo->is_integer && ctx->numeric_type_mode == CIMPORT_NUMTYPE_DOUBLE) {
+        if (!colinfo->is_integer && ctx->numeric_type_mode == CIMPORT_NUMTYPE_DOUBLE) {
             colinfo->num_subtype = CIMPORT_NUM_DOUBLE;
         } else if (colinfo->min_value == DBL_MAX) {
             colinfo->num_subtype = force == CIMPORT_FORCE_NUMERIC ? CIMPORT_NUM_DOUBLE : CIMPORT_NUM_BYTE;
@@ -1146,7 +1170,9 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
       return ctx;
     }
 
-    int normalize_rc = cimport_normalize_delimiters(ctx);
+    int normalize_rc = cimport_normalize_line_endings(ctx);
+    if (!normalize_rc)
+      normalize_rc = cimport_normalize_delimiters(ctx);
     if (!normalize_rc)
       normalize_rc = cimport_check_quoted_rows(ctx);
     if (normalize_rc) {
@@ -1179,6 +1205,14 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
         }
     }
 
+    {
+        char text[32] = "";
+        SF_macro_use("___cimport_startcol", text, sizeof(text) - 1);
+        ctx->col_first = atoi(text) > 1 ? atoi(text) - 1 : 0;
+        text[0] = 0;
+        SF_macro_use("___cimport_endcol", text, sizeof(text) - 1);
+        ctx->col_last = atoi(text) > 0 ? atoi(text) : 0;
+    }
     if (cimport_parse_header(ctx) != 0) {
         cimport_display_error("Failed to parse header");
         cimport_free_context(ctx);
@@ -1431,7 +1465,7 @@ parse_rows:
 
         for (int i = old_num; i < new_num; i++) {
             memset(&ctx->columns[i], 0, sizeof(CImportColumnInfo));
-            snprintf(ctx->columns[i].name, CTOOLS_MAX_VARNAME_LEN, "v%d", i + 1);
+            snprintf(ctx->columns[i].name, CTOOLS_MAX_VARNAME_LEN, "v%d", i + 1 - ctx->col_first);
             ctx->columns[i].type = CIMPORT_COL_UNKNOWN;
             ctx->columns[i].max_strlen = 0;
         }
@@ -1911,13 +1945,16 @@ static ST_retcode cimport_do_scan(const char *filename, char delimiter, bool has
     snprintf(macro_val, sizeof(macro_val), "%zu", ctx->total_rows);
     SF_macro_save("_cimport_nobs", macro_val);
 
-    snprintf(macro_val, sizeof(macro_val), "%d", ctx->num_columns);
+    /* Only the colrange() columns become variables, numbered from 1. */
+    int first = ctx->col_first, stop = cimport_col_stop(ctx);
+    if (stop < first) stop = first;
+    snprintf(macro_val, sizeof(macro_val), "%d", stop - first);
     SF_macro_save("_cimport_nvar", macro_val);
 
     char *p = macro_val;
     char *end = macro_val + sizeof(macro_val) - 1;
-    for (int i = 0; i < ctx->num_columns && p < end; i++) {
-        if (i > 0 && p < end) *p++ = ' ';
+    for (int i = first; i < stop && p < end; i++) {
+        if (i > first && p < end) *p++ = ' ';
         size_t name_len = strlen(ctx->columns[i].name);
         size_t space_left = (size_t)(end - p);
         if (name_len > space_left) name_len = space_left;
@@ -1928,16 +1965,16 @@ static ST_retcode cimport_do_scan(const char *filename, char delimiter, bool has
     SF_macro_save("_cimport_varnames", macro_val);
 
     p = macro_val;
-    for (int i = 0; i < ctx->num_columns && p < end; i++) {
-        if (i > 0 && p < end) *p++ = ' ';
+    for (int i = first; i < stop && p < end; i++) {
+        if (i > first && p < end) *p++ = ' ';
         if (p < end) *p++ = (ctx->columns[i].type == CIMPORT_COL_STRING) ? '1' : '0';
     }
     *p = '\0';
     SF_macro_save("_cimport_vartypes", macro_val);
 
     p = macro_val;
-    for (int i = 0; i < ctx->num_columns && p < end; i++) {
-        if (i > 0 && p < end) *p++ = ' ';
+    for (int i = first; i < stop && p < end; i++) {
+        if (i > first && p < end) *p++ = ' ';
         if (p < end) {
             if (ctx->columns[i].type == CIMPORT_COL_STRING) {
                 *p++ = '0';
@@ -1950,8 +1987,8 @@ static ST_retcode cimport_do_scan(const char *filename, char delimiter, bool has
     SF_macro_save("_cimport_numtypes", macro_val);
 
     p = macro_val;
-    for (int i = 0; i < ctx->num_columns && p < end; i++) {
-        if (i > 0 && p < end) *p++ = ' ';
+    for (int i = first; i < stop && p < end; i++) {
+        if (i > first && p < end) *p++ = ' ';
         int len = ctx->columns[i].type == CIMPORT_COL_STRING ? ctx->columns[i].max_strlen : 0;
         int written = snprintf(p, (size_t)(end - p + 1), "%d", len);
         if (written > 0 && p + written <= end) p += written;
@@ -1959,8 +1996,8 @@ static ST_retcode cimport_do_scan(const char *filename, char delimiter, bool has
     *p = '\0';
     SF_macro_save("_cimport_strlens", macro_val);
     p=macro_val;
-    for(int i=0;i<ctx->num_columns && p<end;i++) {
-        if(i>0 && p<end)*p++=' ';
+    for(int i=first;i<stop && p<end;i++) {
+        if(i>first && p<end)*p++=' ';
         if(p<end)*p++=ctx->columns[i].use_strl ? '1' : '0';
     }
     *p=0;SF_macro_save("_cimport_longtypes",macro_val);
@@ -1978,9 +2015,9 @@ static ST_retcode cimport_do_scan(const char *filename, char delimiter, bool has
         }
         count = cimport_parse_header_row(ctx, headings, NULL, NULL);
     }
-    for (int i = 0; i < ctx->num_columns; i++) {
+    for (int i = first; i < stop; i++) {
         char key[64], value[CTOOLS_MAX_STRING_LEN + 1] = "";
-        snprintf(key, sizeof(key), "_cimport_label_%d", i + 1);
+        snprintf(key, sizeof(key), "_cimport_label_%d", i + 1 - first);
         if (i < count) cimport_extract_field_fast(ctx->file_data, &headings[i], value, sizeof(value), cimport_extract_quote(ctx));
         SF_macro_save(key, value);
     }
@@ -2007,7 +2044,8 @@ static ST_retcode cimport_do_scan(const char *filename, char delimiter, bool has
 #define CIMPORT_STORE_TILE_ROWS 2048
 
 /* Per-column store kinds */
-enum { CIMPORT_STORE_NUMERIC = 0, CIMPORT_STORE_STRING = 1, CIMPORT_STORE_STRL = 2 };
+enum { CIMPORT_STORE_NUMERIC = 0, CIMPORT_STORE_STRING = 1, CIMPORT_STORE_STRL = 2,
+       CIMPORT_STORE_SKIP = 3 /* outside colrange() */ };
 
 typedef struct {
     CImportContext *ctx;
@@ -2059,8 +2097,8 @@ static void *cimport_store_tile_worker(void *arg) {
             ST_retcode rc = 0;
             int kind = task->kind[col];
             if (col >= nfields) {
-                if (kind == CIMPORT_STORE_NUMERIC) rc = store(col + 1, obs, missing);
-                else if (kind == CIMPORT_STORE_STRING) rc = SF_sstore(col + 1, obs, "");
+                if (kind == CIMPORT_STORE_NUMERIC) rc = store(col + 1 - ctx->col_first, obs, missing);
+                else if (kind == CIMPORT_STORE_STRING) rc = SF_sstore(col + 1 - ctx->col_first, obs, "");
             } else {
                 field.length = row->lengths[col];
                 if (kind == CIMPORT_STORE_NUMERIC) {
@@ -2071,11 +2109,11 @@ static void *cimport_store_tile_worker(void *arg) {
                         rc = atomic_load(&ctx->error_code);
                         val = missing;
                     }
-                    if (!rc) rc = store(col + 1, obs, val);
+                    if (!rc) rc = store(col + 1 - ctx->col_first, obs, val);
                 } else if (kind == CIMPORT_STORE_STRING) {
                     /* strL columns are transferred by the ado (cimport blob). */
                     cimport_store_text(ctx, &field, buf, sizeof(buf), quote);
-                    rc = SF_sstore(col + 1, obs, buf);
+                    rc = SF_sstore(col + 1 - ctx->col_first, obs, buf);
                 }
                 field.offset += CIMPORT_FIELD_LENGTH(field) + 1;
             }
@@ -2154,14 +2192,14 @@ static void *cimport_store_stream_worker(void *arg)
                     }
                 }
                 if (!rc)
-                    rc = store(col + 1, obs, val);
+                    rc = store(col + 1 - ctx->col_first, obs, val);
             }
             else if (task->kind[col] == CIMPORT_STORE_STRING)
             {
                 buf[0] = '\0';
                 if (col < nfields)
                     cimport_store_text(ctx, &fields[col], buf, sizeof(buf), quote);
-                rc = SF_sstore(col + 1, obs, buf);
+                rc = SF_sstore(col + 1 - ctx->col_first, obs, buf);
             }
             if (rc)
             {
@@ -2234,10 +2272,10 @@ static void *cimport_store_compact_worker(void *arg)
                         rc = atomic_load(&ctx->error_code);
                         value = missing;
                     }
-                    if (!rc) rc = store(col + 1, obs, value);
+                    if (!rc) rc = store(col + 1 - ctx->col_first, obs, value);
                 } else if (task->kind[col] == CIMPORT_STORE_STRING) {
                     if (!repair[col] && block->columns[col].kind == CIMPORT_CACHE_INLINE_TEXT) {
-                        rc = SF_sstore(col + 1, obs, (char *)cimport_cache_text(block, col, r));
+                        rc = SF_sstore(col + 1 - ctx->col_first, obs, (char *)cimport_cache_text(block, col, r));
                         if (rc) { task->error = rc; break; }
                         continue;
                     }
@@ -2246,7 +2284,7 @@ static void *cimport_store_compact_worker(void *arg)
                         CImportFieldRef field = cimport_cache_field(block, col, r);
                         cimport_store_text(ctx, &field, buf, sizeof(buf), quote);
                     } else if (col < nfields) cimport_store_text(ctx, &fields[col], buf, sizeof(buf), quote);
-                    rc = SF_sstore(col + 1, obs, buf);
+                    rc = SF_sstore(col + 1 - ctx->col_first, obs, buf);
                 }
                 if (rc) { task->error = rc; break; }
             }
@@ -2318,9 +2356,11 @@ static ST_retcode cimport_do_load(const char *filename, char delimiter, bool has
 
     (void)verbose; /* verbose timing reported via scalars */
 
-    if (stata_nvars < ctx->num_columns) {
+    int selected = cimport_col_stop(ctx) - ctx->col_first;
+    if (selected < 0) selected = 0;
+    if (stata_nvars < selected) {
         snprintf(msg, sizeof(msg), "Error: Stata has %d variables but CSV has %d columns\n",
-                 stata_nvars, ctx->num_columns);
+                 stata_nvars, selected);
         cimport_display_error(msg);
         cimport_clear_cached_context();
         return 198;
@@ -2349,7 +2389,11 @@ static ST_retcode cimport_do_load(const char *filename, char delimiter, bool has
 
         ST_retcode store_error = 0;
         for (int col = 0; col < ctx->num_columns; col++) {
-            ST_int var = col + 1;
+            ST_int var = col + 1 - ctx->col_first;
+            if (!cimport_col_selected(ctx, col)) {
+                kind[col] = CIMPORT_STORE_SKIP;
+                continue;
+            }
             bool is_string = ctx->columns[col].type == CIMPORT_COL_STRING;
             kind[col] = !is_string ? CIMPORT_STORE_NUMERIC
                       : SF_var_is_strl(var) ? CIMPORT_STORE_STRL : CIMPORT_STORE_STRING;
@@ -2439,7 +2483,8 @@ typedef struct {
 
 static ST_retcode cimport_blob(int col, int row, size_t offset) {
     CImportContext *ctx=g_cimport_ctx;
-    if (!ctx || col<1 || col>ctx->num_columns || row<1 || (size_t)row>ctx->total_rows ||
+    if (ctx) col+=ctx->col_first; /* variable number -> file column (colrange()) */
+    if (!ctx || col<1 || !cimport_col_selected(ctx,col-1) || row<1 || (size_t)row>ctx->total_rows ||
         ctx->columns[col-1].type!=CIMPORT_COL_STRING) return 198;
     cimport_build_column_cache(ctx);
     if(!ctx->cache_ready)return atomic_load(&ctx->error_code) ? atomic_load(&ctx->error_code) : 920;

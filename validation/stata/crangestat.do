@@ -1793,6 +1793,57 @@ capture cf _all using `rb_copy', all
 if `rc' == 198 & !_rc test_pass "[rollback] snapshot and fast together refused"
 else test_fail "[rollback] snapshot and fast together refused" "rc=`rc', data changed=`=_rc!=0'"
 
+* A compensated mean must survive cancellation across every group strategy.
+foreach size in 3 8 64 200 {
+    foreach groups in 1 8 {
+        clear
+        set obs `=`size'*`groups''
+        gen long g = floor((_n-1)/`size')
+        gen double t = mod(_n-1,`size')+1
+        gen double x = cond(t==1,1e16,cond(t==2,1,cond(t==3,-1e16,.)))
+        * Vary original order without changing key order or group membership.
+        gsort -t -g
+        foreach nt in 1 4 {
+            rangestat (mean) ref=x, interval(t . .) by(g)
+            crangestat (mean) got=x, interval(t . .) by(g) threads(`nt')
+            assert_var_equal got ref $DEFAULT_SIGFIGS "cancelled mean `size' `groups' threads `nt'"
+            capture assert got == 1/3
+            if !_rc test_pass "known cancelled mean `size' `groups' threads `nt'"
+            else test_fail "known cancelled mean `size' `groups' threads `nt'" "expected 1/3"
+            drop got ref
+        }
+        replace x = cond(t==1,1e16,1)
+        crangestat (mean) got=x, interval(t . .) by(g) excludeself threads(4)
+        capture assert got == 1 if t==1
+        if !_rc test_pass "exclude dominant value `size' `groups'"
+        else test_fail "exclude dominant value `size' `groups'" "expected 1"
+    }
+}
+
+* Overflow must publish genuine Stata missing, preserving endpoint .a/.z.
+foreach groups in 1 8 {
+    clear
+    set obs `=10*`groups''
+    gen byte g = floor((_n-1)/10)
+    gen double t = mod(_n-1,10)+1
+    gen double large = t*1e100
+    gen double huge = 8e307
+    gen double tiny = t*1e-100
+    gen double spread = t*1e155
+    gen double endpoints = cond(t==1,.a,cond(t==10,.z,t))
+    gsort -t -g
+    foreach nt in 1 4 {
+        crangestat (kurtosis) k=large (kurtosis) small=tiny ///
+            (skewness) sk=spread (variance) v=spread (sd) sd=spread ///
+            (sum) s=huge (mean) m=huge (first) f=endpoints (last) l=endpoints, interval(t . .) by(g) threads(`nt')
+        capture assert missing(k) & k==. & missing(s) & s==. & m==8e307 & f==.a & l==.z ///
+            & missing(small) & small==. & missing(sk) & sk==. & missing(v) & v==. & missing(sd) & sd==.
+        if !_rc test_pass "canonical overflow and endpoints `groups' threads `nt'"
+        else test_fail "canonical overflow and endpoints `groups' threads `nt'" "invalid numeric output"
+        drop k small sk v sd s m f l
+    }
+}
+
 * End of crangestat validation
 noi print_summary "crangestat"
 }

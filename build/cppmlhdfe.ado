@@ -152,9 +152,8 @@ program define cppmlhdfe, eclass
     if "`d'" != "" & "`d2'" != "" error 198
     if "`d2'" != "" {
         local d _ppmlhdfe_d
-        capture drop `d'
     }
-    if "`d'" != "" _ctools_newvars `d'
+    if "`d'" != "" & "`d2'" == "" _ctools_newvars `d'
 
     * Parse independent absorbed-DF adjustments, matching reference semantics
     * (abbreviations included); all stands for pairwise clusters continuous.
@@ -711,26 +710,48 @@ program define cppmlhdfe, eclass
         matrix colnames `V' = _cons
         matrix rownames `V' = _cons
     }
+    * Prepare outputs under temporary names. Existing automatic targets
+    * remain intact until all estimation, posting and display work succeeds.
+    local publish_sources
+    local publish_targets
     if "`d'" != "" {
-        quietly generate double `d' = `saved_d'
-        label variable `d' "Sum of fixed effects"
+        label variable `saved_d' "Sum of fixed effects"
+        local publish_sources `saved_d'
+        local publish_targets `d'
     }
-
     forvalues g=1/`nfe' {
         if "`fe_target_`g''"!="" {
-            if `fe_automatic_`g'' capture drop `fe_target_`g''
-            quietly generate double `fe_target_`g'' = `fe_output_`g''
-            label variable `fe_target_`g'' "[FE] `fe_name_`g''"
+            label variable `fe_output_`g'' "[FE] `fe_name_`g''"
+            local publish_sources `publish_sources' `fe_output_`g''
+            local publish_targets `publish_targets' `fe_target_`g''
         }
     }
-    if "`tagsep'"!="" quietly generate byte `tagsep' = `separation_tag'
-    if "`zvarname'"!="" quietly generate double `zvarname' = `separation_certificate'
+    if "`tagsep'"!="" {
+        local publish_sources `publish_sources' `separation_tag'
+        local publish_targets `publish_targets' `tagsep'
+    }
+    if "`zvarname'"!="" {
+        local publish_sources `publish_sources' `separation_certificate'
+        local publish_targets `publish_targets' `zvarname'
+    }
 
     * Record results building time
     _ctools_lap __time_build __ct_lap98 `__ct_lap98'
 
-    * Post results
-    ereturn post `b' `V', esample(`final_sample') depname(`depvar_orig') obs(`N_final')
+    * Post results. With factor variables, buildfvinfo lets margins check
+    * estimability, as after ppmlhdfe.
+    * buildfvinfo costs a pass over the data and is only
+    * needed when a coefficient other than a base level is omitted; with a
+    * full-rank design every margin is estimable.
+    local bfv
+    _ms_op_info `b'
+    if r(fvops) {
+        local __bfv_names : colnames `b'
+        foreach __bfv_name of local __bfv_names {
+            if strpos("`__bfv_name'", "o.") & !strpos("`__bfv_name'", "b.") local bfv buildfvinfo
+        }
+    }
+    ereturn post `b' `V', esample(`final_sample') depname(`depvar_orig') obs(`N_final') `bfv'
 
     * Store e() results
     ereturn scalar N = `N_final'
@@ -836,6 +857,48 @@ program define cppmlhdfe, eclass
         di as text "{hline 55}"
     }
 
+    * This is the last operation: publication cannot precede a later error.
+    if "`publish_targets'" != "" {
+        nobreak {
+            capture noisily _cppmlhdfe_publish `publish_sources', names(`publish_targets')
+            local publish_rc = _rc
+            if `publish_rc' {
+                ereturn clear
+                exit `publish_rc'
+            }
+        }
+    }
+
+end
+
+* Atomically replace automatic outputs without copying the dataset. Group
+* renames validate every destination before making any change; backup names
+* retain the old values, metadata and variable positions until commit.
+program define _cppmlhdfe_publish
+    version 14.1
+    syntax varlist, NAMES(string)
+    local originals
+    local backups
+    foreach target of local names {
+        capture confirm variable `target', exact
+        if !_rc {
+            tempvar backup
+            local originals `originals' `target'
+            local backups `backups' `backup'
+        }
+    }
+    nobreak {
+        if "`originals'" != "" rename (`originals') (`backups')
+        capture noisily {
+            if "$CTOOLS_cppmlhdfe_fault" == "publish" error 459
+            rename (`varlist') (`names')
+        }
+        local rc = _rc
+        if `rc' {
+            if "`originals'" != "" rename (`backups') (`originals')
+            exit `rc'
+        }
+    }
 end
 
 capture mata: mata drop _cppmlhdfe_fix_psd()

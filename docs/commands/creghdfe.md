@@ -152,7 +152,7 @@ where αᵢ represents the fixed effects for each absorbed variable.
 ## Technical Notes
 
 - The absorbed fixed effects consume degrees of freedom
-- Singleton groups (groups with only one observation) are dropped, repeatedly, until none remain; with frequency weights a group is a singleton only when its total weight is 1, as in reghdfe
+- Singleton groups (groups with only one observation) are dropped, repeatedly, until none remain; with frequency weights a group is a singleton only when its total weight is 1, as in reghdfe. Factor variables are expanded on the sample after singleton removal, as in reghdfe, so levels and base levels follow the estimation sample
 - Multicollinear fixed effects are automatically handled
 - The constant term is absorbed with the fixed effects
 

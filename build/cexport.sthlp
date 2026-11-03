@@ -134,7 +134,9 @@ instead of their value labels.
 {phang}
 {opt datafmt} writes numeric and date/time values using their Stata display
 formats. Without it, delimited export writes numeric values without applying
-display formats.
+display formats. As with {cmd:export delimited}, a comma format such as
+{cmd:%12.0gc} is written without thousands separators, and a decimal-comma
+format such as {cmd:%9,2f} is written with a decimal point.
 
 
 {phang}
@@ -272,6 +274,12 @@ limit. XPORT8 {opt vallabfile} writes a .sas label program.
 dBase export defaults to version IV; {cmd:version(3)} selects version III.
 {opt datafmt} applies numeric display formats. {opt origdbfdate} uses the date
 retained in dataset characteristics by a prior dBase import.
+
+{pstd}
+As with {cmd:export spss} and {cmd:export sasxport8}, SPSS and XPORT8 exports
+write {cmd:%tC} values with {cmd:cofC()}, and write monthly, quarterly, weekly
+and half-yearly dates as the first day of the period with the matching SPSS or
+SAS date format. Business-calendar ({cmd:%tb}) values are written as numbers.
 
 {p 8 12 2}
 {cmd:cexport shp using} {it:filename}

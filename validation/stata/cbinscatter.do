@@ -276,6 +276,99 @@ if `binscatter_installed' {
         nbins(5) yvar(price) xvar(rep78) testname("discrete rep78")
 }
 
+* Without option discrete, binscatter bins an x with at most nquantiles
+* distinct values one bin per value (pooled count; each by-group's own
+* values), weighted or not. rep78 has 5 values with uneven frequencies.
+if `binscatter_installed' {
+    * Bins of every by-group, from binscatter's saved CSV (columns
+    * <x>_by<g>, <y>_by<g>) and from e(bindata), compared row by row
+    capture program drop _cbin_by_compare
+    program define _cbin_by_compare
+        syntax, bs_cmd(string asis) cb_cmd(string asis) yvar(name) xvar(name) ///
+            ngroups(integer) testname(string)
+        preserve
+        quietly `bs_cmd'
+        quietly import delimited _bs_test.csv, clear asdouble
+        tempfile wide long
+        quietly save `wide'
+        forvalues g = 1/`ngroups' {
+            quietly use `wide', clear
+            keep `xvar'_by`g' `yvar'_by`g'
+            rename (`xvar'_by`g' `yvar'_by`g') (bs_x bs_y)
+            quietly drop if missing(bs_x)
+            gen int bs_g = `g'
+            if `g' > 1 quietly append using `long'
+            quietly save `long', replace
+        }
+        sort bs_g bs_x
+        mkmat bs_g bs_x bs_y, mat(_bs_data)
+        restore
+        `cb_cmd'
+        mata: _cb = st_matrix("e(bindata)"); _cb = _cb[selectindex(_cb[., 2] :!= .), (1, 3, 4)]
+        mata: _cb = sort(_cb, (1, 2)); st_matrix("_cb_data", _cb)
+        mata: mata drop _cb
+        local ok = rowsof(_bs_data) == rowsof(_cb_data)
+        local min_sf = 15
+        if `ok' {
+            forvalues r = 1/`=rowsof(_bs_data)' {
+                if _bs_data[`r', 1] != _cb_data[`r', 1] local ok 0
+                forvalues c = 2/3 {
+                    sigfigs `=_bs_data[`r', `c']' `=_cb_data[`r', `c']'
+                    local min_sf = min(`min_sf', r(sigfigs))
+                }
+            }
+        }
+        if `ok' & `min_sf' >= $DEFAULT_SIGFIGS test_pass "`testname'"
+        else test_fail "`testname'" "rows binscatter=`=rowsof(_bs_data)' cbinscatter=`=rowsof(_cb_data)', min sigfigs=`min_sf'"
+        capture erase _bs_test.csv
+        capture erase _bs_test.do
+        matrix drop _bs_data _cb_data
+    end
+
+    sysuse auto, clear
+    gen int fw = 1 + mod(_n, 4)
+    compare_binscatter_bins, ///
+        bs_cmd(binscatter price rep78, savedata(_bs_test) replace) ///
+        cb_cmd(cbinscatter price rep78, nograph) ///
+        nbins(5) yvar(price) xvar(rep78) testname("automatic discrete rep78")
+    compare_binscatter_bins, ///
+        bs_cmd(binscatter price rep78 [aw=weight], savedata(_bs_test) replace) ///
+        cb_cmd(cbinscatter price rep78 [aw=weight], nograph) ///
+        nbins(5) yvar(price) xvar(rep78) testname("automatic discrete rep78, aweights")
+    compare_binscatter_bins, ///
+        bs_cmd(binscatter price rep78 [fw=fw], savedata(_bs_test) replace) ///
+        cb_cmd(cbinscatter price rep78 [fw=fw], nograph) ///
+        nbins(5) yvar(price) xvar(rep78) testname("automatic discrete rep78, fweights")
+    compare_binscatter_bins, ///
+        bs_cmd(binscatter price rep78, nquantiles(5) savedata(_bs_test) replace) ///
+        cb_cmd(cbinscatter price rep78, nquantiles(5) nograph) ///
+        nbins(5) yvar(price) xvar(rep78) testname("automatic discrete rep78, nquantiles(5)")
+    _cbin_by_compare, bs_cmd(binscatter price rep78, by(foreign) savedata(_bs_test) replace) ///
+        cb_cmd(cbinscatter price rep78, by(foreign) nograph) ///
+        yvar(price) xvar(rep78) ngroups(2) testname("automatic discrete rep78, by(foreign)")
+    _cbin_by_compare, bs_cmd(binscatter price rep78 [aw=weight], by(foreign) savedata(_bs_test) replace) ///
+        cb_cmd(cbinscatter price rep78 [aw=weight], by(foreign) nograph) ///
+        yvar(price) xvar(rep78) ngroups(2) testname("automatic discrete rep78, by(foreign) aweights")
+    * Ten values: discrete with nquantiles(10), quantile bins with nquantiles(9)
+    clear
+    set seed 4021
+    set obs 600
+    gen double x = cond(runiform() < .4, 1, runiformint(2, 10))
+    gen double y = x + rnormal()
+    gen byte g = runiform() < .5
+    compare_binscatter_bins, ///
+        bs_cmd(binscatter y x, nquantiles(10) savedata(_bs_test) replace) ///
+        cb_cmd(cbinscatter y x, nquantiles(10) nograph) ///
+        nbins(10) yvar(y) xvar(x) testname("automatic discrete at nquantiles = distinct values")
+    compare_binscatter_bins, ///
+        bs_cmd(binscatter y x, nquantiles(9) savedata(_bs_test) replace) ///
+        cb_cmd(cbinscatter y x, nquantiles(9) nograph) ///
+        nbins(9) yvar(y) xvar(x) testname("quantile bins at nquantiles < distinct values")
+    _cbin_by_compare, bs_cmd(binscatter y x, by(g) savedata(_bs_test) replace) ///
+        cb_cmd(cbinscatter y x, by(g) nograph) ///
+        yvar(y) xvar(x) ngroups(2) testname("automatic discrete 10 values, by()")
+}
+
 * SECTION 5: controls option
 print_section "controls Option"
 

@@ -115,6 +115,16 @@ int cexport_parse_args(cexport_context *ctx, const char *args)
                 ctx->delimiter = token[0];
             } else if (strcmp(token, "tab") == 0) {
                 ctx->delimiter = '\t';
+            } else if (strncmp(token, "byte=", 5) == 0) {
+                int byte;
+                if (!ctools_safe_atoi(token + 5, &byte) || byte < 1 || byte > 255) {
+                    free(args_copy);
+                    return 198;
+                }
+                ctx->delimiter = (char)byte;
+            } else {
+                free(args_copy);
+                return 198;
             }
         } else {
             /* Options */
@@ -164,6 +174,8 @@ int cexport_parse_args(cexport_context *ctx, const char *args)
     }
 
     free(args_copy);
+
+    if (arg_idx == 0) return 198;
 
     if (ctx->filename == NULL) {
         SF_error("cexport: no output filename specified\n");

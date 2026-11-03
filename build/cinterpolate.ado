@@ -4,6 +4,13 @@ program define cinterpolate, byable(onecall)
     version 14.1
     syntax varlist(numeric min=2 max=2) [if] [in], Generate(name) ///
         [BY(varlist) Epolate CUBic Verbose THReads(integer 0)]
+    * The if is evaluated now, as ipolate does, before any helper replaces
+    * the r() or e() results it may name.
+    if `"`if'"' != "" {
+        tempvar iftouse
+        mark `iftouse' `if' `in'
+        local if "if `iftouse'"
+    }
     if "`cubic'" != "" & "`epolate'" != "" {
         di as error "cubic may not be combined with epolate"
         exit 198

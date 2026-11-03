@@ -48,6 +48,17 @@ program define crangejoin
         }
         if "`mode'" == "" _ctools_undo clear CTOOLS_u_crangejoin_
         macro drop CTOOLS_crangejoin_plugin
+        * rangejoin replaces the dataset, which empties e(sample) and keeps
+        * the other estimation results; the plugin rewrote the rows in place,
+        * so the hidden e(sample) column would mark unrelated observations.
+        local esample : e(functions)
+        if `: list posof "sample" in esample' {
+            tempname eshold
+            tempvar esvar
+            _estimates hold `eshold', copy varname(`esvar')
+            drop `esvar'
+            _estimates unhold `eshold'
+        }
     }
 end
 

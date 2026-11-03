@@ -37,8 +37,14 @@ ST_int ppml_relu_ex(const PPML_Options *options, HDFE_State *S, const ST_double 
 ST_int ppml_relu(const PPML_Options *options, HDFE_State *S, const double *y, const double *X,
                  int N, int K, int *mask, int threads);
 void ppml_update_fe_weights(HDFE_State *S, const ST_double *irls_w, ST_int N);
-ST_double ppml_compute_deviance(const ST_double *y, const ST_double *mu, const ST_double *w_user,
-                                ST_int N);
-ST_double ppml_compute_loglik(const ST_double *y, const ST_double *mu, const ST_double *w_user,
-                              ST_int N);
+/* ppmlhdfe floors the IRLS mean at Mata's epsilon(100), the spacing of
+   doubles at 100 (2^-46), and has no upper bound. */
+#define PPML_MU_FLOOR 1.4210854715202004e-14
+/* Deviance and log likelihood from the linear predictor eta (+ offset)
+   itself, mu = exp(eta + offset) without the IRLS floor; offset may be
+   NULL and log_scale undoes a response scaling. */
+ST_double ppml_compute_deviance(const ST_double *y, const ST_double *eta, const ST_double *offset,
+                                const ST_double *w_user, ST_int N);
+ST_double ppml_compute_loglik(const ST_double *y, const ST_double *eta, const ST_double *offset,
+                              ST_double log_scale, const ST_double *w_user, ST_int N);
 #endif

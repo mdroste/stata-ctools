@@ -82,7 +82,6 @@ ST_retcode cbsample_main(const char *args) {
     perm_idx_t *if_map = NULL;  /* obs_map when built here by SF_ifobs */
     ST_int obs_start = 0;  /* For null obs_map: first observation number */
     stata_retcode rc = STATA_OK;
-    int num_threads = 1;
     ctools_rng *thread_rngs = NULL;
 
     ctools_filtered_data_init(&by_filtered);
@@ -168,10 +167,6 @@ ST_retcode cbsample_main(const char *args) {
             return 198;
         }
     }
-
-    #ifdef _OPENMP
-    num_threads = ctools_get_max_threads();
-    #endif
 
     if (seed_rc == 0) {
         config.seed = (uint64_t)time(NULL) ^ ((uint64_t)clock() << 32);
@@ -422,7 +417,6 @@ ST_retcode cbsample_main(const char *args) {
 
     /* Allocate thread-local RNGs */
     /* Strata are processed serially for reproducible draws. */
-    num_threads = 1;
     thread_rngs = (ctools_rng *)malloc(sizeof(ctools_rng));
     if (!thread_rngs) {
         if (sort_perm) free(sort_perm);
@@ -556,11 +550,8 @@ cleanup:
     SF_scal_save("_cbsample_nclusters", (double)nclusters);
     SF_scal_save("_cbsample_nstrata", (double)nstrata_groups);
 
-    #ifdef _OPENMP
-    SF_scal_save("_cbsample_threads", (double)num_threads);
-    #else
+    /* Draws are serial in every build to preserve the seeded sequence. */
     SF_scal_save("_cbsample_threads", 1.0);
-    #endif
 
     if (config.verbose) {
         ctools_msg(CBSAMPLE_MODULE, "%zu obs, %zu clusters, %zu strata, selected %zu, total weight %.0f",

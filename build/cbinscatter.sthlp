@@ -84,7 +84,11 @@ bin means, and fitted lines.
 
 {phang}
 {opt nquantiles(#)} specifies the requested number of quantile bins.
-The default is 20. Must be between 2 and 1000.
+The default is 20. Must be between 2 and 1000. As with {cmd:binscatter}, when
+the estimation sample has no more than {it:#} distinct values of x (of the
+residualized x with {opt controls()} or {opt absorb()}), x is treated as
+discrete: each by-group gets one bin per value it contains. This applies to the
+default method only.
 
 {phang}
 {opt controls(varlist)} specifies control variables to partial out from both
