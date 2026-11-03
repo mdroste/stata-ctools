@@ -1,7 +1,9 @@
 #!/bin/bash
 # Run only on an ephemeral macOS runner; never enable shell tracing here.
-set -euo pipefail
+set -Eeuo pipefail
 umask 077
+# Name the failing line; never print commands or values, which hold secrets.
+trap 'echo "sign_macos.sh: command at line $LINENO failed" >&2' ERR
 
 for name in APPLE_CERTIFICATE_P12_BASE64 APPLE_CERTIFICATE_PASSWORD APPLE_ID \
             APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
@@ -39,6 +41,7 @@ trap 'exit 143' TERM
 
 keychain_password=$(openssl rand -hex 32)
 printf '%s' "$APPLE_CERTIFICATE_P12_BASE64" | base64 --decode > "$work/certificate.p12"
+echo "Decoded signing identity: $(wc -c < "$work/certificate.p12" | tr -d ' ') bytes"
 security create-keychain -p "$keychain_password" "$keychain"
 security set-keychain-settings -lut 3600 "$keychain"
 security unlock-keychain -p "$keychain_password" "$keychain"

@@ -182,6 +182,7 @@ int main(void) {
 #include <string.h>
 #include "stplugin.h"
 ST_plugin *_stata_;
+void ctools_error(const char *command,const char *format,...){(void)command;(void)format;}
 #include "io/cexport_xls.c"
 static FILE *book(const char *text,unsigned row,unsigned col,int formula) {
     FILE *f=tmpfile();assert(f);assert(!bof(f,0));
