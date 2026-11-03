@@ -648,6 +648,111 @@ static void cqreg_snap_zero_residuals(ST_double *r, const ST_double *y,
     }
 }
 
+/*
+ * Whether the reported vertex is one of several optima. At the basic solution
+ * through the K basis observations (B, the K x K matrix of their rows), each
+ * edge of the LP leaves along v_j = B^-1 e_j, moving basis residual j off zero
+ * while the others stay at zero. Along +v_j (-v_j) the objective changes at
+ * the rate
+ *   D+_j = (1 - tau) - xi_j + sum_d rho(-a_dj),
+ *   D-_j = tau + xi_j + sum_d rho(a_dj),
+ * with a_ij = x_i'v_j, xi_j = sum of psi_i a_ij over the nonbasic observations
+ * with nonzero residuals (psi_i = tau, or tau - 1 below the fit), and d the
+ * other observations on the fitted hyperplane (degenerate, zero to working
+ * precision as in cqreg_snap_zero_residuals). All rates are >= 0 at an
+ * optimum (Koenker and Bassett 1978); a zero rate (a zero reduced cost) is an
+ * edge of optimal solutions, so the optimum is not unique. Rates within
+ * rounding of zero count as zero: 1000 eps times a bound on the sum of
+ * |a_ij| over the nonbasic observations. With degenerate observations an
+ * optimal face can also leave the vertex between edges, which this test does
+ * not see; it never reports a unique optimum as not unique.
+ * Returns 1 (not unique), 0, or -1 (not determined: singular basis or
+ * allocation failure).
+ */
+static int cqreg_optimum_not_unique(const ST_double *y, const ST_double *X,
+                                    const ST_double *beta, const ST_double *r,
+                                    ST_int N, ST_int K, ST_double tau,
+                                    const ST_int *basis)
+{
+    ST_double *B = (ST_double *)malloc((size_t)K * 2 * K * sizeof(ST_double));
+    ST_double *g = (ST_double *)calloc((size_t)K, sizeof(ST_double));
+    ST_double *S = (ST_double *)calloc((size_t)K, sizeof(ST_double));
+    ST_double *dplus = (ST_double *)calloc((size_t)K, sizeof(ST_double));
+    ST_double *dminus = (ST_double *)calloc((size_t)K, sizeof(ST_double));
+    unsigned char *in_basis = (unsigned char *)calloc((size_t)N, 1);
+    int result = -1;
+    ST_int i, j, k, c;
+    const ST_int W = 2 * K;
+    const ST_double rtol = 8.0 * (ST_double)(K + 1) * DBL_EPSILON;
+
+    if (!B || !g || !S || !dplus || !dminus || !in_basis) goto done;
+    for (j = 0; j < K; j++) {
+        if (basis[j] < 0 || basis[j] >= N) goto done;
+        in_basis[basis[j]] = 1;
+    }
+    /* [B | I] -> [I | B^-1] by Gauss-Jordan with partial pivoting */
+    for (j = 0; j < K; j++) {
+        for (k = 0; k < K; k++) {
+            B[j * W + k] = X[(size_t)k * N + basis[j]];
+            B[j * W + K + k] = (j == k) ? 1.0 : 0.0;
+        }
+    }
+    for (c = 0; c < K; c++) {
+        ST_int pivot = c;
+        for (j = c + 1; j < K; j++)
+            if (fabs(B[j * W + c]) > fabs(B[pivot * W + c])) pivot = j;
+        if (!(fabs(B[pivot * W + c]) > 0.0)) goto done;
+        if (pivot != c) {
+            for (k = 0; k < W; k++) {
+                ST_double t = B[c * W + k]; B[c * W + k] = B[pivot * W + k]; B[pivot * W + k] = t;
+            }
+        }
+        ST_double d = B[c * W + c];
+        for (k = 0; k < W; k++) B[c * W + k] /= d;
+        for (j = 0; j < K; j++) {
+            if (j == c || B[j * W + c] == 0.0) continue;
+            ST_double f = B[j * W + c];
+            for (k = 0; k < W; k++) B[j * W + k] -= f * B[c * W + k];
+        }
+    }
+    /* B^-1[k][j] = B[k * W + K + j]; a_ij = sum_k x_ik B^-1[k][j] */
+    for (i = 0; i < N; i++) {
+        if (in_basis[i]) continue;
+        ST_double m = fabs(y[i]);
+        for (k = 0; k < K; k++) {
+            ST_double x = X[(size_t)k * N + i];
+            S[k] += fabs(x);
+            m += fabs(x * beta[k]);
+        }
+        if (fabs(r[i]) <= rtol * m) {
+            /* degenerate: rho(-a) on +v_j, rho(a) on -v_j */
+            for (j = 0; j < K; j++) {
+                ST_double a = 0.0;
+                for (k = 0; k < K; k++) a += X[(size_t)k * N + i] * B[k * W + K + j];
+                dplus[j] += (a > 0.0) ? (1.0 - tau) * a : -tau * a;
+                dminus[j] += (a > 0.0) ? tau * a : (tau - 1.0) * a;
+            }
+        } else {
+            ST_double psi = (r[i] > 0.0) ? tau : tau - 1.0;
+            for (k = 0; k < K; k++) g[k] += psi * X[(size_t)k * N + i];
+        }
+    }
+    result = 0;
+    for (j = 0; j < K; j++) {
+        ST_double xi = 0.0, scale = 1.0;
+        for (k = 0; k < K; k++) {
+            xi += g[k] * B[k * W + K + j];
+            scale += fabs(B[k * W + K + j]) * S[k];
+        }
+        ST_double tol = 1000.0 * DBL_EPSILON * scale;
+        if ((1.0 - tau) - xi + dplus[j] <= tol || tau + xi + dminus[j] <= tol) result = 1;
+    }
+
+done:
+    free(B); free(g); free(S); free(dplus); free(dminus); free(in_basis);
+    return result;
+}
+
 /* ============================================================================
  * Helper: Store results to Stata
  * ============================================================================ */
@@ -1105,6 +1210,11 @@ ST_retcode cqreg_full_regression(const char *args)
     cqreg_ipm_get_residuals(state->ipm, state->residuals);
 
     main_debug_log("IPM phase complete. sum_adev=%.4f\n", state->sum_adev);
+    /* Before the auxiliary fits reuse the IPM state and its basis */
+    store_scalar("__cqreg_nonunique", state->ipm->basis_ok ?
+                 (ST_double)cqreg_optimum_not_unique(state->y, state->X, state->beta,
+                                                     state->residuals, N, K, quantile,
+                                                     state->ipm->basis) : -1.0);
     state->time_ipm = ctools_timer_seconds() - ipm_start;
 
     /* Save IPM sub-timers now, before aux solves can overwrite them */

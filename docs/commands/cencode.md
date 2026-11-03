@@ -1,10 +1,10 @@
 # cencode
 
-High-performance C-accelerated string encoding for Stata datasets.
+Convert strings to labeled numeric variables.
 
 ## Overview
 
-`cencode` is a drop-in replacement for Stata's `encode` command. It converts string variables to numeric variables with value labels, using an optimized streaming algorithm.
+`cencode` converts string variables to numeric variables with value labels. It accepts multiple variables and can replace the originals.
 
 ## Syntax
 
@@ -21,7 +21,7 @@ cencode varlist [if] [in], {generate(newvarlist) | replace} [options]
 | `label(name)` | Name for the value label (default: same as newvar) |
 | `noextend` | Do not extend existing value label |
 | `verbose` | Display timing breakdown |
-| `threads(#)` | Maximum workers; zero uses the ctools thread setting (automatic cap: 16) |
+| `threads(#)` | Maximum threads; zero uses the ctools thread setting (automatic cap: 16) |
 
 ## Examples
 
@@ -59,18 +59,18 @@ cencode make if foreign == 1, generate(foreign_make)
 
 `encode` handles strL inputs. It also handles `noextend` with an unlabeled string, existing labels with extended missing values or text longer than 2,045 bytes, and codes beyond the `long` range.
 
-### Speedup Tricks
-1. **Streaming two-pass design**: Only K unique strings and a 4-byte code per observation are stored in memory, not the strings themselves
+### Implementation details
+1. **Streaming two-pass design**: The C implementation stores each distinct string once and a four-byte code for each observation
 2. **Thread-local FNV-1a hash tables**: O(1) average lookup per observation without locks; tables are merged once at the end
 3. **Arena allocator**: Unique strings are bulk-allocated in a contiguous arena with O(1) bump-pointer allocation and a single bulk free, eliminating per-string `malloc`/`free` overhead
-4. **Alphabetical ordering**: After collecting uniques, codes are assigned in sorted order (1, 2, 3, ...) matching Stata's `encode` convention
+4. **Alphabetical ordering**: Codes are assigned in alphabetical order (1, 2, 3, ...) after collecting the distinct strings, matching Stata's `encode` convention
 
 ## Performance
 
 See the [published profiler results](../benchmarks/readme_profile/results.md)
 and [run metadata](../benchmarks/readme_profile/manifest.json) for measured
 encoding times. Reproduce them with the [benchmark runner](../performance/README.md).
-The streaming C path keeps a four-byte code per observation and storage for the
+The C implementation keeps a four-byte code per observation and storage for the
 unique strings, so memory use depends on both the number of rows and the number
 and length of distinct values.
 
@@ -132,4 +132,4 @@ cencode timing breakdown:
 
 ## Validation and failure behavior
 
-The complete source and output specification is validated even with zero observations. Generated targets must be distinct new names. A failed multi-variable operation restores source variables, outputs, and value labels; successful replace commits all requested variables together.
+The command checks input variables and output names even when there are no observations. Output names must be distinct and unused. With `replace`, it updates the requested variables only after all conversions succeed. A failed operation restores variables and value labels.

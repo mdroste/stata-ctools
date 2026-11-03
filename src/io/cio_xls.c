@@ -291,6 +291,14 @@ int cio_scan_xls(cio_dataset *dataset, const char *path)
             {
                 cio_copy_text(c->label, sizeof(c->label), h->d != 0 ? "1" : "0");
             }
+            else if (kind == XLS_NUMBER && cio_excel_date_kind(cio_xls_native_format(w, h)))
+            {
+                /* A date-styled heading labels as its date text, as native. */
+                char date[100];
+                cio_excel_date_text(cio_excel_days(h->d, w->is1904), cio_xls_native_format(w, h), date,
+                                    sizeof(date));
+                cio_copy_text(c->label, sizeof(c->label), date);
+            }
             else if (kind == XLS_NUMBER && h->str && *h->str)
                 cio_copy_text(c->label, sizeof(c->label), h->str);
         }

@@ -208,7 +208,7 @@ ST_retcode ivest_compute_2sls(
     ST_double fuller_alpha,
     ST_double *lambda_out,
     ST_int kernel_type,
-    ST_int bw,
+    ST_double bw,
     ST_int kiefer,
     const civreghdfe_ts *ts,
     ST_int sdofminus,
@@ -217,7 +217,8 @@ ST_retcode ivest_compute_2sls(
     ST_int n_absorbed_x,
     ST_int n_absorbed_iv,
     ST_int n_absorbed_iv_all,
-    ST_int dofminus, ST_int small
+    ST_int dofminus, ST_int small,
+    const ST_double *b0, ST_int n_excl_dropped
 );
 
 #endif /* CIVREGHDFE_ESTIMATE_H */

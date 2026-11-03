@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.3 20261030}{...}
+{* *! version 1.2.4 20261103}{...}
 {viewerjumpto "Syntax" "cbsample##syntax"}{...}
 {viewerjumpto "Description" "cbsample##description"}{...}
 {viewerjumpto "Options" "cbsample##options"}{...}
@@ -28,6 +28,7 @@
 {synopt:{it:exp}}positional number of draws within each stratum; default is the original number of sampling units{p_end}
 {synopt:{opt cl:uster(varlist)}}variables identifying resampling clusters{p_end}
 {synopt:{opt str:ata(varlist)}}variables identifying strata{p_end}
+{synopt:{opt id:cluster(newvar)}}create a new cluster ID variable; requires {opt cluster()}{p_end}
 {synopt:{opt weight(varname)}}store bootstrap weights instead of resampling{p_end}
 {synoptline}
 {syntab:Advanced}
@@ -52,8 +53,8 @@ sizes, the resulting number of observations can differ from the original.
 
 {pstd}
 With {opt weight()}, all observations remain in memory and an existing numeric
-variable receives each observation's draw count. Observations outside the
-sampling sample receive zero.
+variable receives each observation's draw count. Observations excluded from
+sampling receive zero.
 
 {pstd}
 Use {help set seed} to reproduce a draw with the same data, observation order,
@@ -67,25 +68,37 @@ from the same seed.
 {dlgtab:Main}
 
 {phang}
-The positional {it:exp} specifies draws within each stratum. For example,
-{cmd:cbsample 2, strata(s)} draws two observations from every stratum;
-adding {cmd:cluster(c)} draws two clusters from every stratum. Omitting the
-count uses each stratum's original number of sampling units. As in
-{cmd:bsample}, {it:exp} is an expression, such as {cmd:_N/2}, evaluated in the
-sample (within each stratum with {opt strata()}, so {cmd:_N} counts the
-stratum's observations). It must be constant and an integer (r(198)), greater
-than zero and no greater than the available units in any stratum (r(498)).
-Sizes that differ across strata are not supported (r(198)); use {cmd:bsample}.
+The expression following {cmd:cbsample} specifies the number of draws within
+each stratum. For example, {cmd:cbsample 2, strata(s)} draws two observations
+from every stratum; adding {cmd:cluster(c)} draws two clusters from every
+stratum. Omitting the count uses each stratum's original number of sampling
+units. As in {cmd:bsample}, {it:exp} is an expression, such as {cmd:_N/2},
+evaluated in the sample (within each stratum with {opt strata()}, so {cmd:_N}
+counts the stratum's observations). It must be constant and an integer
+(r(198)), greater than zero and no greater than the available units in any
+stratum (r(498)). The size may differ across strata:
+{cmd:cbsample _N/2, strata(s)} draws half of each stratum.
 
 {phang}
 As in {cmd:bsample}, a cluster sample, or a stratum, with a single cluster is
 refused with r(460) ("singleton cluster detected"): its resamples would all be
-identical. {cmd:bsample}'s {opt idcluster()} option is not supported.
+identical.
 
 {phang}
 {opt cluster(varlist)} specifies the variables that identify resampling clusters.
 When specified, entire clusters are resampled rather than individual observations.
 All observations within a selected cluster receive the same weight.
+
+{phang}
+{opt idcluster(newvar)} creates a new variable that identifies each drawn copy
+of a cluster, as {cmd:bsample} does: a cluster drawn twice becomes two
+clusters, so panel estimators can use the resample ({cmd:xtset} {it:newvar}).
+The copies are numbered 1, 2, ... in each stratum, continuing across strata in
+stratum order (within each stratum under {help version} 13 or earlier), in
+cluster order, or at random when some stratum draws fewer clusters than it
+has. The data are sorted by strata, {it:newvar} and the original observation
+order. An existing variable of that name is replaced. {opt idcluster()}
+requires {opt cluster()} and may not be combined with {opt weight()} (r(198)).
 
 {phang}
 {opt strata(varlist)} specifies variables identifying strata. Resampling is
@@ -94,10 +107,11 @@ Cluster labels reused across strata identify separate sampling units.
 
 {phang}
 {opt weight(varname)} overwrites an existing numeric variable with bootstrap
-frequency weights. Create it first with {cmd:generate double bsweight = 0}. When this option is specified, all observations are kept and
-the weight variable indicates how many times each observation was selected
-(0 if not selected). This is more memory-efficient than physical replication
-for bootstrap estimation.
+frequency weights. Create it first with {cmd:generate double bsweight = 0}.
+When this option is specified, all observations are kept and the weight
+variable indicates how many times each observation was selected (0 if not
+selected). Storing draw counts uses less memory than creating copies of the
+sampled observations.
 
 {dlgtab:Advanced}
 

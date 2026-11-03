@@ -819,12 +819,36 @@ static ST_retcode do_compute_bins(void) {
                 goto cleanup;
             }
 
+            /* binscatter bins the x it stores: predict's float residual
+             * plus the mean, stored as float. Counting the distinct values
+             * of that x decides the switch to discrete bins as binscatter
+             * does (a residual that is zero in exact arithmetic carries
+             * ~1e-16 noise in double, which the float storage removes);
+             * discrete bins are then that x's values. */
+            ST_double *x_stored = (ST_double *)ctools_safe_malloc2((size_t)N_valid, sizeof(ST_double));
+            if (!x_stored) {
+                rc = CBINSCATTER_ERR_MEMORY;
+                goto cleanup;
+            }
+            for (ST_int i = 0; i < N_valid; i++)
+                x_stored[i] = (ST_double)(float)((ST_double)(float)x[i] + x_raw_mean);
+
             /* Like binscatter, add the means back to the residuals themselves,
              * so bins, bin means and the fit line share the original scale */
             for (ST_int i = 0; i < N_valid; i++) {
                 y[i] += y_raw_mean;
                 x[i] += x_raw_mean;
             }
+
+            int few = x_has_few_values(x_stored, N_valid,
+                                       config.discrete ? N_valid / 2 : config.nquantiles);
+            if (few < 0) {
+                free(x_stored);
+                rc = CBINSCATTER_ERR_MEMORY;
+                goto cleanup;
+            }
+            if (few) memcpy(x, x_stored, (size_t)N_valid * sizeof(ST_double));
+            free(x_stored);
         }
 
         results.obs_dropped += dropped;

@@ -1,10 +1,10 @@
 # creghdfe
 
-High-performance C-accelerated high-dimensional fixed effects regression.
+Linear regression with high-dimensional fixed effects.
 
 ## Overview
 
-`creghdfe` is a drop-in replacement for `reghdfe` that performs linear regression with multiple high-dimensional fixed effects. All computation is performed in optimized C code using a conjugate gradient (CG) solver with Kaczmarz-style sweeping.
+`creghdfe` estimates linear regressions with multiple high-dimensional fixed effects. It removes fixed effects in C using a conjugate-gradient solver. See [Compatibility](../COMPATIBILITY.md) for differences from `reghdfe`.
 
 ## Syntax
 
@@ -24,7 +24,7 @@ creghdfe depvar indepvars [if] [in] [weight] [, absorb(varlist) options]
 | `dofadjustments(string)` | Absorbed degrees-of-freedom adjustments; default `all` |
 | `tolerance(#)` | Projection tolerance; default `1e-8` |
 | `iterate(#)` | Maximum projection iterations; default 10,000 |
-| `threads(#)` | Maximum workers; zero uses the ctools thread setting |
+| `threads(#)` | Maximum threads; zero uses the ctools thread setting |
 | `snapshot`, `fast` | Use a recovery snapshot, or skip recovery; mutually exclusive |
 
 ### Variance/Standard Error Options
@@ -81,7 +81,7 @@ creghdfe y x1 x2, absorb(firm year industry)
 
 `creghdfe` achieves its speed through:
 
-### Speedup Tricks
+### Implementation details
 
 **CG Solver and HDFE Absorption:**
 - **Symmetric Kaczmarz transform**: Forward and backward projection sweeps provide the symmetric operator used by CG
@@ -108,7 +108,7 @@ The fixed effects absorption works as follows:
 1. **Data Loading**: Load dependent and independent variables into C memory
 2. **Demeaning**: Iteratively demean all variables within each absorbed factor
 3. **OLS Estimation**: Solve the normal equations on demeaned data
-4. **VCE Computation**: Calculate standard errors with appropriate adjustments
+4. **VCE Computation**: Calculate standard errors using the selected covariance estimator and degrees-of-freedom adjustments
 
 The CG solver minimizes:
 ```
@@ -153,7 +153,7 @@ where αᵢ represents the fixed effects for each absorbed variable.
 
 - The absorbed fixed effects consume degrees of freedom
 - Singleton groups (groups with only one observation) are dropped, repeatedly, until none remain; with frequency weights a group is a singleton only when its total weight is 1, as in reghdfe. Factor variables are expanded on the sample after singleton removal, as in reghdfe, so levels and base levels follow the estimation sample
-- Multicollinear fixed effects are automatically handled
+- The absorbed degrees of freedom account for redundant fixed-effect coefficients according to `dofadjustments()`
 - The constant term is absorbed with the fixed effects
 
 ## Comparison with reghdfe
@@ -163,7 +163,8 @@ where αᵢ represents the fixed effects for each absorbed variable.
 | Implementation | Stata + Mata | C with OpenMP |
 | Algorithm | Method of Alternating Projections | CG with Kaczmarz |
 | Parallelization | Limited | Yes |
-| Memory | Higher | Optimized |
+
+Memory use depends on the dataset, options, and number of threads.
 
 ## Degrees of Freedom
 
@@ -185,4 +186,4 @@ Redundant coefficients are counted as `reghdfe` counts them. Effects nested with
 
 ## Validation and failure behavior
 
-residuals(), groupvar(), and savefe output names must be distinct new variables. Existing variables, including inputs and fixed-effect identifiers, are never replaced by these options. Failed or interrupted operations restore the dataset without writing a snapshot to disk (the variables creghdfe added are dropped again); option `snapshot` uses `preserve` instead and option `fast` undoes nothing. iterate() and tolerance() must be positive. Exhausting the fixed-effect solver returns error 430 instead of posting estimates.
+residuals(), groupvar(), and savefe output names must be distinct new variables. Existing variables, including inputs and fixed-effect identifiers, are never replaced by these options. Failed or interrupted operations restore the dataset without writing a snapshot to disk (the variables creghdfe added are dropped again); option `snapshot` uses `preserve` instead and option `fast` undoes nothing. iterate() and tolerance() must be positive. If the fixed-effect solver reaches its iteration limit before converging, the command returns error 430 and does not store new estimates.

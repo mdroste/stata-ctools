@@ -1606,6 +1606,6 @@ Kaczmarz/conjugate-gradient solver as `creghdfe`; optional transforms and
 accelerators are exposed through `partial_out_columns_options()`.
 
 Each call frees its C allocations before returning. Result variables are
-published only after all projections succeed. Clear mode preserves the dataset
-during publication. `validation/stata/cdistinct.do` and
+added only after all projections succeed. With `clear`, the original dataset is
+retained until the replacement dataset is ready. `validation/stata/cdistinct.do` and
 `validation/stata/chdfe.do` compare reference results and exercise output and error contracts.

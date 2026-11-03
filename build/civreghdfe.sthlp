@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.3 20261030}{...}
+{* *! version 1.2.4 20261103}{...}
 {viewerjumpto "Syntax" "civreghdfe##syntax"}{...}
 {viewerjumpto "Description" "civreghdfe##description"}{...}
 {viewerjumpto "Options" "civreghdfe##options"}{...}
@@ -36,6 +36,7 @@
 {synopt:{opt kclass(#)}}use k-class estimator with {it:k} = {it:#}{p_end}
 {synopt:{opt gmm2s}}use two-step efficient GMM{p_end}
 {synopt:{opt cue}}use continuously-updated GMM (CUE){p_end}
+{synopt:{opt b0(matrix)}}evaluate the CUE objective and statistics at the coefficients in {it:matrix}{p_end}
 
 {syntab:VCE/SE}
 {synopt:{opt vce(vcetype)}}variance-covariance estimation: {opt un:adjusted}, {opt r:obust}, {opt cl:uster} {it:clustvar} [{it:clustvar2}]{p_end}
@@ -45,6 +46,8 @@
 {synopt:{opt dofminus(#)}}subtract {it:#} from residual degrees of freedom{p_end}
 {synopt:{opt sdofminus(#)}}additional DOF adjustment for small-sample VCE correction{p_end}
 {synopt:{opt nopartialsmall}}exclude partialled variables from K in small-sample adjustment{p_end}
+{synopt:{opt dof:adjustments(list)}}absorbed degrees of freedom, as in {cmd:reghdfe}: {opt all} (default), {opt none}, {opt first:pair}, {opt pair:wise}, {opt cl:usters}{p_end}
+{synopt:{opt keepsin:gletons}}keep singleton groups of the absorbed effects{p_end}
 
 {syntab:HAC Standard Errors (data must be {help tsset})}
 {synopt:{opt bw(#)}}bandwidth for kernel-based estimation: AC, or HAC with {opt robust}{p_end}
@@ -58,6 +61,7 @@
 {synopt:{opt iterate(#)}}synonym for {opt maxiter()}, as in {cmd:ivreghdfe}{p_end}
 {synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
 {synopt:{opt noc:onstant}}suppress constant term (absorbed with FE){p_end}
+{synopt:{opt nocollin}}skip {cmd:ivreg2}'s collinearity checks of the variables{p_end}
 
 {syntab:Reporting}
 {synopt:{opt first}}report first-stage regression statistics{p_end}
@@ -121,26 +125,33 @@ categorical fixed effects and compute the estimates and covariance matrix.
 
 {pstd}
 The syntax follows {cmd:ivreghdfe}: endogenous variables and their instruments
-are specified in parentheses with an equals sign. Fixed effects are optional. The default estimator is 2SLS;
-alternative estimators can be selected via options. Without the parenthesized
-instrument specification, the command estimates OLS. Exogenous regressors may
-appear before or after the parentheses. Factor-variable and time-series
-operators are allowed in regressor and instrument lists, and time-series
-operators on the dependent variable. As in {cmd:ivreg2}, a term listed twice is
-used once, and a term listed both as exogenous and as endogenous is exogenous.
+are specified in parentheses with an equals sign. Fixed effects are optional.
+The default estimator is 2SLS; alternative estimators can be selected via
+options. Without the parenthesized instrument specification, the command
+estimates OLS. Exogenous regressors may appear before or after the
+parentheses. Factor-variable and time-series operators are allowed in
+regressor and instrument lists, and time-series operators on the dependent
+variable. As in {cmd:ivreg2}, a term listed twice is used once, a term listed
+both as exogenous and as endogenous is exogenous, and an excluded instrument
+that is also a regressor is not an excluded instrument; these are listed in
+{cmd:e(dups)}.
 
 {pstd}
-Differences from {cmd:ivreghdfe}: a regressor or instrument absorbed by the
-fixed effects (partialled sum of squares at most min(1e-6, {opt tolerance()}/10)
-times its sum of squares before partialling, the {cmd:reghdfe} rule) is omitted,
-where {cmd:ivreghdfe} keeps the rounding noise that remains of it; when an
-endogenous and an exogenous regressor are exactly collinear, the endogenous one
-is omitted ({cmd:ivreg2} omits the exogenous one); an endogenous variable listed
-among the instruments is an error ({cmd:ivreg2} reclassifies it); {cmd:e(df_m)} is
-the number of estimated slopes ({cmd:ivreg2} adds {opt sdofminus()} and the
-partialled-out regressors). {cmd:ivreghdfe}'s {opt dofadjustments()},
-{opt keepsingletons}, {opt nocollin} and {opt sfirst}, a non-integer {opt bw()},
-{cmd:predict, d} and {cmd:dresiduals}, and {cmd:estat ic} are not available.
+Collinear variables are handled as in {cmd:ivreg2}: a term collinear with earlier
+terms is dropped ({cmd:e(collin)}), first among the endogenous regressors and then
+over the exogenous regressors, excluded instruments and endogenous regressors in
+that order; an endogenous regressor collinear with the instruments becomes an
+included exogenous regressor ({cmd:e(ecollin)}), and the exogenous term it duplicates
+is dropped. Warnings and the footer list them. {opt nocollin} skips these rules.
+
+{pstd}
+Differences from {cmd:ivreghdfe}: a regressor or instrument that the fixed
+effects absorb is marked omitted ({cmd:o.}{it:varname}), where {cmd:ivreghdfe}
+leaves its name unmarked with a zero coefficient and variance;
+{cmd:civreghdfe} also omits variables whose remaining variation after removing
+fixed effects falls below its numerical threshold. {cmd:ivreghdfe} may retain
+these variables, producing different coefficients and degrees of freedom.
+{opt sfirst} is not available.
 
 
 {marker options}{...}
@@ -165,8 +176,7 @@ computed from a generalized eigenvalue problem. The LIML k value (lambda) is sto
 
 {phang}
 {opt fuller(#)} requests Fuller's modified LIML estimator with adjustment parameter
-{it:#}. The parameter must be positive and determines the adjustment to the LIML
-k value.
+{it:#}, k = lambda - {it:#}/(N - L). As in {cmd:ivreg2}, a negative {it:#} gives LIML.
 
 {phang}
 {opt kclass(#)} requests the k-class estimator with {it:k} = {it:#}, which must
@@ -174,12 +184,14 @@ not be negative. {cmd:kclass(1)} is 2SLS and k=lambda is LIML; {cmd:kclass(0)}
 (the default) requests no k-class estimator.
 
 {phang}
-As {cmd:ivreg2} parses them, {opt liml}, {opt fuller()} and {opt kclass()} cannot be
-combined with {opt gmm2s} or {opt cue}, {opt liml} (or {opt fuller()}) cannot be
-combined with {opt kclass()}, {opt gmm2s} cannot be combined with {opt cue}, and
-the {opt fuller()} parameter cannot be negative: each is an error (r(198)).
-{cmd:ivreg2} and {cmd:ivreghdfe} skip some of these checks and run one of the
-estimators.
+As in {cmd:ivreg2}, {opt fuller()} and {opt kclass()} take precedence over
+{opt gmm2s}, and {opt liml} with {opt kclass()} is the k-class estimator with
+that k (labelled LIML). {opt liml} with {opt gmm2s} or {opt cue}, {opt gmm2s}
+with {opt cue}, a negative {opt kclass()}, {opt liml} with a negative
+{opt fuller()}, {opt fuller()} with {opt kclass()} and {opt fuller()} or
+{opt kclass()} with {opt cue} are errors (r(198)). These restrictions differ
+from {cmd:ivreg2}: some combinations produce error 3200 there, while combining
+{opt cue} with {opt fuller()} or {opt kclass()} runs CUE after a k-class fit.
 
 {phang}
 {opt gmm2s} requests two-step efficient GMM estimation. This uses an optimal weighting
@@ -189,8 +201,13 @@ matrix computed from first-step residuals.
 {opt cue} requests continuously-updated GMM (CUE) estimation. CUE recomputes the moment covariance at each candidate coefficient vector.
 
 {phang}
-{cmd:ivreg2}'s {opt b0()} option (the CUE objective at a given coefficient
-vector) is not supported and is an error.
+{opt b0(matrix)} evaluates the model at the coefficients in {it:matrix}, as
+{cmd:ivreg2} does: {cmd:e(b)} is {it:matrix}, {cmd:e(j)} the CUE objective (the J
+statistic, also when the model is exactly identified), {cmd:e(V)} the efficient GMM
+covariance at those coefficients, and the residual statistics follow from them
+({cmd:e(model)} is {cmd:cue}). The columns of {it:matrix} are matched to the
+regressors by name ({cmd:_cons} included without {opt absorb()}). {opt b0()} implies
+{opt noid} and cannot be combined with another estimator.
 
 {dlgtab:VCE/SE}
 
@@ -231,7 +248,8 @@ not depend on {opt absorb()}. fweights are not allowed with kernel-based estimat
 
 {phang}
 {opt bw(#)} requests kernel-based standard errors and statistics with bandwidth
-{it:#}. Without {opt robust} the estimator is autocorrelation-consistent (AC) under
+{it:#}, a positive real number as in {cmd:ivreg2} (lag windows sum the lags up to
+{it:#}). Without {opt robust} the estimator is autocorrelation-consistent (AC) under
 conditional homoskedasticity; with {opt robust} (or pweights) it is heteroskedasticity-
 and autocorrelation-consistent (HAC). Combined with {cmd:cluster(}{it:timevar}{cmd:)}
 it gives Driscoll-Kraay standard errors; combined with
@@ -285,10 +303,10 @@ kernel whatever {opt kernel()} is, and with {opt kiefer} they are the iid
 solver used in HDFE absorption. Default is 1e-8.
 
 {phang}
-{opt maxiter(#)} specifies the maximum number of CG iterations. Default is 16000, as
-in {cmd:reghdfe} and {cmd:ivreghdfe}; {opt iterate(#)} is a synonym. Both
-{opt maxiter()} and {opt tolerance()} must be positive.
-A projection that exhausts its iteration limit returns error 430.
+{opt maxiter(#)} specifies the maximum number of CG iterations. Default is
+16000, as in {cmd:reghdfe} and {cmd:ivreghdfe}; {opt iterate(#)} is a synonym.
+Both {opt maxiter()} and {opt tolerance()} must be positive. Failure to remove
+fixed effects within the iteration limit returns error 430.
 
 {phang}
 {opt threads(#)} sets the maximum number of threads, from 1 to 256.
@@ -413,19 +431,19 @@ Results are stored in {cmd:e(redund)}, {cmd:e(redund_df)}, and {cmd:e(redund_p)}
 {dlgtab:Estimation}
 
 {phang}
-{opt partial(varlist)} requests that the specified exogenous variables be partialled
-out (removed) from the estimation using the Frisch-Waugh-Lovell (FWL) transformation.
-All other variables (dependent, endogenous, remaining exogenous, and instruments)
-are regressed on the partial variables and replaced with their residuals. This retains the controls in the model while omitting their coefficients
-from the displayed output. This option is useful when you want to
-omit certain control variables from the displayed output while still controlling for
-them. The partialled-out variables do not appear in the coefficient table.
-Variables specified in {opt partial()} must be included in the model as exogenous
-regressors. The partialling is performed after fixed effect absorption, on the
-demeaned data, and uses the estimation weights. A partial() variable that is
-collinear with earlier ones or absorbed by the fixed effects is dropped with a note.
-Without {opt absorb()}, the constant is partialled out as well and counted in
-{cmd:e(partial_ct)}, as in {cmd:ivreg2}; {cmd:e(b)} then has no {cmd:_cons}.
+{opt partial(varlist)} requests that the specified exogenous variables be
+partialled out (removed) from the estimation using the Frisch-Waugh-Lovell
+(FWL) transformation. All other variables (dependent, endogenous, remaining
+exogenous, and instruments) are regressed on the partial variables and
+replaced with their residuals. The variables listed in {opt partial()} remain
+controls in the model, but their coefficients are omitted from the coefficient
+table. Variables specified in {opt partial()} must be included in the model as
+exogenous regressors. The partialling is performed after fixed effect
+absorption, on the demeaned data, and uses the estimation weights. A partial()
+variable that is collinear with earlier ones or absorbed by the fixed effects
+is dropped with a note. Without {opt absorb()}, the constant is partialled out
+as well and counted in {cmd:e(partial_ct)}, as in {cmd:ivreg2}; {cmd:e(b)}
+then has no {cmd:_cons}.
 
 {dlgtab:Save Results}
 
@@ -456,9 +474,8 @@ by "main".
 results with {opt saverf}. The default prefix is "_civreghdfe_rf_".
 
 {phang}
-{opt noreturn} skips all result retrieval and e() posting after estimation.
-This is useful for scripted workflows where only side effects (e.g., residuals)
-are needed, avoiding the overhead of transferring results back to Stata.
+{opt noreturn} skips storing estimation results in {cmd:e()}. Use it when only
+generated variables, such as residuals, are needed.
 
 
 {marker prediction}{...}
@@ -474,6 +491,9 @@ specify {opt residuals(newvar)} during estimation first. The option
 {pstd}
 {cmd:predict newvar, xbd} returns y minus the saved residual, including absorbed
 effects. It requires saved residuals and is missing outside {cmd:e(sample)}.
+{opt d} returns the sum of the absorbed effects, y - xb - the saved residual, and
+{opt dresiduals} y - xb, as {cmd:reghdfe}'s {cmd:predict} does; both require
+{opt residuals()} during estimation.
 
 {pstd}
 After {opt partial()}, {cmd:e(b)} omits the partialled-out terms
@@ -549,7 +569,13 @@ coefficients, as with {cmd:ivreghdfe}.
 {synoptset 20 tabbed}{...}
 {p2col 5 20 24 2: Scalars}{p_end}
 {synopt:{cmd:e(N)}}number of observations{p_end}
-{synopt:{cmd:e(df_m)}}model degrees of freedom{p_end}
+{synopt:{cmd:e(df_m)}}model degrees of freedom, as {cmd:ivreg2}: rankxx - cons + sdofminus - partialcons{p_end}
+{synopt:{cmd:e(rankxx)}, {cmd:e(rankzz)}}regressors and instruments kept (ranks){p_end}
+{synopt:{cmd:e(rankS)}, {cmd:e(rankV)}}rank of the moment covariance S and nonzero variances in e(V){p_end}
+{synopt:{cmd:e(sdofminus)}, {cmd:e(partialcons)}, {cmd:e(cons)}}{cmd:ivreg2}'s small-sample count of partialled-out terms, partialled-out constant (absorbed effects) and constant indicator{p_end}
+{synopt:{cmd:e(ll)}}log likelihood, as {cmd:ivreg2} ({cmd:estat ic} uses it){p_end}
+{synopt:{cmd:e(num_singletons)}, {cmd:e(N_full)}}singletons dropped and observations before they are dropped{p_end}
+{synopt:{cmd:e(nocollin)}}1 if {opt nocollin} was specified{p_end}
 {synopt:{cmd:e(df_r)}}residual degrees of freedom (with {opt small} or {opt absorb()}){p_end}
 {synopt:{cmd:e(df_a)}}absorbed degrees of freedom{p_end}
 {synopt:{cmd:e(K)}}number of regressors{p_end}
@@ -612,7 +638,7 @@ coefficients, as with {cmd:ivreghdfe}.
 {p2col 5 20 24 2: LIML/Fuller scalars}{p_end}
 {synopt:{cmd:e(lambda)}}LIML k-value (if liml or fuller){p_end}
 {synopt:{cmd:e(fuller)}}Fuller parameter (if fuller){p_end}
-{synopt:{cmd:e(kclass)}}k-class parameter (if kclass){p_end}
+{synopt:{cmd:e(kclass)}}k of the k-class estimator (if liml, fuller or kclass){p_end}
 
 {synoptset 20 tabbed}{...}
 {p2col 5 20 24 2: Macros}{p_end}
@@ -624,6 +650,7 @@ coefficients, as with {cmd:ivreghdfe}.
 {synopt:{cmd:e(instruments)}}excluded instruments{p_end}
 {synopt:{cmd:e(instd)}, {cmd:e(inexog)}, {cmd:e(exexog)}, {cmd:e(insts)}}instrumented, included exogenous, excluded and all instruments (expanded terms), as {cmd:ivreg2} names them{p_end}
 {synopt:{cmd:e(absorb)}}absorbed fixed effects{p_end}
+{synopt:{cmd:e(dups)}, {cmd:e(collin)}, {cmd:e(ecollin)}}duplicate terms, terms dropped as collinear, endogenous regressors reclassified as exogenous{p_end}
 {synopt:{cmd:e(title)}}estimation method title{p_end}
 {synopt:{cmd:e(model)}}estimator: 2sls, liml, fuller, kclass, gmm2s, or cue{p_end}
 {synopt:{cmd:e(vcetype)}}VCE type: Robust, Cluster, or Two-way Cluster (Robust for Driscoll-Kraay; empty for AC and Kiefer){p_end}
@@ -697,15 +724,17 @@ matrix is not unique.
 
 {phang2}1. Absorb fixed effects from all variables (y, endogenous X, exogenous X, instruments Z)
 using the conjugate gradient (CG) solver with symmetric Kaczmarz iteration.
-A regressor or instrument whose (weighted) sum of squares after absorption is at most
-min(1e-6, {opt tolerance()}/10) times its sum of squared deviations before absorption
-is collinear with the fixed effects: it is omitted (regressors are shown as
-{cmd:o.}{it:varname}). As in {cmd:ivreghdfe}, it still counts in K and the
-residual and overidentification degrees of freedom when the fixed effects do not
-remove it exactly (it is absorbed only jointly by several unbalanced fixed effects,
-such as age = year - birth year with {cmd:absorb(}{it:id year}{cmd:)}); an absorbed
-exogenous regressor also counts among the instruments in the degrees of freedom of
-the Cragg-Donald and Kleibergen-Paap Wald F statistics.{p_end}
+As in {cmd:ivreghdfe}, which partials the fixed effects out before it estimates,
+the ranks are those of Stata's {cmd:invsym()} of the partialled (weighted)
+cross-products: a regressor or instrument is dropped when the fixed effects absorb it
+(its partialled sum of squares is rounding noise, at most 1e-20 times its sum of
+squares) or when {cmd:invsym()} zeroes it; a regressor with little within variation
+is kept. A dropped column does not count in K or the degrees of freedom; an absorbed
+exogenous regressor or excluded instrument still counts among the instruments of the
+Cragg-Donald and Kleibergen-Paap Wald F statistics and the identification dof, as
+{cmd:ivreghdfe} counts its variable lists. An absorbed endogenous regressor has no
+first-stage variation, so the identification statistics are 0. The footer reports the
+instruments dropped this way.{p_end}
 
 {phang2}2. Compute the IV estimator on demeaned data:
 {p_end}
@@ -718,7 +747,8 @@ the Cragg-Donald and Kleibergen-Paap Wald F statistics.{p_end}
 
 {pmore}GMM: Use optimal weighting W = S^{-1}, where S is the covariance of the moment conditions of the chosen VCE (robust, cluster, two-way, AC/HAC, Driscoll-Kraay, Kiefer) at the first-step (2SLS) residuals; CUE evaluates S at each candidate estimate{p_end}
 
-{phang2}3. Compute residuals using original X (not projected X) for proper inference.{p_end}
+{phang2}3. Compute residuals using the regressors rather than their
+instrument-fitted values, after removing any absorbed fixed effects.{p_end}
 
 {phang2}4. Compute VCE using the appropriate sandwich estimator for the chosen method.{p_end}
 
@@ -777,9 +807,10 @@ Michael Droste{break}
 {title:Acknowledgments}
 
 {pstd}
-This command provides similar functionality to {cmd:ivreghdfe} by Sergio Correia.
-The original {cmd:ivreghdfe} package, which combines {cmd:ivreg2} and {cmd:reghdfe},
-is available at {browse "https://github.com/sergiocorreia/ivreghdfe"}.
+{cmd:civreghdfe} estimates instrumental-variable regressions with fixed
+effects, similar to Sergio Correia's {cmd:ivreghdfe}. The original
+{cmd:ivreghdfe} package, which combines {cmd:ivreg2} and {cmd:reghdfe}, is
+available at {browse "https://github.com/sergiocorreia/ivreghdfe"}.
 {cmd:ivreg2} is by Christopher Baum, Mark Schaffer, and Steven Stillman.
 
 {pstd}

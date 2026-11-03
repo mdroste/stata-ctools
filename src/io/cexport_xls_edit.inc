@@ -47,13 +47,14 @@ static int xe_new_cell(FILE *f, const xe_record *r, unsigned strings,
   unsigned char b[8224];
   memcpy(b, r->data, r->len);
   unsigned style = xe16(b + 4) + styles;
-  /* As in XLSX, a date cell keeps its fresh date style under keepcellfmt. */
-  if (keep && old && !xe16(b + 4)) {
+  /* As in XLSX, a %t cell keeps its fresh style under keepcellfmt. */
+  if (keep && old && !CEXPORT_STYLE_IS_TFORMAT(xe16(b + 4))) {
     xlsCell *cell = xls_cell(old, (XLSWORD)xe16(b), (XLSWORD)xe16(b + 2));
     if (cell && cell->id)
       style = cell->xf;
   }
-  if (date1904 && r->id == 0x203 && r->len >= 14 && xe16(b + 4) > 0) {
+  if (date1904 && r->id == 0x203 && r->len >= 14 &&
+      CEXPORT_STYLE_IS_DATE(xe16(b + 4))) {
     uint64_t bits = (uint64_t)xe32(b + 6) | ((uint64_t)xe32(b + 10) << 32);
     double value;
     memcpy(&value, &bits, 8);
@@ -427,11 +428,12 @@ static int xe_edit(const char *path, const char *sheet, int action, int keep,
   xls_error_t error;
   int rc = 610, which = -1;
   xlsWorkBook *wb = xls_open_file(path, "UTF-8", &error);
-  /* Not a workbook: native reports that the file exists (r(602)), or under
-   * modify or replace that it cannot be loaded (r(603)). */
+  /* Not a workbook: native reports that the file exists (r(602)), or with
+   * sheet() that it cannot be loaded (r(603)). */
   if (!wb) {
-    ctools_error("cexport", action ? "file %s could not be loaded" : "file %s already exists", path);
-    return action ? 603 : 602;
+    int named = action || *sheet;
+    ctools_error("cexport", named ? "file %s could not be loaded" : "file %s already exists", path);
+    return named ? 603 : 602;
   }
   *book = wb;
   /* libxls leaves a name it cannot decode NULL; it matches no sheet(). */

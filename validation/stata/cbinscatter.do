@@ -1952,6 +1952,97 @@ if `binscatter_installed' {
     }
 }
 
+* P3-11: by() legend keys are binscatter's byvarname=byvalname: a numeric
+* value as a macro expression evaluates it, or its value label; a string's
+* text. Compared on the graph objects (built with nodraw, never displayed).
+clear
+set seed 305
+set obs 600
+gen double x = rnormal()
+gen double y = 1 + x + rnormal()
+gen bv = mod(_n, 2)
+gen float bf = cond(mod(_n, 3) == 0, .1, cond(mod(_n, 3) == 1, -1.5, 2.25))
+gen double bd = cond(mod(_n, 3) == 0, .1, cond(mod(_n, 3) == 1, 1e-7, 123456789))
+gen bl = mod(_n, 3)
+label define _cb_bll 0 "zero" 1 "one and more"
+label values bl _cb_bll
+gen str12 bs = cond(mod(_n, 3) == 0, "alpha", cond(mod(_n, 3) == 1, "b c", "z"))
+gen long bbig = cond(mod(_n, 2), 2147483000, -5)
+foreach b in bv bf bd bl bs bbig {
+    local keys_ref
+    local keys_ct
+    foreach cmd in binscatter cbinscatter {
+        local n = 0
+        capture quietly `cmd' y x, by(`b') nodraw
+        local rc_`cmd' = _rc
+        capture local n : di `.Graph.legend.labels.arrnels'
+        local keys
+        forvalues i = 1/`n' {
+            local keys `"`keys'[`.Graph.legend.labels[`i']']"'
+        }
+        if "`cmd'" == "binscatter" local keys_ref `"`keys'"'
+        else local keys_ct `"`keys'"'
+    }
+    if !`rc_binscatter' & !`rc_cbinscatter' & `"`keys_ref'"' == `"`keys_ct'"' & `"`keys_ref'"' != "" ///
+        test_pass "P3-11 by(`b') legend keys `keys_ref'"
+    else test_fail "P3-11 by(`b') legend keys" "binscatter `keys_ref' cbinscatter `keys_ct'"
+}
+capture graph drop Graph
+label drop _cb_bll
+
+* P3-12: binscatter switches to discrete bins when the x it stores (predict's
+* float residual plus the mean, stored as float) has at most nquantiles
+* values; a residual that is exactly constant within absorb() groups, or
+* collinear with controls(), carries ~1e-16 noise in double. binscatter's
+* float storage of the residualized x and y holds about 7 digits of each
+* value, so y and the quantile-binned x4 are shifted away from 0 (the same
+* bins, shifted), as for controls(L.z) above.
+clear
+set seed 412
+set obs 600
+gen g = ceil(_n / 3)
+gen k = mod(_n, 3)
+gen double z = rnormal()
+gen double x1 = g * .1 + k
+gen double x2 = g * .37
+gen double x3 = 3 * z + .1
+gen double x4 = 1.7 * z + k + 10
+gen double y = rnormal() + k + 10
+gen w = 1 + mod(_n, 4)
+foreach spec in "x1, absorb(g)" "x2, absorb(g)" "x3, controls(z)" "x4, controls(z)" ///
+    "x1 [aw=w], absorb(g)" "x1, absorb(g) discrete" "x1, absorb(g) controls(z)" {
+    gettoken xv rest : spec, parse(" ,[")
+    preserve
+    quietly binscatter y `spec' nodraw savedata(_bs_count) replace
+    quietly import delimited _bs_count.csv, clear
+    local nb = _N
+    restore
+    capture erase _bs_count.csv
+    capture erase _bs_count.do
+    compare_binscatter_bins, bs_cmd(binscatter y `spec' savedata(_bs_test) replace) ///
+        cb_cmd(cbinscatter y `spec' nograph) nbins(`nb') yvar(y) xvar(`xv') ///
+        testname("P3-12 discrete switch: `spec' (`nb' bins)")
+}
+* by(): the switch counts the pooled x; each group's values are its bins
+preserve
+quietly binscatter y x1, absorb(g) by(k) nodraw savedata(_bs_count) replace
+quietly import delimited _bs_count.csv, clear
+local nb = _N
+restore
+capture erase _bs_count.csv
+capture erase _bs_count.do
+capture quietly cbinscatter y x1, absorb(g) by(k) nograph
+local nc = 0
+if !_rc {
+    matrix _cb_b = e(bindata)
+    forvalues r = 1/`=rowsof(_cb_b)' {
+        if _cb_b[`r', 2] < . local ++nc
+    }
+    matrix drop _cb_b
+}
+if `nc' == `nb' test_pass "P3-12 discrete switch: by(k) (`nb' bins)"
+else test_fail "P3-12 discrete switch: by(k)" "binscatter `nb' bins, cbinscatter `nc'"
+
 * Clean up helpers
 capture program drop ctools_binsreg_reference
 capture program drop compare_binscatter_bins

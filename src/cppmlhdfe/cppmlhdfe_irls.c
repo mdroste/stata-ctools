@@ -299,6 +299,7 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
     ST_double *V_ext = NULL;
     ST_double *separation_certificate = NULL;
     ST_double *previous_working = NULL;
+    ST_double *eta_refit = NULL, *eta_refit_prev = NULL, *beta_prev = NULL;
 
     (void)argc;
     (void)argv;
@@ -905,6 +906,10 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
     ST_double deviance = 1e30, deviance_old;
     ST_int irls_iter;
     ST_int irls_converged = 0, ok_iterations=0, halving_count=0;
+    int have_refit_prev = 0;
+    double hdfe_subiterations = 0;
+    beta_prev = (ST_double *)calloc((size_t)(K_x > 0 ? K_x : 1), sizeof(ST_double));
+    if (!beta_prev) { output_rc = 920; goto ppml_cleanup; }
     memset(sep_m,0,(size_t)N*sizeof(int));
     ST_double log_eps_history[3] = {0.0, 0.0, 0.0};
     ST_int eps_history_count = 0;
@@ -974,8 +979,11 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
             output_rc = projection.status;
             goto ppml_cleanup;
         }
+        /* e(ic2): partialling-out subiterations of the IRLS, as ppmlhdfe */
+        hdfe_subiterations += projection.iterations;
 
         /* (e) Solve WLS: beta = (X~'W X~)^{-1} X~'W z~ using partialled data */
+        if (irls_iter) memcpy(beta_prev, irls_beta, K_x * sizeof(ST_double));
         memset(irls_beta, 0, K_x * sizeof(ST_double));
 
         if (options->exact_solver || !options->remove_collinear) {
@@ -993,15 +1001,24 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
 
             memcpy(inv_xx_k, xtx_k, K_irls * K_irls * sizeof(ST_double));
             if (ctools_cholesky(inv_xx_k, K_irls) != 0) {
-                break;
-            }
-            output_rc = ctools_stata_rc(ctools_invert_from_cholesky(inv_xx_k, K_irls, inv_xx_k));
-            if (output_rc) goto ppml_cleanup;
+                /* See the full solve below */
+                ST_double *compact = (ST_double *)malloc((size_t)N * (size_t)K_irls * sizeof(ST_double));
+                if (!compact) { output_rc = 920; goto ppml_cleanup; }
+                for (ki = 0; ki < K_irls; ki++)
+                    memcpy(compact + (size_t)ki * N, aug_copy + (size_t)(irls_keep_idx[ki] + 1) * N,
+                           (size_t)N * sizeof(ST_double));
+                output_rc = ppml_qrsolve(compact, aug_copy, irls_w, N, K_irls, beta_k, NULL);
+                free(compact);
+                if (output_rc) goto ppml_cleanup;
+            } else {
+                output_rc = ctools_stata_rc(ctools_invert_from_cholesky(inv_xx_k, K_irls, inv_xx_k));
+                if (output_rc) goto ppml_cleanup;
 
-            for (ki = 0; ki < K_irls; ki++) {
-                beta_k[ki] = 0.0;
-                for (kj = 0; kj < K_irls; kj++)
-                    beta_k[ki] += inv_xx_k[ki * K_irls + kj] * xty_k[kj];
+                for (ki = 0; ki < K_irls; ki++) {
+                    beta_k[ki] = 0.0;
+                    for (kj = 0; kj < K_irls; kj++)
+                        beta_k[ki] += inv_xx_k[ki * K_irls + kj] * xty_k[kj];
+                }
             }
             /* Expand to full beta */
             for (ki = 0; ki < K_irls; ki++)
@@ -1013,14 +1030,23 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
             if (output_rc) goto ppml_cleanup;
 
             memcpy(inv_xx, xtx, K_x * K_x * sizeof(ST_double));
-            if (ctools_cholesky(inv_xx, K_x) != 0) break;
-            output_rc = ctools_stata_rc(ctools_invert_from_cholesky(inv_xx, K_x, inv_xx));
-            if (output_rc) goto ppml_cleanup;
+            if (ctools_cholesky(inv_xx, K_x) != 0) {
+                /* Far from the optimum (wide offsets: means spanning hundreds
+                 * of orders of magnitude) X'WX can be numerically singular.
+                 * The step then comes from the rank-revealing weighted QR of
+                 * the partialled data, as ppmlhdfe's fast solver uses qrsolve;
+                 * stopping here ended the fit with "IRLS did not converge". */
+                output_rc = ppml_qrsolve(aug_copy + N, aug_copy, irls_w, N, K_x, irls_beta, NULL);
+                if (output_rc) goto ppml_cleanup;
+            } else {
+                output_rc = ctools_stata_rc(ctools_invert_from_cholesky(inv_xx, K_x, inv_xx));
+                if (output_rc) goto ppml_cleanup;
 
-            for (i = 0; i < K_x; i++) {
-                irls_beta[i] = 0.0;
-                for (j = 0; j < K_x; j++)
-                    irls_beta[i] += inv_xx[i * K_x + j] * xty[j];
+                for (i = 0; i < K_x; i++) {
+                    irls_beta[i] = 0.0;
+                    for (j = 0; j < K_x; j++)
+                        irls_beta[i] += inv_xx[i * K_x + j] * xty[j];
+                }
             }
         }
 
@@ -1033,11 +1059,42 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
         memset(xb_work, 0, (size_t)N * sizeof(ST_double));
         ctools_matvec_add(aug_copy + N, N, K_x, irls_beta, xb_work);
         int eta_not_finite = 0, mu_overflow = 0;
+        /* Full step: xb_work := X~ beta + FE component (original z minus
+         * partialled z), the new eta without the offset */
+        #pragma omp parallel for schedule(static) reduction(| : eta_not_finite, mu_overflow) if (N > 100000)
+        for (i = 0; i < N; i++) {
+            xb_work[i] += z_orig[i] - aug_copy[i];
+            if (!isfinite(xb_work[i])) eta_not_finite |= 1;
+            else if (!isfinite(exp(xb_work[i] + (offset_compact ? offset_compact[i] : 0.0)))) mu_overflow |= 1;
+        }
+        /* Far from the optimum with wide offsets (means spanning hundreds of
+         * orders of magnitude) the full step can overflow a mean although
+         * the deviance is falling. As glm's IRLS (and R's glm.fit) the step
+         * toward the new eta and beta is then halved until every mean is
+         * finite; the fit stopped there with r(430) where ppmlhdfe converged. */
+        if (mu_overflow && !eta_not_finite) {
+            ST_double step = 1.0;
+            for (int halving = 0; halving < 60 && mu_overflow; halving++) {
+                step *= 0.5;
+                mu_overflow = 0;
+                for (i = 0; i < N && !mu_overflow; i++)
+                    mu_overflow = !isfinite(exp(eta[i] + step * (xb_work[i] - eta[i]) +
+                                                (offset_compact ? offset_compact[i] : 0.0)));
+            }
+            if (!mu_overflow) {
+                for (i = 0; i < N; i++) xb_work[i] = eta[i] + step * (xb_work[i] - eta[i]);
+                for (k = 0; k < K_x; k++) irls_beta[k] = beta_prev[k] + step * (irls_beta[k] - beta_prev[k]);
+                if (verbose) {
+                    char msg[128];
+                    snprintf(msg, sizeof(msg), "  iter %d: step scaled by %.3g to keep the means finite\n",
+                             irls_iter + 1, step);
+                    SF_display(msg);
+                }
+            }
+        }
         #pragma omp parallel for schedule(static) reduction(max : max_eta_change) reduction(| : eta_not_finite, mu_overflow) if (N > 100000)
         for (i = 0; i < N; i++) {
-            /* FE component: original z minus partialled z */
-            ST_double fe_part = z_orig[i] - aug_copy[i];
-            ST_double z_hat = xb_work[i] + fe_part;
+            ST_double z_hat = xb_work[i];
             ST_double off = (offset_compact != NULL) ? offset_compact[i] : 0.0;
             /* eta = X*beta + FE (without offset); z didn't include offset */
             if (!isfinite(z_hat)) { eta_not_finite |= 1; continue; }
@@ -1054,7 +1111,14 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
             if (!isfinite(mu[i])) mu_overflow |= 1;
             if (mu[i] < PPML_MU_FLOOR) mu[i] = PPML_MU_FLOOR;
         }
-        if (eta_not_finite) output_rc = 430;
+        if (eta_not_finite) {
+            char msg[200];
+            snprintf(msg, sizeof(msg),
+                     "cppmlhdfe: the linear predictor is not finite on iteration %d; check the scale of "
+                     "offset() or exposure() and of the regressors\n", (int)irls_iter + 1);
+            SF_error(msg);
+            output_rc = 430;
+        }
         if (mu_overflow && !output_rc) {
             char msg[200];
             snprintf(msg, sizeof(msg),
@@ -1075,8 +1139,39 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
             }
         }
 
-        /* (g) Compute deviance */
-        deviance = ppml_compute_deviance(y, eta, offset_compact, w_user_compact, N) / user_weight_scale;
+        /* (g) Compute deviance. A positive outcome whose mean is at the floor
+         * has a working value near y/floor, and its eta = z - (z - Pz) keeps
+         * only the digits left after that subtraction (about 1e-2 at
+         * y/floor = 1e14). Its deviance term y*(log y - eta) then carries
+         * that rounding: with wide offsets the deviance cycled by about
+         * 2e-7 (relative) between two values and the test never passed. On
+         * such iterations the deviance and the eta change are evaluated at
+         * the refitted eta (see ppml_refit_fixed_effects), which is free of
+         * that rounding; eta itself, and so the iteration, is unchanged. */
+        const ST_double *eta_eval = eta;
+        {
+            int floored_now = 0;
+            for (i = 0; i < N && !floored_now; i++) floored_now = y[i] > 0 && mu[i] <= PPML_MU_FLOOR;
+            if (floored_now) {
+                if (!eta_refit) eta_refit = (ST_double *)malloc((size_t)N * sizeof(ST_double));
+                if (!eta_refit_prev) eta_refit_prev = (ST_double *)malloc((size_t)N * sizeof(ST_double));
+                if (!eta_refit || !eta_refit_prev) { output_rc = 920; break; }
+                memcpy(eta_refit, eta, (size_t)N * sizeof(ST_double));
+                output_rc = ppml_refit_fixed_effects(options, g_ppml_state, X, N, K_x, irls_beta,
+                                                     eta_refit, fe_work, xb_work, num_threads);
+                if (output_rc) break;
+                if (have_refit_prev) {
+                    max_eta_change = 0.0;
+                    for (i = 0; i < N; i++)
+                        if (y[i] > 0 || mu[i] > 1e-12)
+                            max_eta_change = fmax(max_eta_change, fabs(eta_refit[i] - eta_refit_prev[i]));
+                }
+                memcpy(eta_refit_prev, eta_refit, (size_t)N * sizeof(ST_double));
+                have_refit_prev = 1;
+                eta_eval = eta_refit;
+            } else have_refit_prev = 0;
+        }
+        deviance = ppml_compute_deviance(y, eta_eval, offset_compact, w_user_compact, N) / user_weight_scale;
 
         /* (h) Check convergence (matching ppmlhdfe's criterion) */
         if (irls_iter > 0) {
@@ -1109,8 +1204,15 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
              * early deviance plateau cannot leave inaccurate standard errors
              * in explicitly tight fits. Preserve default ppmlhdfe stopping
              * behavior; it can intentionally return less accurate weights. */
+            /* With means below the floor (wide offsets) the deviance is
+             * dominated by rows that barely move while the log-means of
+             * others still change by 1e-3 (b at 5-6 digits): there the
+             * log-means must also have settled to sqrt(tolerance), after
+             * which the final solve's Newton step leaves an error of order
+             * tolerance. */
             if (rel_change < irls_tol && final_solve &&
                 (irls_tol >= 1e-10 || max_eta_change <= 1e-8) &&
+                (eta_eval == eta || max_eta_change <= sqrt(irls_tol)) &&
                 (G == 1 || (g_ppml_state->tolerance <= target_inner_tol &&
                             ref_inner_tol <= 1.1 * target_inner_tol))) {
                 ok_iterations++;
@@ -1203,6 +1305,7 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
         output_rc = 430;
     }
     if (output_rc) goto ppml_cleanup;
+    if ((output_rc = ctools_scal_save("__cppmlhdfe_ic2", hdfe_subiterations))) goto ppml_cleanup;
 
     if(options->check_mu) {
         int nsep=0;for(i=0;i<N;i++)nsep+=sep_m[i];
@@ -1363,6 +1466,19 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
                 }
             }
         }
+    }
+
+    /* e(rss) as ppmlhdfe posts it (reghdfe's solve on the final working
+       regression): the sum of squared partialled working residuals with the
+       regression weights w_reg, which sum to N (to the fweight total) */
+    {
+        dd_real rss = {0.0, 0.0};
+        for (i = 0; i < N; i++) {
+            ST_double r = aug_copy[i];
+            for (k = 0; k < K_keep; k++) r -= aug_copy[(size_t)(keep_idx[k] + 1) * N + i] * beta_final[k];
+            rss = dd_add_d(rss, w_reg[i] * r * r);
+        }
+        if ((output_rc = ctools_scal_save("__cppmlhdfe_rss", rss.hi + rss.lo))) goto ppml_cleanup;
     }
 
     /* Recompute eta for the posted coefficients from its fixed-effect part
@@ -1818,6 +1934,7 @@ ppml_cleanup:
     free(V_ext);
     free(separation_certificate);
     free(previous_working);
+    free(eta_refit); free(eta_refit_prev); free(beta_prev);
     free(cluster_raw_values);
     free(mu); free(eta);
     free(z_orig); free(aug_copy);

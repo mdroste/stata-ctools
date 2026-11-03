@@ -64,6 +64,165 @@ typedef struct {
 
 
 /* ===========================================================================
+   idcluster(): bsample's new cluster id, after the ado expanded the draw
+   ===========================================================================
+
+   The draw pass wrote, for every sampled observation, its 1-based position
+   among the sample sorted by (strata, cluster, observation), its cluster's
+   ordinal in that order and its stratum's ordinal. The ado then dropped the
+   undrawn observations and expanded the rest, so each copy of an observation
+   is one row. Plugin variables: pos cluster stratum idvar keyvar.
+
+   bsample's NewClustID numbers the drawn copies of the clusters 1, 2, ...
+   within each stratum (across strata in stratum order when called under
+   version 14 or later: option iduniq) and sorts the rows by (strata, id,
+   observation). The copies are numbered in cluster order, then copy order,
+   unless some stratum draws fewer clusters than it has (option random): then
+   bsample orders all copies of each stratum at random, here a uniform
+   permutation from the draw's seed. keyvar receives each row's final position
+   for the ado's sort. */
+
+static ST_retcode cbsample_idcluster_pass(const char *args)
+{
+    uint64_t seed = 0;
+    if (ctools_parse_seed_option(args, &seed) < 0) {
+        ctools_error(CBSAMPLE_MODULE, "invalid seed option");
+        return 198;
+    }
+    const int uniq = ctools_parse_bool_option(args, "iduniq");
+    const int random = ctools_parse_bool_option(args, "idrandom");
+    if (SF_nvars() < 5) {
+        ctools_error(CBSAMPLE_MODULE, "idcluster pass needs five variables");
+        return 198;
+    }
+    const ST_int in1 = SF_in1(), in2 = SF_in2();
+    const size_t n = in2 >= in1 ? (size_t)(in2 - in1 + 1) : 0;
+    if (n == 0) return 0;
+
+    ST_retcode rc = 0;
+    size_t *pos = NULL, *cl = NULL, *st = NULL, *copy = NULL;
+    size_t *occ = NULL, *ncopies = NULL, *first = NULL, *last = NULL;
+    size_t *cl_stratum = NULL, *offset = NULL, *local_id = NULL;
+    size_t *order = NULL, *copy_start = NULL, *st_copies = NULL;
+    size_t npos = 0, ncl = 0, nst = 0;
+
+    pos = (size_t *)malloc(n * sizeof(size_t));
+    cl = (size_t *)malloc(n * sizeof(size_t));
+    st = (size_t *)malloc(n * sizeof(size_t));
+    copy = (size_t *)malloc(n * sizeof(size_t));
+    if (!pos || !cl || !st || !copy) { rc = 920; goto done; }
+
+    for (size_t i = 0; i < n; i++) {
+        ST_double v[3];
+        for (int k = 0; k < 3; k++) {
+            rc = SF_vdata(k + 1, in1 + (ST_int)i, &v[k]);
+            if (rc) goto done;
+            if (!(v[k] >= 1 && v[k] <= 2147483647.0 && v[k] == floor(v[k]))) {
+                rc = 198;
+                goto done;
+            }
+        }
+        pos[i] = (size_t)v[0];
+        cl[i] = (size_t)v[1];
+        st[i] = (size_t)v[2];
+        if (pos[i] > npos) npos = pos[i];
+        if (cl[i] > ncl) ncl = cl[i];
+        if (st[i] > nst) nst = st[i];
+    }
+
+    /* Copy number of each row: the j-th row of an observation is in copy j */
+    occ = (size_t *)calloc(npos + 1, sizeof(size_t));
+    ncopies = (size_t *)calloc(ncl + 1, sizeof(size_t));
+    first = (size_t *)malloc((ncl + 1) * sizeof(size_t));
+    last = (size_t *)calloc(ncl + 1, sizeof(size_t));
+    cl_stratum = (size_t *)calloc(ncl + 1, sizeof(size_t));
+    offset = (size_t *)calloc(ncl + 2, sizeof(size_t));
+    st_copies = (size_t *)calloc(nst + 2, sizeof(size_t));
+    if (!occ || !ncopies || !first || !last || !cl_stratum || !offset || !st_copies) {
+        rc = 920;
+        goto done;
+    }
+    for (size_t g = 0; g <= ncl; g++) first[g] = SIZE_MAX;
+    for (size_t i = 0; i < n; i++) {
+        size_t g = cl[i];
+        copy[i] = occ[pos[i]]++;
+        if (copy[i] + 1 > ncopies[g]) ncopies[g] = copy[i] + 1;
+        if (pos[i] < first[g]) first[g] = pos[i];
+        if (pos[i] > last[g]) last[g] = pos[i];
+        cl_stratum[g] = st[i];
+    }
+
+    /* Copies in (cluster, copy) order: offset[g] is cluster g's first copy.
+     * Clusters are numbered in (strata, cluster) order, so each stratum's
+     * copies are one contiguous run. */
+    size_t ncopy = 0;
+    for (size_t g = 1; g <= ncl; g++) {
+        offset[g] = ncopy;
+        ncopy += ncopies[g];
+        if (ncopies[g]) st_copies[cl_stratum[g]] += ncopies[g];
+    }
+    offset[ncl + 1] = ncopy;
+
+    local_id = (size_t *)malloc((ncopy ? ncopy : 1) * sizeof(size_t));
+    order = (size_t *)malloc((ncopy ? ncopy : 1) * sizeof(size_t));
+    copy_start = (size_t *)malloc((ncopy ? ncopy : 1) * sizeof(size_t));
+    size_t *copy_cluster = (size_t *)malloc((ncopy ? ncopy : 1) * sizeof(size_t));
+    if (!local_id || !order || !copy_start || !copy_cluster) {
+        free(copy_cluster);
+        rc = 920;
+        goto done;
+    }
+    for (size_t g = 1; g <= ncl; g++)
+        for (size_t j = 0; j < ncopies[g]; j++) copy_cluster[offset[g] + j] = g;
+
+    /* Number each stratum's copies, in order or at random; order[] lists
+     * copies by (stratum, id) and copy_start[] gives each copy's first row. */
+    ctools_rng rng;
+    ctools_rng_seed(&rng, seed ^ 0x6964636c75737472ULL);
+    size_t c0 = 0, row = 0;
+    for (size_t h = 1; h <= nst; h++) {
+        size_t m = st_copies[h];
+        if (!m) continue;
+        for (size_t k = 0; k < m; k++) order[c0 + k] = c0 + k;
+        if (random) {
+            for (size_t k = m - 1; k > 0; k--) {
+                size_t r = ctools_rng_uniform(&rng, k + 1);
+                size_t t = order[c0 + k];
+                order[c0 + k] = order[c0 + r];
+                order[c0 + r] = t;
+            }
+        }
+        for (size_t k = 0; k < m; k++) {
+            size_t c = order[c0 + k];
+            size_t g = copy_cluster[c];
+            local_id[c] = (uniq ? c0 : 0) + k + 1;
+            copy_start[c] = row;
+            row += last[g] - first[g] + 1;
+        }
+        c0 += m;
+    }
+    free(copy_cluster);
+    if (row != n) { rc = 198; goto done; }
+
+    for (size_t i = 0; i < n && !rc; i++) {
+        size_t g = cl[i];
+        size_t c = offset[g] + copy[i];
+        ST_int obs = in1 + (ST_int)i;
+        rc = SF_vstore(4, obs, (ST_double)local_id[c]);
+        if (!rc) rc = SF_vstore(5, obs, (ST_double)(copy_start[c] + (pos[i] - first[g]) + 1));
+    }
+
+done:
+    free(pos); free(cl); free(st); free(copy);
+    free(occ); free(ncopies); free(first); free(last);
+    free(cl_stratum); free(offset); free(local_id);
+    free(order); free(copy_start); free(st_copies);
+    if (rc == 920) ctools_error_alloc(CBSAMPLE_MODULE);
+    else if (rc == 198) ctools_error(CBSAMPLE_MODULE, "invalid idcluster pass input");
+    return rc;
+}
+
+/* ===========================================================================
    Main Entry Point
    =========================================================================== */
 
@@ -92,6 +251,7 @@ ST_retcode cbsample_main(const char *args) {
         ctools_error(CBSAMPLE_MODULE, "no arguments specified");
         return 198;
     }
+    if (ctools_parse_bool_option(args, "idpass")) return cbsample_idcluster_pass(args);
 
     /* Parse options */
     cbsample_config config;
@@ -140,6 +300,25 @@ ST_retcode cbsample_main(const char *args) {
     }
     size_t nstrata = (size_t)nstrata_value;
 
+    /* sizeidx: a variable holding each stratum's resample size (sizes that
+     * differ across strata). posidx/clidx/stidx: idcluster() outputs, each
+     * sampled observation's sorted position, cluster and stratum ordinals. */
+    int size_idx = 0, pos_idx = 0, clid_idx = 0, stid_idx = 0;
+    if (ctools_parse_int_option(args, "sizeidx", &size_idx) < 0 ||
+        ctools_parse_int_option(args, "posidx", &pos_idx) < 0 ||
+        ctools_parse_int_option(args, "clidx", &clid_idx) < 0 ||
+        ctools_parse_int_option(args, "stidx", &stid_idx) < 0 ||
+        size_idx < 0 || size_idx > SF_nvars() || (size_idx && nstrata == 0) ||
+        pos_idx < 0 || pos_idx > SF_nvars() || clid_idx < 0 || clid_idx > SF_nvars() ||
+        stid_idx < 0 || stid_idx > SF_nvars() ||
+        (pos_idx || clid_idx || stid_idx) != (pos_idx && clid_idx && stid_idx) ||
+        (pos_idx && ncluster == 0)) {
+        ctools_error(CBSAMPLE_MODULE, "invalid sizeidx= or idcluster options");
+        return 198;
+    }
+    const int want_ids = pos_idx > 0;
+    const int iduniq = ctools_parse_bool_option(args, "iduniq");
+
     if (ncluster > 0) {
         cluster_indices = (int *)malloc(ncluster * sizeof(int));
         if (!cluster_indices) {
@@ -181,8 +360,9 @@ ST_retcode cbsample_main(const char *args) {
     size_t nobs;
 
     if (total_by > 0) {
-        /* Build combined indices array: strata first, then cluster */
-        combined_indices = (int *)malloc(total_by * sizeof(int));
+        /* Build combined indices array: strata first, then cluster, then the
+         * per-stratum resample size (loaded and permuted, not sorted on) */
+        combined_indices = (int *)malloc((total_by + 1) * sizeof(int));
         if (!combined_indices) {
             if (cluster_indices) free(cluster_indices);
             if (strata_indices) free(strata_indices);
@@ -196,9 +376,11 @@ ST_retcode cbsample_main(const char *args) {
         for (size_t c = 0; c < ncluster; c++) {
             combined_indices[nstrata + c] = cluster_indices[c];
         }
+        if (size_idx) combined_indices[total_by] = size_idx;
 
         /* Load data using filtered loading */
-        rc = ctools_data_load(&by_filtered, combined_indices, total_by, 0, 0, selection);
+        rc = ctools_data_load(&by_filtered, combined_indices, total_by + (size_idx ? 1 : 0),
+                              0, 0, selection);
         if (rc != STATA_OK) {
             ctools_filtered_data_free(&by_filtered);
             free(combined_indices);
@@ -432,6 +614,13 @@ ST_retcode cbsample_main(const char *args) {
         return 920;
     }
 
+    /* Per-stratum resample sizes, in sorted order (constant within strata) */
+    const double *sizes = size_idx ? by_filtered.data.vars[total_by].data.dbl : NULL;
+    /* idcluster(): bsample's largest cluster id stored before its final ids
+     * (the variable's storage type follows it) and whether ids are random */
+    size_t id_max = 0, id_total = 0;
+    int id_random = 0;
+
     /* Process each stratum - use stratum-based seeding for reproducibility */
     if (ncluster > 0) {
         /* Cluster bootstrap: resample clusters with replacement within each stratum */
@@ -467,7 +656,14 @@ ST_retcode cbsample_main(const char *args) {
             if (n_clusters_in_stratum == 0) continue;
 
             size_t target_n = config.n ? config.n : n_clusters_in_stratum;
+            if (sizes) {
+                if (!(sizes[st_start] >= 1 && sizes[st_start] <= (double)SIZE_MAX)) { rc = 198; goto cleanup; }
+                target_n = (size_t)sizes[st_start];
+            }
             if (target_n > n_clusters_in_stratum) { rc = 498; goto cleanup; }
+            if (n_clusters_in_stratum > id_max) id_max = n_clusters_in_stratum;
+            id_total += target_n;
+            if (target_n != n_clusters_in_stratum) id_random = 1;
 
             /* Seed RNG based on stratum index for reproducibility */
             ctools_rng_seed(&thread_rngs[0], config.seed + (uint64_t)st * 0x9e3779b97f4a7c15ULL);
@@ -494,6 +690,10 @@ ST_retcode cbsample_main(const char *args) {
             size_t st_count = strata[st].count;
 
             size_t target_n = config.n ? config.n : st_count;
+            if (sizes) {
+                if (!(sizes[st_start] >= 1 && sizes[st_start] <= (double)SIZE_MAX)) { rc = 198; goto cleanup; }
+                target_n = (size_t)sizes[st_start];
+            }
             if (target_n > st_count) { rc = 498; goto cleanup; }
 
             /* Seed RNG based on stratum index for reproducibility */
@@ -518,6 +718,29 @@ ST_retcode cbsample_main(const char *args) {
         ST_int obs = obs_map ? (ST_int)obs_map[i] : (obs_start + (ST_int)i);
         rc = SF_vstore(freq_idx, obs, freq_weights[i]);
         if (rc) goto cleanup;
+    }
+
+    /* idcluster(): each sampled observation's position in (strata, cluster,
+     * observation) order and its cluster and stratum ordinals */
+    if (want_ids) {
+        size_t cl_cursor = 0;
+        for (size_t st = 0; st < nstrata_groups; st++) {
+            size_t st_end = strata[st].start + strata[st].count;
+            for (; cl_cursor < nclusters && clusters[cl_cursor].start < st_end; cl_cursor++) {
+                for (size_t j = 0; j < clusters[cl_cursor].count; j++) {
+                    size_t sorted = clusters[cl_cursor].start + j;
+                    size_t obs_idx = sort_perm ? sort_perm[sorted] : sorted;
+                    ST_int obs = obs_map ? (ST_int)obs_map[obs_idx] : (obs_start + (ST_int)obs_idx);
+                    rc = SF_vstore(pos_idx, obs, (double)(sorted + 1));
+                    if (!rc) rc = SF_vstore(clid_idx, obs, (double)(cl_cursor + 1));
+                    if (!rc) rc = SF_vstore(stid_idx, obs, (double)(st + 1));
+                    if (rc) goto cleanup;
+                }
+            }
+        }
+        if (iduniq && id_total > id_max) id_max = id_total;
+        SF_scal_save("_cbsample_idmax", (double)id_max);
+        SF_scal_save("_cbsample_idrandom", (double)id_random);
     }
 
     t_store = ctools_timer_seconds() - store_start;
@@ -546,6 +769,7 @@ cleanup:
     if (rc) {
         if (rc == 498) SF_error("cbsample: resample size exceeds sampling units in a stratum\n");
         if (rc == 460) SF_error("singleton cluster detected\n");
+        if (rc == 198) SF_error("cbsample: invalid resample size\n");
         return rc;
     }
 

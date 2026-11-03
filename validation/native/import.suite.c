@@ -145,14 +145,18 @@ int main(void) {
         atomic_init(&failed->error_code,error?109:0);
         assert(!cimport_fail(failed,920) && g_cimport_parse_status==(error?109:920));
     }
-    /* More fields than the parser holds fail (902) instead of being dropped. */
+    /* Rows wider than CTOOLS_MAX_COLUMNS fields are read whole, as native
+     * does: the field buffers grow (here twice, for a second, wider row). */
     char widefile[]="/tmp/ctools-cimport-wide-XXXXXX";
     fd=mkstemp(widefile);assert(fd>=0);
     for(int f=0;f<=CTOOLS_MAX_COLUMNS;f++) assert(write(fd,f?",1":"1",f?2:1)>0);
+    assert(write(fd,"\n",1)==1);
+    for(int f=0;f<2*CTOOLS_MAX_COLUMNS+5;f++) assert(write(fd,f?",2":"2",f?2:1)>0);
     assert(write(fd,"\n",1)==1);close(fd);
-    assert(!cimport_parse_csv(widefile,',',false,0,false,CIMPORT_BINDQUOTES_LOOSE,
-        CIMPORT_NUMTYPE_AUTO,'.',0,CIMPORT_EMPTYLINES_SKIP,20,CIMPORT_ENC_UNKNOWN,NULL,0,NULL,0));
-    assert(g_cimport_parse_status==902);unlink(widefile);
+    CImportContext *wide=cimport_parse_csv(widefile,',',false,0,false,CIMPORT_BINDQUOTES_LOOSE,
+        CIMPORT_NUMTYPE_AUTO,'.',0,CIMPORT_EMPTYLINES_SKIP,20,CIMPORT_ENC_UNKNOWN,NULL,0,NULL,0);
+    assert(wide && wide->num_columns==2*CTOOLS_MAX_COLUMNS+5 && wide->total_rows==2);
+    cimport_free_context(wide);unlink(widefile);
     ctools_destroy_global_pool();return 0;
 }
 #endif

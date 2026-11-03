@@ -1,4 +1,4 @@
-*! version 1.2.3 20261030 github.com/mdroste/stata-ctools
+*! version 1.2.4 20261103 github.com/mdroste/stata-ctools
 
 program define cbinscatter, eclass
     version 14.1
@@ -232,6 +232,23 @@ program define cbinscatter, eclass
         local by "`by_numeric'"
         local num_by_groups = r(N_groups)
         if `num_by_groups' == 0 error 2000
+        * binscatter's legend key for each group, byvarname=byvalname: a
+        * numeric value as a macro expression evaluates it, or its value
+        * label; a string's text (from egen group(), label)
+        local by_reps `"`r(reps)'"'
+        capture confirm numeric variable `by_orig'
+        local by_isnum = !_rc
+        local by_vlabel
+        if `by_isnum' local by_vlabel : value label `by_orig'
+        forval g = 1/`num_by_groups' {
+            if `by_isnum' {
+                local rep : word `g' of `by_reps'
+                local byval = `by_orig'[`rep']
+                if "`by_vlabel'" == "" local by_key`g' = `byval'
+                else local by_key`g' `: label `by_vlabel' `byval''
+            }
+            else local by_key`g' : label (`by') `g'
+        }
     }
 
     * Load the platform-appropriate ctools plugin if not already loaded
@@ -587,8 +604,7 @@ program define cbinscatter, eclass
                 if "`symbol'" != "" local thissymbol "msymbol(`symbol')"
 
                 local scatters `"`scatters' (scatteri `coords', mcolor(`thismcolor') lcolor(`thislcolor') `thissymbol' `connect_opt')"'
-                local group_label : label (`by') `g'
-                local legend_labels `"`legend_labels' label(`legend_idx' "`by_orig'==`group_label'")"'
+                local legend_labels `"`legend_labels' label(`legend_idx' `by_orig'=`by_key`g'')"'
                 local legend_order "`legend_order' `legend_idx'"
                 local legend_idx = `legend_idx' + 1
 

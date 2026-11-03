@@ -375,6 +375,221 @@ def docs_main(argv=None):
     print(f"docs tree checked ({len(files)} files)")
 
 
+# The runner executes many named cases in one Stata session, so a case that
+# draws random numbers before its own `set seed` gets whatever RNG state the
+# previous case left and its data change with the selection and order of cases.
+seeds_PREFIX = (
+    r"(?:(?:qui(?:e|et|etl|etly)?|n(?:oi|ois|oisi|oisil|oisily)|cap(?:t|tu|tur|ture)?"
+    r"|(?:by|bys|byso|bysor|bysort)\s[^:]*:|version\s+[\d.]+\s*:|frame\s+\S+\s*:)\s+)*"
+)
+seeds_FUNCTION = re.compile(
+    r"(?<![\w.])(?:runiform|runiformint|rnormal|rbeta|rbinomial|rcauchy|rchi2|rexponential"
+    r"|rgamma|rhypergeometric|rigaussian|rlaplace|rlogistic|rnbinomial|rpoisson|rt|rweibull"
+    r"|rweibullph|uniform|rdiscrete|jumble|_jumble)\s*\("
+)
+seeds_COMMAND = re.compile(
+    r"^\s*" + seeds_PREFIX + r"(?:sample|bsample|csample|cbsample|splitsample|drawnorm"
+    r"|bootstrap|permute|simulate|corr2data)\b(?!\s*=)"
+)
+seeds_SEED = re.compile(
+    r"^\s*" + seeds_PREFIX + r"(?:set\s+(?:seed|rngstate)\b|(?:drawnorm|bootstrap|permute"
+    r"|simulate|corr2data)\b.*\bseed\(\s*[^)\s])|\brseed\(\s*[^)\s]"
+)
+seeds_CALL = re.compile(r"^\s*" + seeds_PREFIX + r"([A-Za-z_]\w*)")
+seeds_DO = re.compile(
+    r"^\s*" + seeds_PREFIX + r"(?:do|run)\s+\"?(validation/[\w./]+\.do)\"?(?:\s+\"?(\w+))?"
+)
+seeds_PROGRAM = re.compile(
+    r"^\s*(?:cap(?:t|tu|tur|ture)?\s+)?(?:qui(?:etly)?\s+)?program\s+(?:define\s+|def\s+)?"
+    r"(?!drop\b|dir\b|list\b)([A-Za-z_]\w*)(?!.*,\s*plugin\b)"
+)
+seeds_MATA = re.compile(r"^\s*" + seeds_PREFIX + r"mata\s*:?\s*\{?\s*$")
+
+
+def seeds_statements(text, first=1):
+    """(line, statement) pairs without comments, with /// continuations joined."""
+    text = re.sub(r"/\*.*?\*/", lambda m: "\n" * m[0].count("\n"), text, flags=re.S)
+    found, pending, start = [], "", None
+    for number, line in enumerate(text.split("\n"), first):
+        if not pending and re.match(r"\s*\*", line):
+            continue
+        joined = re.search(r"(?:^|\s)///", line)
+        line = re.sub(r"(?:^|\s)//.*$", "", line)
+        start = number if start is None else start
+        pending += " " + line
+        if not joined:
+            found.append((start, pending.strip()))
+            pending, start = "", None
+    return found
+
+
+def seeds_split(statements):
+    """Separate executed statements from `program` bodies (Mata blocks run in place)."""
+    top, programs, stack = [], {}, []
+    for number, statement in statements:
+        if stack and re.fullmatch(r"end", statement):
+            stack.pop()
+            continue
+        if stack and stack[-1] == "mata":
+            (programs[stack[-2]][-1] if len(stack) > 1 else top).append((number, statement))
+            continue
+        program = seeds_PROGRAM.match(statement)
+        if program and not stack:
+            stack.append(program[1])
+            programs.setdefault(program[1], []).append([(number, statement)])
+            top.append((number, ("program", program[1])))
+            continue
+        if seeds_MATA.match(statement):
+            stack.append("mata")
+            continue
+        if stack:
+            programs[stack[-1]][-1].append((number, statement))
+        else:
+            top.append((number, statement))
+    return top, {name: [body[1:] for body in bodies] for name, bodies in programs.items()}
+
+
+def seeds_blocks(text, marker):
+    """Yield (name, statements) for each named block, the shared preamble first."""
+    starts = list(re.finditer(r'^if "`' + marker + r"'\" == \"([a-z0-9_]+)\" \{\n", text, re.M))
+    preamble = seeds_statements(text[: starts[0].start()]) if starts else []
+    for i, match in enumerate(starts):
+        end = starts[i + 1].start() if i + 1 < len(starts) else len(text)
+        first = text[: match.end()].count("\n") + 1
+        yield match[1], preamble + seeds_statements(text[match.end() : end], first)
+
+
+def seeds_findings(root):
+    """Return 'path:line [case] statement' for each case that draws before seeding."""
+    root = Path(root)
+    cases = {}
+    for folder, marker in (
+        ("validation/stata", "__case"),
+        ("validation/performance", "__workload"),
+    ):
+        for path in sorted((root / folder).glob("*.do")):
+            for name, statements in seeds_blocks(path.read_text(errors="replace"), marker):
+                cases[(path.relative_to(root).as_posix(), name)] = seeds_split(statements)
+    files = {}
+    for path in sorted((root / "validation/support").glob("*.do")):
+        files[path.relative_to(root).as_posix()] = seeds_split(
+            seeds_statements(path.read_text(errors="replace"))
+        )
+    programs = {}
+    for _, defined in [*cases.values(), *files.values()]:
+        for name, bodies in defined.items():
+            programs.setdefault(name, []).extend(bodies)
+    memo = {}
+
+    def first_event(statements, active):
+        """('seed'|'draw', line, statement) for the first RNG event, or None."""
+        for number, statement in statements:
+            if isinstance(statement, tuple):
+                continue
+            if seeds_SEED.search(statement):
+                return ("seed", number, statement)
+            if seeds_FUNCTION.search(statement) or seeds_COMMAND.match(statement):
+                return ("draw", number, statement)
+            called = seeds_DO.match(statement)
+            if called:
+                event = target_event(("do",) + called.groups(), active)
+            else:
+                called = seeds_CALL.match(statement)
+                event = target_event(("program", called[1]), active) if called else None
+            if event:
+                return (event[0], number, f"{statement}  [{event[0]} at line {event[1]}]")
+        return None
+
+    def target_event(key, active):
+        if key in active:
+            return None
+        if key not in memo:
+            if key[0] == "program":
+                bodies = programs.get(key[1], [])
+            elif key[2] and (key[1], key[2]) in cases:
+                bodies = [cases[(key[1], key[2])][0]]
+            else:
+                bodies = [files[key[1]][0]] if key[1] in files else []
+            # A name defined twice is judged by its worst definition.
+            events = [first_event(body, active | {key}) for body in bodies]
+            memo[key] = next((e for e in events if e and e[0] == "draw"), None) or next(
+                (e for e in events if e), None
+            )
+        return memo[key]
+
+    findings = []
+    for (path, name), (top, defined) in cases.items():
+        seeded = False
+        for number, statement in top:
+            if isinstance(statement, tuple):
+                # A program defined here may be called under any name, so its
+                # body must not draw unless the case has already been seeded.
+                events = [first_event(body, frozenset()) for body in defined[statement[1]]]
+                event = next((e for e in events if e and e[0] == "draw"), None)
+            else:
+                event = first_event([(number, statement)], frozenset())
+            if event and event[0] == "seed":
+                seeded = True
+            elif event and not seeded:
+                findings.append(f"{path}:{event[1]} [{name}] {event[2][:200]}")
+                break
+    return findings
+
+
+def seeds_selftest():
+    with tempfile.TemporaryDirectory(prefix="ctools-seeds-") as tmp:
+        root = Path(tmp)
+        for folder in ("stata", "performance", "support"):
+            (root / "validation" / folder).mkdir(parents=True)
+        (root / "validation/support/helpers.do").write_text(
+            "program make_data\n    gen x = rnormal()\nend\n"
+            "program seeded_data\n    args s\n    set seed `s'\n    gen x = runiform()\nend\n"
+        )
+        (root / "validation/support/setup.do").write_text("program quiet_helper\nend\n")
+        case = 'if "`__case\'" == "{}" {{\n{}\n}}\n'
+        clean = {
+            "seeded": "do validation/support/setup.do\nset seed 1\ngen x = runiform()",
+            "helper_seeds": "seeded_data 4\nmake_data",
+            "comments": "* gen x = runiform()\n// csample 10\n/* rnormal() */\n"
+            "set seed 2\ncsample 5",
+            "mata_seed": "mata: rseed(3)\ngen x = rnormal()",
+            "drawnorm": "drawnorm x, n(10) seed(5)\ngen y = runiform()",
+            "subcase": "do validation/stata/other.do seeded\ngen y = runiform()",
+            "program_after_seed": "set seed 6\nprogram local_draw\n    gen x = runiform()\nend",
+            "strings": 'di "runiform values"\nforeach sample in a b {\n    di "`sample\'"\n}',
+        }
+        dirty = {
+            "unseeded": "gen x = runiform()",
+            "late_seed": "gen x = rpoisson(2)\nset seed 1",
+            "continued": "gen x = 1 + ///\n    rnormal()\nset seed 1",
+            "helper_draws": "make_data\nset seed 1",
+            "sampling": "quietly capture noisily bysort g: csample 10",
+            "mata_block": "mata:\nx = runiform(2, 2)\nend",
+            "program_before_seed": "program p_draw\n    bsample\nend\nset seed 1\np_`which'",
+            "unseeded_subcase": "do validation/stata/other.do unseeded",
+            "plugin_declaration": 'program p_io, plugin using("x.plugin")\ngen x = runiform()',
+        }
+        blocks = {**clean, **dirty}
+        (root / "validation/stata/other.do").write_text(
+            "gettoken __case 0 : 0\n"
+            + "".join(case.format(name, body) for name, body in blocks.items())
+        )
+        (root / "validation/performance/work.do").write_text(
+            'if "`__workload\'" == "bench" {\n    set obs 10\n    gen x = rnormal()\n}\n'
+        )
+        flagged = {re.search(r"\[(\w+)\]", line)[1] for line in seeds_findings(root)}
+        assert flagged == set(dirty) | {"bench"}, sorted(flagged ^ (set(dirty) | {"bench"}))
+    print(f"PASS seed checker flags {len(dirty) + 1} unseeded and passes {len(clean)} seeded cases")
+
+
+def seeds_main(argv=None):
+    seeds_selftest()
+    findings = seeds_findings(ROOT)
+    if findings:
+        raise SystemExit("Cases draw random numbers before `set seed`:\n" + "\n".join(findings))
+    print("PASS every named validation case and workload seeds before its first random draw")
+
+
 def windows_main(argv=None):
     if os.name != "nt":
         raise SystemExit("This regression requires a real Windows worker")
@@ -441,6 +656,7 @@ def run(out):
         ("options", "validation.check_runner", "options_main"),
         ("benchmark.evidence", "validation.check_runner", "test_performance"),
         ("docs", "validation.checks", "docs_main"),
+        ("seeds", "validation.checks", "seeds_main"),
     ]
     failures = []
     for name, module, function in targets:
@@ -471,6 +687,8 @@ def main(argv):
         return windows_main(argv[1:])
     if argv[0] == "docs":
         return docs_main(argv[1:])
+    if argv[0] == "seeds":
+        return seeds_main(argv[1:])
     if argv[0] == "options":
         from validation import options
 

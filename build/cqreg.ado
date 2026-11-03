@@ -1,4 +1,4 @@
-*! version 1.2.3 20261030 github.com/mdroste/stata-ctools
+*! version 1.2.4 20261103 github.com/mdroste/stata-ctools
 
 program define cqreg, eclass
     version 14.1
@@ -316,6 +316,7 @@ program define cqreg, eclass
     local bandwidth = __cqreg_bandwidth
     local iterations = __cqreg_iterations
     local converged = __cqreg_converged
+    local nonunique = __cqreg_nonunique
 
     * Get number of clusters if cluster VCE
     local num_clusters = 0
@@ -388,6 +389,10 @@ program define cqreg, eclass
     ereturn scalar convcode = cond(`converged', 0, 1)
     ereturn scalar iterations = `iterations'
     ereturn scalar r2_p = `r2_p'
+    * 1 when an edge of optimal solutions leaves the reported vertex (other
+    * coefficients attain the same minimum), 0 when none does, missing when
+    * the solver found no basis
+    ereturn scalar nonunique = cond(`nonunique' < 0, ., `nonunique')
 
     if `vcetype' == 2 {
         ereturn scalar N_clust = `num_clusters'
@@ -518,6 +523,10 @@ program define _cqreg_display
 
     * Display coefficient table
     ereturn display, level(`level') `options'
+    if e(nonunique) == 1 {
+        di as text "Note: the solution is not unique; other coefficient vectors attain the"
+        di as text "      same minimum sum of deviations."
+    }
 end
 
 * Kernel of denmethod(kernel(name)), with the names and abbreviations of

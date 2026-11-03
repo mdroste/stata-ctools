@@ -764,13 +764,53 @@
         }
       ]
     },
-    "b0": {
+    "sfirst": {
       "kind": "unsupported",
-      "reason": "ivreg2's b0() (the CUE objective at a given coefficient vector) is not implemented; the option is refused with r(198).",
+      "reason": "ivreg2's system of first-stage and reduced-form equations (joint VCE) and its Sanderson-Windmeijer and Anderson-Rubin statistics are not computed; the option is refused with r(198).",
       "evidence": [
         {
           "path": "validation/stata/civreghdfe.do",
-          "anchor": "b0(matrix) refused"
+          "anchor": "sfirst refused"
+        }
+      ]
+    },
+    "civrerun": {
+      "kind": "contract",
+      "reason": "Internal: the second estimation pass after ivreg2's collinearity rules passes the dropped, reclassified and duplicate terms; e(collin), e(ecollin), e(dups) and the estimates are compared with ivreghdfe.",
+      "evidence": [
+        {
+          "path": "validation/stata/civreghdfe.do",
+          "anchor": "collinear variables in ivreg2's order"
+        }
+      ]
+    },
+    "civcollin": {
+      "kind": "contract",
+      "reason": "Internal: the second estimation pass after ivreg2's collinearity rules passes the dropped, reclassified and duplicate terms; e(collin), e(ecollin), e(dups) and the estimates are compared with ivreghdfe.",
+      "evidence": [
+        {
+          "path": "validation/stata/civreghdfe.do",
+          "anchor": "collinear variables in ivreg2's order"
+        }
+      ]
+    },
+    "civecollin": {
+      "kind": "contract",
+      "reason": "Internal: the second estimation pass after ivreg2's collinearity rules passes the dropped, reclassified and duplicate terms; e(collin), e(ecollin), e(dups) and the estimates are compared with ivreghdfe.",
+      "evidence": [
+        {
+          "path": "validation/stata/civreghdfe.do",
+          "anchor": "collinear variables in ivreg2's order"
+        }
+      ]
+    },
+    "civdups": {
+      "kind": "contract",
+      "reason": "Internal: the second estimation pass after ivreg2's collinearity rules passes the dropped, reclassified and duplicate terms; e(collin), e(ecollin), e(dups) and the estimates are compared with ivreghdfe.",
+      "evidence": [
+        {
+          "path": "validation/stata/civreghdfe.do",
+          "anchor": "collinear variables in ivreg2's order"
         }
       ]
     }

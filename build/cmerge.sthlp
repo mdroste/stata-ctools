@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.3 20261030}{...}
+{* *! version 1.2.4 20261103}{...}
 {viewerjumpto "Syntax" "cmerge##syntax"}{...}
 {viewerjumpto "Description" "cmerge##description"}{...}
 {viewerjumpto "Options" "cmerge##options"}{...}
@@ -77,11 +77,11 @@ As with {cmd:merge}, {opt n} may be written for {opt m} ({opt 1:n}, {opt n:1}, {
 
 
 {pstd}
-For an observation-by-observation merge, use
-{cmd:cmerge 1:1 _n using} {it:filename}. For a keyed merge, missing key values
-participate in matching. {cmd:m:m} pairs observations sequentially within each
-key group and repeats the last observation of the shorter group; it does not
-form every pair. Use {help joinby} for all combinations.
+For an observation-by-observation merge, use {cmd:cmerge 1:1 _n using}
+{it:filename}. For a keyed merge, missing key values participate in matching.
+{cmd:m:m} pairs observations sequentially within each key group and repeats
+the last observation of the shorter group; it does not form every pair. Use
+{help joinby} for all combinations.
 
 {marker options}{...}
 {title:Options}
@@ -176,10 +176,10 @@ leave a partially merged dataset. It cannot be combined with {opt snapshot}.
 
 {pstd}
 Shared numeric and fixed-width string variables are widened as needed to hold
-both inputs; a {cmd:long}/{cmd:float} combination uses {cmd:double}. New variables
-retain the using data's formats, labels, notes, and characteristics. If either
-dataset contains a retained {cmd:strL} variable, the merge uses Stata's
-{cmd:merge}; {opt preserve_order()} does not apply on this path.
+both inputs; a {cmd:long}/{cmd:float} combination uses {cmd:double}. New
+variables retain the using data's formats, labels, notes, and characteristics.
+If either dataset contains a {cmd:strL} variable that will be retained,
+{cmd:cmerge} uses Stata's {cmd:merge} and ignores {opt preserve_order()}.
 
 {marker failure}{...}
 {pstd}
@@ -242,7 +242,7 @@ recovery.
 {synopt:{cmd:r(N_3)}}number of matched observations{p_end}
 {synopt:{cmd:r(N_4)}}matches with missing values updated (with {opt update}){p_end}
 {synopt:{cmd:r(N_5)}}matches with conflicting nonmissing values (with {opt update}){p_end}
-{synopt:{cmd:r(time)}}elapsed time in seconds; missing on the native merge path{p_end}
+{synopt:{cmd:r(time)}}elapsed time in seconds; missing when Stata's {cmd:merge} is used{p_end}
 
 {p2col 5 20 24 2: Macros}{p_end}
 {synopt:{cmd:r(using)}}name of using file{p_end}

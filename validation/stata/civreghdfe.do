@@ -646,9 +646,9 @@ benchmark_ivreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm) cue vce(cluster 
 * Benchmark coviv
 benchmark_ivreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm) coviv testname("coviv")
 
-* b0() is refused: ivreg2 evaluates the CUE objective at a given coefficient
-* vector there, which civreghdfe does not implement (it used to accept the
-* option and ignore it)
+* b0() columns are matched to the regressors by name, as ivreg2 matches
+* them: a matrix without the regressors' names is refused (ivreghdfe r(198));
+* b0() itself is compared with ivreghdfe below
 matrix b0 = (2, 1.5)
 capture civreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm) b0(b0)
 if _rc == 198 test_pass "b0(matrix) refused"
@@ -1923,7 +1923,7 @@ foreach stat in xb stdp xbd {
 * when both are missing)
 capture program drop _civreghdfe_cmp
 program define _civreghdfe_cmp
-    syntax, ref(string) ct(string) testname(string) [scalars(string) nov]
+    syntax, ref(string) ct(string) testname(string) [scalars(string) nov omitzero]
     capture quietly `ref'
     if _rc {
         test_fail "`testname'" "reference failed rc=`=_rc'"
@@ -1933,6 +1933,28 @@ program define _civreghdfe_cmp
     tempname rb rV cb cV
     matrix `rb' = e(b)
     matrix `rV' = e(V)
+    * omitzero: ivreghdfe leaves a column that its invsym() zeroes (one the
+    * fixed effects absorb) unmarked, with zero coefficient and variance;
+    * civreghdfe marks it omitted (o.)
+    if "`omitzero'" != "" {
+        local __names
+        local __j = 0
+        foreach __n of local ref_names {
+            local ++__j
+            if `rb'[1, `__j'] == 0 & `rV'[`__j', `__j'] == 0 & !regexm("`__n'", "[ob]\.") {
+                local __parts : subinstr local __n "#" " ", all
+                local __n
+                foreach __p of local __parts {
+                    local __d = strpos("`__p'", ".")
+                    if `__d' local __p = substr("`__p'", 1, `__d' - 1) + "o" + substr("`__p'", `__d', .)
+                    else local __p o.`__p'
+                    local __n = cond("`__n'" == "", "`__p'", "`__n'#`__p'")
+                }
+            }
+            local __names `__names' `__n'
+        }
+        local ref_names `__names'
+    }
     foreach s of local scalars {
         local r_`s' = e(`s')
     }
@@ -2099,21 +2121,34 @@ quietly civreghdfe y w (x = z1 z2 z3), absorb(id)
 assert_scalar_equal `fw_chi2' `=e(endog_chi2)' $DEFAULT_SIGFIGS "endog_chi2 with fweights equals the expanded data"
 restore
 
-* Estimators and VCEs that cannot be combined are refused, as ivreg2's
-* parser intends (k-class and LIML are not GMM; liml with kclass() and
-* negative k-class or Fuller parameters are invalid); cluster() implies robust
-foreach o in "gmm2s cue" "liml gmm2s" "fuller(1) cue" "kclass(0.5) gmm2s" "liml kclass(0.5)" "kclass(-0.5)" "fuller(-1)" {
+* Estimators that cannot be combined are refused: liml with gmm2s or cue
+* and gmm2s with cue (ivreg2 r(198)), a negative k-class parameter and
+* fuller() with kclass() (ivreg2 r(3200)), fuller() or kclass() with cue
+* (ivreg2 runs CUE and labels it LIML or k-class), liml with a negative
+* fuller(); cluster() implies robust
+foreach o in "gmm2s cue" "liml gmm2s" "fuller(1) cue" "kclass(0.5) cue" "kclass(-0.5)" ///
+    "fuller(1) kclass(0.5)" "liml fuller(-1)" {
     capture civreghdfe y w (x = z1 z2), absorb(id) `o'
     if _rc == 198 test_pass "conflicting options refused: `o'"
     else test_fail "conflicting options refused: `o'" "rc=`=_rc'"
+}
+* The combinations ivreg2 accepts give its estimator: fuller() and kclass()
+* take precedence over gmm2s, kclass() over liml, and a negative fuller()
+* is LIML
+foreach o in "fuller(1) gmm2s" "kclass(0.5) gmm2s" "liml kclass(0.5)" "fuller(-1)" ///
+    "fuller(1) gmm2s robust" "fuller(-1) cluster(id)" {
+    _civreghdfe_cmp, ref(ivreghdfe y w (x = z1 z2 z3), absorb(id) `o') ///
+        ct(civreghdfe y w (x = z1 z2 z3), absorb(id) `o') scalars(`ivstats' j kclass lambda) ///
+        testname("estimator combination ivreg2 accepts: `o'")
 }
 _civreghdfe_cmp, ref(ivreghdfe y w (x = z1 z2), absorb(id) robust cluster(id)) ///
     ct(civreghdfe y w (x = z1 z2), absorb(id) robust cluster(id)) scalars(`ivstats' N_clust) ///
     testname("robust with cluster()")
 
 * First-stage statistics follow the endogenous regressors when one is
-* dropped as collinear
-gen double x2 = 2*w
+* dropped as collinear (with another endogenous regressor: one collinear with
+* an exogenous regressor becomes exogenous, as in ivreg2)
+gen double x2 = 2*x
 quietly civreghdfe y w (x x3 = z1 z2 z3 z4), absorb(id) ffirst
 local nox2_F2 = e(F_first2)
 local nox2_r2 = e(partial_r2_2)
@@ -2192,6 +2227,327 @@ foreach o in "" "robust" "small" {
     _civreghdfe_cmp, ref(ivreg2 price (mpg = weight) length turn, partial(turn) `o') ///
         ct(civreghdfe price (mpg = weight) length turn, partial(turn) `o') ///
         scalars(N r2 r2_a rss mss rmse F df_r idstat widstat partial_ct) testname("partial() without absorb() `o'")
+}
+
+* Regressors (nearly) collinear with the absorbed effects, as ivreghdfe
+* decides them: it partials the effects out first and keeps every column
+* that its invsym() does not zero, so a regressor with little within
+* variation (nf) is kept, and one the effects absorb is dropped and not
+* counted in the degrees of freedom (also when the projection is iterative)
+clear
+set seed 4242
+set obs 3000
+gen int id = ceil(_n/30)
+gen int t = mod(_n-1,30)+1
+gen byte bal = runiform() >= .2
+gen double z1 = rnormal()
+gen double z2 = rnormal()
+gen double x1 = rnormal()
+gen double u = rnormal()
+gen double d1 = z1 + .5*z2 + u + rnormal()
+gen double y = 1 + d1 + x1 + u + rnormal() + id/10 + t/5
+gen double xa = id/7
+gen double xb = id/7 + t/3
+gen int k3 = mod(_n, 7)
+local festats `ivstats' df_r j jdf idstat cdf
+foreach r in 1e-2 1e-4 1e-5 {
+    gen double nf = 1000*id + `r'*1000*rnormal()
+    foreach ab in "id" "id t" {
+        _civreghdfe_cmp, ref(ivreghdfe y x1 nf (d1=z1 z2) if bal, absorb(`ab')) ///
+            ct(civreghdfe y x1 nf (d1=z1 z2) if bal, absorb(`ab')) scalars(`festats') ///
+            testname("regressor with little within variation (`r') absorb(`ab')")
+    }
+    drop nf
+}
+foreach sp in "xa|id|" "xa|id t|" "xa|id t|if bal" "xb|id t|" "xb|id t k3|" {
+    gettoken v sp : sp, parse("|")
+    gettoken bar sp : sp, parse("|")
+    gettoken ab sp : sp, parse("|")
+    local ifc = substr("`sp'", 2, .)
+    _civreghdfe_cmp, ref(ivreghdfe y x1 `v' (d1=z1 z2) `ifc', absorb(`ab')) ///
+        ct(civreghdfe y x1 `v' (d1=z1 z2) `ifc', absorb(`ab')) scalars(`festats') omitzero ///
+        testname("regressor absorbed by the effects: `v' absorb(`ab') `ifc'")
+}
+* An absorbed endogenous regressor has no first-stage variation, so the rank
+* condition fails: the identification statistics are 0 (ivreghdfe's ranktest
+* returns rounding noise around 0 there: idstat 3.6e-32 with absorb(id),
+* 2.3e-32 with absorb(t id)), with the regressor counted in their dof
+_civreghdfe_cmp, ref(ivreghdfe y x1 (d1 xa = z1 z2), absorb(id)) ///
+    ct(civreghdfe y x1 (d1 xa = z1 z2), absorb(id)) scalars(N r2 r2_a rss mss rmse F df_r j jdf iddf) omitzero ///
+    testname("endogenous regressor absorbed by the effects")
+quietly ivreghdfe y x1 (d1 xa = z1 z2), absorb(id)
+local fe_ok = abs(e(idstat)) < 1e-20 & abs(e(cdf)) < 1e-20
+quietly civreghdfe y x1 (d1 xa = z1 z2), absorb(id)
+if `fe_ok' & e(idstat) == 0 & e(cdf) == 0 & e(widstat) == 0 test_pass "absorbed endogenous regressor: identification statistics 0"
+else test_fail "absorbed endogenous regressor: identification statistics 0" "idstat=`=e(idstat)' cdf=`=e(cdf)'"
+* An excluded instrument absorbed by the effects counts in the
+* excluded-instrument count of the weak-identification F and the
+* identification dof, as ivreghdfe counts its variable list. When its
+* projection removes the instrument exactly (xa, constant within id), the
+* statistics are those of the model without it; when it leaves rounding
+* noise (xb with absorb(id t)), ranktest uses the noise (idstat 1159.063
+* with absorb(id t), 1159.468 with absorb(t id), 1161.880 with the instrument
+* times 1000), so the model with xa, an instrument absorbed exactly, is the
+* reference for the identification statistics there
+_civreghdfe_cmp, ref(ivreghdfe y x1 (d1 = z1 z2 xa), absorb(id)) ///
+    ct(civreghdfe y x1 (d1 = z1 z2 xa), absorb(id)) scalars(`festats' iddf) ///
+    testname("excluded instrument absorbed by the effects, absorb(id)")
+_civreghdfe_cmp, ref(ivreghdfe y x1 (d1 = z1 z2 xb), absorb(id t)) ///
+    ct(civreghdfe y x1 (d1 = z1 z2 xb), absorb(id t)) scalars(N r2 r2_a rss mss rmse F df_r j jdf iddf) ///
+    testname("excluded instrument absorbed by the effects")
+_civreghdfe_cmp, ref(ivreghdfe y x1 (d1 = z1 z2 xa), absorb(id t)) ///
+    ct(civreghdfe y x1 (d1 = z1 z2 xb), absorb(id t)) scalars(`festats' iddf) ///
+    testname("excluded instrument absorbed by the effects: identification statistics")
+* Where ivreghdfe's own projection leaves noise above invsym()'s tolerance in
+* an absorbed column, it keeps the noise as a regressor with an arbitrary
+* coefficient (xbig = 1e6*id + 1e5 with absorb(id): b = -6.6e-09, se = 1.8e6;
+* age = year - birth with absorb(id year) on the unbalanced sample:
+* b = 8.3, se = 1.6e7) and counts it in df_r. The column is exactly in the
+* span of the effects, so the model with another absorbed column, one that
+* ivreghdfe removes exactly (xa, constant within id), is the same model:
+* that is the reference
+gen double xbig = 1e6*id + 1e5
+gen int year = 2000 + t
+gen double age = year - (1950 + id)
+foreach sp in "xbig|id" "xbig|id t" "age|id year" {
+    gettoken v sp : sp, parse("|")
+    local ab = substr("`sp'", 2, .)
+    quietly ivreghdfe y x1 xa (d1=z1 z2) if bal, absorb(`ab')
+    matrix fe_rb = e(b)
+    matrix fe_rV = e(V)
+    local fe_diffs
+    if fe_rb[1, 3] != 0 | fe_rV[3, 3] != 0 local fe_diffs "reference keeps xa"
+    matrix fe_rb = fe_rb[1, 1..2]
+    matrix fe_rV = fe_rV[1..2, 1..2]
+    foreach st of local festats {
+        local fe_r_`st' = e(`st')
+    }
+    quietly civreghdfe y x1 `v' (d1=z1 z2) if bal, absorb(`ab')
+    if colnumb(e(b), "o.`v'") != 3 local fe_diffs "`fe_diffs' `v' not omitted"
+    else {
+        matrix fe_cb = e(b)
+        matrix fe_cV = e(V)
+        matrix fe_cb = fe_cb[1, 1..2]
+        matrix fe_cV = fe_cV[1..2, 1..2]
+        matrix_min_sigfigs fe_rb fe_cb
+        if r(min_sigfigs) < $DEFAULT_SIGFIGS local fe_diffs "`fe_diffs' b"
+        matrix_min_sigfigs fe_rV fe_cV
+        if r(min_sigfigs) < $DEFAULT_SIGFIGS local fe_diffs "`fe_diffs' V"
+        foreach st of local festats {
+            if missing(`fe_r_`st'') & missing(e(`st')) continue
+            sigfigs `fe_r_`st'' `=e(`st')'
+            if r(sigfigs) < $DEFAULT_SIGFIGS local fe_diffs "`fe_diffs' `st'"
+        }
+    }
+    if "`fe_diffs'" == "" test_pass "absorbed regressor kept as noise by ivreghdfe: `v' absorb(`ab')"
+    else test_fail "absorbed regressor kept as noise by ivreghdfe: `v' absorb(`ab')" "`fe_diffs'"
+}
+capture matrix drop fe_rb fe_rV fe_cb fe_cV
+
+* Exact collinearity among the variables, resolved in ivreg2's order: an
+* endogenous regressor collinear with the instruments becomes exogenous and
+* the exogenous term it duplicates is dropped; collinear terms are dropped
+* from the right; the lists are posted as e(collin), e(ecollin), e(dups)
+clear
+set seed 4242
+set obs 2000
+gen int id = ceil(_n/10)
+forvalues j = 1/4 {
+    gen double z`j' = rnormal()
+}
+gen double w = rnormal()
+gen double x2 = rnormal()
+gen double u = rnormal()
+gen double x = .5*z1 + .3*z2 + .2*z3 + u + rnormal()
+gen double d1 = z4 + z1 + rnormal()
+gen double y = 1 + x + .5*w + u + rnormal() + id/100
+gen double wb = 2*w
+gen double dz = z1 + z2
+gen double x1b = 2*x2
+gen double d2 = 3*d1
+foreach sp in "y w x2 (d1 x1b = z1 z2 z3)" "y w (x wb = z1 z2 z3)" "y w (x dz = z1 z2 z3)" ///
+    "y w (x d1 d2 = z1 z2 z3 z4)" "y w wb (x = z1 z2)" "y w (x = z1 z2 dz)" "y (wb = z1) w" ///
+    "y w (x = x z1 z2)" "y w (x = w z1 z2)" {
+    foreach ab in "absorb(id)" "" {
+        local cstats = cond("`ab'" == "", "N r2 rss mss rmse F idstat widstat cdf j jdf", "`ivstats' df_r cdf j jdf")
+        _civreghdfe_cmp, ref(ivreghdfe `sp', `ab') ct(civreghdfe `sp', `ab') scalars(`cstats') ///
+            testname("collinear variables in ivreg2's order: `sp' `ab'")
+        quietly ivreghdfe `sp', `ab'
+        local cl_r "`e(collin)'|`e(ecollin)'|`e(dups)'"
+        capture quietly civreghdfe `sp', `ab'
+        if _rc test_fail "e(collin), e(ecollin), e(dups): `sp' `ab'" "rc=`=_rc'"
+        else if "`e(collin)'|`e(ecollin)'|`e(dups)'" == "`cl_r'" test_pass "e(collin), e(ecollin), e(dups): `sp' `ab'"
+        else test_fail "e(collin), e(ecollin), e(dups): `sp' `ab'" "`e(collin)'|`e(ecollin)'|`e(dups)' vs `cl_r'"
+    }
+}
+
+* b0(): the CUE objective (J), the efficient GMM VCE and the statistics at
+* the given coefficients, as ivreg2 evaluates them (b0 implies noid, whose
+* statistics civreghdfe still stores); the columns are matched by name
+use `ivdata', clear
+matrix cb0 = (1.1, .4)
+matrix colnames cb0 = x w
+matrix cb1 = (.4, 1.1, 2)
+matrix colnames cb1 = w x _cons
+foreach o in "" "robust" "cluster(id)" "small" {
+    _civreghdfe_cmp, ref(ivreghdfe y w (x = z1 z2 z3), absorb(id) b0(cb0) `o') ///
+        ct(civreghdfe y w (x = z1 z2 z3), absorb(id) b0(cb0) `o') ///
+        scalars(N r2 r2_a rss mss rmse F df_r j jdf) testname("b0() `o'")
+    foreach iv in "z1 z2" "z1" {
+        _civreghdfe_cmp, ref(ivreg2 y w (x = `iv'), b0(cb1) `o') ///
+            ct(civreghdfe y w (x = `iv'), b0(cb1) `o') ///
+            scalars(N r2 rss mss rmse F j jdf) testname("b0() without absorb(), instruments `iv' `o'")
+    }
+}
+capture quietly civreghdfe y w (x = z1 z2 z3), absorb(id) b0(cb0)
+if _rc test_fail "b0(): e(model) and e(b)" "rc=`=_rc'"
+else if "`e(model)'" == "cue" & _b[x] == 1.1 & _b[w] == .4 test_pass "b0(): e(model) and e(b)"
+else test_fail "b0(): e(model) and e(b)" "`e(model)'"
+foreach o in "cue" "gmm2s" "liml" "kclass(.5)" "fuller(1)" {
+    capture civreghdfe y w (x = z1 z2 z3), absorb(id) b0(cb0) `o'
+    if _rc == 198 test_pass "b0() refused with `o'"
+    else test_fail "b0() refused with `o'" "rc=`=_rc'"
+}
+capture matrix drop cb0 cb1
+* sfirst (ivreg2's system of first-stage and reduced-form equations, with
+* its Sanderson-Windmeijer and Anderson-Rubin statistics) is refused
+capture civreghdfe y w (x = z1 z2 z3), absorb(id) sfirst
+if _rc == 198 test_pass "sfirst refused"
+else test_fail "sfirst refused" "rc=`=_rc'"
+
+* nocollin: ivreg2's collinearity rules are skipped; what remains is
+* ivreghdfe's invsym() of the partialled cross-products
+use `ivdata', clear
+gen double wb = 2*w
+gen double dz = z1 + z2
+foreach sp in "y w wb (x = z1 z2)" "y w (x = z1 z2 dz)" {
+    foreach ab in "absorb(id)" "" {
+        local cstats = cond("`ab'" == "", "N r2 rss F j jdf nocollin idstat iddf widstat cdf", "`ivstats' df_r j jdf nocollin iddf cdf")
+        * (the redundant instrument dz counts in the weak-identification F's
+        * excluded-instrument count, as ivreg2 counts its list)
+        _civreghdfe_cmp, ref(ivreghdfe `sp', `ab' nocollin) ct(civreghdfe `sp', `ab' nocollin) ///
+            scalars(`cstats') omitzero testname("nocollin: `sp' `ab'")
+    }
+}
+
+* dofadjustments() and keepsingletons, as ivreghdfe passes them to reghdfe
+clear
+set seed 4242
+set obs 2000
+gen int id = ceil(_n/10)
+gen int t = mod(_n-1,10)+1
+gen int f = ceil(id/7)
+forvalues j = 1/3 {
+    gen double z`j' = rnormal()
+}
+gen double w = rnormal()
+gen double u = rnormal()
+gen double x = .5*z1 + .3*z2 + .2*z3 + u + rnormal()
+gen double y = 1 + x + .5*w + u + rnormal() + id/100
+replace id = 5000 + _n in 1/5
+foreach d in "dofadjustments(none)" "dof(firstpair)" "dof(pairwise)" "dof(all)" "dof(clusters)" "dof(pairwise clusters)" "" {
+    foreach v in "cluster(f)" "" {
+        _civreghdfe_cmp, ref(ivreghdfe y w (x = z1 z2 z3), absorb(id t f) `v' `d') ///
+            ct(civreghdfe y w (x = z1 z2 z3), absorb(id t f) `v' `d') scalars(`ivstats' df_r df_a j) ///
+            testname("degrees-of-freedom adjustment `d' `v'")
+    }
+}
+foreach v in "cluster(f)" "robust" {
+    _civreghdfe_cmp, ref(ivreghdfe y w (x = z1 z2 z3), absorb(id t) `v' keepsingletons) ///
+        ct(civreghdfe y w (x = z1 z2 z3), absorb(id t) `v' keepsingletons) ///
+        scalars(`ivstats' df_r df_a j num_singletons N_full) testname("keepsingletons `v'")
+}
+
+* ivreg2's e(df_m), ranks, sdofminus, partialcons, cons, log likelihood and
+* reghdfe's singleton counts; estat ic from e(ll)
+foreach o in "" "sdofminus(3)" "partial(w)" "partial(w) nopartialsmall" "robust" "cluster(f)" {
+    _civreghdfe_cmp, ref(ivreghdfe y w (x = z1 z2 z3), absorb(id t) `o') ///
+        ct(civreghdfe y w (x = z1 z2 z3), absorb(id t) `o') ///
+        scalars(N df_m rankxx rankzz rankS rankV sdofminus partialcons cons ll num_singletons N_full) ///
+        testname("ivreg2's e() scalars with absorb() `o'")
+}
+foreach o in "" "sdofminus(3)" "partial(w)" "partial(w) nopartialsmall" "robust" "noconstant" {
+    _civreghdfe_cmp, ref(ivreg2 y w (x = z1 z2 z3), `o') ct(civreghdfe y w (x = z1 z2 z3), `o') ///
+        scalars(N df_m rankxx rankzz rankS rankV sdofminus partialcons cons ll) ///
+        testname("ivreg2's e() scalars without absorb() `o'")
+}
+* (ll(null) is missing in both: columns N, ll, df, AIC and BIC)
+quietly ivreghdfe y w (x = z1 z2 z3), absorb(id t)
+quietly estat ic
+matrix ic_r = r(S)
+quietly civreghdfe y w (x = z1 z2 z3), absorb(id t)
+capture quietly estat ic
+if _rc test_fail "estat ic" "rc=`=_rc'"
+else {
+    matrix ic_c = r(S)
+    local ic_ll0 = missing(ic_r[1, 2]) & missing(ic_c[1, 2])
+    matrix ic_r = ic_r[1, 1], ic_r[1, 3..6]
+    matrix ic_c = ic_c[1, 1], ic_c[1, 3..6]
+    matrix_min_sigfigs ic_r ic_c
+    if r(min_sigfigs) >= $DEFAULT_SIGFIGS & `ic_ll0' test_pass "estat ic"
+    else test_fail "estat ic" "sf=`=r(min_sigfigs)'"
+}
+capture matrix drop ic_r ic_c
+
+* Saved first stages with clustering keep ivreg2's residual dof and root MSE
+foreach o in "absorb(id) cluster(f)" "cluster(f)" "absorb(id t) cluster(f)" {
+    estimates clear
+    quietly ivreghdfe y w (x = z1 z2 z3), `o' savefirst
+    quietly estimates restore _ivreg2_x
+    local sf_r "`=e(df_r)' `=e(rmse)' `=e(N_clust)'"
+    matrix sf_rV = e(V)
+    quietly civreghdfe y w (x = z1 z2 z3), `o' savefirst
+    quietly estimates restore _civreghdfe_x
+    matrix sf_cV = e(V)
+    matrix_min_sigfigs sf_rV sf_cV
+    local sf_sf = r(min_sigfigs)
+    gettoken sf_dfr sf_r : sf_r
+    gettoken sf_rmse sf_r : sf_r
+    sigfigs `sf_rmse' `=e(rmse)'
+    if e(df_r) == `sf_dfr' & r(sigfigs) >= $DEFAULT_SIGFIGS & e(N_clust) == `sf_r' & `sf_sf' >= $DEFAULT_SIGFIGS ///
+        test_pass "saved first stage with clustering: df_r, rmse, N_clust, V (`o')"
+    else test_fail "saved first stage with clustering: df_r, rmse, N_clust, V (`o')" ///
+        "df_r=`=e(df_r)' vs `sf_dfr', rmse=`=e(rmse)' vs `sf_rmse', V sf=`sf_sf'"
+}
+capture matrix drop sf_rV sf_cV
+estimates clear
+
+* predict d and dresiduals, as reghdfe_p after ivreghdfe (residuals() saved)
+quietly ivreghdfe y w (x = z1 z2 z3), absorb(id t) residuals(ivh_r)
+quietly predict double ivh_d, d
+quietly predict double ivh_dr, dresiduals
+quietly civreghdfe y w (x = z1 z2 z3), absorb(id t) residuals(civ_r)
+foreach pr in d dresiduals {
+    local pv = cond("`pr'" == "d", "d", "dr")
+    capture quietly predict double civ_`pv', `pr'
+    if _rc test_fail "predict `pr'" "rc=`=_rc'"
+    else assert_var_equal ivh_`pv' civ_`pv' $DEFAULT_SIGFIGS "predict `pr'"
+}
+quietly civreghdfe y w (x = z1 z2 z3), absorb(id t)
+capture predict double civ_d2, d
+if _rc == 198 test_pass "predict d requires residuals()"
+else test_fail "predict d requires residuals()" "rc=`=_rc'"
+capture drop ivh_r ivh_d ivh_dr civ_r civ_d civ_dr
+
+* A real bandwidth, as ivreg2 takes it, for each kernel
+clear
+set seed 77
+set obs 1500
+gen int id = ceil(_n/15)
+gen int t = mod(_n-1,15)+1
+xtset id t
+gen double z1 = rnormal()
+gen double z2 = rnormal()
+gen double w = rnormal()
+gen double u = rnormal()
+gen double x = z1 + .5*z2 + u + rnormal()
+gen double y = 1 + x + w + u + rnormal()
+foreach k in bartlett truncated parzen qs thann {
+    foreach v in "robust" "" {
+        _civreghdfe_cmp, ref(ivreghdfe y w (x = z1 z2), absorb(id) bw(2.5) kernel(`k') `v') ///
+            ct(civreghdfe y w (x = z1 z2), absorb(id) bw(2.5) kernel(`k') `v') scalars(`ivstats' j bw) ///
+            testname("bw(2.5) kernel(`k') `v'")
+    }
 }
 
 * Summary

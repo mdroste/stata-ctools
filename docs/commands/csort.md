@@ -1,10 +1,10 @@
 # csort
 
-High-performance C-accelerated sorting for Stata datasets.
+Sort Stata datasets.
 
 ## Overview
 
-`csort` implements stable ascending sorting through a C plugin. It supports multiple sorting algorithms optimized for different use cases:
+`csort` implements stable ascending sorting through a C plugin. `algorithm()` selects the sorting method:
 
 - **LSD Radix Sort**: Best for numeric keys and short strings (up to 16 bytes), alone or combined
 - **MSD Radix Sort**: Best for long variable-length strings with common prefixes
@@ -77,7 +77,7 @@ csort panelid year, algorithm(timsort) verbose
 
 **How it works:**
 - Processes characters from most significant (leftmost) first
-- Short-circuits when elements become distinguishable
+- Stops comparing characters once the order of the strings is determined
 - Uses insertion sort for small buckets
 - O(N*k) where k is the average distinguishing prefix length
 
@@ -99,7 +99,7 @@ csort state_name, algorithm(msd)
 **How it works:**
 - Finds natural ascending/descending runs in the data
 - Extends short runs using binary insertion sort
-- Merges runs using an optimized merge strategy
+- Merges sorted runs
 - O(N) best case for already-sorted data, O(N log N) worst case
 
 **Example use cases:**
@@ -114,8 +114,6 @@ csort date_var, algorithm(timsort)
 
 ## Performance
 
-The sorting algorithms are optimized for performance:
-
 ### LSD Radix Sort Performance
 - **Complexity**: O(N*k) where k is the number of differing key bytes, counted only over rows still tied on the earlier words
 - **Parallelization**: OpenMP parallel histogram and scatter for the first word; runs of tied rows are sorted one per thread
@@ -126,10 +124,10 @@ The sorting algorithms are optimized for performance:
 
 ### Timsort Performance
 - **Complexity**: O(N) best case, O(N log N) worst case
-- **Parallelization**: Parallel permutation application
-- **Best case**: Near-instant for already-sorted data
+- **Parallelization**: Reorders observations in parallel
+- **Best case**: Already-sorted data require a linear scan
 
-### Speedup Tricks
+### Implementation details
 
 **LSD Radix Sort:**
 - **8-bit radix (256 buckets)**: Balances the number of passes against bucket overhead; at most 8 passes for 64-bit doubles
@@ -178,7 +176,7 @@ When using the `verbose` option, you'll see:
 
 ## Stored Results
 
-`csort` returns the following in `r()`; `verbose` also prints phase timings.
+`csort` returns the following in `r()`; `verbose` also prints time spent in each computation stage.
 
 | Result | Description |
 |--------|-------------|
@@ -187,15 +185,15 @@ When using the `verbose` option, you'll see:
 | `r(time_store)`, `r(time_stream)`, `r(time_cleanup)` | Storage, streaming, and cleanup times in seconds |
 | `r(time_total)` | Total C plugin time in seconds |
 | `r(stream)` | Whether streaming was used |
-| `r(threads_max)`, `r(openmp_enabled)` | Worker limit and OpenMP availability |
+| `r(threads_max)`, `r(openmp_enabled)` | Thread limit and OpenMP availability |
 | `r(algorithm)`, `r(sortvars)`, `r(cmd)` | Algorithm, sort keys, and command name |
 
-Phase results can be missing when a path does not report that timing.
+A timing result is missing when the selected method does not measure that stage.
 
 ## Technical Notes
 
 - The sort is stable, meaning observations with equal sort keys maintain their original relative order
-- By default, the wrapper runs native `sort, stable` to establish Stata's `sortedby` metadata; `nosortedby` skips that step and exposes the C permutation directly
+- By default, `csort` calls `sort, stable` after reordering observations so that Stata records the dataset as sorted. `nosortedby` skips this call
 - Missing values are sorted to the end (consistent with Stata's convention)
 
 ## Comparison with Native `sort`

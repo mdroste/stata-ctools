@@ -1,10 +1,10 @@
 # cmerge
 
-High-performance C-accelerated merge for Stata datasets.
+Merge Stata datasets.
 
 ## Overview
 
-`cmerge` is a drop-in replacement for Stata's `merge` command that performs all merge operations entirely in C. It uses parallel data loading, radix sort, and optimized merge algorithms.
+`cmerge` joins datasets by matching key variables. It uses C code for data loading, sorting, and matching, and calls Stata's `merge` for datasets containing `strL` variables.
 
 ## Syntax
 
@@ -46,7 +46,7 @@ keys have ties, `merge`'s order within the ties depends on `set sortseed`;
 | `update` | Fill missing master values from same-named using variables |
 | `replace` | Replace conflicting nonmissing values; requires `update` |
 | `preserve_order(#)` | Preserve master observation order when set to 1 |
-| `threads(#)` | Maximum workers; zero uses the ctools thread setting |
+| `threads(#)` | Maximum threads; zero uses the ctools thread setting |
 | `snapshot` | Restore the master after a failure from a `preserve` snapshot (written to disk above `c(max_preservemem)`) |
 | `fast` | Keep no copy of the master; a failure or Break can leave the data partly merged |
 
@@ -89,7 +89,7 @@ cmerge m:1 code using lookup.dta, force
 - Applies `keep()` and `assert()` filters
 - Renames placeholder variables to match using dataset
 
-### Speedup Tricks
+### Implementation details
 
 - **Parallel 4-pass LSD radix sort**: Sorts key variables using 8-bit radix (256 buckets) with OpenMP-parallelized histogram and scatter phases; pointer swapping between passes avoids copying
 - **Cache-line aligned histograms**: 64-byte aligned per-thread histograms prevent false sharing during parallel counting
@@ -97,7 +97,7 @@ cmerge m:1 code using lookup.dta, force
 - **Specialized numeric key comparison**: Fast path skips string comparison logic when all key variables are numeric
 - **Pre-sorted detection**: Automatically detects if data is already sorted and skips the sort phase entirely
 - **Parallel data loading**: SIMD-accelerated (AVX2/SSE2/NEON) bulk load with 16x loop unrolling from Stata's Plugin Interface
-- **Overflow-safe allocation**: `ctools_safe_malloc2` checks for integer overflow before every allocation, avoiding silent corruption on large datasets
+- **Overflow-safe allocation**: `ctools_safe_malloc2` checks allocation sizes for integer overflow before requesting memory
 - **Arena allocator for strings**: Bulk-allocated string storage with O(1) allocation and single bulk free, reducing `malloc` overhead
 - **Persistent thread pool**: Worker threads are reused across sort and merge phases
 
@@ -148,7 +148,8 @@ The `_merge` variable (or variable specified by `generate()`) indicates:
 | Implementation | Stata + Mata | Pure C |
 | Parallelization | No | Yes (OpenMP) |
 | Sort Algorithm | Stata default | Radix sort |
-| Memory Efficiency | Standard | Optimized |
+
+Memory use depends on the dataset, options, and number of threads.
 
 ## See Also
 
@@ -159,7 +160,7 @@ The `_merge` variable (or variable specified by `generate()`) indicates:
 
 Shared numeric and fixed-string variables are widened before updates or using-only rows are written. A long/float combination uses double to preserve both inputs. Key variables must have matching string/numeric types even with force. For incompatible non-key types, force retains the master type and treats the using-side values as missing. String writes retain the shared plugin limit of str2045; strL output is unsupported. If `assert()` fails, the merged result stays in memory, as with `merge`; any other failed or interrupted merge (including Break) restores the master dataset.
 
-By default `cmerge` keeps that guarantee without writing a snapshot to disk. A `preserve` snapshot of the whole dataset, which Stata writes to disk above `c(max_preservemem)` (1 GB by default), took about a quarter of the merge time at 10 and 25 million observations. Key, sortedness and uniqueness errors are found before the master is changed. Before the plugin overwrites a master observation it keeps a copy of every master observation in memory (the staged rows, or full columns for strings too wide to stage, that the output is written from); a failure, or Break, restores the observations from it, and `cmerge` undoes its own changes: added variables and observations, promoted storage types and formats, value labels, notes and characteristics, the sort marker and `c(changed)`. The copy is released when the merge completes. The few merges that cannot be undone that way keep a snapshot in memory, in a frame dropped when `cmerge` finishes: merges involving strL variables (run by `merge`, which sorts the master before it checks the keys), and empty-data merges whose `keep()` or key sort would drop or reorder master observations. If that copy does not fit in memory the merge fails before changing anything. Stata 15 and earlier have no frames and use `preserve` for these merges.
+By default, `cmerge` keeps an in-memory copy of the master observations until the merge succeeds. If the command fails or is interrupted, it restores the observations and reverses changes to variables and dataset attributes. Merges involving `strL`, and certain merges with empty datasets, keep a separate copy in a Stata frame. If that copy does not fit in memory, the merge fails before changing the dataset. On Stata 15 and earlier, those merges use `preserve`.
 
 Two options change this:
 

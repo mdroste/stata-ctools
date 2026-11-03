@@ -106,6 +106,23 @@ forvalues variant=1/3 {
     erase "`exposed_csv'.csv"
     erase "`exposed_csv'.do"
 }
+// idcluster(): ids that split or merge cluster copies are rejected
+program coverage_bad_idcluster
+    args mutation
+    bsample, cluster(g) idcluster(newid)
+    if "`mutation'"=="split" replace newid=newid+1 in 1
+    if "`mutation'"=="merge" replace newid=1 if newid==2
+end
+coverage_fixture 1
+quietly replace g=ceil(id/3)
+local before=$TESTS_FAILED
+coverage_sampling, reference(bsample, cluster(g) idcluster(newid)) candidate(coverage_bad_idcluster none idcluster(newid)) name("idcluster identity")
+assert $TESTS_FAILED==`before'
+foreach mutation in split merge {
+    local before=$TESTS_FAILED
+    coverage_sampling, reference(bsample, cluster(g) idcluster(newid)) candidate(coverage_bad_idcluster `mutation' idcluster(newid)) name("idcluster `mutation'")
+    assert $TESTS_FAILED==`before'+1
+}
 di "COVERAGE_HELPERS_MUTATIONS_PASS"
     global CTOOLS_CASE_COMPLETE "coverage_helpers"
     exit

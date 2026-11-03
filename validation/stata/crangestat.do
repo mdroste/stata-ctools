@@ -20,6 +20,7 @@ noi di as text "Running validation tests for crangestat..."
 * SECTION 1: Plugin functionality check
 print_section "Plugin Check"
 
+set seed 260413
 clear
 set obs 100
 gen obs = _n

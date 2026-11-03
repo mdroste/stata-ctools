@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.3 20261030}{...}
+{* *! version 1.2.4 20261103}{...}
 {viewerjumpto "Syntax" "cencode##syntax"}{...}
 {viewerjumpto "Description" "cencode##description"}{...}
 {viewerjumpto "Options" "cencode##options"}{...}
@@ -63,12 +63,9 @@ Strings such as {cmd:"."} and {cmd:".a"} are encoded as text.
 created. The number of names must match the number of variables in {it:varlist}.
 
 {phang}
-{opt replace} specifies that the variables in {it:varlist} should be replaced with their
-encoded numeric versions instead of creating new variables. This is a ctools-specific
-extension not available in Stata's built-in {cmd:encode}. When {opt replace}
-is specified, each original string variable is dropped and replaced with the
-new numeric variable using the same name, which keeps the source's notes and
-characteristics.
+{opt replace} replaces each string variable with its encoded numeric values,
+retaining its name, notes, and characteristics. Stata's {cmd:encode} does not
+offer this option.
 
 {pstd}
 You must specify either {opt generate()} or {opt replace}, but not both.
@@ -98,10 +95,10 @@ The default follows the {help ctools##threads:ctools thread setting}.
 {title:Remarks}
 
 {pstd}
-Numeric output uses {cmd:long} storage on the C path. {cmd:encode} handles
-{cmd:strL} inputs and existing labels that require long text, extended missing
-codes, or codes outside the {cmd:long} range. The value-label limit is 65,536
-entries.
+The ctools plugin stores numeric results as {cmd:long}. {cmd:cencode} uses
+Stata's {cmd:encode} for {cmd:strL} inputs and for existing value labels
+containing long text, extended missing values, or codes outside the {cmd:long}
+range. The value-label limit is 65,536 entries.
 
 {pstd}
 Output names must be distinct new variables. If a multi-variable conversion

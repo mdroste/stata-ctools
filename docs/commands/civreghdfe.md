@@ -1,10 +1,10 @@
 # civreghdfe
 
-High-performance C-accelerated instrumental variables regression with high-dimensional fixed effects.
+Instrumental variables regression with high-dimensional fixed effects.
 
 ## Overview
 
-`civreghdfe` is a high-performance replacement for `ivreghdfe` that uses a C plugin for all computations. It defaults to two-stage least squares (2SLS) and also supports LIML, Fuller LIML, k-class, two-step GMM, and continuously updated GMM. Absorbing fixed effects is optional.
+`civreghdfe` estimates instrumental variables models in C, with optional absorbed fixed effects. It defaults to two-stage least squares (2SLS) and also supports LIML, Fuller LIML, k-class, two-step GMM, and continuously updated GMM.
 
 ## Syntax
 
@@ -39,7 +39,7 @@ civreghdfe depvar (endogvars = instruments) [exogvars] [if] [in] [weight] [, abs
 | `partial(varlist)` | Partial out specified model terms; `fwl()` is an alias |
 | `orthog()`, `endogtest()`, `redundant()` | Instrument orthogonality, regressor endogeneity, and instrument redundancy tests |
 | `residuals(newvar)` | Save residuals |
-| `threads(#)` | Maximum workers; zero uses the ctools thread setting |
+| `threads(#)` | Maximum threads; zero uses the ctools thread setting |
 
 ### Reporting Options
 | Option | Description |
@@ -117,7 +117,7 @@ Compute the 2SLS estimator on demeaned data:
 where Pz = Z(Z'Z)⁻¹Z' is the projection onto the instrument space.
 
 ### Step 4: Variance Estimation
-Compute residuals using original X (not projected X) for proper inference. Apply the appropriate sandwich estimator.
+Compute residuals using the original endogenous regressors after any fixed-effect removal. Calculate the covariance matrix using the selected estimator and variance option.
 
 ## First-Stage Statistics
 
@@ -145,7 +145,7 @@ freedom are G-1.
 | `cluster(panelvar timevar) bw(#)` | Two-way clustering on panel and time with the kernel over time |
 | `kiefer` | Truncated kernel over the whole panel (AC; HAC with pweights) |
 
-All VCE computations use the proper sandwich formula for the chosen estimator with original endogenous regressors (not first-stage fitted values).
+Covariance calculations use the selected estimator and variance option. Residuals use the original endogenous regressors after any fixed-effect removal.
 
 The kernel-based estimators follow `ivreg2`: the data must be `tsset` (error 111 otherwise; `dkraay` and `kiefer` need panel and time variables, error 5); kernel lags are differences of the time variable within panels, so gaps and unbalanced panels are handled like `ivreg2`'s lag operators and the panel structure does not depend on `absorb()`. `kernel()` requires `bw()` (error 102), fweights are not allowed with a kernel (error 101), a kernel with clustering must cluster on the time variable (or on panel and time), and the bandwidth may not exceed the time span of the sample. `ivreg2`'s Tukey-Hamming, Daniell and Tent kernels and `bw(auto)` are not supported.
 
@@ -216,7 +216,7 @@ For valid 2SLS estimation:
 
 ### Degrees of Freedom
 - Absorbed fixed effects consume degrees of freedom
-- Proper adjustment for clustered standard errors
+- Apply the cluster-based degrees-of-freedom adjustment when standard errors are clustered
 
 ### Overidentification
 - When instruments > endogenous variables, the model is overidentified
@@ -224,7 +224,7 @@ For valid 2SLS estimation:
 
 ## Performance
 
-`civreghdfe` achieves its speed through the following tricks:
+The implementation uses the following methods:
 
 **HDFE Absorption (shared with `creghdfe`):**
 - **CG solver with symmetric Kaczmarz transform**: Forward and backward sweeps define the projection operator
@@ -243,7 +243,7 @@ For valid 2SLS estimation:
 - **Cache-line aligned allocations**: 64-byte boundaries prevent false sharing
 - **Persistent thread pool**: Threads reused across first stage, second stage, and HDFE iterations
 
-Runtime depends on data and hardware; retain benchmark provenance with any comparison.
+Runtime depends on data and hardware; report the dataset, options, hardware, thread count, and software versions with timing comparisons.
 
 ## Comparison with ivreghdfe
 
@@ -262,4 +262,4 @@ Runtime depends on data and hardware; retain benchmark provenance with any compa
 
 ## Validation and failure behavior
 
-maxiter() and tolerance() must be positive. A fixed-effect projection that exhausts its iteration limit returns error 430; covariance allocation failures propagate as errors rather than successful zero standard errors.
+maxiter() and tolerance() must be positive. A fixed-effect projection that exhausts its iteration limit returns error 430. If memory allocation for the covariance matrix fails, the command returns an error.

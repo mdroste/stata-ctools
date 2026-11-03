@@ -25,7 +25,7 @@
 
     Returns kernel weight for lag j given bandwidth bw.
 */
-ST_double civreghdfe_kernel_weight(ST_int kernel_type, ST_int j, ST_int bw);
+ST_double civreghdfe_kernel_weight(ST_int kernel_type, ST_int j, ST_double bw);
 
 /*
     Jacobi eigenvalue algorithm for symmetric matrices.

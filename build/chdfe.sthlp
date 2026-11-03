@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.3 20261030}{...}
+{* *! version 1.2.4 20261103}{...}
 {viewerjumpto "Syntax" "chdfe##syntax"}{...}
 {viewerjumpto "Description" "chdfe##description"}{...}
 {viewerjumpto "Options" "chdfe##options"}{...}
@@ -80,18 +80,18 @@ adjustments. No variable is created when there is no eligible pair.
 {opt maxiterations(#)} limits iterations; the default is 10,000 and {cmd:.}
 removes the practical limit. Failure to converge returns error 430.
 
-{pstd}{opt poolsize(#)} sets the number of variables projected together; the
-default is 10. A smaller value reduces projection workspace.
+{pstd}{opt poolsize(#)} sets how many variables have their fixed effects
+removed together. The default is 10. Smaller values use less memory.
 
 {pstd}{opt transform(str)} selects {cmd:symmetric_kaczmarz} (default),
 {cmd:kaczmarz}, or {cmd:cimmino}. Abbreviations are allowed.
 {opt acceleration(str)} selects {cmd:conjugate_gradient} ({cmd:cg}, default),
-{cmd:steepest_descent} ({cmd:sd}), {cmd:aitken}, or {cmd:none}.
-Conjugate gradient requires a symmetric transform. Iteration paths and counts
-may differ from {cmd:hdfe}.
+{cmd:steepest_descent} ({cmd:sd}), {cmd:aitken}, or {cmd:none}. Conjugate
+gradient requires a symmetric transform. Intermediate estimates and the number
+of iterations may differ from those of {cmd:hdfe}.
 
-{pstd}{opt threads(#)} sets the maximum worker count, from 1 to 256.
-Zero or omission uses the {help ctools##threads:ctools setting}.
+{pstd}{opt threads(#)} sets the maximum number of threads, from 1 to 256. Zero
+or omission uses the {help ctools##threads:ctools setting}.
 
 {pstd}{opt verbose}, {opt verbose(#)} with a positive number, and {opt timeit}
 report load, projection, and write times. {cmd:verbose(0)} is quiet.

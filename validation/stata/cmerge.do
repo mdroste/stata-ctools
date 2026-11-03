@@ -171,6 +171,7 @@ program define benchmark_mm_unsorted
     }
 end
 
+set seed 177311
 clear
 set obs 100
 gen group = mod(_n - 1, 10) + 1

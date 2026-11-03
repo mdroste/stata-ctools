@@ -197,6 +197,54 @@ static ST_retcode xlsx_part_refused(XLSXContext *ctx, const char *part)
     return memory ? 909 : 603;
 }
 
+/* Native reads XML parts stored as UTF-16 (after a byte order mark, or
+ * starting "<?" without one): such a part is converted to UTF-8, replacing
+ * *data. Unpaired surrogates become U+FFFD. False when memory runs out. */
+static bool xlsx_part_utf8(void **data, size_t *size)
+{
+    const unsigned char *s = *data;
+    size_t n = *size, i;
+    int big;
+    if (n >= 2 && s[0] == 0xFF && s[1] == 0xFE) big = 0, i = 2;
+    else if (n >= 2 && s[0] == 0xFE && s[1] == 0xFF) big = 1, i = 2;
+    else if (n >= 4 && s[0] == '<' && !s[1] && s[2] == '?' && !s[3]) big = 0, i = 0;
+    else if (n >= 4 && !s[0] && s[1] == '<' && !s[2] && s[3] == '?') big = 1, i = 0;
+    else return true;
+    if ((n - i) / 2 > (SIZE_MAX - 1) / 3) return false;
+    unsigned char *out = malloc((n - i) / 2 * 3 + 1);
+    if (!out) return false;
+    size_t o = 0;
+    for (; i + 1 < n; i += 2) {
+        uint32_t u = big ? (uint32_t)s[i] << 8 | s[i + 1] : (uint32_t)s[i + 1] << 8 | s[i];
+        if (u >= 0xD800 && u <= 0xDBFF && i + 3 < n) {
+            uint32_t lo = big ? (uint32_t)s[i + 2] << 8 | s[i + 3] : (uint32_t)s[i + 3] << 8 | s[i + 2];
+            if (lo >= 0xDC00 && lo <= 0xDFFF) {
+                u = 0x10000 + ((u - 0xD800) << 10) + (lo - 0xDC00);
+                i += 2;
+            } else u = 0xFFFD;
+        } else if (u >= 0xD800 && u <= 0xDFFF) u = 0xFFFD;
+        if (u < 0x80) out[o++] = (unsigned char)u;
+        else if (u < 0x800) {
+            out[o++] = (unsigned char)(0xC0 | u >> 6);
+            out[o++] = (unsigned char)(0x80 | (u & 0x3F));
+        } else if (u < 0x10000) {
+            out[o++] = (unsigned char)(0xE0 | u >> 12);
+            out[o++] = (unsigned char)(0x80 | (u >> 6 & 0x3F));
+            out[o++] = (unsigned char)(0x80 | (u & 0x3F));
+        } else {
+            out[o++] = (unsigned char)(0xF0 | u >> 18);
+            out[o++] = (unsigned char)(0x80 | (u >> 12 & 0x3F));
+            out[o++] = (unsigned char)(0x80 | (u >> 6 & 0x3F));
+            out[o++] = (unsigned char)(0x80 | (u & 0x3F));
+        }
+    }
+    out[o] = 0;
+    free(*data);
+    *data = out;
+    *size = o;
+    return true;
+}
+
 static bool xlsx_rel_type(const char *type, const char *name)
 {
     size_t n = strlen(type), m = strlen(name);
@@ -289,6 +337,7 @@ static ST_retcode xlsx_parse_rels(XLSXContext *ctx, const char *part, char *offi
     if (index == (size_t)-1) return 0;
     void *data = xlsx_zip_extract_to_heap(zip, index, &size);
     if (!data) return xlsx_zip_refused(zip) ? xlsx_part_refused(ctx, rels) : 610;
+    if (!xlsx_part_utf8(&data, &size)) { free(data); return 920; }
     RelsParseState state = {ctx, dir, office_document};
     xlsx_xml_parser *parser = xlsx_xml_parser_create(rels_callback, &state);
     if (!parser) {
@@ -435,6 +484,7 @@ ST_retcode xlsx_parse_workbook(XLSXContext *ctx)
                  "Failed to extract workbook.xml");
         return 610;
     }
+    if (!xlsx_part_utf8(&data, &size)) { free(data); return 920; }
 
     WorkbookParseState state = {0};
     state.ctx = ctx;
@@ -679,6 +729,7 @@ ST_retcode xlsx_parse_shared_strings(XLSXContext *ctx)
                  "Failed to extract sharedStrings.xml");
         return 610;
     }
+    if (!xlsx_part_utf8(&data, &size)) { free(data); return 920; }
 
     ST_retcode rc = xlsx_parse_shared_strings_buf(ctx, data, size);
     free(data);
@@ -795,6 +846,7 @@ ST_retcode xlsx_parse_styles(XLSXContext *ctx)
     if (!data) {
         return 610;  /* A present styles part must be readable. */
     }
+    if (!xlsx_part_utf8(&data, &size)) { free(data); return 920; }
 
     ST_retcode rc = xlsx_parse_styles_buf(ctx, data, size);
     free(data);
@@ -1289,7 +1341,8 @@ cell_value:
 
     const char *t = a[1].value;
     size_t tn = t ? a[1].len : 0;
-    int style = a[2].value ? xlsx_index(a[2].value, a[2].len) : -1;
+    /* A cell without s= takes cellXfs[0], as in native. */
+    int style = a[2].value ? xlsx_index(a[2].value, a[2].len) : 0;
     uint8_t format = style >= 0 && style < ctx->num_styles ? ctx->excel_formats[style] : 0;
     if (valueless) {
         xlsx_store_cell(ctx, loc, row, col, XLSX_CELL_EMPTY, 0, NULL, format);
@@ -1657,6 +1710,11 @@ ST_retcode xlsx_parse_worksheet(XLSXContext *ctx)
         snprintf(ctx->error_message, sizeof(ctx->error_message),
                  "Failed to extract worksheet: %s", info->path);
         return 610;
+    }
+    {
+        void *part = xml;
+        if (!xlsx_part_utf8(&part, &xml_size)) { free(part); return 920; }
+        xml = part;
     }
     ST_retcode rc = xlsx_scan_buffer(ctx, xml, xml_size);
     free(xml);

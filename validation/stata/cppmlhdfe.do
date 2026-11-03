@@ -1302,6 +1302,110 @@ foreach model in "absorb(g)" "noabsorb" {
     else test_fail "e(title) and e(marginsnotok): `model'" "[`e(title)'] [`e(marginsnotok)']"
 }
 
+* Normal offsets with absorb(), SD 6 to 100, stored as float and as double.
+* The IRLS must converge (it stopped with r(430): the deviance cycled from
+* the rounding of the working values of positive outcomes with means below
+* the floor, X'WX was numerically singular far from the optimum, or a full
+* step overflowed a mean). ppmlhdfe's b drifts to 3-5 sf at SD 30-100 and its
+* e(ll) keeps 4-6 sf, so the reference is Stata's poisson with explicit group
+* dummies at tight tolerances, started at ppmlhdfe's b with the group effects
+* concentrated out, a_g = ln(Y_g) - ln(sum over g of exp(ov + xb)); it agrees
+* with an independent Newton solution of the concentrated likelihood to at
+* least 13 sf. The deviance is 2*(saturated ll - ll), as above.
+foreach type in float double {
+    clear
+    set seed 504
+    set obs 1000
+    gen i = ceil(_n/20)
+    gen x = rnormal()
+    gen z = runiform()
+    gen y = rpoisson(exp(.3 + .5*x - .3*z))
+    gen `type' ov = .
+    quietly generate double wide_sat = cond(y == 0, 0, cond(y < 10, ///
+        y*ln(y) - y - lngamma(y + 1), ///
+        -0.5*ln(2*_pi*y) - 1/(12*y) + 1/(360*y^3) - 1/(1260*y^5) + 1/(1680*y^7)))
+    quietly summarize wide_sat, meanonly
+    local wide_satsum = r(sum)
+    sort i, stable
+    quietly by i: egen double wide_Y = total(y)
+    foreach sd in 6 7 8 10 30 60 100 {
+        quietly replace ov = rnormal()*`sd'
+        capture ppmlhdfe y x z, absorb(i) offset(ov)
+        if _rc {
+            test_fail "normal offset SD `sd' (`type'), absorb(): reference" "ppmlhdfe rc=`=_rc'"
+            continue
+        }
+        matrix wide_from = e(b)
+        matrix wide_from = wide_from[1, 1..2]
+        capture drop wide_v wide_vmax wide_sv wide_a
+        quietly generate double wide_v = ov + wide_from[1, 1]*x + wide_from[1, 2]*z
+        quietly by i: egen double wide_vmax = max(wide_v)
+        quietly by i: egen double wide_sv = total(exp(wide_v - wide_vmax))
+        quietly generate double wide_a = ln(wide_Y) - wide_vmax - ln(wide_sv)
+        forvalues g = 1/50 {
+            quietly summarize wide_a if i == `g', meanonly
+            matrix wide_from = wide_from, r(mean)
+        }
+        capture poisson y x z ibn.i, noconstant offset(ov) from(wide_from, copy) ///
+            tolerance(1e-13) ltolerance(1e-15) nrtolerance(1e-13) iterate(100)
+        if _rc | e(converged) != 1 {
+            test_fail "normal offset SD `sd' (`type'), absorb(): reference" "poisson rc=`=_rc'"
+            continue
+        }
+        matrix wide_bref = (_b[x], _b[z])
+        local wide_llref = e(ll)
+        capture cppmlhdfe y x z, absorb(i) offset(ov)
+        if _rc {
+            test_fail "normal offset SD `sd' (`type'), absorb()" "rc=`=_rc'"
+            continue
+        }
+        matrix wide_b = (_b[x], _b[z])
+        assert_matrix_equal wide_b wide_bref $DEFAULT_SIGFIGS "normal offset SD `sd' (`type'), absorb(): e(b)"
+        assert_scalar_equal `=e(ll)' `wide_llref' $DEFAULT_SIGFIGS "normal offset SD `sd' (`type'), absorb(): e(ll)"
+        assert_scalar_equal `=e(deviance)' `=2*(`wide_satsum' - `wide_llref')' $DEFAULT_SIGFIGS "normal offset SD `sd' (`type'), absorb(): e(deviance)"
+    }
+}
+
+* e(rss), e(rmse), e(ic2), e(title2) and estat ic as after ppmlhdfe; e(footnote)
+* and e(estat_cmd) name cppmlhdfe's own programs (ppmlhdfe's are reghdfe's,
+* which refuse other commands). e(ic2) counts the partialling subiterations,
+* which only one-way demeaning (one per IRLS iteration) shares with ppmlhdfe.
+sysuse auto, clear
+generate w = round(turn/5)
+foreach model in "|absorb(rep78)" "|noabsorb" "|absorb(rep78 foreign)" "|absorb(rep78##c.mpg)" ///
+    "|absorb(rep78) vce(cluster foreign)" "[fw=w]|absorb(foreign)" "[pw=turn]|absorb(rep78) vce(robust)" {
+    local wgt = substr("`model'", 1, strpos("`model'", "|") - 1)
+    local opts = substr("`model'", strpos("`model'", "|") + 1, .)
+    quietly ppmlhdfe price weight `wgt', `opts'
+    local ref_rss = e(rss)
+    local ref_rmse = e(rmse)
+    local ref_ic2 = e(ic2)
+    local ref_title2 "`e(title2)'"
+    quietly estat ic
+    matrix ref_ic = r(S)
+    quietly cppmlhdfe price weight `wgt', `opts'
+    assert_scalar_equal `=e(rss)' `ref_rss' $DEFAULT_SIGFIGS "e(rss): `model'"
+    assert_scalar_equal `=e(rmse)' `ref_rmse' $DEFAULT_SIGFIGS "e(rmse): `model'"
+    if "`e(title2)'" == "`ref_title2'" test_pass "e(title2): `model'"
+    else test_fail "e(title2): `model'" "[`e(title2)'] vs [`ref_title2']"
+    if strpos("`model'", "rep78 foreign") | strpos("`model'", "c.mpg") {
+        if e(ic2) >= e(ic) & e(ic2) < . test_pass "e(ic2): `model'"
+        else test_fail "e(ic2): `model'" "`=e(ic2)'"
+    }
+    else assert_scalar_equal `=e(ic2)' `ref_ic2' $DEFAULT_SIGFIGS "e(ic2): `model'"
+    capture estat ic
+    if _rc test_fail "estat ic: `model'" "rc=`=_rc'"
+    else {
+        matrix cand_ic = r(S)
+        assert_matrix_equal cand_ic ref_ic $DEFAULT_SIGFIGS "estat ic: `model'"
+    }
+    capture `e(footnote)'
+    local foot_rc = _rc
+    capture estat summarize
+    if "`e(footnote)'" != "" & "`e(estat_cmd)'" != "" & !`foot_rc' & !_rc test_pass "e(footnote), e(estat_cmd): `model'"
+    else test_fail "e(footnote), e(estat_cmd): `model'" "[`e(footnote)'] [`e(estat_cmd)'] rc=`foot_rc'/`=_rc'"
+}
+
 } // end quietly
 
 * Summary

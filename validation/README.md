@@ -43,7 +43,12 @@ python3 scripts/sync_release.py --check
 python3 scripts/sync_architecture.py --check
 python3 validation/run.py --checks options
 python3 validation/run.py --checks docs
+python3 validation/run.py --checks seeds
 ```
+
+The runner executes many named cases in one Stata session, so each case (and
+each benchmark workload) must `set seed` before its first random draw; a seed
+set by another case does not count. The seeds check enforces this.
 
 The docs-tree check invokes Git. On this Mac, run it through zsh outside the
 sandbox, as required for other Git operations.

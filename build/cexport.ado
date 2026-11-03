@@ -1,4 +1,4 @@
-*! version 1.2.3 20261030 github.com/mdroste/stata-ctools
+*! version 1.2.4 20261103 github.com/mdroste/stata-ctools
 
 program define cexport, rclass
     version 14.1
@@ -590,6 +590,8 @@ program define cexport_excel, rclass
             if substr("`fmt'", 1, 2) == "%t" | substr("`fmt'", 1, 3) == "%-t" {
                 local is_date_fmt = 1
             }
+            * The old %d is a daily format, as export excel reads it
+            if substr("`fmt'", 1, 2) == "%d" | substr("`fmt'", 1, 3) == "%-d" local is_date_fmt = 1
 
             if `is_date_fmt' {
                 * This is a date/time variable - convert to formatted string
@@ -629,6 +631,10 @@ program define cexport_excel, rclass
             if substr("`fmt'", 1, 2) == "%t" | substr("`fmt'", 1, 3) == "%-t" {
                 local is_date_fmt = 1
             }
+            * The old %d is a daily format, as export excel reads it
+            if substr("`fmt'", 1, 2) == "%d" | substr("`fmt'", 1, 3) == "%-d" local is_date_fmt = 1
+            if substr("`fmt'", 1, 2) == "%d" local fmt = "%t" + substr("`fmt'", 2, .)
+            if substr("`fmt'", 1, 3) == "%-d" local fmt = "%-t" + substr("`fmt'", 3, .)
             * Determine date type: strip % and optional -
             local fmtsub = substr("`fmt'", 2, .)
             if substr("`fmtsub'", 1, 1) == "-" local fmtsub = substr("`fmtsub'", 2, .)
@@ -754,22 +760,44 @@ program define cexport_excel, rclass
     }
 
 
-    * Build date column flags for plugin
+    * Cell style codes for the plugin, assigned from the display format as
+    * export excel assigns them: 1 date (m/d/yy), 3 date and time
+    * (m/d/yy h:mm), 4 time of day (h:mm:ss AM/PM) when a %tc format starts
+    * with an hour, minute or am/pm code, 2 a %tc format that shows seconds
+    * with s (native writes empty text; cexport writes the value with
+    * milliseconds), 5 0 for %tg; numbers 7 0.00 (.2f), 9 #,##0.00 (.2fc),
+    * 8 #,##0 (gc), 10 0.00E+00 (.2e) and 6 0 otherwise. 0 is General: text,
+    * and numbers under keepcellfmt, which keeps a cell's format for
+    * everything but %t formats.
     local date_cols ""
     local export_idx = 0
     foreach var of local export_varlist {
         local export_idx = `export_idx' + 1
         local origvar : word `export_idx' of `varlist'
         local fmt : format `origvar'
+        if substr("`fmt'", 1, 2) == "%d" local fmt = "%t" + substr("`fmt'", 2, .)
+        if substr("`fmt'", 1, 3) == "%-d" local fmt = "%-t" + substr("`fmt'", 3, .)
         local is_date = 0
-        if substr("`fmt'", 1, 2) == "%t" | substr("`fmt'", 1, 3) == "%-t" {
-            local is_date = 1
+        capture confirm numeric variable `var'
+        local isnum = !_rc
+        if `isnum' & (substr("`fmt'", 1, 2) == "%t" | substr("`fmt'", 1, 3) == "%-t") {
             * The unit follows %t or %-t; %tg is written as its raw number
             local unit = substr(subinstr("`fmt'", "%-t", "%t", 1), 3, 1)
-            if inlist("`unit'", "c", "C") local is_date = 2
-            if !inlist("`unit'", "d", "m", "q", "w", "h", "y", "b", "c", "C") local is_date = 0
-            capture confirm numeric variable `var'
-            if _rc local is_date = 0
+            local custom = substr(subinstr("`fmt'", "%-t", "%t", 1), 4, .)
+            local is_date = 5
+            if inlist("`unit'", "d", "m", "q", "w", "h", "y", "b") local is_date = 1
+            else if inlist("`unit'", "c", "C") {
+                local is_date = 3
+                if inlist(substr("`custom'", 1, 1), "H", "h", "a") | inlist(substr("`custom'", 1, 2), "MM", "mm") local is_date = 4
+                if strpos("`custom'", "s") local is_date = 2
+            }
+        }
+        if `isnum' & !`is_date' & "`keepcellfmt'" == "" {
+            local is_date = 6
+            if substr("`fmt'", -2, 2) == "gc" local is_date = 8
+            else if substr("`fmt'", -4, 4) == ".2fc" local is_date = 9
+            else if substr("`fmt'", -3, 3) == ".2f" local is_date = 7
+            else if substr("`fmt'", -3, 3) == ".2e" local is_date = 10
         }
         local date_cols `date_cols' `is_date'
     }

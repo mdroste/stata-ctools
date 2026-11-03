@@ -30,13 +30,13 @@
 
     Following ivreg2/livreg2's m_calckw() function exactly.
 */
-ST_double civreghdfe_kernel_weight(ST_int kernel_type, ST_int j, ST_int bw)
+ST_double civreghdfe_kernel_weight(ST_int kernel_type, ST_int j, ST_double bw)
 {
     if (j == 0) return 1.0;
     if (bw <= 0) return 0.0;
 
     /* karg = tau / bw, following ivreg2's m_calckw() */
-    ST_double x = (ST_double)j / (ST_double)bw;
+    ST_double x = (ST_double)j / bw;
 
     switch (kernel_type) {
         case 1:  /* Bartlett / Newey-West - lag window, truncate at bw */

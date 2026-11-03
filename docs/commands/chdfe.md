@@ -19,7 +19,7 @@ indicators are excluded from output.
 `generate()` creates double variables by adding a prefix to each input name.
 Expanded terms use the `hdfe` naming convention: names start with `__`, dots
 become `__`, and `#` becomes `_X_`. The original data and row order are
-preserved. `sample()` saves the zero-one transformation sample.
+preserved. `sample()` creates an indicator equal to 1 for observations used in the transformation and 0 otherwise.
 
 `clear` keeps the selected rows and transformed variables. It also retains the
 source variables needed for expanded terms and simple weight variables. `keepvars()`
@@ -52,14 +52,14 @@ error 2000.
 | `groupvar(newvar)` | Connected-component IDs for the first pair of nonnested categorical effects |
 | `tolerance(#)` | Convergence tolerance; default `1e-8` |
 | `maxiterations(#)` | Iteration limit; default 10,000; `.` removes the practical limit |
-| `poolsize(#)` | Columns projected together; default 10 |
+| `poolsize(#)` | Number of variables from which fixed effects are removed together; default 10 |
 | `transform(str)` | `symmetric_kaczmarz` (default), `kaczmarz`, or `cimmino` |
 | `acceleration(str)` | `conjugate_gradient`/`cg` (default), `steepest_descent`/`sd`, `aitken`, or `none` |
-| `threads(#)` | Maximum workers; zero uses the ctools setting |
+| `threads(#)` | Maximum threads; zero uses the ctools setting |
 | `verbose`, `verbose(#)`, `timeit` | Report time by computation stage; `verbose(0)` is quiet |
 
-Conjugate gradient requires a symmetric transform. Iteration paths and counts
-may differ from `hdfe`. Nonconvergence produces error 430. `groupvar()`
+Conjugate gradient requires a symmetric transform. Intermediate estimates and iteration counts
+may differ from `hdfe`, even when the final estimates agree. Nonconvergence produces error 430. `groupvar()`
 requires pairwise or first-pair adjustments; no output is created without an
 eligible pair. With more than two categorical effects, the degrees-of-freedom
 calculation is generally an upper bound, as in `hdfe`.

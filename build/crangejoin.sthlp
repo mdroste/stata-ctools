@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.3 20261030}{...}
+{* *! version 1.2.4 20261103}{...}
 {viewerjumpto "Syntax" "crangejoin##syntax"}{...}
 {viewerjumpto "Description" "crangejoin##description"}{...}
 {viewerjumpto "Options" "crangejoin##options"}{...}
@@ -7,7 +7,8 @@
 
 {title:Title}
 
-{pstd}{bf:crangejoin} {hline 2} C-accelerated inclusive interval joins
+{pstd}{bf:crangejoin} {hline 2} Join observations whose keys fall within
+specified intervals
 
 {marker syntax}{...}
 
@@ -42,9 +43,10 @@ using keys returns error 2000.
 
 {title:Options}
 
-{pstd}{opt by()} restricts matches to equal numeric/string groups; missing group
-values participate and extended numeric missings remain distinct. keyvar cannot
-also be a by() variable.
+{pstd}{opt by(varlist)} requires matched observations to have the same values
+of the listed variables. Numeric and string variables are allowed. Missing
+values can match, and each extended numeric missing value defines a separate
+group. keyvar cannot also be a by() variable.
 
 {pstd}{opt keepusing()} selects using variables. Key and by variables are always
 loaded.
@@ -55,9 +57,10 @@ with master variables. The default is suffix(_U) when neither is specified.
 variable except the by() variables. Name conflicts return an error.
 
 {pstd}{opt threads(#)} sets the maximum number of threads, from 1 to 256.
-Omitting it or specifying zero uses the {help ctools##threads:ctools setting}. {opt verbose}
-reports loading, index sorting, group/key indexing, matching/counting, and
-output writing times.
+Omitting it or specifying zero uses the {help ctools##threads:ctools setting}.
+{opt verbose} reports the time spent loading data, sorting keys, identifying
+groups and key values, finding and counting matches, and writing the joined
+data.
 
 {pstd}By default, an error or interruption restores the master dataset.
 Recovery uses an in-memory copy on Stata 16 or later and {help preserve} on

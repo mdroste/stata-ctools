@@ -256,48 +256,59 @@ fwl_done:
 }
 
 
-/* 1 if x is constant within the groups of one absorbed factor, which the
-   fixed effects then remove exactly (conservatively 1 on allocation failure) */
-static ST_int civ_const_in_factor(const ST_double *x, ST_int N, const HDFE_State *state)
-{
-    for (ST_int g = 0; g < state->G; g++) {
-        const FE_Factor *f = &state->factors[g];
-        ST_int maxl = (f->max_level > f->num_levels) ? f->max_level : f->num_levels;
-        ST_double *first = (ST_double *)malloc(((size_t)maxl + 1) * sizeof(ST_double));
-        unsigned char *seen = (unsigned char *)calloc((size_t)maxl + 1, 1);
-        if (!first || !seen) { free(first); free(seen); return 1; }
-        ST_int constant = 1;
-        for (ST_int i = 0; i < N && constant; i++) {
-            ST_int l = f->levels[i];
-            if (l < 0 || l > maxl) constant = 0;
-            else if (!seen[l]) { seen[l] = 1; first[l] = x[i]; }
-            else if (x[i] != first[l]) constant = 0;
-        }
-        free(first); free(seen);
-        if (constant) return 1;
-    }
-    return 0;
-}
+/* A column is absorbed by the fixed effects (or by partial()) when its
+   partialled (weighted) SS is at most CIV_FE_NOISE times its uncentered SS
+   before partialling: only rounding noise is left, which the projection
+   leaves at about 1e-30 of that SS. A column with genuine within variation
+   above this is kept, as ivreghdfe keeps it (ivreghdfe has no rule of its
+   own: it partials first and drops only what invsym() drops). */
+#define CIV_FE_NOISE 1e-20
 
-/*
-    ivreghdfe checks collinearity before partialling, so a column absorbed by
-    the fixed effects reaches its estimation as partialling noise, and it
-    counts in ivreghdfe's ranks (degrees of freedom, J df) unless Stata's
-    invsym() drops it, which it does when the noise has a sum of squares of
-    at most 1e-19. That happens when the fixed effects remove the column
-    exactly: it is constant within the groups of one absorbed factor, or the
-    projection is exact (one factor, balanced panels), where the partialled
-    column here is exactly zero too. Otherwise (a column absorbed only
-    jointly by unbalanced fixed effects, e.g. age = year - birth year with
-    absorb(id year)) reghdfe's iterative solver leaves noise above that. So
-    an absorbed column counts when its partialled SS is not zero and it is
-    not constant within any single factor (columns absorbed by partial()
-    alone, without fixed effects, never count). It is still omitted here.
-*/
-static ST_int civ_absorbed_counts(ST_double ss_partial, const ST_double *orig, ST_int N,
-                                  const HDFE_State *state)
+/* Columns dropped by Stata's invsym() of the symmetric K x K cross-product
+   A (column-major), the rule behind ivreghdfe's ranks: a column is zeroed
+   when its remaining pivot is not positive, below 1e-9 of its diagonal, or
+   below 1e-19 (as ctools_invsym). The first n_ordered columns are swept in
+   order, the rest on the largest remaining diagonal, as invsym() does.
+   Columns with drop[j] already set are left out. Returns the number of
+   columns newly dropped, or -1 if memory runs out. */
+static ST_int civ_invsym_drops(const ST_double *A, ST_int K, ST_int n_ordered, ST_int *drop)
 {
-    return state->G > 0 && ss_partial > 0.0 && !civ_const_in_factor(orig, N, state);
+    if (K <= 0) return 0;
+    ST_double *W = (ST_double *)ctools_safe_malloc3((size_t)K, (size_t)K, sizeof(ST_double));
+    ST_int *done = (ST_int *)calloc((size_t)K, sizeof(ST_int));
+    if (!W || !done) { free(W); free(done); return -1; }
+    memcpy(W, A, (size_t)K * K * sizeof(ST_double));
+    for (ST_int j = 0; j < K; j++) done[j] = drop[j] ? 1 : 0;
+    ST_int n_new = 0;
+    for (;;) {
+        ST_int p = -1;
+        for (ST_int j = 0; j < K; j++) {
+            if (done[j]) continue;
+            if (j < n_ordered) { p = j; break; }
+            if (p < 0 || W[(size_t)j * K + j] > W[(size_t)p * K + p]) p = j;
+        }
+        if (p < 0) break;
+        done[p] = 1;
+        ST_double d = W[(size_t)p * K + p], d0 = A[(size_t)p * K + p];
+        if (!(d > 0.0) || !(d0 > 0.0) || d < 1e-9 * d0 || d < 1e-19) {
+            drop[p] = 1;
+            n_new++;
+            continue;
+        }
+        /* Sweep the remaining columns on p */
+        for (ST_int i = 0; i < K; i++) {
+            if (done[i]) continue;
+            ST_double wip = W[(size_t)p * K + i] / d;
+            for (ST_int j = i; j < K; j++) {
+                if (done[j]) continue;
+                W[(size_t)j * K + i] -= wip * W[(size_t)j * K + p];
+                W[(size_t)i * K + j] = W[(size_t)j * K + i];
+            }
+        }
+    }
+    free(W);
+    free(done);
+    return n_new;
 }
 
 /*
@@ -355,7 +366,7 @@ static ST_retcode do_iv_regression(void)
     ST_int verbose = input.verbose;
     ST_int est_method = input.est_method;
     ST_int kernel_type = input.kernel_type;
-    ST_int bw = input.bw;
+    ST_double bw = input.bw;
     ST_int kiefer = input.kiefer;
     ST_int ts_mode = input.ts_mode;
     ST_int ts_cols = input.ts_cols;
@@ -630,9 +641,21 @@ static ST_retcode do_iv_regression(void)
                 if (valid_mask[ii]) fw_c[idx++] = filtered.data.vars[var_weight_idx].data.dbl[ii];
         }
     }
-    ST_int num_singletons_total = (has_weights && weight_type == 2 && !fw_c) ? -1 :
-        ctools_remove_singletons(fe_levels_c, G, N_valid, singleton_mask, fw_c, verbose);
+    /* keepsingletons: reghdfe's option, which ivreghdfe passes on */
+    ST_double keep_singletons = 0;
+    SF_scal_use("__civreghdfe_keepsingletons", &keep_singletons);
+    ST_int num_singletons_total;
+    if (keep_singletons == 1) {
+        for (ST_int ii = 0; ii < N_valid; ii++) singleton_mask[ii] = 1;
+        num_singletons_total = 0;
+    } else {
+        num_singletons_total = (has_weights && weight_type == 2 && !fw_c) ? -1 :
+            ctools_remove_singletons(fe_levels_c, G, N_valid, singleton_mask, fw_c, verbose);
+    }
     free(fw_c);
+    if (num_singletons_total >= 0 &&
+        (iv_rc = ctools_scal_save("__civreghdfe_num_singletons", (ST_double)num_singletons_total)))
+        goto iv_cleanup;
     if (num_singletons_total < 0) {
         SF_error("civreghdfe: Memory allocation failed in singleton detection\n");
         iv_rc = 920;
@@ -839,10 +862,6 @@ static ST_retcode do_iv_regression(void)
         n_partial = (ST_int)dval_partial;
     }
 
-    /* exogenous regressors as sent (the columns of X_exog_c and the first
-       ones of Z_c), before partial() removes some */
-    const ST_int K_exog_in = K_exog;
-
     if (n_partial > 0 && K_exog > 0) {
         is_partial = (ST_int *)calloc(K_exog, sizeof(ST_int));
         ST_int n_flagged = is_partial ? read_flag_matrix("__civreghdfe_partial_flags", K_exog, is_partial) : -1;
@@ -862,10 +881,11 @@ static ST_retcode do_iv_regression(void)
     /* Partial out FEs from all variables using CG solver */
     ST_int total_cols = 1 + K_endog + K_exog + K_iv;
 
-    /* Combine all data into one array for parallel processing. One spare row
-       (total_cols values after the N x total_cols block) holds each column's
-       pre-partialling sum of squares; it shares all_data's lifetime. */
-    all_data = (ST_double *)ctools_safe_malloc3((size_t)N + 1, (size_t)total_cols, sizeof(ST_double));
+    /* Combine all data into one array for parallel processing. Two spare
+       rows (total_cols values each after the N x total_cols block) hold each
+       column's pre-partialling sums of squares, centred and uncentred; they
+       share all_data's lifetime. */
+    all_data = (ST_double *)ctools_safe_malloc3((size_t)N + 2, (size_t)total_cols, sizeof(ST_double));
     if (!all_data) {
         SF_error("civreghdfe: Memory allocation failed for demeaning buffer\n");
         iv_rc = 920;
@@ -892,27 +912,65 @@ static ST_retcode do_iv_regression(void)
         memcpy(all_data + (size_t)N * col_exog, X_exog_c, (size_t)N * K_exog * sizeof(ST_double));
     }
 
-    /* Pre-partialling (weighted) sum of squared deviations of every column.
-       A column whose partialled SS is at most absorb_tol times this was
-       absorbed by the fixed effects (or by partial()) and is omitted, as
-       ivreghdfe does; absorb_tol is reghdfe's collinear-with-FE tolerance. */
+    /* Pre-partialling (weighted) sums of squares of every column: about the
+       mean (ss_pre, for partial()'s redundancy rule, absorb_tol being
+       reghdfe's collinear-with-FE tolerance) and uncentred (ss_unc, the
+       scale of the rounding noise that the projection leaves in a column
+       the fixed effects absorb; see CIV_FE_NOISE) */
     const ST_double absorb_tol = (tolerance / 10.0 < 1e-6) ? tolerance / 10.0 : 1e-6;
     ST_double *ss_pre = all_data + (size_t)N * total_cols;
+    ST_double *ss_unc = all_data + (size_t)(N + 1) * total_cols;
     #pragma omp parallel for schedule(dynamic) if ((size_t)N * total_cols > 100000)
     for (ST_int c = col_excl; c < total_cols; c++) {
         ss_pre[c] = civ_wss_dev(all_data + (size_t)c * N, weights_c, N);
+        ss_unc[c] = civ_wss(all_data + (size_t)c * N, weights_c, N);
     }
-    for (ST_int k = 0; k < K_exog; k++) ss_pre[k] = ss_pre[col_exog + k];
-    const ST_double *ss_endog = ss_pre + col_endog;
+    for (ST_int k = 0; k < K_exog; k++) {
+        ss_pre[k] = ss_pre[col_exog + k];
+        ss_unc[k] = ss_unc[col_exog + k];
+    }
+    const ST_double *ss_unc_endog = ss_unc + col_endog;
     ST_double *ss_exog = ss_pre + col_exog;  /* compacted with X_exog below */
-    const ST_double *ss_excl = ss_pre + col_excl;
+    ST_double *ss_unc_exog = ss_unc + col_exog;  /* likewise */
+    const ST_double *ss_unc_excl = ss_unc + col_excl;
 
     /* Partial out the FEs from every column in one pass, then the partial()
        variables by weighted FWL on the FE-demeaned data: the residual of the
        W-weighted projection on [FE, P] is M_P~ M_FE x with P~ = M_FE P, the
        way ivreghdfe runs HDFE partial_out and then s_partial. */
+    /* Each column is projected at unit scale, as chdfe does: a power-of-two
+       rescaling keeps the mantissas (the projection is unchanged), but the
+       solver's convergence test then behaves the same for a column in units
+       of 1e5 as in units of 1. Without it, a column of large values with
+       little within variation (1000*id + noise) can come back as noise
+       larger than the column itself. */
+    ST_double *col_scale = (ST_double *)malloc((size_t)total_cols * sizeof(ST_double));
+    if (!col_scale) {
+        SF_error("civreghdfe: Memory allocation failed for demeaning buffer\n");
+        iv_rc = 920;
+        goto iv_cleanup;
+    }
+    #pragma omp parallel for schedule(dynamic) if ((size_t)N * total_cols > 100000)
+    for (ST_int c = col_excl; c < total_cols; c++) {
+        ST_double *x = all_data + (size_t)c * N, largest = 0.0;
+        for (ST_int i = 0; i < N; i++) largest = fmax(largest, fabs(x[i]));
+        int exponent = 0;
+        col_scale[c] = 1.0;
+        if (largest > 0.0 && isfinite(largest)) {
+            frexp(largest, &exponent);
+            col_scale[c] = ldexp(1.0, exponent - 1);
+            for (ST_int i = 0; i < N; i++) x[i] /= col_scale[c];
+        }
+    }
     HDFE_SolveResult projection = partial_out_columns(state, all_data + (size_t)N * col_excl, N,
                                                       total_cols - col_excl, num_threads);
+    #pragma omp parallel for schedule(dynamic) if ((size_t)N * total_cols > 100000)
+    for (ST_int c = col_excl; c < total_cols; c++) {
+        if (col_scale[c] == 1.0) continue;
+        ST_double *x = all_data + (size_t)c * N;
+        for (ST_int i = 0; i < N; i++) x[i] *= col_scale[c];
+    }
+    free(col_scale);
     ST_retcode fwl_rc = 0;
     if (!projection.status && K_exog > 0) {
         memcpy(all_data, all_data + (size_t)N * col_exog, (size_t)N * K_exog * sizeof(ST_double));
@@ -960,6 +1018,7 @@ static ST_retcode do_iv_regression(void)
                     if (new_idx != k) {
                         memcpy(X_exog_dem + (size_t)new_idx * N, X_exog_dem + (size_t)k * N, N * sizeof(ST_double));
                         ss_exog[new_idx] = ss_exog[k];
+                        ss_unc_exog[new_idx] = ss_unc_exog[k];
                     }
                     new_idx++;
                 }
@@ -999,16 +1058,26 @@ static ST_retcode do_iv_regression(void)
     ST_int df_a_nested = 0;  /* Levels from FE nested within cluster */
     ST_int mobility_groups = 0;
 
+    /* dofadjustments(), as reghdfe (which ivreghdfe calls) applies them:
+       0 = all (pairwise and clusters), 1 = none, 2 = firstpair,
+       3 = pairwise; dof_clusters: effects nested in the clusters */
+    ST_double dof_type_d = 0, dof_clusters_d = 1;
+    SF_scal_use("__civreghdfe_dof_type", &dof_type_d);
+    SF_scal_use("__civreghdfe_dof_clusters", &dof_clusters_d);
+    const ST_int dof_pairs = dof_type_d == 1 ? 0 :
+        (dof_type_d == 2 ? CTOOLS_DOF_FIRSTPAIR : CTOOLS_DOF_PAIRWISE);
+    const ST_int dof_clusters = dof_clusters_d != 0;
+
     fe_redundant = (ST_int *)ctools_safe_calloc2((size_t)(G > 0 ? G : 1), sizeof(ST_int));
     fe_nested = (ST_int *)ctools_safe_calloc2((size_t)(G > 0 ? G : 1), sizeof(ST_int));
     if (!fe_redundant || !fe_nested ||
-        ctools_hdfe_redundant_intercepts(state->factors, G, N, NULL, CTOOLS_DOF_PAIRWISE, fe_redundant)) {
+        ctools_hdfe_redundant_intercepts(state->factors, G, N, NULL, dof_pairs, fe_redundant)) {
         SF_error("civreghdfe: Memory allocation failed for the absorbed degrees of freedom\n");
         iv_rc = 920;
         goto iv_cleanup;
     }
     for (ST_int g = 0; g < G; g++) df_a += state->factors[g].num_levels - fe_redundant[g];
-    if (G >= 2) mobility_groups = fe_redundant[1] + (G - 2);
+    if (G >= 2 && dof_pairs) mobility_groups = fe_redundant[1] + (dof_pairs == CTOOLS_DOF_PAIRWISE ? G - 2 : 0);
 
     for (ST_int g = 0; g < G; g++) {
         /* Save per-FE num_levels to Stata scalars for absorbed DOF table */
@@ -1066,7 +1135,7 @@ static ST_retcode do_iv_regression(void)
      * full df_a). */
     /* A failed allocation must not silently skip the detection: it changes
      * the cluster dof */
-    if (has_cluster && !kiefer) {
+    if (has_cluster && !kiefer && dof_clusters) {
         df_a_nested = 0;
         for (ST_int g = 0; g < G; g++) {
             ST_int is_nested = ctools_fe_nested_in_cluster(
@@ -1086,7 +1155,7 @@ static ST_retcode do_iv_regression(void)
         }
         if (df_a_nested > 0) {
             if (ctools_hdfe_redundant_intercepts(state->factors, G, N, fe_nested,
-                                                 CTOOLS_DOF_PAIRWISE, fe_redundant)) {
+                                                 dof_pairs, fe_redundant)) {
                 SF_error("civreghdfe: Memory allocation failed for the absorbed degrees of freedom\n");
                 iv_rc = 920;
                 goto iv_cleanup;
@@ -1141,140 +1210,58 @@ static ST_retcode do_iv_regression(void)
     }
 
     /* Stage 1: columns absorbed by the fixed effects (or by partial()): the
-       partialled (weighted) SS is zero or negligible relative to the
-       pre-partialling SS (reghdfe's collinear-with-FE rule). What remains is
-       numerical noise; it is omitted and must not reach stage 2, whose
-       equilibration would rescale it to unit variance. Those that ivreghdfe
-       keeps in its ranks still count in the degrees of freedom
-       (civ_absorbed_counts). Every absorbed exogenous regressor counts in the
-       Cragg-Donald and KP Wald F dof, whose instrument count ivreghdfe takes
-       from its variable lists (ranktest partials those regressors out, so
-       the statistics themselves do not change). An absorbed excluded
-       instrument makes ivreghdfe's statistics missing (exact zero) or
-       noise-based, so there the model without it is the reference. */
+       partialled (weighted) SS is rounding noise relative to the column's
+       uncentred SS (CIV_FE_NOISE). They are omitted and do not count in the
+       ranks, as ivreghdfe's invsym() zeroes them (when its own projection
+       leaves noise above invsym's tolerance, ivreghdfe keeps a column of
+       noise with an arbitrary coefficient; the model without the column is
+       the reference). Every absorbed or collinear exogenous regressor still
+       counts in the Cragg-Donald and KP Wald F dof, whose instrument count
+       ivreghdfe takes from its variable lists (ranktest partials those
+       regressors out, so the statistics themselves do not change). An
+       absorbed excluded instrument makes ivreghdfe's statistics missing
+       (exact zero), so there the model without it is the reference. */
     ST_int n_abs_x_exog = 0, n_abs_x_endog = 0, n_abs_z_excl = 0, n_abs_exog_all = 0;
-    {
-        ST_int j_in = 0;   /* X_exog_c column of X_exog column k (partial() removed) */
-        for (ST_int k = 0; k < K_exog; k++, j_in++) {
-            while (is_partial && j_in < K_exog_in && is_partial[j_in]) j_in++;
-            ST_double xx_partial = civ_wss(X_exog_dem + (size_t)k * N, weights_c, N);
-            if (xx_partial < 1e-30 || xx_partial <= absorb_tol * ss_exog[k]) {
-                is_collinear_x[k] = 1;
-                num_collinear_x++;
-                n_abs_exog_all++;
-                if (j_in < K_exog_in &&
-                    civ_absorbed_counts(xx_partial, X_exog_c + (size_t)j_in * N, N, state))
-                    n_abs_x_exog++;
-            }
+    for (ST_int k = 0; k < K_exog; k++) {
+        ST_double xx_partial = civ_wss(X_exog_dem + (size_t)k * N, weights_c, N);
+        if (!(xx_partial > CIV_FE_NOISE * ss_unc_exog[k])) {
+            is_collinear_x[k] = 1;
+            num_collinear_x++;
         }
-        for (ST_int k = 0; k < K_endog; k++) {
-            ST_double xx_partial = civ_wss(X_endog_dem + (size_t)k * N, weights_c, N);
-            if (xx_partial < 1e-30 || xx_partial <= absorb_tol * ss_endog[k]) {
-                is_collinear_x[K_exog + k] = 1;
-                num_collinear_x++;
-                if (civ_absorbed_counts(xx_partial, X_endog_c + (size_t)k * N, N, state))
-                    n_abs_x_endog++;
-            }
+    }
+    for (ST_int k = 0; k < K_endog; k++) {
+        ST_double xx_partial = civ_wss(X_endog_dem + (size_t)k * N, weights_c, N);
+        if (!(xx_partial > CIV_FE_NOISE * ss_unc_endog[k])) {
+            is_collinear_x[K_exog + k] = 1;
+            num_collinear_x++;
         }
     }
     free(is_partial);
     is_partial = NULL;
 
-    /* Stage 2: Numerical collinearity via Cholesky on X'X
-       Build concatenated X = [X_exog, X_endog] in column-major order */
-    if (K_total > 1) {
+    /* Stage 2: ivreghdfe's rank rule, invsym() of the partialled X'WX in its
+       column order [endogenous, exogenous] (the endogenous block precedes
+       the exogenous one in all_data), with the stage-1 columns left out.
+       Exact collinearity among the variables themselves is resolved by the
+       ado first, in ivreg2's order; what remains here is collinearity that
+       the fixed effects create. */
+    if (K_total > 0) {
         ST_double *XtX = (ST_double *)ctools_safe_calloc3((size_t)K_total, (size_t)K_total, sizeof(ST_double));
-        if (!XtX) {
-            SF_error("civreghdfe: Memory allocation failed for XtX\n");
-            iv_rc = 920;
-            goto iv_cleanup;
-        }
-
-        /* Compute X'X where X = [X_exog_dem, X_endog_dem] using block matmul.
-         * XtX (K_total x K_total) has blocks:
-         *   [Xe'Xe  Xe'Xn]
-         *   [Xn'Xe  Xn'Xn]
-         * Use ctools_matmul_atb for each block (OpenMP + SIMD) instead of
-         * K_total² individual fast_dot calls. */
-        if (K_exog > 0 && K_endog > 0) {
-            /* Both exog and endog present — compute 3 blocks (4th by symmetry) */
-            ST_double *blk_ee = (ST_double *)ctools_safe_malloc3((size_t)K_exog, (size_t)K_exog, sizeof(ST_double));
-            ST_double *blk_en = (ST_double *)ctools_safe_malloc3((size_t)K_exog, (size_t)K_endog, sizeof(ST_double));
-            ST_double *blk_nn = (ST_double *)ctools_safe_malloc3((size_t)K_endog, (size_t)K_endog, sizeof(ST_double));
-            if (blk_ee && blk_en && blk_nn) {
-                ctools_matmul_ata(X_exog_dem, N, K_exog, blk_ee);
-                ctools_matmul_atb(X_exog_dem, X_endog_dem, N, K_exog, K_endog, blk_en);
-                ctools_matmul_ata(X_endog_dem, N, K_endog, blk_nn);
-
-                /* Place blocks into K_total x K_total XtX (column-major) */
-                for (ST_int jj = 0; jj < K_exog; jj++)
-                    for (ST_int ii = 0; ii < K_exog; ii++)
-                        XtX[jj * K_total + ii] = blk_ee[jj * K_exog + ii];
-                for (ST_int jj = 0; jj < K_endog; jj++)
-                    for (ST_int ii = 0; ii < K_exog; ii++) {
-                        XtX[(K_exog + jj) * K_total + ii] = blk_en[jj * K_exog + ii];
-                        XtX[ii * K_total + (K_exog + jj)] = blk_en[jj * K_exog + ii];
-                    }
-                for (ST_int jj = 0; jj < K_endog; jj++)
-                    for (ST_int ii = 0; ii < K_endog; ii++)
-                        XtX[(K_exog + jj) * K_total + (K_exog + ii)] = blk_nn[jj * K_endog + ii];
-            } else {
-                /* Fallback: element-wise */
-                for (ST_int ii = 0; ii < K_total; ii++) {
-                    const ST_double *xi = (ii < K_exog) ? X_exog_dem + (size_t)ii * N
-                                                        : X_endog_dem + (size_t)(ii - K_exog) * N;
-                    for (ST_int jj = ii; jj < K_total; jj++) {
-                        const ST_double *xj = (jj < K_exog) ? X_exog_dem + (size_t)jj * N
-                                                            : X_endog_dem + (size_t)(jj - K_exog) * N;
-                        ST_double val = fast_dot(xi, xj, N);
-                        XtX[jj * K_total + ii] = val;
-                        XtX[ii * K_total + jj] = val;
-                    }
-                }
-            }
-            free(blk_ee); free(blk_en); free(blk_nn);
-        } else if (K_exog > 0) {
-            ctools_matmul_ata(X_exog_dem, N, K_exog, XtX);
-        } else {
-            ctools_matmul_ata(X_endog_dem, N, K_endog, XtX);
-        }
-
-        /* Stage-1 columns are excluded from the factorization and stay
-         * flagged; the rest are screened on the equilibrated X'X, which keeps
-         * mixed-scale variables (e.g., x_tiny / x_huge) from producing false
-         * positives. */
-        /* Without absorbed effects the constant is the last exogenous
-           column; ivreg2 screens it first, so a regressor that is constant
-           on the sample (or a full set of dummies) is omitted, not _cons.
-           Screen in the order [_cons, other exog, endog], then map back. */
-        ST_double has_cons_flag = 0;
-        SF_scal_use("__civreghdfe_has_cons", &has_cons_flag);
-        ST_int num_chol_collinear;
-        if (G == 0 && has_cons_flag != 0 && K_exog > 1) {
-            ST_int *perm = (ST_int *)malloc((size_t)K_total * sizeof(ST_int));
-            ST_int *flags_p = (ST_int *)malloc((size_t)K_total * sizeof(ST_int));
-            ST_double *XtX_p = (ST_double *)ctools_safe_malloc3((size_t)K_total, (size_t)K_total, sizeof(ST_double));
-            num_chol_collinear = -1;
-            if (perm && flags_p && XtX_p) {
-                perm[0] = K_exog - 1;
-                for (ST_int k = 1; k < K_exog; k++) perm[k] = k - 1;
-                for (ST_int k = K_exog; k < K_total; k++) perm[k] = k;
-                for (ST_int jj = 0; jj < K_total; jj++) {
-                    flags_p[jj] = is_collinear_x[perm[jj]];
-                    for (ST_int ii = 0; ii < K_total; ii++)
-                        XtX_p[(size_t)jj * K_total + ii] = XtX[(size_t)perm[jj] * K_total + perm[ii]];
-                }
-                num_chol_collinear = detect_collinearity_scaled(XtX_p, K_total, flags_p, verbose);
-                for (ST_int jj = 0; jj < K_total; jj++) is_collinear_x[perm[jj]] = flags_p[jj];
-            }
-            free(perm); free(flags_p); free(XtX_p);
-        } else {
-            num_chol_collinear = detect_collinearity_scaled(XtX, K_total, is_collinear_x, verbose);
+        ST_int *drop = (ST_int *)calloc((size_t)K_total, sizeof(ST_int));
+        ST_int n_drop = -1;
+        if (XtX && drop) {
+            const ST_double *X_ne = (K_endog > 0) ? X_endog_dem : X_exog_dem;
+            ctools_matmul_atdb(X_ne, X_ne, weights_c, N, K_total, K_total, XtX);
+            for (ST_int k = 0; k < K_endog; k++) drop[k] = is_collinear_x[K_exog + k];
+            for (ST_int k = 0; k < K_exog; k++) drop[K_endog + k] = is_collinear_x[k];
+            n_drop = civ_invsym_drops(XtX, K_total, 0, drop);
+            for (ST_int k = 0; k < K_endog; k++) is_collinear_x[K_exog + k] = drop[k];
+            for (ST_int k = 0; k < K_exog; k++) is_collinear_x[k] = drop[K_endog + k];
         }
         free(XtX);
-
-        if (num_chol_collinear < 0) {
-            SF_error("civreghdfe: Collinearity detection failed\n");
+        free(drop);
+        if (n_drop < 0) {
+            SF_error("civreghdfe: Memory allocation failed for the collinearity check\n");
             iv_rc = 920;
             goto iv_cleanup;
         }
@@ -1284,6 +1271,7 @@ static ST_retcode do_iv_regression(void)
         for (ST_int k = 0; k < K_total; k++) {
             if (is_collinear_x[k]) num_collinear_x++;
         }
+        for (ST_int k = 0; k < K_exog; k++) n_abs_exog_all += is_collinear_x[k];
     }
 
     /* Store collinearity flags to Stata scalars (in [exog, endog] order) */
@@ -1354,30 +1342,35 @@ static ST_retcode do_iv_regression(void)
         }
     }
 
-    /* Z collinearity detection. Excluded instruments absorbed by the fixed
-       effects (the stage-1 rule above) get zero rows and columns of Z'Z
-       before the equilibration, so they are dropped rather than kept as
-       rescaled noise. The exogenous block of Z was checked with X. */
+    /* Z collinearity detection: excluded instruments absorbed by the fixed
+       effects (the stage-1 rule above), then ivreghdfe's invsym() rule on
+       Z'WZ. The exogenous block of Z was checked with X. */
     ST_int K_excl_z = K_iv - K_exog;  /* excluded instruments as sent by the ado */
+    ST_int K_excl_dropped = 0;
     ST_int *is_collinear_z = (ST_int *)calloc((size_t)(K_iv > 0 ? K_iv : 1), sizeof(ST_int));
     ST_int num_collinear_z = 0;
 
     if (is_collinear_z) {
         for (ST_int j = 0; j < K_excl_z; j++) {
             ST_double zz_partial = civ_wss(Z_dem + (size_t)(K_exog + j) * N, weights_c, N);
-            if (zz_partial < 1e-30 || zz_partial <= absorb_tol * ss_excl[j]) {
-                is_collinear_z[K_exog + j] = 1;
-                if (civ_absorbed_counts(zz_partial, Z_c + (size_t)(K_exog_in + j) * N, N, state))
-                    n_abs_z_excl++;
-            }
+            if (!(zz_partial > CIV_FE_NOISE * ss_unc_excl[j])) is_collinear_z[K_exog + j] = 1;
         }
 
-        ST_double *ZtZ = (K_iv > 1) ? (ST_double *)ctools_safe_calloc3((size_t)K_iv, (size_t)K_iv, sizeof(ST_double)) : NULL;
+        /* invsym() of Z'WZ: the kept exogenous regressors are swept first,
+           so only excluded instruments are dropped */
+        ST_double *ZtZ = (ST_double *)ctools_safe_calloc3((size_t)K_iv, (size_t)K_iv, sizeof(ST_double));
+        ST_int z_drops = ZtZ ? 0 : -1;
         if (ZtZ) {
-            ctools_matmul_ata(Z_dem, N, K_iv, ZtZ);
-            detect_collinearity_scaled(ZtZ, K_iv, is_collinear_z, verbose);
+            ctools_matmul_atdb(Z_dem, Z_dem, weights_c, N, K_iv, K_iv, ZtZ);
+            z_drops = civ_invsym_drops(ZtZ, K_iv, K_exog, is_collinear_z);
         }
         free(ZtZ);
+        if (z_drops < 0) {
+            free(is_collinear_z);
+            SF_error("civreghdfe: Memory allocation failed for the collinearity check\n");
+            iv_rc = 920;
+            goto iv_cleanup;
+        }
 
         /* Compact Z_dem in-place */
         ST_int new_K_iv = 0;
@@ -1390,13 +1383,63 @@ static ST_retcode do_iv_regression(void)
             }
         }
         num_collinear_z = K_iv - new_K_iv;
+        K_excl_dropped = num_collinear_z;
         K_iv = new_K_iv;
+        /* excluded instruments dropped here, for ivreghdfe's footer note */
+        if ((iv_rc = ctools_scal_save("__civreghdfe_z_dropped", (ST_double)num_collinear_z))) {
+            free(is_collinear_z);
+            goto iv_cleanup;
+        }
 
         if (verbose && num_collinear_z > 0) {
             char msg[128];
             snprintf(msg, sizeof(msg), "civreghdfe: Dropped %d collinear instrument(s)\n",
                      (int)num_collinear_z);
             SF_display(msg);
+        }
+    }
+
+    /* An endogenous regressor collinear with the instruments, which ivreg2
+       reclassifies as exogenous when the variables themselves are collinear:
+       flagged for the ado, which then applies ivreg2's rules (invsym() swept
+       in order over [instruments, endogenous]) */
+    if (K_endog > 0 && K_iv > 0) {
+        ST_int KJ = K_iv + K_endog;
+        ST_double *J = (ST_double *)ctools_safe_calloc3((size_t)KJ, (size_t)KJ, sizeof(ST_double));
+        ST_double *blk_zx = (ST_double *)ctools_safe_calloc3((size_t)K_iv, (size_t)K_endog, sizeof(ST_double));
+        ST_double *blk_xx = (ST_double *)ctools_safe_calloc3((size_t)K_endog, (size_t)K_endog, sizeof(ST_double));
+        ST_int *jdrop = (ST_int *)calloc((size_t)KJ, sizeof(ST_int));
+        ST_int j_drops = -1;
+        if (J && blk_zx && blk_xx && jdrop) {
+            ST_double *blk_zz = J;  /* filled in place below */
+            ST_double *zz = (ST_double *)ctools_safe_calloc3((size_t)K_iv, (size_t)K_iv, sizeof(ST_double));
+            if (zz) {
+                ctools_matmul_atdb(Z_dem, Z_dem, weights_c, N, K_iv, K_iv, zz);
+                ctools_matmul_atdb(Z_dem, X_endog_dem, weights_c, N, K_iv, K_endog, blk_zx);
+                ctools_matmul_atdb(X_endog_dem, X_endog_dem, weights_c, N, K_endog, K_endog, blk_xx);
+                for (ST_int c = 0; c < KJ; c++)
+                    for (ST_int r = 0; r < KJ; r++) {
+                        ST_double v;
+                        if (c < K_iv && r < K_iv) v = zz[(size_t)c * K_iv + r];
+                        else if (c >= K_iv && r >= K_iv) v = blk_xx[(size_t)(c - K_iv) * K_endog + (r - K_iv)];
+                        else if (c >= K_iv) v = blk_zx[(size_t)(c - K_iv) * K_iv + r];
+                        else v = blk_zx[(size_t)(r - K_iv) * K_iv + c];
+                        blk_zz[(size_t)c * KJ + r] = v;
+                    }
+                j_drops = civ_invsym_drops(J, KJ, KJ, jdrop);
+                free(zz);
+            }
+        }
+        free(J); free(blk_zx); free(blk_xx); free(jdrop);
+        if (j_drops < 0) {
+            free(is_collinear_z);
+            SF_error("civreghdfe: Memory allocation failed for the collinearity check\n");
+            iv_rc = 920;
+            goto iv_cleanup;
+        }
+        if ((iv_rc = ctools_scal_save("__civreghdfe_endo_in_z", (ST_double)j_drops))) {
+            free(is_collinear_z);
+            goto iv_cleanup;
         }
     }
 
@@ -1432,8 +1475,9 @@ static ST_retcode do_iv_regression(void)
         goto iv_cleanup;
     }
 
-    /* Store compacted dimensions */
-    if ((iv_rc = ctools_scal_save("__civreghdfe_K_keep", (ST_double)K_total)))
+    /* Store compacted dimensions; ivreg2's rankzz is the instrument count */
+    if ((iv_rc = ctools_scal_save("__civreghdfe_K_keep", (ST_double)K_total)) ||
+        (iv_rc = ctools_scal_save("__civreghdfe_rankzz", (ST_double)K_iv)))
         goto iv_cleanup;
 
     /* Allocate output arrays */
@@ -1493,7 +1537,7 @@ static ST_retcode do_iv_regression(void)
                as Kiefer's bandwidth; as ivreg2, a bandwidth may not exceed
                span / delta */
             if (!rc) rc = ctools_scal_save("__civreghdfe_tspan", tmax - tmin);
-            if (!rc && kernel_type > 0 && !kiefer && (ST_double)bw > (tmax - tmin) / tdelta) {
+            if (!rc && kernel_type > 0 && !kiefer && bw > (tmax - tmin) / tdelta) {
                 SF_error("invalid bandwidth in option bw() - cannot exceed timespan of data\n");
                 rc = 198;
             }
@@ -1532,6 +1576,32 @@ static ST_retcode do_iv_regression(void)
     ST_int df_a_small = df_a_for_vce + sdof_extra;
     if (sdof_extra > 0 && df_a_for_vce == 0 && nested_adj == 1) df_a_small = 1 + sdof_extra;
 
+    /* b0(): the coefficients at which ivreg2 evaluates the CUE objective,
+       in e(b)'s [endogenous, exogenous] order of the plugin columns; the
+       estimation works on the kept columns in [exogenous, endogenous] order */
+    ST_double *b0 = NULL;
+    {
+        ST_double has_b0 = 0;
+        if (!rc && SF_scal_use("__civreghdfe_has_b0", &has_b0) == 0 && has_b0 == 1) {
+            b0 = (ST_double *)calloc((size_t)(K_total > 0 ? K_total : 1), sizeof(ST_double));
+            if (!b0) rc = 920;
+            ST_int ce = 0, cx = 0;
+            for (ST_int i = 0; !rc && i < K_endog_orig + K_exog_orig; i++) {
+                ST_int is_endo = i < K_endog_orig;
+                ST_int fi = is_endo ? K_exog_orig + i : i - K_endog_orig;
+                if (is_collinear_x[fi]) continue;
+                ST_double v = 0;
+                if (SF_mat_el("__civreghdfe_b0", 1, i + 1, &v)) {
+                    SF_error("civreghdfe: b0() could not be read\n");
+                    rc = 198;
+                    break;
+                }
+                if (is_endo) b0[K_exog + ce++] = v;
+                else b0[cx++] = v;
+            }
+        }
+    }
+
     ST_double lambda = 1.0;
     if (!rc) rc = ivest_compute_2sls(
         y_dem, X_exog_dem, X_endog_dem, Z_dem,
@@ -1547,8 +1617,9 @@ static ST_retcode do_iv_regression(void)
         (G > 0) ? (df_a_for_vce > 0 ? df_a_for_vce : 1) + sdof_extra : sdofminus_opt, center,
         &test_cols,
         n_abs_x_exog + n_abs_x_endog, n_abs_x_exog + n_abs_z_excl, n_abs_exog_all,
-        dofminus_vce, small
+        dofminus_vce, small, b0, K_excl_dropped
     );
+    free(b0);
     free(test_idx);
     free(ts_int);
     test_idx = ts_int = NULL;
@@ -1556,6 +1627,25 @@ static ST_retcode do_iv_regression(void)
     if (rc != STATA_OK) {
         iv_rc = rc;
         goto iv_cleanup;
+    }
+
+    /* An endogenous regressor dropped here (absorbed by the fixed effects,
+       or collinear after partialling) has no first-stage variation: the
+       rank condition fails, so the identification statistics are 0, as
+       ivreghdfe's ranktest finds them with the zero column (up to rounding),
+       and their dof count it */
+    {
+        ST_int n_endo_drop = 0;
+        for (ST_int k = 0; k < K_endog_orig; k++) n_endo_drop += is_collinear_x[K_exog_orig + k] != 0;
+        if (n_endo_drop > 0) {
+            ST_int id_df = (K_iv - K_exog + K_excl_dropped) - K_endog_orig + 1;
+            if (id_df < 1) id_df = 1;
+            if ((iv_rc = ctools_scal_save("__civreghdfe_underid", 0.0)) ||
+                (iv_rc = ctools_scal_save("__civreghdfe_underid_df", (ST_double)id_df)) ||
+                (iv_rc = ctools_scal_save("__civreghdfe_cd_f", 0.0)) ||
+                (iv_rc = ctools_scal_save("__civreghdfe_kp_f", 0.0)))
+                goto iv_cleanup;
+        }
     }
 
     /* End estimation timing (includes VCE), start stats computation */

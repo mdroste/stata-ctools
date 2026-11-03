@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.3 20261030}{...}
+{* *! version 1.2.4 20261103}{...}
 {viewerjumpto "Syntax" "cpsmatch##syntax"}{...}
 {viewerjumpto "Description" "cpsmatch##description"}{...}
 {viewerjumpto "Options" "cpsmatch##options"}{...}
@@ -59,10 +59,12 @@
 {pstd}
 {cmd:cpsmatch} matches treated observations to controls using an estimated or
 supplied propensity score. With {opt outcome()}, it reports the average
-treatment effect on the treated (ATT) for the matched sample. The treatment
-variable must be coded 0/1, with both groups present. Supply covariates for
-score estimation or specify {opt pscore()}, not both. Covariates may include
-factor variables ({help fvvarlist}).
+treatment effect on the treated (ATT) for the matched sample. Observations
+with {cmd:_treated} equal to 1 are matched to those with {cmd:_treated} equal
+to 0; see {help cpsmatch##remarks:Remarks} for other treatment codes and
+samples without treated or control observations. Supply covariates for score
+estimation or specify {opt pscore()}, not both. Covariates may include factor
+variables ({help fvvarlist}).
 
 
 {pstd}
@@ -160,18 +162,17 @@ scores. Controls remain on support. Treated observations without an eligible
 match also receive {cmd:_support=0}.
 
 {phang}
-{opt noreplacement} specifies matching without replacement. Each control
-can only be matched to one treated observation. The default is matching
-with replacement. Without replacement, only nearest-neighbor matching with
-{cmd:neighbor(1)} is supported. Matching follows {cmd:psmatch2}'s greedy scan:
-treated observations are taken in propensity-score order (see
-{opt descending}), and the search for each starts at the next unused control
-after the previous match and moves in one direction until the distance
-increases, turning backward once the last control is used; treated
-observations left when the scan runs off the controls are off support. With
-replacement or without, the nearest control is the first of equally distant
-controls in score order (the lower score on equal distance), as in
-{cmd:psmatch2}.
+{opt noreplacement} specifies matching without replacement. Each control can
+only be matched to one treated observation. The default is matching with
+replacement. Without replacement, only nearest-neighbor matching with
+{cmd:neighbor(1)} is supported. Treated observations are matched sequentially
+in propensity-score order (see {opt descending}). For each one, the search
+starts at the next unused control after the previous match and continues until
+the score distance increases. After reaching the last control, the search
+reverses direction. Treated observations remaining when no further control can
+be selected receive {cmd:_support=0}. With replacement or without, the nearest
+control is the first of equally distant controls in score order (the lower
+score on equal distance), as in {cmd:psmatch2}.
 
 {phang}
 {opt ties} specifies that when there are tied matches at the boundary
@@ -208,6 +209,16 @@ and, when specified, outcomes. Estimated scores also restrict matching to the
 score model's estimation sample.
 
 {pstd}
+As in {cmd:psmatch2}, the treatment needs no particular coding. {cmd:_treated}
+is the treatment stored as a byte: observations with {cmd:_treated} equal to 1
+are matched to those equal to 0. Observations with another code stay in the
+sample, on support, with {cmd:_weight} equal to {cmd:_treated}, and take no
+part in matching. With no treated or no control observations the command runs
+and the ATT is missing. {cmd:psmatch2} assumes every other code sorts after the
+controls; a code below zero enters its matching as a control or a treated
+observation, which {cmd:cpsmatch} does not do.
+
+{pstd}
 Each run replaces existing {cmd:_pscore}, {cmd:_weight}, {cmd:_id},
 {cmd:_support}, {cmd:_treated}, and {cmd:_nn} variables. These names cannot be
 used as inputs. Observation order is preserved.
@@ -216,15 +227,16 @@ used as inputs. Observation order is preserved.
 When propensity scores tie (for example, with only discrete covariates),
 nearest-neighbor results depend on the sort order of the data, exactly as with
 {cmd:psmatch2}: among tied controls, the first in the current order is used.
-To avoid results that depend on an arbitrary order, set the seed and sort the
-data randomly before matching, for example
-{cmd:set seed 1}, {cmd:generate double u = runiform()}, {cmd:sort u}.
+To randomize the order used to break ties reproducibly, set the seed and sort
+the data randomly before matching, for example {cmd:set seed 1},
+{cmd:generate double u = runiform()}, {cmd:sort u}.
 
 
 {pstd}
 The ATT (Average Treatment Effect on the Treated) is calculated as the
 weighted mean difference in outcomes between matched treated and control
-observations. Only ATT is reported; ATE/ATU and observation-weight syntax are not supported.
+observations. Only ATT is reported; ATE/ATU and observation-weight syntax are
+not supported.
 
 {pstd}
 {cmd:r(att_se)} (also returned as {cmd:r(seatt)}) uses the default
@@ -291,7 +303,7 @@ least-squares regression of the outcome on treatment, as in {cmd:psmatch2}.
 {synopt:{cmd:r(n_off_support)}}number of observations off common support{p_end}
 {synopt:{cmd:r(common_min)}}minimum propensity score in common support{p_end}
 {synopt:{cmd:r(common_max)}}maximum propensity score in common support{p_end}
-{synopt:{cmd:r(att)}}estimated ATT (if outcome specified){p_end}
+{synopt:{cmd:r(att)}}estimated ATT (if outcome specified; missing when no treated observation is matched){p_end}
 {synopt:{cmd:r(att_se)}}approximate ATT standard error (see Remarks){p_end}
 {synopt:{cmd:r(seatt)}}alias for {cmd:r(att_se)}, as in {cmd:psmatch2}{p_end}
 {synopt:{cmd:r(att_t)}}t-statistic for ATT (if outcome specified){p_end}
@@ -317,10 +329,10 @@ least-squares regression of the outcome on treatment, as in {cmd:psmatch2}.
 
 
 {pstd}
-{cmd:_nn} records the actual number of controls used for each treated observation.
-It includes ties; for radius/kernel matching it counts controls with positive
-matching weight. Unmatched treated observations have zero; controls and rows
-outside the matching sample have missing values.
+{cmd:_nn} records the actual number of controls used for each treated
+observation. It includes ties; for radius/kernel matching it counts controls
+with positive matching weight. Unmatched treated observations have zero;
+controls and rows outside the matching sample have missing values.
 
 
 {title:Author}

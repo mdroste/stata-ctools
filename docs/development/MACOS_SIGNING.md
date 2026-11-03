@@ -112,10 +112,10 @@ codesign --verify --verbose=2 --check-notarization -R='notarized' /absolute/path
 ```
 
 Use `ctools_mac_arm.plugin` for Apple Silicon. Expect a Developer ID Application
-authority, the configured Team Identifier, and a timestamp. Test the downloaded
-package in Stata on clean Intel and Apple Silicon Macs with Gatekeeper enabled
-and internet access. These workflow checks do not exercise licensed Stata or
-prove runtime compatibility on every supported OS. A normal signature check
+authority, the configured Team Identifier, and a timestamp. The workflow checks
+signatures and notarization. Test the downloaded plugins in Stata on each
+supported macOS version, using clean Intel and Apple Silicon Macs with Gatekeeper
+enabled and internet access. A normal signature check
 alone does not establish notarization, and `spctl --assess --type execute` is
 intended for applications rather than these plugin files.
 

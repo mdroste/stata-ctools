@@ -16,15 +16,14 @@ cexport shp using "boundaries.shp", shx replace
 cexport sas using "output.sas7bdat", replace
 ```
 
-Statistical writers accept variable lists and if/in selection. Native SAS export
-is unavailable in the local installation, so that writer has reader-based
-validation rather than a native writer comparison. XLS supports long text via
-BIFF8 SST continuation. XLSX loads long text through a dedicated C path rather
-than the general str2045 transfer buffer. Both Excel writers support
+Statistical writers accept variable lists and if/in selection. SAS export is
+tested by reading the generated files. The Stata installation used for testing
+does not provide SAS export. Both XLS and XLSX export support text longer than 2,045 bytes, subject to
+Excel's cell-length limit. Both Excel writers support
 `sheet(..., modify/replace)`, adding worksheets, and `keepcellfmt`. Modification
 retains untouched cells and workbook content; keepcellfmt preserves styles in
-the written rectangle. XLSX edits move overwritten shared-formula anchors to
-surviving cells, remove calculation chains, and request recalculation on opening.
+the written rectangle. When an XLSX edit overwrites part of a shared formula, the remaining cells
+retain their formulas. Excel recalculates formulas when the workbook is next opened.
 See [import and export formats](../IO_PARITY.md) for format-specific behavior and validation.
 
 ## Delimited text
@@ -61,7 +60,7 @@ cexport delimited [varlist] using filename [if] [in] [, options]
 | Option | Description |
 |--------|-------------|
 | `verbose` | Display progress information during export |
-| `threads(#)` | Maximum workers; zero uses the ctools thread setting |
+| `threads(#)` | Maximum threads; zero uses the ctools thread setting |
 
 ## Examples
 
@@ -95,18 +94,18 @@ cexport delimited using output.csv, quote replace
 
 `cexport` achieves its speed advantage through:
 
-### Speedup Tricks
+### Implementation details
 
 - **Vectored I/O**: Uses `pwritev()` on POSIX and batched async `WriteFile` on Windows to write multiple buffers in a single syscall, reducing kernel transitions
 - **Async mmap flush**: Uses `MS_ASYNC` instead of `MS_SYNC` so the OS writes dirty pages in the background while formatting continues
 - **File pre-allocation**: `posix_fallocate` (POSIX) or `SetFilePointerEx`+`SetEndOfFile` (Windows) reserves disk space upfront, avoiding expensive file-growth operations during writing
 - **Zero-copy mmap access**: Data is formatted directly into memory-mapped output buffers, bypassing userspace buffering
-- **Deferred fsync**: Optional `CEXPORT_IO_FLAG_NOFSYNC` skips the final `fsync`, trading durability for speed on non-critical exports
-- **Windows async batching**: `WaitForMultipleObjects` allows concurrent overlapped writes, saturating disk bandwidth
+- **Deferred disk write**: `nofsync` skips the final request to write buffered data to disk. The command may finish sooner, but a system crash or power loss can leave the file incomplete
+- **Windows async batching**: On Windows, multiple output buffers can be written concurrently
 - **Optional write-through**: `direct` opens the file with `FILE_FLAG_WRITE_THROUGH` on Windows; it does not bypass the page cache, because unbuffered writes would need sector-aligned rows. macOS and Linux builds ignore it
 - **SIMD-accelerated data loading**: AVX2/SSE2/NEON bulk load from Stata with 16x loop unrolling in `ctools_data_io`
 - **Parallel formatting**: Multiple OpenMP threads convert numeric values to text concurrently
-- **Smart quoting**: Only quotes fields containing delimiters, quotes, or newlines—avoids unnecessary work
+- **Automatic quoting**: Quotes fields containing delimiters, quotation marks, or newlines
 
 ### Timing Breakdown
 
@@ -137,7 +136,7 @@ With `verbose`, you'll see:
 |------|----------|
 | Default | Quote strings containing delimiter, quotes, or newlines |
 | `quote` | Quote all string fields unconditionally |
-| `noquoteif` | Never quote (use with caution) |
+| `noquoteif` | Never quote fields. Delimiters or newlines within a value may then be read as field or row boundaries |
 
 Embedded quotes within strings are escaped by doubling them (`"` becomes `""`).
 
@@ -170,14 +169,13 @@ Embedded quotes within strings are escaped by doubling them (`"` becomes `""`).
 ## Excel and output fidelity
 
 `cexport excel using "output file.xlsx", firstrow(variables) replace` writes an
-XLSX workbook. `sheet("A sheet")` and filenames may contain spaces. Text fields
-are transferred separately from plugin options, including text resembling
-`threads(2)`. `threads(#)` also limits Excel export workers.
+XLSX workbook. `sheet("A sheet")` and filenames may contain spaces. Text resembling an option, such as `threads(2)`, is exported as text. `threads(#)` also limits Excel export workers.
 
-Delimited and Excel exports validate per-column metadata and write a sibling temporary
-file before publishing it. A failed export leaves an existing destination intact;
-without `replace`, publication refuses an existing file, including one created
-while export is running. The destination directory must allow temporary files.
+Delimited and Excel exports check variable attributes, then write a temporary file
+in the destination directory and move it to the requested filename after writing
+succeeds. A failed export leaves an existing destination intact. Without `replace`,
+the command returns an error if that filename exists, including if another process
+creates it during export. The destination directory must allow temporary files.
 As with `export`, `replace` turns a symbolic-link destination into a regular file
 and leaves its target unchanged, sheet modification writes through the link, and a
 write-protected destination is not replaced.
@@ -190,7 +188,9 @@ quarterly, weekly, half-yearly, and yearly dates use the first day of the period
 written as numbers.
 `datafmt` and `datestring()` instead export date/time values as text.
 
-`keepcellfmt` preserves the existing cell formats in the written rectangle when modifying a worksheet; exported dates still receive date formats, as with `export excel`. Cells outside that rectangle and other worksheets retain their content and formatting. Use `sheet(..., modify)` for edits and `sheet(..., replace)` to replace the selected worksheet. Whole-workbook `replace` retains only style definitions with `keepcellfmt`, not the old cells, their style assignments, or other sheets.
+Cell formats follow `export excel`: `m/d/yy` for dates, `m/d/yy h:mm` for datetimes (`h:mm:ss AM/PM` when a `%tc` format begins with an hour, minute or am/pm code), and for numbers `0.00` (`%9.2f`), `#,##0.00` (`%9.2fc`), `#,##0` (any `%gc`), `0.00E+00` (`%9.2e`) or `0` (any other format, so `%9.0g` shows 1234.57 as 1235). See [import and export formats](../IO_PARITY.md) for the remaining differences.
+
+`keepcellfmt` preserves the existing cell formats in the written rectangle when modifying a worksheet; variables with `%t` formats still receive their formats and other numbers receive none, as with `export excel`. Cells outside that rectangle and other worksheets retain their content and formatting. Use `sheet(..., modify)` for edits and `sheet(..., replace)` to replace the selected worksheet. Whole-workbook `replace` retains only style definitions with `keepcellfmt`, not the old cells, their style assignments, or other sheets.
 
 ## More details
 

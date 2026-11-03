@@ -41,7 +41,7 @@ typedef struct {
  * cached numeric values follows the lengths (see cimport_row_values). */
 typedef struct {
     uint64_t offset;
-    uint16_t num_fields;
+    int32_t num_fields;
     uint32_t lengths[];
 } CImportParsedRow;
 
@@ -69,7 +69,7 @@ static inline bool cimport_fill_row(CImportParsedRow *row, const CImportFieldRef
 {
     uint64_t next = num_fields ? fields[0].offset : 0;
     row->offset = next;
-    row->num_fields = (uint16_t)num_fields;
+    row->num_fields = (int32_t)num_fields;
     for (int i = 0; i < num_fields; i++) {
         if (fields[i].offset != next) return false;
         row->lengths[i] = fields[i].length;
@@ -128,11 +128,6 @@ int cimport_parse_row_fast(const char *start, const char *end, char delim, char 
                            CImportFieldRef *fields, int max_fields, const char *file_base,
                            CImportBindQuotesMode bindquotes,
                            const char **next_row_out, bool *had_unmatched_quote);
-
-/* Set when a row had more than max_fields fields (the rest was skipped);
- * the scan fails instead of dropping them. */
-void cimport_fields_overflow_reset(void);
-bool cimport_fields_overflowed(void);
 
 /*
  * Extract field value with quote handling.

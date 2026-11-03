@@ -2,7 +2,7 @@
 
 ## Compatibility and Requirements
 
-ctools is compatible with Stata 14.1+ (plugin interface version 3.0). The [platform contract](development/PLATFORMS.md) specifies CPU/OS baselines and runtime dependencies. In short: macOS 11 or later on Apple Silicon or Intel; Windows 10 or later on x86-64; x86-64 Linux with glibc 2.17 or later (RHEL/CentOS 7 and newer); the OpenMP runtime is built into the plugin.
+ctools is compatible with Stata 14.1+ (plugin interface version 3.0). The [platform requirements](development/PLATFORMS.md) list supported processors, operating systems, and required libraries: macOS 11 or later on Apple Silicon or Intel; Windows 10 or later on x86-64; x86-64 Linux with glibc 2.17 or later (RHEL/CentOS 7 and newer); the OpenMP runtime is built into the plugin.
 
 **Note:** ctools does not support datasets exceeding 2^31−1 (2,147,483,647) observations. This is a [known limitation](https://github.com/mcaceresb/stata-gtools/issues/43) of Stata's plugin API for C and can only be addressed with an internal Stata update. ctools will gracefully exit with an error if your dataset exceeds this limit.
 
@@ -59,8 +59,8 @@ notarization tickets; first use may require internet access. See
 
 ### The plugin does not match the installed ado files
 
-Every ctools command first checks that the plugin speaks the same protocol as the
-ado files. A plugin from another release stops the command, before any data or
+Every ctools command first checks that the installed plugin and ado files use
+compatible interfaces. A plugin from another release stops the command, before any data or
 file changes, with an error that names both and asks you to reinstall:
 
 ```stata
@@ -96,7 +96,7 @@ Stata's plugin loader; the command exits with the loader's return code.
 
 ## Building from Source Files
 
-Release identity is defined in `config/release.json`. Run `python3 scripts/sync_release.py` after changing it; CI checks the generated copies. `ctools, version` reports the installed ado and plugin identities.
+Release settings are defined in `config/release.json`. Run `python3 scripts/sync_release.py` after changing it; CI checks the generated copies. `ctools, version` reports version information for the installed ado files and plugin.
 
 
 You probably do not need to compile the ctools plugin yourself; GitHub automatically builds plugins for Windows, Mac, and Linux. If you want or need to build plugins from source, follow the [platform build instructions](development/PLATFORMS.md), including the deployment-compatible macOS OpenMP runtime.
@@ -125,9 +125,4 @@ Mac plugins. See [Windows signing](development/WINDOWS_SIGNING.md) and
 GitHub Actions does not require self-hosted runners or
 run licensed Stata tests. Stata correctness suites remain available for local testing.
 
-Exports normally publish with atomic rename. Multi-file SHP and XPORT exports
-retain originals until all outputs are published and roll back ordinary failures;
-this is not a crash-atomic filesystem transaction. Backups are retained with a
-reported path if rollback itself fails. On POSIX filesystems lacking both exclusive
-rename and hard links, the no-overwrite fallback copies into an exclusively created
-private destination and removes it on failure. Its name is visible while copying.
+Exports normally write a temporary file and rename it after writing succeeds. Exports containing several files retain the originals until all new files are in place and restore them if an error occurs. A system crash can leave only some files replaced. If restoration fails, ctools retains the backups and reports their locations. On filesystems that cannot rename or link files without replacing an existing destination, ctools creates a new destination and copies into it. That filename is visible during copying and is removed if copying fails.

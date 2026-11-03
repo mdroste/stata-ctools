@@ -180,8 +180,15 @@ int cio_scan_xlsx(cio_dataset *dataset, const char *path)
             double value;
             const char *text;
             int type = cio_xlsx_raw(&x, r0, c0 + j, &value, &text);
-            char number[80];
-            if (cio_xlsx_numeric(type))
+            char number[100];
+            if (type == XLSX_CELL_DATE || type == XLSX_CELL_DATETIME)
+            {
+                /* A date-styled heading labels as its date text, as native. */
+                cio_excel_date_text(cio_excel_days(value, x.date1904),
+                                    cio_xlsx_native_format(&x, r0, c0 + j), number, sizeof(number));
+                text = number;
+            }
+            else if (cio_xlsx_numeric(type))
             {
                 snprintf(number, sizeof(number), "%.16g", value);
                 text = number;

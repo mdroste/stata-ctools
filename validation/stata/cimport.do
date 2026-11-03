@@ -90,6 +90,7 @@ program define benchmark_import
 end
 
 * Create Test Data Files (call helper script)
+set seed 610931
 capture do "validation/support/validate_cimport_helper.do"
 if _rc != 0 {
     do "validate_cimport_helper.do"

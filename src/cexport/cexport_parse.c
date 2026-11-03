@@ -222,7 +222,7 @@ ST_retcode cexport_column_metadata(size_t column, char **name, int *type, int *d
         *type < 0 || *type > 6) return 198;
     snprintf(macro, sizeof(macro), "___cexport_date_%zu", column + 1);
     if (SF_macro_use(macro, value, sizeof(value)) || !ctools_safe_atoi(value, date) ||
-        *date < 0 || *date > 2) return 198;
+        *date < 0 || *date >= CEXPORT_STYLE_COUNT) return 198;
     return 0;
 }
 

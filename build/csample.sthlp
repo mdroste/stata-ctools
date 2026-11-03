@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.3 20261030}{...}
+{* *! version 1.2.4 20261103}{...}
 {viewerjumpto "Syntax" "csample##syntax"}{...}
 {viewerjumpto "Description" "csample##description"}{...}
 {viewerjumpto "Options" "csample##options"}{...}
@@ -49,10 +49,11 @@ selected by {cmd:if} and {cmd:in}, it drops those not drawn. Observations outsid
 that selection remain in the dataset.
 
 {pstd}
-The positional {it:#} specifies a percentage from 0 to 100. The number drawn
-is rounded to the nearest integer, separately within each {opt by()} group.
-Use {opt count(#)} to specify a positive integer count instead. If a group has
-fewer than {it:#} observations, all its observations are kept.
+The number following {cmd:csample} specifies a percentage from 0 to 100. The
+number drawn is rounded to the nearest integer, separately within each
+{opt by()} group. Use {opt count(#)} to specify a nonnegative integer count
+instead. If a group has fewer than {it:#} observations, all its observations
+are kept.
 
 {pstd}
 Use {help set seed} to reproduce a draw with the same data, observation order,

@@ -1,4 +1,4 @@
-*! version 1.2.3 20261030 github.com/mdroste/stata-ctools
+*! version 1.2.4 20261103 github.com/mdroste/stata-ctools
 
 program define cimport, rclass
     version 14.1
@@ -368,6 +368,13 @@ program define cimport, rclass
     if `"`__cimport_encoding_name'"' == "" di as text `"(encoding automatically selected: `macval(returned_encoding)')"'
 
     * From here every exit before the load releases the scanned file.
+    * More columns than maxvar allows fail as native does (after colrange()).
+    if `nvar' > c(maxvar) {
+        di as error "There are more columns than allowed by this Stata. See help maxvar for more information."
+        capture plugin call ctools_plugin, "cimport clear"
+        capture macro drop _cimport_label_*
+        exit 900
+    }
     * More explicit names than columns fails before loading (rechecked after colrange()).
     if `: word count `explicit_names'' > `nvar' {
         di as error "too many variables specified"
@@ -457,10 +464,11 @@ program define cimport, rclass
     * Numeric subtypes: 0=double, 1=float, 2=long, 3=int, 4=byte
     local i = 1
     foreach vname of local varnames {
-        local vtype : word `i' of `vartypes'
-        local ntype : word `i' of `numtypes'
-        local vlen : word `i' of `strlens'
-        local vlong : word `i' of `longtypes'
+        * Taken from the front of each list: word `i' of costs O(i) per column.
+        gettoken vtype vartypes : vartypes
+        gettoken ntype numtypes : numtypes
+        gettoken vlen strlens : strlens
+        gettoken vlong longtypes : longtypes
 
         * The plugin names ASCII headers. A header with other characters is
         * named in Mata as native does: Unicode letters, decimal digits (not
@@ -477,12 +485,17 @@ program define cimport, rclass
             local vprefix "V"
         }
 
-        if `: list vname in seen_names' {
+        * The data hold only the variables named so far, so a name is taken
+        * when a variable has exactly that name (a name list costs O(k) each).
+        mata: st_local("taken", strofreal(_st_varindex(st_local("vname")) < .))
+        if `taken' {
             local vname "`vprefix'`i'"
             local suffix = 0
-            while `: list vname in seen_names' {
+            mata: st_local("taken", strofreal(_st_varindex(st_local("vname")) < .))
+            while `taken' {
                 local ++suffix
                 local vname "`vprefix'`i'_`suffix'"
+                mata: st_local("taken", strofreal(_st_varindex(st_local("vname")) < .))
             }
         }
 
@@ -509,16 +522,17 @@ program define cimport, rclass
             if _rc {
                 local vname "`vprefix'`i'"
                 local suffix = 0
-                while `: list vname in seen_names' {
+                mata: st_local("taken", strofreal(_st_varindex(st_local("vname")) < .))
+                while `taken' {
                     local ++suffix
                     local vname "`vprefix'`i'_`suffix'"
+                    mata: st_local("taken", strofreal(_st_varindex(st_local("vname")) < .))
                 }
                 if `vtype' == 1 quietly gen `storage' `vname' = ""
                 else quietly gen `storage' `vname' = .
             }
         }
 
-        local seen_names `seen_names' `vname'
         * Header text comes from the file: it is compared and stored in Mata
         * only, never pasted into a Stata expression or command line.
         * (A new variable has no label, so "" leaves it as it is.)
@@ -579,9 +593,9 @@ program define cimport, rclass
     local __ct_elapsed13 = `__ct_elapsed13' + (`__ct_now' - `__ct_start13')
 
     * Native shows a numeric column in the format of the type it infers from
-    * the first 513 lines it reads, header included: integers there display
-    * as %8.0g, or %12.0g in long range, whatever the final storage.
-    if `nobs' mata: _cimport_sample_formats(513 - `hasheader')
+    * a sample of lines (see _cimport_sample_formats), whatever the final
+    * storage.
+    if `nobs' mata: _cimport_sample_formats(`hasheader', "`opt_asdouble'" != "")
 
     * Like native, explicit names rename imported variables 1..k as typed
     * (no case conversion; header labels are kept). Errors restore the data.
@@ -821,21 +835,36 @@ string scalar _cimport_name(string scalar cname, string scalar header) {
     name = ustrregexrf(ustrregexra(header, "[^\p{L}\p{Nd}_]", ""), "^\p{Nd}+", "")
     return(usubstr(name, 1, 32))
 }
-void _cimport_sample_formats(real scalar lines) {
-    real scalar j, n, lo, hi
-    real colvector x
-    n = min((st_nobs(), lines))
+/* Native infers display formats from a sample of the file's lines: the
+   first 513 (header included), then the later lines in groups of 512 counted
+   from the second line, group b when b is a power of two from 2, and a last
+   group that is not full. Integers there display as %8.0g, or %12.0g in long
+   range; a non-integer as float (%9.0g), or double (%10.0g) with asdouble or
+   an integer beyond long range in the sample. */
+void _cimport_sample_formats(real scalar hasheader, real scalar asdouble) {
+    real scalar j, n, b, last, lo, hi
+    real colvector obs, x, y
+    n = st_nobs()
     if (n < 1) return
+    obs = 1::min((n, 513 - hasheader))
+    for (b = 2; 512 * b + 2 - hasheader <= n; b = 2 * b) {
+        obs = obs \ ((512 * b + 2 - hasheader)::min((n, 512 * b + 513 - hasheader)))
+    }
+    last = n - 2 + hasheader
+    if (last >= 512 & mod(last + 1, 512)) obs = obs \ ((512 * floor(last / 512) + 2 - hasheader)::n)
+    obs = uniqrows(obs)
     for (j = 1; j <= st_nvar(); j++) {
         if (!st_isnumvar(j)) continue
-        x = st_data((1, n), j)
+        x = st_data(obs, j)
         x = select(x, x :< .)
         if (!length(x)) continue
-        if (any(x :!= floor(x))) continue
-        lo = min(x)
-        hi = max(x)
-        if (lo >= -32767 & hi <= 32740) st_varformat(j, "%8.0g")
+        y = select(x, x :== floor(x))
+        lo = length(y) ? min(y) : 0
+        hi = length(y) ? max(y) : 0
+        if (any(x :!= floor(x))) st_varformat(j, asdouble | lo < -2147483647 | hi > 2147483620 ? "%10.0g" : "%9.0g")
+        else if (lo >= -32767 & hi <= 32740) st_varformat(j, "%8.0g")
         else if (lo >= -2147483647 & hi <= 2147483620) st_varformat(j, "%12.0g")
+        else st_varformat(j, "%10.0g")
     }
 }
 void _cimport_read_blobs(string scalar path, real scalar col, real scalar n) {

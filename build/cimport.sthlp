@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.3 20261030}{...}
+{* *! version 1.2.4 20261103}{...}
 {viewerjumpto "Syntax" "cimport##syntax"}{...}
 {viewerjumpto "Description" "cimport##description"}{...}
 {viewerjumpto "Options" "cimport##options"}{...}
@@ -132,11 +132,11 @@ comma, then tab, pipe, colon, and semicolon.
 
 {pmore}
 With several characters, each character is a delimiter. The suboption
-{opt collapse} treats consecutive delimiters as one; {opt asstring} treats
-the entire string as one delimiter. These suboptions cannot be combined.
-For example, {cmd:delimiters("::", asstring)} splits at a pair of colons.
-The top-level {opt collapsedelimiters} option is accepted but has no effect;
-use {cmd:delimiters(chars, collapse)} to collapse runs.
+{opt collapse} treats consecutive delimiters as one; {opt asstring} treats the
+entire string as one delimiter. These suboptions cannot be combined. For
+example, {cmd:delimiters("::", asstring)} splits at a pair of colons. The
+top-level {opt collapsedelimiters} option is accepted but has no effect; use
+{cmd:delimiters(chars, collapse)} to treat consecutive delimiters as one.
 
 {dlgtab:Variable names}
 
@@ -173,7 +173,10 @@ type, regardless of whether a smaller type would suffice. This retains double pr
 numeric. Column numbers are 1-based. Values that cannot be parsed as numbers
 become missing. This overrides automatic type detection for these columns,
 and, as in {cmd:import delimited}, it takes precedence over {opt stringcols()}
-for a column named in both.
+for a column named in both. A column holding text only is stored as
+{cmd:import delimited} stores it, by its string width (1 {cmd:byte}, 2
+{cmd:int}, 3 {cmd:long}, 4 {cmd:float}, 5 {cmd:double}, wider {cmd:byte}); a
+column with numbers takes the type its numbers need.
 
 {phang}
 {opt stringcols(numlist)} forces the specified columns to be imported as
@@ -205,9 +208,12 @@ Under {cmd:bindquotes(strict)}, a CRLF line ending inside quotes is kept as CR.
 {cmd:NaN} and {cmd:Infinity}, in that case and with an optional sign, are
 numeric missing values, and {cmd:d} or {cmd:D} is accepted as the exponent
 marker ({cmd:1d3} is 1000), as in {cmd:import delimited}; {cmd:nan} and
-{cmd:NA} are text. A numeric variable takes the display format of the type
-the values in the file's first 513 lines would need. A file with more than
-32,767 fields in a row fails with error 902.
+{cmd:NA} are text. Numeric display formats are selected using the same sampled
+lines as {cmd:import delimited}: the first 513 lines, blocks of 512 lines
+beginning at lines 1,026, 2,050, 4,098, and so on, and the final incomplete
+block. The format corresponds to the numeric storage type required by the
+sampled values. Rows of any width are read; more columns than {cmd:maxvar}
+allows fail with error 900, as in {cmd:import delimited}.
 
 {phang}
 {opt encoding(encoding)} overrides automatic encoding detection. Supported encodings include UTF-8,
@@ -254,9 +260,10 @@ European formats like "1.234.567" use {opt groupseparator(.)}.
 Use {opt parselocale()} for delimited text; {opt locale()} is not accepted.
 
 {phang}
-{opt maxquotedrows(#)} limits physical rows within a strict quoted field and
-accepts a nonnegative integer or {cmd:unlimited}. The default is 20; zero
-and {cmd:unlimited} remove the limit. Exceeding the limit returns error 5101.
+{opt maxquotedrows(#)} limits the number of file lines that one quoted field
+may span with {cmd:bindquotes(strict)}. It accepts a nonnegative integer or
+{cmd:unlimited}. The default is 20; zero and {cmd:unlimited} remove the limit.
+Exceeding the limit returns error 5101.
 
 {dlgtab:Data recovery}
 
@@ -384,17 +391,23 @@ dBase attributes separately with {cmd:cimport dbase}.
 
 {pstd}
 Excel dates are converted from the workbook's 1900 or 1904 date system to
-Stata dates. A numeric column containing only date-formatted temporal cells
-uses daily dates; if any temporal cell includes a time, it uses datetime
-values in milliseconds. All numeric cells in that column, including cells
-with General formatting, are converted to the same unit. In the 1900 system,
-serial 60 maps to 28 February 1900.
+Stata dates. If all date or time formats in a numeric column specify dates
+only, the column uses Stata daily dates. If any specifies a time, the column
+uses Stata datetime values in milliseconds. All numeric cells in that column,
+including cells with General formatting, are converted to the same unit. In
+the 1900 system, serial 60 maps to 28 February 1900.
 
 {pstd}
-When all numeric cells share a format, the corresponding Stata display format
-is retained where supported. Mixed date formats use {cmd:%td} or {cmd:%tc};
-other unsupported numeric formats use {cmd:%10.0g}. With {opt allstring}, date
-and time cells use their formatted Stata values, truncated to whole seconds.
+When all numeric cells share a Stata display format, it is retained where
+supported: built-in date and time formats map to their Stata formats, and a
+custom format maps to {cmd:%td} (a date), {cmd:%tc} (a date with a time, or an
+elapsed time such as {cmd:[h]:mm}) or {cmd:%tcHH:MM:SS} (a time of day). Mixed
+date formats use {cmd:%td} or {cmd:%tc}, or {cmd:%tcHH:MM:SS} when every date
+or time cell is a time; other unsupported numeric formats use {cmd:%10.0g}. A
+cell without a style takes the workbook's first cell style. With
+{opt allstring}, and in text columns and header labels, date and time cells use
+their formatted Stata values, truncated to whole seconds; a value Stata cannot
+show as a date (beyond year 9999) reads as Stata displays it.
 
 {pstd}
 Boolean cells become 1 or 0, except in date/datetime columns, where they become
@@ -406,11 +419,11 @@ number reads as 0, and one that begins with a number as that number, as in
 are not read as cells.
 
 {pstd}
-Each part of an .xlsx package is checked before it is decompressed. A part
-that declares more data than its compressed size can hold fails with error 603,
-as in {cmd:import excel}; a part larger than half of physical memory, or than
-{cmd:c(max_memory)} when that is set, fails with error 909. Either way the data
-in memory are kept.
+An .xlsx file contains compressed files. Before extracting each one,
+{cmd:cimport} checks its reported size. An impossible reported size causes
+error 603, as in {cmd:import excel}. A file larger than half of physical
+memory, or than {cmd:c(max_memory)} when that is set, causes error 909. In
+either case, the data in memory are kept.
 
 
 {marker examples}{...}
@@ -435,7 +448,7 @@ in memory are kept.
 {pstd}Force all numerics to double precision:{p_end}
 {phang2}{cmd:. cimport delimited using auto.csv, clear asdouble}{p_end}
 
-{pstd}Force column 1 to be string (make is already string, but demonstrates syntax):{p_end}
+{pstd}Import column 1 as a string:{p_end}
 {phang2}{cmd:. cimport delimited using auto.csv, clear stringcols(1)}{p_end}
 
 {pstd}Create and import a tab-delimited file:{p_end}
@@ -480,9 +493,9 @@ in memory are kept.
 
 
 {pstd}
-Excel and the other file formats return {cmd:r(N)}, {cmd:r(k)},
-{cmd:r(width)} (bytes per observation), {cmd:r(changed)}, {cmd:r(datalabel)},
-and {cmd:r(filename)}. They do not return {cmd:r(time)}.
+Excel and the other file formats return {cmd:r(N)}, {cmd:r(k)}, {cmd:r(width)}
+(bytes per observation), {cmd:r(changed)}, {cmd:r(datalabel)}, and
+{cmd:r(filename)}. They do not return {cmd:r(time)}.
 
 {pstd}
 {cmd:cimport excel, describe} returns {cmd:r(N_worksheet)} and the macros

@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.3 20261030}{...}
+{* *! version 1.2.4 20261103}{...}
 {viewerjumpto "Syntax" "cbinscatter##syntax"}{...}
 {viewerjumpto "Description" "cbinscatter##description"}{...}
 {viewerjumpto "Options" "cbinscatter##options"}{...}
@@ -85,10 +85,11 @@ bin means, and fitted lines.
 {phang}
 {opt nquantiles(#)} specifies the requested number of quantile bins.
 The default is 20. Must be between 2 and 1000. As with {cmd:binscatter}, when
-the estimation sample has no more than {it:#} distinct values of x (of the
-residualized x with {opt controls()} or {opt absorb()}), x is treated as
-discrete: each by-group gets one bin per value it contains. This applies to the
-default method only.
+the estimation sample has no more than {it:#} distinct values of x (with
+{opt controls()} or {opt absorb()}, of the residualized x plus its mean as
+{cmd:binscatter} stores it, in float precision), x is treated as discrete: each
+by-group gets one bin per value it contains. This applies to the default method
+only.
 
 {phang}
 {opt controls(varlist)} specifies control variables to partial out from both
@@ -110,12 +111,12 @@ with {cmd:method(binsreg)} each group is binned on its own x, as in
 
 {phang}
 {opt method(method)} specifies the residualization method when controls or
-fixed effects are specified. This follows the methodology discussion in
-Cattaneo, Crump, Farrell, and Feng (2024), "On Binscatter".
+fixed effects are specified. See Cattaneo, Crump, Farrell, and Feng (2024),
+"On Binscatter", for a comparison of these methods.
 
-{phang2}{opt classic} (the default) residualizes both x and y on the controls/FE,
-then creates bins based on the residualized x values. This is the traditional
-binscatter approach.{p_end}
+{phang2}{opt classic} (the default) residualizes both x and y on the
+controls/FE, then creates bins based on the residualized x values. This is the
+method used by {cmd:binscatter}.{p_end}
 
 {phang2}{opt binsreg} creates bins based on the raw (non-residualized) x values,
 then computes the conditional mean of y within each bin after partialling out
@@ -162,7 +163,8 @@ omits x.
 unique value of x instead of quantile-based bins. With {opt method(binsreg)},
 the bin means are adjusted for {opt controls()} and {opt absorb()} as with
 quantile bins. As in {cmd:binscatter}, x (the residualized x with
-{opt method(classic)} and {opt controls()} or {opt absorb()}) may have at most
+{opt method(classic)} and {opt controls()} or {opt absorb()}, as {cmd:binscatter}
+stores it in float precision) may have at most
 half as many distinct values as the sample has observations; otherwise the
 command exits with r(134). The bins must also fit in a Stata matrix
 ({cmd:c(max_matdim)} rows, over all by-groups), or the command exits with
@@ -176,8 +178,8 @@ Use this option for aggregate bin data; {opt genxq()} is not supported.
 {dlgtab:Graph Options}
 
 {phang}
-{opt nograph} suppresses the graph output. Useful when you only need the
-computed bin statistics in {cmd:e()}.
+{opt nograph} suppresses the graph. Bin statistics are still stored in
+{cmd:e()}.
 
 {phang}
 {opt title()}, {opt ytitle()}, {opt xtitle()} specify graph and axis titles.
@@ -189,7 +191,8 @@ empty titles ({cmd:ytitle("")}) work as in {help title_options}.
 {phang}
 {opt legend()} specifies legend options, merged after the default legend as in
 {cmd:binscatter}: with one series the default is {cmd:legend(off)}, which
-{cmd:legend(on)} overrides.
+{cmd:legend(on)} overrides. With {opt by()}, each key reads
+{it:byvar}{cmd:=}{it:value}, the value's label when it has one.
 
 {phang}
 {opt colors(string)} specifies colors for the scatter series when using
@@ -238,10 +241,10 @@ The default follows the {help ctools##threads:ctools thread setting}.
 
 {pstd}
 Weight expressions are evaluated once. Missing weights are excluded, selected
-weights must be positive, and fweights must be integers. Factor-variable controls
-and interactions are materialized before adjustment. Redundant control columns
-are omitted; a failed adjustment returns an error. Fixed effects are removed by iterative projection.
-{p_end}
+weights must be positive, and fweights must be integers. Factor-variable
+controls and interactions are expanded before estimation. Collinear control
+variables are omitted. If the adjustment cannot be computed, the command
+returns an error. Fixed effects are removed by iterative projection. {p_end}
 
 
 {marker examples}{...}

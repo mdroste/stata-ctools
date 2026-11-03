@@ -1,4 +1,4 @@
-*! version 1.2.3 20261030 github.com/mdroste/stata-ctools
+*! version 1.2.4 20261103 github.com/mdroste/stata-ctools
 *! Binary statistical readers; parsing and values are provided by C.
 program define _cio_import, rclass
     version 14.1
@@ -309,6 +309,19 @@ program define _cio_import_load
     capture program ctools_plugin, plugin using("`__ctools_plugin'")
     if _rc != 0 & _rc != 110 exit 601
     clear
+    * The file's data label. label data cannot quote one holding an
+    * unbalanced compound quote (it fails or stores other text); that label
+    * comes from an empty dataset written to hold it. Later steps keep it.
+    mata: st_local("__data_label",st_global("CTOOLS_CIO_datalabel"))
+    capture label data `"`macval(__data_label)'"'
+    local __label_rc = _rc
+    local __label_got : data label
+    mata: st_local("__label_rc",strofreal(`__label_rc' | st_local("__label_got")!=usubstr(st_local("__data_label"),1,80)))
+    if `__label_rc' {
+        tempfile __label_stub
+        mata: _cio_label_stub(st_local("__label_stub"),st_local("__data_label"))
+        quietly use `"`__label_stub'"', clear
+    }
     quietly set obs `=max(1,`nobs')'
     mata: __ctools_cio_sets = J(1,0,"")
     if `nvar' {
@@ -408,7 +421,6 @@ program define _cio_import_load
             quietly gen double `rawnumber' = .
             plugin call ctools_plugin `rawnumber', "cio textnumbers `j'"
             local target `sourcevar`j''
-            if `"`allstringfmt'"' != "" quietly recast strL `target'
             mata: _cio_format_text(st_local("target"),st_local("rawnumber"),st_local("textfmt"),st_local("allstringfmt")=="")
             quietly drop `rawnumber'
             quietly compress `target'
@@ -474,8 +486,6 @@ program define _cio_import_load
         }
     }
     capture mata: mata drop __ctools_cio_sets
-    mata: st_local("__data_label",st_global("CTOOLS_CIO_datalabel"))
-    label data `"`macval(__data_label)'"'
 end
 
 mata:
@@ -510,11 +520,58 @@ string scalar _cio_hex_bytes(string scalar hex) {
 end
 
 mata:
+/* An empty .dta (format 118, no variables or observations) whose header
+   holds label, the first 80 characters as label data keeps them: using it
+   sets a data label that label data cannot quote (an unbalanced compound
+   quote). */
+void _cio_label_stub(string scalar path, string scalar label) {
+    string scalar head, body, map, text
+    real colvector at
+    real scalar fh, i
+    string rowvector tags
+    text=usubstr(label,1,80)
+    head="<stata_dta><header><release>118</release><byteorder>LSF</byteorder><K>"+_cio_le(0,2)+"</K><N>"+_cio_le(0,8)+"</N><label>"+_cio_le(strlen(text),2)+text+"</label><timestamp>"+char(0)+"</timestamp></header>"
+    tags=("variable_types","varnames","sortlist","formats","value_label_names","variable_labels","characteristics","data","strls","value_labels")
+    at=J(14,1,0)
+    at[2]=strlen(head)
+    body=""
+    for (i=1;i<=10;i++) {
+        at[i+2]=at[2]+strlen("<map>")+14*8+strlen("</map>")+strlen(body)
+        body=body+"<"+tags[i]+">"+(tags[i]=="sortlist" ? _cio_le(0,2) : "")+"</"+tags[i]+">"
+    }
+    at[13]=at[2]+strlen("<map>")+14*8+strlen("</map>")+strlen(body)
+    at[14]=at[13]+strlen("</stata_dta>")
+    map="<map>"
+    for (i=1;i<=14;i++) map=map+_cio_le(at[i],8)
+    map=map+"</map>"
+    if (fileexists(path)) unlink(path)
+    fh=fopen(path,"w")
+    fwrite(fh,head+map+body+"</stata_dta>")
+    fclose(fh)
+}
+string scalar _cio_le(real scalar value, real scalar bytes) {
+    string scalar out
+    real scalar i, rest
+    out=""
+    rest=value
+    for (i=1;i<=bytes;i++) {
+        out=out+char(mod(rest,256))
+        rest=floor(rest/256)
+    }
+    return(out)
+}
 void _cio_format_text(string scalar target, string scalar source, string scalar fmt, real scalar trim) {
     real colvector values, selected
+    string colvector text
+    real scalar width
     values=st_data(.,source)
     selected=selectindex(values:<.)
-    if (length(selected)) st_sstore(selected,target,trim ? strtrim(strofreal(values[selected],fmt)) : strofreal(values[selected],fmt))
+    if (!length(selected)) return
+    text=trim ? strtrim(strofreal(values[selected],fmt)) : strofreal(values[selected],fmt)
+    /* Widen the variable only as far as the text needs (strL past 2045) */
+    width=max(strlen(text))
+    if (st_vartype(target)!="strL" & width>strtoreal(substr(st_vartype(target),4,.))) stata("quietly recast "+(width>2045 ? "strL" : "str"+strofreal(width))+" "+target)
+    st_sstore(selected,target,text)
 }
 end
 

@@ -27,6 +27,17 @@ ST_retcode cppmlhdfe_read_input(cppmlhdfe_input *input)
     if ((rc = read_required("__cppmlhdfe_K", &val)))
         return rc;
     K = (ST_int)val;
+    /* The square matrices (X'WX, its inverse, the covariance with the
+     * constant) are sized and indexed with int products, here and in the
+     * shared solvers; more than CPPMLHDFE_MAX_REGRESSORS regressors would
+     * overflow them. One such dense matrix already takes 17 GB. */
+    if (K - 1 > CPPMLHDFE_MAX_REGRESSORS) {
+        char msg[160];
+        snprintf(msg, sizeof(msg), "cppmlhdfe: %d regressors exceed the limit of %d\n",
+                 (int)(K - 1), CPPMLHDFE_MAX_REGRESSORS);
+        SF_error(msg);
+        return 920;
+    }
     if ((rc = read_required("__cppmlhdfe_G", &val)))
         return rc;
     G = (ST_int)val;

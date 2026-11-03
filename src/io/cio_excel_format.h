@@ -6,6 +6,8 @@
 #include <string.h>
 #define CIO_EXCEL_DATE 90
 #define CIO_EXCEL_DATETIME 91
+#define CIO_EXCEL_TIME 92
+#define CIO_EXCEL_ELAPSED 93
 static inline uint8_t cio_excel_format_code(int id, const char *custom)
 {
     if ((id >= 14 && id <= 22) || (id >= 45 && id <= 47))
@@ -32,6 +34,12 @@ static inline uint8_t cio_excel_format_code(int id, const char *custom)
     }
     if (!custom || !*custom)
         return 0;
+    /* A custom format is classified by its tokens outside quotes, escapes
+       and brackets, as native import excel does: d, y and mmm... are dates;
+       h, s and an elapsed [h], [m] or [s] are times, and with a time m and
+       mm are minutes (otherwise months). Every custom time of day displays
+       as %tcHH:MM:SS, an elapsed time as %tc, a date as %td and a date with
+       a time as %tc, whatever the custom code says. */
     char lower[256];
     size_t n = strlen(custom);
     if (n >= sizeof(lower))
@@ -39,17 +47,7 @@ static inline uint8_t cio_excel_format_code(int id, const char *custom)
     for (size_t j = 0; j < n; j++)
         lower[j] = (char)tolower((unsigned char)custom[j]);
     lower[n] = 0;
-    if (!strcmp(lower, "h:mm:ss") || !strcmp(lower, "hh:mm:ss"))
-        return 21;
-    if (!strcmp(lower, "h:mm") || !strcmp(lower, "hh:mm"))
-        return 20;
-    if (!strcmp(lower, "h:mm am/pm") || !strcmp(lower, "hh:mm am/pm"))
-        return 18;
-    if (!strcmp(lower, "h:mm:ss am/pm") || !strcmp(lower, "hh:mm:ss am/pm"))
-        return 19;
-    if (!strcmp(lower, "m/d/yy h:mm") || !strcmp(lower, "m/d/yyyy h:mm"))
-        return 22;
-    uint8_t kind = 0;
+    int date = 0, time = 0, elapsed = 0, months = 0;
     int quoted = 0;
     for (const char *p = lower; *p; p++)
     {
@@ -68,25 +66,46 @@ static inline uint8_t cio_excel_format_code(int id, const char *custom)
         }
         if (*p == '[')
         {
-            if (p[1] == 'h' || p[1] == 's')
-                kind = CIO_EXCEL_DATETIME;
+            if (p[1] == 'h' || p[1] == 'm' || p[1] == 's')
+                time = elapsed = 1;
             while (p[1] && *p != ']')
                 p++;
             continue;
         }
         if (*p == 'h' || *p == 's')
-            kind = CIO_EXCEL_DATETIME;
-        else if (!kind && (*p == 'd' || *p == 'm' || *p == 'y'))
-            kind = CIO_EXCEL_DATE;
+            time = 1;
+        else if (*p == 'd' || *p == 'y')
+            date = 1;
+        else if (*p == 'm')
+        {
+            int run = 1;
+            while (p[1] == 'm')
+                run++, p++;
+            if (run > 2)
+                date = 1;
+            else
+                months = 1;
+        }
     }
-    return kind;
+    if (months && !time)
+        date = 1;
+    if (date)
+        return time ? CIO_EXCEL_DATETIME : CIO_EXCEL_DATE;
+    return time ? (elapsed ? CIO_EXCEL_ELAPSED : CIO_EXCEL_TIME) : 0;
 }
 static inline uint8_t cio_excel_date_kind(uint8_t code)
 {
     return code == CIO_EXCEL_DATE || (code >= 14 && code <= 17) ? 1
-           : code == CIO_EXCEL_DATETIME || (code >= 18 && code <= 22) || (code >= 45 && code <= 47)
+           : code == CIO_EXCEL_DATETIME || code == CIO_EXCEL_TIME || code == CIO_EXCEL_ELAPSED ||
+                     (code >= 18 && code <= 22) || (code >= 45 && code <= 47)
                ? 2
                : 0;
+}
+/* A time of day or elapsed time with no date part. */
+static inline int cio_excel_time_only(uint8_t code)
+{
+    return code == CIO_EXCEL_TIME || code == CIO_EXCEL_ELAPSED || (code >= 18 && code <= 21) ||
+           (code >= 45 && code <= 47);
 }
 static inline const char *cio_excel_stata_format(uint8_t code)
 {
@@ -136,7 +155,10 @@ static inline const char *cio_excel_stata_format(uint8_t code)
         return "%tcMM:SS";
     case CIO_EXCEL_DATE:
         return "%td";
+    case CIO_EXCEL_TIME:
+        return "%tcHH:MM:SS";
     case CIO_EXCEL_DATETIME:
+    case CIO_EXCEL_ELAPSED:
         return "%tc";
     default:
         return "%10.0g";
@@ -159,13 +181,14 @@ static inline double cio_excel_stata_value(double serial, int date1904, int kind
 /* One display decision per numeric column, as native import excel makes it:
    any date or time cell makes the column a date (%td) if all such cells are
    dates only, else a datetime (%tc). The cells' own Stata format is used only
-   when every number shares it; otherwise plain %td, %tc or %10.0g. TRUE/FALSE
-   cells take no part in that decision (their style is ignored, and in a date
-   column they import as missing); a column of only TRUE/FALSE cells displays
-   as %1.0f. */
+   when every number shares it; otherwise plain %td or %tc, %tcHH:MM:SS when
+   the date and time cells are all times of day or elapsed times, or %10.0g.
+   TRUE/FALSE cells take no part in that decision (their style is ignored,
+   and in a date column they import as missing); a column of only TRUE/FALSE
+   cells displays as %1.0f. */
 typedef struct
 {
-    int count, booleans, mixed; /* count: numbers other than TRUE/FALSE */
+    int count, booleans, mixed, dated; /* count: numbers other than TRUE/FALSE */
     uint8_t code, kind;
 } cio_excel_column;
 static inline void cio_excel_column_add(cio_excel_column *c, uint8_t code, int boolean)
@@ -178,10 +201,12 @@ static inline void cio_excel_column_add(cio_excel_column *c, uint8_t code, int b
     uint8_t kind = cio_excel_date_kind(code);
     if (!c->count)
         c->code = code;
-    else if (code != c->code)
+    else if (strcmp(cio_excel_stata_format(code), cio_excel_stata_format(c->code)))
         c->mixed = 1;
     if (kind > c->kind)
         c->kind = kind;
+    if (kind && !cio_excel_time_only(code))
+        c->dated = 1;
     c->count++;
 }
 static inline const char *cio_excel_column_format(const cio_excel_column *c)
@@ -190,6 +215,7 @@ static inline const char *cio_excel_column_format(const cio_excel_column *c)
         return c->booleans ? "%1.0f" : "%10.0g";
     if (c->kind)
         return cio_excel_stata_format(!c->mixed      ? c->code
+                                      : !c->dated    ? CIO_EXCEL_TIME
                                       : c->kind == 2 ? CIO_EXCEL_DATETIME
                                                      : CIO_EXCEL_DATE);
     return cio_excel_stata_format(c->mixed ? 0 : c->code);

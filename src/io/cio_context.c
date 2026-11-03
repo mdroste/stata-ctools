@@ -206,14 +206,76 @@ void cio_days_civil(int days, int *y, unsigned *m, unsigned *d)
     *y += *m <= 2;
 }
 
-void cio_excel_date_text(double days, uint8_t code, char *out, size_t cap)
+/* Round the decimal digits d[0..n) (from %.30e) to p digits, half away from
+   zero as Stata rounds; a carry raises *e. */
+static void cio_round_digits(char *d, int n, int p, int *e)
 {
-    if (!isfinite(days) || days < (double)INT_MIN || days > (double)INT_MAX)
+    if (p >= n || d[p] < '5')
+        return;
+    int i = p - 1;
+    for (; i >= 0 && d[i] == '9'; i--)
+        d[i] = '0';
+    if (i >= 0)
+        d[i]++;
+    else
     {
-        cio_copy_text(out, cap, ".");
+        memmove(d + 1, d, (size_t)p - 1);
+        d[0] = '1';
+        (*e)++;
+    }
+}
+/* Stata's %w.0g text of x, |x| >= 1: fixed with w-2 significant digits
+   when the integer part fits, else d.ddde+XX with w-7 decimals (w-8 for a
+   three-digit exponent, "d.e+XXX" at none). */
+static void cio_stata_g(double x, int w, char *out, size_t cap)
+{
+    char text[64], d[40];
+    snprintf(text, sizeof(text), "%.30e", fabs(x));
+    int n = 0, e = atoi(strchr(text, 'e') + 1);
+    for (const char *c = text; *c && *c != 'e'; c++)
+        if (isdigit((unsigned char)*c))
+            d[n++] = *c;
+    int p = w - 2 < 17 ? w - 2 : 17, fe = e;
+    char fd[40];
+    memcpy(fd, d, (size_t)n);
+    if (p >= 1)
+        cio_round_digits(fd, n, p, &fe);
+    if (p >= 1 && fe >= 0 && fe < p)
+    {
+        int last = p;
+        while (last > fe + 1 && fd[last - 1] == '0')
+            last--;
+        snprintf(out, cap, "%s%.*s%s%.*s", x < 0 ? "-" : "", fe + 1, fd, last > fe + 1 ? "." : "",
+                 last - fe - 1, fd + fe + 1);
         return;
     }
+    int frac = abs(e) < 100 ? (w - 7 > 1 ? w - 7 : 1) : (w - 8 > 0 ? w - 8 : 0);
+    cio_round_digits(d, n, frac + 1, &e);
+    snprintf(out, cap, "%s%c.%.*se%c%02d", x < 0 ? "-" : "", d[0], frac, d + 1, e < 0 ? '-' : '+',
+             abs(e));
+}
+void cio_excel_date_text(double days, uint8_t code, char *out, size_t cap)
+{
     double ms = days * 86400 * 1000;
+    /* A value Stata cannot show in the cell's %t format (before 0100 or
+       after 9999) is shown as Stata shows it: %w.0g, w the format's width
+       up to 12, right-aligned in that width. */
+    int datetime = cio_excel_date_kind(code) == 2;
+    double shown = datetime ? floor(ms) : floor(days);
+    if (!isfinite(shown) || (datetime ? shown < -58695840000000.0 || shown > 253717919999999.0
+                                     : shown < -679350 || shown > 2936549))
+    {
+        int width = code == 14 ? 10 : code == 15 || code == CIO_EXCEL_DATE ? 9
+                    : code == 16 || code == 17 ? 6 : code == 18 || code == 21 || code == 46 || code == CIO_EXCEL_TIME ? 8
+                    : code == 19 ? 11 : code == 20 || code == 45 || code == 47 ? 5 : code == 22 ? 16 : 18;
+        char text[64];
+        if (!isfinite(shown))
+            cio_copy_text(text, sizeof(text), ".");
+        else
+            cio_stata_g(datetime ? ms : days, width < 12 ? width : 12, text, sizeof(text));
+        snprintf(out, cap, "%*s", width, text);
+        return;
+    }
     long long whole = 0, seconds = 0;
     if (cio_excel_date_kind(code) == 2)
     {
@@ -260,10 +322,12 @@ void cio_excel_date_text(double days, uint8_t code, char *out, size_t cap)
         break;
     case 21:
     case 46:
+    case CIO_EXCEL_TIME:
         snprintf(out, cap, "%02d:%02d:%02d", h, m, s);
         break;
     case 22:
-        snprintf(text, sizeof(text), "%u/%u/%04d %d:%02d", month, day, year, h % 12 ? h % 12 : 12,
+        /* ccYY: no leading zeros on the century (1/1/100) */
+        snprintf(text, sizeof(text), "%u/%u/%d %d:%02d", month, day, year, h % 12 ? h % 12 : 12,
                  m);
         snprintf(out, cap, "%16s", text);
         break;

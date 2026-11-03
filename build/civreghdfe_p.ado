@@ -1,4 +1,4 @@
-*! version 1.2.3 20261030 github.com/mdroste/stata-ctools
+*! version 1.2.4 20261103 github.com/mdroste/stata-ctools
 
 program define civreghdfe_p, rclass
     version 14.1
@@ -11,13 +11,13 @@ program define civreghdfe_p, rclass
         local 0 `s(varlist)' `if' `in', residuals
     }
 
-    syntax newvarname [if] [in] [, XB STDP Residuals XBD]
+    syntax newvarname [if] [in] [, XB STDP Residuals XBD D DResiduals]
 
     * Ensure there is only one option
-    opts_exclusive "`xb' `stdp' `residuals' `xbd'"
+    opts_exclusive "`xb' `stdp' `residuals' `xbd' `d' `dresiduals'"
 
     * Default option is xb
-    capture opts_exclusive "`xb' `stdp' `residuals' `xbd' placeholder"
+    capture opts_exclusive "`xb' `stdp' `residuals' `xbd' `d' `dresiduals' placeholder"
     if !c(rc) {
         di as text "(option xb assumed; fitted values)"
         local xb "xb"
@@ -39,7 +39,14 @@ program define civreghdfe_p, rclass
     * refer to the posted coefficients, as ivreghdfe's reghdfe_p
     local partial_ct = cond(missing(e(partial_ct)), 0, e(partial_ct))
     if `partial_ct' > 0 & "`fixed_effects'" == "" & "`residuals'" == "" {
-        di as error "option `xb'`stdp'`xbd' not supported with the partial() option"
+        di as error "option `xb'`stdp'`xbd'`d'`dresiduals' not supported with the partial() option"
+        exit 198
+    }
+
+    * d (the sum of the fixed effects, y - xb - residuals) and dresiduals
+    * (y - xb) need the residuals saved by residuals(), as in reghdfe_p
+    if "`d'`dresiduals'" != "" & "`e(resid)'" == "" {
+        di as error "you must add the residuals() option to civreghdfe before running this prediction"
         exit 198
     }
 
@@ -94,6 +101,19 @@ program define civreghdfe_p, rclass
         if `was_score' {
             return local scorevars `varlist'
         }
+    }
+    else if "`d'" != "" {
+        confirm numeric variable `e(resid)', exact
+        tempvar xbvar
+        PredictXB `xbvar' `if' `in', xb
+        gen `typlist' `varlist' = `depvar' - `xbvar' - `e(resid)' if `touse'
+        label var `varlist' "d[`fixed_effects']"
+    }
+    else if "`dresiduals'" != "" {
+        confirm numeric variable `e(resid)', exact
+        tempvar xbvar
+        PredictXB `xbvar' `if' `in', xb
+        gen `typlist' `varlist' = `depvar' - `xbvar' if `touse'
     }
     else if "`xbd'" != "" {
         * xbd: fitted values including fixed effects (y - residuals)

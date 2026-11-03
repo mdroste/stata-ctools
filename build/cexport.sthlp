@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.3 20261030}{...}
+{* *! version 1.2.4 20261103}{...}
 {viewerjumpto "Syntax" "cexport##syntax"}{...}
 {viewerjumpto "Description" "cexport##description"}{...}
 {viewerjumpto "Options" "cexport##options"}{...}
@@ -59,10 +59,10 @@
 {synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
 
 {syntab:I/O options}
-{synopt:{opt mmap}}use memory-mapped I/O (zero-copy formatting){p_end}
+{synopt:{opt mmap}}format output directly in memory mapped to the file{p_end}
 {synopt:{opt nofsync}}skip the final disk synchronization{p_end}
 {synopt:{opt direct}}request write-through I/O on Windows{p_end}
-{synopt:{opt prefault}}pre-fault mmap pages to avoid stalls{p_end}
+{synopt:{opt prefault}}prepare mapped memory before writing{p_end}
 {synopt:{opt crlf}}use Windows-style CRLF line endings{p_end}
 {synopt:{opt noparallel}}disable parallel I/O{p_end}
 {synoptline}
@@ -95,9 +95,9 @@
 {pstd}
 {cmd:cexport} writes delimited text, Excel (.xls and .xlsx), dBase, SAS7BDAT,
 SAS XPORT5/8, SPSS SAV, and ESRI shapefiles. It uses C routines for file
-formatting and writing. Unless a variable list or {cmd:if}/{cmd:in} is specified,
-all variables and observations are exported. Shapefile export uses its own
-geometry schema, described below.
+formatting and writing. Unless a variable list or {cmd:if}/{cmd:in} is
+specified, all variables and observations are exported. Shapefile export
+requires the variables and dataset characteristics described below.
 
 
 {marker options}{...}
@@ -141,7 +141,8 @@ format such as {cmd:%9,2f} is written with a decimal point.
 
 {phang}
 {opt datestring(fmt)} specifies a custom format to use for all date/time
-variables. This overrides the variables' display formats. Common formats include:
+variables. This overrides the variables' display formats. Common formats
+include:
 
 {p 12 16 2}{cmd:datestring("%tdCCYY-NN-DD")} for ISO 8601 dates (2024-01-15){p_end}
 {p 12 16 2}{cmd:datestring("%tdNN/DD/CCYY")} for US format (01/15/2024){p_end}
@@ -160,18 +161,22 @@ The default follows the {help ctools##threads:ctools thread setting}.
 {dlgtab:I/O options}
 
 {phang}
-{opt mmap} uses memory-mapped I/O for zero-copy formatting, which can improve
-performance for large files.
+{opt mmap} formats output directly in memory mapped to the destination file,
+avoiding an intermediate copy.
 
 {phang}
-{opt nofsync} skips the final fsync system call for faster writes. The file
-may not be fully flushed to disk when the command returns. The operating system may still have buffered data if the machine loses power.
+{opt nofsync} returns without waiting for all output to be written to disk.
+This can shorten export time, but a power failure before writing finishes can
+leave the file incomplete.
 
 {phang}
-{opt direct} is advisory. On Windows it asks the operating system to write data through its cache to disk; it does not bypass the cache. Other platforms ignore it.
+On Windows, {opt direct} requests that writes reach disk through the operating
+system's cache. Windows may ignore the request. The option has no effect on
+other platforms.
 
 {phang}
-{opt prefault} pre-faults mmap pages to avoid page fault stalls during writing.
+{opt prefault} prepares the memory used by {opt mmap} before writing begins,
+reducing delays while the file is written.
 
 {phang}
 {opt crlf} uses Windows-style CRLF ({cmd:\r\n}) line endings instead of the
@@ -188,7 +193,10 @@ default Unix-style LF ({cmd:\n}).
 
 {phang}
 {opt sheet(name)} specifies the worksheet name. The default is "Sheet1".
-The name is limited to 31 characters. With an existing workbook,
+As in Excel, the name is limited to 31 characters, may not contain
+{cmd::} {cmd:\} {cmd:/} {cmd:?} {cmd:*} {cmd:[} or {cmd:]}, and may not begin or end with
+an apostrophe; as with {cmd:export excel}, another name is error 9901. With an
+existing file that is not a workbook, {opt sheet()} gives error 603. With an existing workbook,
 {cmd:sheet(name, modify)} writes into that worksheet while retaining cells
 outside the exported rectangle. {cmd:sheet(name, replace)} replaces the entire
 worksheet and retains other sheets; if both are given, the first applies.
@@ -201,7 +209,6 @@ workbook.
 {phang}
 {opt cell(start)} specifies the starting cell for the data export. The default
 is "A1". For example, {cmd:cell(B5)} starts the export at column B, row 5.
-This allows you to write data to a specific region of a worksheet.
 
 {phang}
 {opt replace} specifies that {it:filename} be replaced if it already exists.
@@ -212,7 +219,7 @@ This allows you to write data to a specific region of a worksheet.
 By default, Excel export writes data starting in the first row.
 {cmd:firstrow(variables)} writes variable names as column headers.
 {cmd:firstrow(varlabels)} writes variable labels, falling back to names.
-{cmd:firstrow(nonames)} remains an extension for explicitly omitting headers.
+{cmd:firstrow(nonames)} omits column headers.
 
 {phang}
 {opt nolabel} specifies that numeric values should be exported as raw values
@@ -226,9 +233,10 @@ exports them as periods.
 
 {phang}
 {opt keepcellfmt} retains existing formats for cells overwritten by
-{cmd:sheet(name, modify)}; exported dates still receive date formats. Without
-it, overwritten cells receive the export's formats. It has no effect on a new
-workbook. With whole-workbook {opt replace},
+{cmd:sheet(name, modify)}; variables with {cmd:%t} formats still receive their
+formats. Without it, overwritten cells receive the export's formats. As with
+{cmd:export excel}, other numbers then receive no number format, in a new
+workbook too. With whole-workbook {opt replace},
 it retains style definitions but not the old cells, their format assignments,
 or other worksheets; use sheet modification to retain an existing layout.
 
@@ -271,8 +279,17 @@ The default follows the {help ctools##threads:ctools thread setting}.
 {opt novallabels} omits SPSS value labels. XPORT5 uses {cmd:vallabfile(xpf)} by
 default, writing labels to {cmd:formats.xpf} in the destination directory.
 {cmd:sascode} writes a .sas program, {cmd:both} writes both files, and
-{cmd:none} writes neither. {opt rename} converts names to XPORT5's eight-character
-limit. XPORT8 {opt vallabfile} writes a .sas label program.
+{cmd:none} writes neither. XPORT8 {opt vallabfile} writes a .sas label program.
+
+{pstd}
+As with {cmd:export sasxport5}, XPORT5 names are upper case and at most eight
+bytes, and only value labels that variables use are written. A variable name
+that collides takes a numeric suffix ({cmd:ABCDEFG2}); a value-label name drops
+trailing digits ({cmd:lab1} is written as {cmd:LAB}), one that collides takes
+letters counting with A-J as digits ({cmd:a2} and {cmd:a3} are {cmd:A} and
+{cmd:AA}), and a SAS format name such as {cmd:date} becomes {cmd:USER}. Without
+{opt rename}, any other change is error 110 with the suggested names, variables
+first; {opt rename} applies and lists them.
 
 {pstd}
 dBase export defaults to version IV; {cmd:version(3)} selects version III.
@@ -284,13 +301,12 @@ As with {cmd:export spss} and {cmd:export sasxport8}, SPSS and XPORT8 exports
 write {cmd:%tC} values with {cmd:cofC()}, and write monthly, quarterly, weekly
 and half-yearly dates as the first day of the period with the matching SPSS or
 SAS date format. Business-calendar ({cmd:%tb}) values are written as numbers.
-The conversion uses one temporary variable for each such variable, so it needs
-free variable slots below {help maxvar:c(maxvar)}.
+The conversion creates one temporary variable for each date variable being
+converted. These temporary variables count toward Stata's {help maxvar} limit.
 
 {pstd}
 XPORT5 names the member after the file name, up to its first period and eight
-bytes, and drops trailing digits from value-label names ({cmd:lab1} is written
-as {cmd:LAB}), as {cmd:export sasxport5} does; XPORT8 names it {cmd:DATASET}.
+bytes, as {cmd:export sasxport5} does; XPORT8 names it {cmd:DATASET}.
 SPSS numeric formats follow the display format: its width plus 3, COMMA for
 comma formats and E for {cmd:%e}. dBase export allows 255
 variables and an observation width ({cmd:c(width)}) of 4,000 bytes.
@@ -310,9 +326,9 @@ the whole geometry dataset and does not accept a variable list or {cmd:if}/{cmd:
 {title:Remarks}
 
 {pstd}
-Delimited and Excel exports write a temporary file and publish the destination
-after successful completion. Without {opt replace} or a sheet-update option,
-an existing destination is an error.
+Delimited and Excel exports first write a temporary file. The destination file
+is created or replaced only after the export succeeds. Without {opt replace}
+or a sheet-update option, an existing destination is an error.
 
 {pstd}
 New Excel workbooks use the 1900 date system. Daily dates retain their calendar
@@ -321,7 +337,20 @@ values are converted with {cmd:cofC()} because Excel has no leap-second
 representation. Other Stata period dates use the first day of the period;
 {cmd:%tb} dates are converted through their business calendar, and {cmd:%tg}
 values are written as numbers. As with {cmd:export excel}, an empty dataset is
-error 2000. An Excel cell holds at most 32,767 characters: longer strL text is
+error 2000.
+
+{pstd}
+Excel cell formats follow {cmd:export excel}: dates receive {cmd:m/d/yy},
+datetimes {cmd:m/d/yy h:mm}, and {cmd:%tc} formats that begin with an hour,
+minute or am/pm code {cmd:h:mm:ss AM/PM}. Numbers receive {cmd:0.00} for
+{cmd:%}{it:w}{cmd:.2f}, {cmd:#,##0.00} for {cmd:%}{it:w}{cmd:.2fc}, {cmd:#,##0}
+for any {cmd:%gc} format, {cmd:0.00E+00} for {cmd:%}{it:w}{cmd:.2e}, and {cmd:0}
+otherwise, so {cmd:%9.0g} shows 1234.57 as 1235; the values are written in
+full. Text is General. Blank missing cells keep their column's format; with a
+numeric {opt missing()}, only {cmd:%t} columns do. A {cmd:%tc} format that shows
+seconds with {cmd:s} ({cmd:%tcHH:MM:SS.sss}, for example) is written with
+{cmd:yyyy-mm-dd hh:mm:ss.000} in .xlsx and {cmd:m/d/yy h:mm} in .xls, where
+{cmd:export excel} writes empty text. An Excel cell holds at most 32,767 characters: longer strL text is
 error 109, where {cmd:export excel} truncates it.
 
 {pstd}

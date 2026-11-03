@@ -784,7 +784,7 @@ ST_retcode ivest_compute_2sls(
     ST_double fuller_alpha,
     ST_double *lambda_out,
     ST_int kernel_type,
-    ST_int bw,
+    ST_double bw,
     ST_int kiefer,
     const civreghdfe_ts *ts,
     ST_int sdofminus,
@@ -793,7 +793,8 @@ ST_retcode ivest_compute_2sls(
     ST_int n_absorbed_x,
     ST_int n_absorbed_iv,
     ST_int n_absorbed_iv_all,
-    ST_int dofminus, ST_int small
+    ST_int dofminus, ST_int small,
+    const ST_double *b0, ST_int n_excl_dropped
 )
 {
     /* Heap state released at est_cleanup; every error path after the first
@@ -829,7 +830,8 @@ ST_retcode ivest_compute_2sls(
        VCE, GMM2S/CUE, the J and C statistics: bw()/kernel() alone is AC,
        with robust HAC; dkraay() clusters on time with a kernel; kiefer is AC
        with the truncated kernel over every within-panel lag. */
-    ST_int s_kind = CIV_OMEGA_IID, s_kernel = 0, s_bw = bw;
+    ST_int s_kind = CIV_OMEGA_IID, s_kernel = 0;
+    ST_double s_bw = bw;
     if (kiefer) {
         /* heteroskedastic too with pweights (ivreg2 sets robust after its
            kiefer checks) */
@@ -916,6 +918,9 @@ ST_retcode ivest_compute_2sls(
     /* est_method 0: k=1 (2SLS)
        est_method 4: GMM2S - will be computed after initial 2SLS
        est_method 5 with a non-iid S: CUE by minimizing the GMM objective */
+
+    /* the k of the k-class estimator, ivreg2's e(kclass) */
+    ctools_scal_save("__civreghdfe_k", kclass);
 
     const char *method_name = "2SLS";
     if (est_method == 1) method_name = "LIML";
@@ -1227,6 +1232,11 @@ ST_retcode ivest_compute_2sls(
         }
     }
 
+    /* b0(): ivreg2 evaluates the CUE objective at the given coefficients
+       (s_gmmcue with b0): they replace the estimate, and S, J and the
+       efficient GMM VCE (X'Z S^-1 Z'X)^-1 are taken at their residuals */
+    if (b0) memcpy(beta, b0, (size_t)K_total * sizeof(ST_double));
+
     /* Step 8: Compute residuals using original X (not projected) */
     /* resid = y - X * beta */
     /* OPTIMIZED: Parallelized with OpenMP */
@@ -1264,7 +1274,7 @@ ST_retcode ivest_compute_2sls(
             om_rc = 920;
         }
         s_fullrank = (s_rank == K_iv);
-        if (!om_rc && !s_fullrank && (est_method == 4 || est_method == 5)) {
+        if (!om_rc && !s_fullrank && (est_method == 4 || est_method == 5 || b0)) {
             SF_error("civreghdfe: estimated covariance matrix of moment conditions not of full rank,\n");
             SF_error("            and optimal GMM weighting matrix not unique\n");
             om_rc = 506;
@@ -1457,6 +1467,38 @@ ST_retcode ivest_compute_2sls(
     if (!s_noniid) {
         ST_double sigma2_s = rss / (ST_double)(N_eff - dofminus);
         for (i = 0; i < K_iv * K_iv; i++) S_main[i] = sigma2_s * ZtZ[i];
+    }
+
+    /* b0(): the efficient GMM VCE at S(b0), as s_gmmcue */
+    if (b0) {
+        ST_double *S_inv = (ST_double *)calloc((size_t)K_iv * K_iv, sizeof(ST_double));
+        ST_double *A = (ST_double *)calloc((size_t)K_iv * K_total, sizeof(ST_double));
+        ST_double *H = (ST_double *)calloc((size_t)K_total * K_total, sizeof(ST_double));
+        gmm_hessian_inv = (ST_double *)calloc((size_t)K_total * K_total, sizeof(ST_double));
+        ST_retcode b0_rc = (S_inv && A && H && gmm_hessian_inv) ? 0 : 920;
+        if (!b0_rc && civ_sym_inverse(S_main, K_iv, S_inv) != 0) b0_rc = 920;
+        if (!b0_rc) {
+            /* A = S^-1 Z'X, H = X'Z S^-1 Z'X */
+            ctools_matmul_ab(S_inv, ZtX, K_iv, K_iv, K_total, A);
+            for (ST_int c = 0; c < K_total; c++)
+                for (ST_int r = 0; r < K_total; r++) {
+                    ST_double sum = 0.0;
+                    for (ST_int k = 0; k < K_iv; k++) sum += ZtX[(size_t)r * K_iv + k] * A[(size_t)c * K_iv + k];
+                    H[(size_t)c * K_total + r] = sum;
+                }
+            for (ST_int c = 0; c < K_total; c++)
+                for (ST_int r = c + 1; r < K_total; r++) {
+                    ST_double m = 0.5 * (H[(size_t)c * K_total + r] + H[(size_t)r * K_total + c]);
+                    H[(size_t)c * K_total + r] = H[(size_t)r * K_total + c] = m;
+                }
+            if (civ_sym_inverse(H, K_total, gmm_hessian_inv) != 0) b0_rc = 920;
+        }
+        free(S_inv); free(A); free(H);
+        if (b0_rc) {
+            SF_error("civreghdfe: Memory allocation failed for the b0() VCE\n");
+            est_rc = b0_rc;
+            goto est_cleanup;
+        }
     }
 
     /* ivreg2's small-sample factor for V: N/(N-K-df_a), or with clusters
@@ -1820,6 +1862,23 @@ ST_retcode ivest_compute_2sls(
         goto est_cleanup;
     }
 
+    /* Excluded instruments dropped as collinear (with nocollin) or absorbed
+       by the fixed effects still count in ivreg2's excluded-instrument
+       count L2, which divides the Cragg-Donald and KP Wald F, enters their
+       residual dof and the identification test dof (ivreg2 takes them
+       from its variable lists) */
+    if (n_excl_dropped > 0 && L > 0) {
+        ST_double dfa_t = (ST_double)(df_a_full + n_absorbed_iv_all);
+        ST_double dr = N_eff - K_iv - dfa_t - dofminus, dc = N_eff - K_iv - dfa_t;
+        ST_double ls = (ST_double)L / (ST_double)(L + n_excl_dropped);
+        if (dr > n_excl_dropped && dc > n_excl_dropped) {
+            if (cd_f < SV_missval) cd_f *= (dr - n_excl_dropped) / dr * ls;
+            if (kp_f < SV_missval) kp_f *= (rk_cluster ? (dc - n_excl_dropped) / dc : (dr - n_excl_dropped) / dr) * ls;
+        }
+        underid_df = L + n_excl_dropped - K_endog + 1;
+        if (underid_df < 1) underid_df = 1;
+    }
+
     /* Store underidentification test result */
     ctools_scal_save("__civreghdfe_underid", underid_stat);
     ctools_scal_save("__civreghdfe_underid_df", (ST_double)underid_df);
@@ -1831,12 +1890,26 @@ ST_retcode ivest_compute_2sls(
     ST_double sargan_stat = 0.0;
     ST_int overid_df = K_iv - K_total;
 
+    /* ivreg2's rankS: the rank of S as invsym() counts it (K_iv when iid) */
+    {
+        ST_int rank_s = s_noniid ? civ_sym_rank(S_main, K_iv, 1.0 / (ST_double)N_eff) : K_iv;
+        if (rank_s < 0) {
+            SF_error("civreghdfe: Memory allocation failed for the moment covariance rank\n");
+            est_rc = 920;
+            goto est_cleanup;
+        }
+        ctools_scal_save("__civreghdfe_rankS", (ST_double)rank_s);
+    }
+
+    /* b0(): the CUE objective at b0, also when the model is exactly
+       identified (ivreg2 reports it then too) */
     est_rc = civreghdfe_compute_hansen_j(
-        y, X_all, K_total, Z, K_iv,
+        y, X_all, b0 ? 0 : K_total, Z, K_iv,
         weights, weight_type, N, S_main,
-        (s_noniid && est_method != 4 && est_method != 5) ? NULL : resid,
+        (s_noniid && est_method != 4 && est_method != 5 && !b0) ? NULL : resid,
         &sargan_stat, &overid_df
     );
+    if (b0) overid_df = K_iv - K_total;
     if (est_rc) {
         SF_error("civreghdfe: Memory allocation failed for the diagnostic tests\n");
         goto est_cleanup;

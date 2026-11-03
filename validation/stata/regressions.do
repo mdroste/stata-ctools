@@ -6,6 +6,7 @@ if "`__case'" == "" local __case "regressions"
 if "`__case'" == "audit_p1" {
 /* Targeted regression tests for audit findings A01--A17. Run from the root. */
 do validation/support/validate_setup.do
+set seed 530467
 
 program p1_helpers
     capture noisily do validation/stata/oracle_tests.do validation_helpers
@@ -358,6 +359,7 @@ global CTOOLS_COMPONENT_COMPLETE "audit_p1"
 if "`__case'" == "audit_p2" {
 /* Targeted regression tests for audit findings A18--A29. */
 do validation/support/validate_setup.do
+set seed 516083
 
 program p2_labels
     clear

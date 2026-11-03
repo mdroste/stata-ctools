@@ -516,24 +516,95 @@ ssize_t cio_write_cb(const void *data, size_t len, void *ctx)
     return n == len ? (ssize_t)n : -1;
 }
 
+/* SAS format names that export sasxport5 will not give a value label (as
+   probed: the SAS 6 built-in formats); such a label becomes USER. */
+static int cio_xport_reserved(const char *name)
+{
+    static const char *const reserved[] = {
+        "BEST", "BINARY", "COMMA", "COMMAX", "D", "DATE", "DATEAMPM", "DATETIME", "DAY",
+        "DDMMYY", "DOLLAR", "DOLLARX", "DOWNAME", "E", "FLOAT", "FRACT", "HEX", "HHMM",
+        "HOUR", "IB", "IBR", "IEEE", "JULDAY", "JULIAN", "MINGUO", "MMDDYY", "MMSS", "MMYY",
+        "MONNAME", "MONTH", "MONYY", "NEGPAREN", "NENGO", "NUMX", "OCTAL", "PD", "PDJULG",
+        "PDJULI", "PERCENT", "PIB", "PIBR", "PK", "PVALUE", "QTR", "QTRR", "RB", "ROMAN",
+        "S370FF", "S370FIB", "S370FIBU", "S370FPD", "S370FPDU", "S370FPIB", "S370FRB",
+        "S370FZD", "S370FZDL", "S370FZDS", "S370FZDT", "S370FZDU", "SSN", "TIME", "TIMEAMPM",
+        "TOD", "WEEKDATE", "WEEKDATX", "WEEKDAY", "WORDDATE", "WORDDATX", "WORDF", "WORDS",
+        "YEAR", "YEN", "YYMM", "YYMMDD", "YYMON", "YYQ", "YYQR", "Z", "ZD"};
+    for (size_t i = 0; i < sizeof(reserved) / sizeof(reserved[0]); i++)
+        if (!strcmp(name, reserved[i]))
+            return 1;
+    return 0;
+}
+
+static void cio_xport_print(int rename, const char *text)
+{
+    if (rename)
+        SF_display((char *)text);
+    else
+        SF_error((char *)text);
+}
+
+/* Print export sasxport5's list of names that change (original -> new). */
+static void cio_xport_report(int field, int rename, int nvar, char (*original)[301],
+                             char (*final)[301], const unsigned char *changed)
+{
+    /* One line per call: Stata shows at most 80 bytes of each */
+    char line[700];
+    const char *what = field ? "value label(s)" : "variable(s)";
+    if (rename)
+        snprintf(line, sizeof(line), "the following %s were renamed in the output file:\n", what);
+    else
+    {
+        snprintf(line, sizeof(line),
+                 "the following %s have names that must be changed to fit into .xpt\n", what);
+        cio_xport_print(rename, line);
+        snprintf(line, sizeof(line), "format:  (suggested renamings shown):\n");
+    }
+    cio_xport_print(rename, line);
+    cio_xport_print(rename, "\n");
+    for (int j = 0; j < nvar; j++)
+        if (changed[j])
+        {
+            snprintf(line, sizeof(line), "%32s -> %s\n", original[j], final[j]);
+            cio_xport_print(rename, line);
+        }
+    cio_xport_print(rename, "\n");
+    if (!rename)
+        cio_xport_print(rename, "specify option rename to save .xpt file with suggested names\n");
+}
+
+/* Names as export sasxport5 writes them: upper case and eight bytes. A
+   variable that collides takes a numeric suffix (ABCDEFG2); a value-label
+   name also loses trailing digits, as a SAS format name cannot end in one
+   (LAB1 is LAB), and one that collides takes a letter suffix counting with
+   A-J as digits (A, B, ..., J, BA, BB, ...), while a SAS format name becomes
+   USER. Without rename, any change other than case and those digits fails
+   r(110), variables first, with native's list. */
 int cio_xport_names(int nvar, char (*names)[301], char (*sets)[301], int rename)
 {
-    char (*original_sets)[301] = calloc((size_t)nvar, 301);
-    if (!original_sets)
+    char (*original)[301] = calloc((size_t)nvar, 301);
+    unsigned char *changed = calloc((size_t)nvar, 1);
+    if (!original || !changed)
+    {
+        free(original);
+        free(changed);
         return 909;
+    }
     int rc = 0;
     for (int field = 0; field < 2 && !rc; field++)
+    {
+        int nchanged = 0;
+        memset(changed, 0, (size_t)nvar);
         for (int j = 0; j < nvar; j++)
         {
-            char original[301], base[301];
-            cio_export_meta(j + 1, field ? "labelset" : "name", original, sizeof(original));
+            char base[301];
+            cio_export_meta(j + 1, field ? "labelset" : "name", original[j], 301);
             char *out = field ? sets[j] : names[j];
             if (field)
             {
-                cio_copy_text(original_sets[j], 301, original);
                 int previous = -1;
                 for (int k = 0; k < j; k++)
-                    if (!strcmp(original, original_sets[k]))
+                    if (!strcmp(original[j], original[k]))
                     {
                         previous = k;
                         break;
@@ -544,48 +615,58 @@ int cio_xport_names(int nvar, char (*names)[301], char (*sets)[301], int rename)
                     continue;
                 }
             }
-            if (!*original)
+            if (!*original[j])
             {
                 out[0] = 0;
                 continue;
             }
-            cio_copy_text(base, sizeof(base), original);
+            cio_copy_text(base, sizeof(base), original[j]);
             for (char *p = base; *p; p++)
                 *p = (char)toupper((unsigned char)*p);
-            if (strlen(base) > 8 && !rename)
-            {
-                rc = 198;
-                break;
-            }
+            int change = strlen(base) > 8;
             base[8] = 0;
-            /* A SAS format name cannot end in a digit: native drops trailing
-             * digits from a value-label name (LAB1 is written as LAB). */
             for (size_t n = strlen(base); field && n > 1 && isdigit((unsigned char)base[n - 1]);)
                 base[--n] = 0;
             cio_copy_text(out, 301, base);
-            for (int suffix = 2;; suffix++)
+            for (unsigned counter = 0, suffix = 2;;)
             {
+                if (field && cio_xport_reserved(out))
+                {
+                    cio_copy_text(base, sizeof(base), "USER");
+                    cio_copy_text(out, 301, base);
+                    counter = 0;
+                    change = 1;
+                    continue;
+                }
                 int collision = 0;
-                for (int k = 0; k < j; k++)
-                    if (!strcmp(out, field ? sets[k] : names[k]))
-                    {
-                        collision = 1;
-                        break;
-                    }
+                for (int k = 0; k < j && !collision; k++)
+                    collision = !strcmp(out, field ? sets[k] : names[k]);
                 if (!collision)
                     break;
-                if (!rename)
+                change = 1;
+                char code[24];
+                if (field)
                 {
-                    rc = 198;
-                    break;
+                    snprintf(code, sizeof(code), "%u", counter++);
+                    for (char *p = code; *p; p++)
+                        *p = (char)('A' + (*p - '0'));
                 }
-                char number[24];
-                snprintf(number, sizeof(number), "%d", suffix);
-                size_t keep = 8 - strlen(number);
-                snprintf(out, 301, "%.*s%s", (int)keep, base, number);
+                else
+                    snprintf(code, sizeof(code), "%u", suffix++);
+                snprintf(out, 301, "%.*s%s", (int)(8 - strlen(code)), base, code);
             }
+            changed[j] = (unsigned char)change;
+            nchanged += change;
         }
-    free(original_sets);
+        if (nchanged)
+        {
+            cio_xport_report(field, rename, nvar, original, field ? sets : names, changed);
+            if (!rename)
+                rc = 110;
+        }
+    }
+    free(original);
+    free(changed);
     return rc;
 }
 

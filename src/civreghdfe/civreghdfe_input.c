@@ -77,13 +77,14 @@ ST_retcode civreghdfe_read_input(civreghdfe_input *input)
     fuller_alpha = dval;
 
     /* HAC parameters */
-    ST_int kernel_type = 0, bw = 0, kiefer = 0;
+    ST_int kernel_type = 0, kiefer = 0;
+    ST_double bw = 0;
     if ((rc = read_required("__civreghdfe_kernel", &dval)))
         return rc;
     kernel_type = (ST_int)dval;
     if ((rc = read_required("__civreghdfe_bw", &dval)))
         return rc;
-    bw = (ST_int)dval;
+    bw = dval;  /* ivreg2 takes a real bandwidth */
     if ((rc = read_required("__civreghdfe_kiefer", &dval)))
         return rc;
     kiefer = (ST_int)dval;

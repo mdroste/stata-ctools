@@ -295,6 +295,16 @@ int main(int argc,char **argv) {
     assert(!memcmp(edited_raw+length,raw+length,512));
     wb=xls_open_file(embededit,"UTF-8",&error);assert(wb);ws=xls_getWorkSheet(wb,0);assert(ws && !xls_parseWorkSheet(ws));
     assert(!strcmp(xls_cell(ws,1,1)->str,b));xls_close_WS(ws);xls_close_WB(wb);free(edited_raw);
+    /* A 1904 workbook shifts only date-styled numbers: style codes 1-4 are
+     * dates, 5-9 number formats; every code is relocated past old styles. */
+    for(unsigned code=0;code<CEXPORT_STYLE_COUNT;code++) {
+        unsigned char cell[14]={0};put16(cell+4,code);double v=40000;uint64_t bits;memcpy(&bits,&v,8);put64(cell+6,bits);
+        xe_record r={0};r.id=0x203;r.len=14;r.data=cell;
+        FILE *f=tmpfile();assert(f);assert(!xe_new_cell(f,&r,0,21,NULL,0,1));
+        unsigned char back[18];rewind(f);assert(fread(back,1,18,f)==18);fclose(f);
+        memcpy(&bits,back+10,8);memcpy(&v,&bits,8);
+        assert(xe16(back+8)==21+code && v==(CEXPORT_STYLE_IS_DATE(code)?40000-1462:40000));
+    }
     free(raw);free(a);free(b);return 0;
 }
 #endif
@@ -307,6 +317,7 @@ ST_plugin *_stata_;
 #include "cexport/cexport_xlsx.c"
 #include "ctools_text.c"
 #include "formats/excel_address.c"
+static ST_boolean edit_missing(ST_double z){return z>=8.98846567431158e307;}
 int main(void) {
     const char *old = "<x:worksheet xmlns:x=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">"
         "<!-- > <row> --> <x:dimension ref='A1:F9'/><x:sheetData>"
@@ -334,10 +345,18 @@ int main(void) {
     const char *styles="<styleSheet><numFmts count='1'><numFmt numFmtId='181' formatCode='custom'/></numFmts>"
         "<cellXfs count='1'><xf numFmtId='181' fontId='2' fillId='3'/></cellXfs></styleSheet>";
     unsigned base=99;got=xedit_styles((char*)styles,&base);
-    assert(got && base==1 && strstr(got,"numFmtId=\"182\"") && strstr(got,"count=\"4\""));
-    assert(strstr(got,"<xf numFmtId='181' fontId='2' fillId='3'/>"));free(got);
+    assert(got && base==1 && strstr(got,"numFmtId=\"182\"") && strstr(got,"count=\"12\""));
+    assert(strstr(got,"<xf numFmtId='181' fontId='2' fillId='3'/>"));
+    /* One appended cell format per style code, in code order */
+    {
+        const char *order[]={"\"0\"","\"14\"","\"182\"","\"22\"","\"19\"","\"1\"","\"1\"","\"2\"","\"3\"","\"4\"","\"11\""};
+        const char *p=strstr(got,"fillId='3'/>");assert(p);
+        for(int i=0;i<CEXPORT_STYLE_COUNT;i++){p=strstr(p,"<xf ");assert(p);p=strstr(p,"numFmtId=");assert(p && !strncmp(p+9,order[i],strlen(order[i])));}
+        assert(!strstr(p,"<xf "));
+    }
+    free(got);
     styles="<styleSheet><cellXfs count='0'/></styleSheet>";
-    got=xedit_styles((char*)styles,&base);assert(got && base==0 && strstr(got,"count=\"3\""));free(got);
+    got=xedit_styles((char*)styles,&base);assert(got && base==0 && strstr(got,"count=\"11\""));free(got);
     got=xedit_translate_formula("SUM(A2,$A2,A$2,$A$2,'A2 sheet'!B3,LOG10(A2),\"A2\",Table1[A2],A2:B4)",1,2);
     assert(got && !strcmp(got,"SUM(B4,$A4,B$2,$A$2,'A2 sheet'!C5,LOG10(B4),\"A2\",Table1[A2],B4:C6)"));free(got);
     got=xedit_translate_formula("A1+$A1+A$1+$A$1",-1,-1);
@@ -393,6 +412,14 @@ int main(void) {
     got=xedit_worksheet("<worksheet><sheetData><row r='1'><c r='A1' s='5'><v>1</v></c><c r='B1' s='6'><v>2</v></c></row></sheetData></worksheet>",
         "<worksheet><sheetData><row r='1'><c r='A1'><v>3</v></c><c r='B1' s='1'><v>4</v></c></row></sheetData></worksheet>",1,10);
     assert(got && strstr(got,"s=\"5\"><v>3</v>") && strstr(got,"s=\"11\"><v>4</v>"));free(got);
+    /* Without keepcellfmt every style code is relocated; with it, only %t
+     * codes (1-5) win over the old style */
+    got=xedit_worksheet("<worksheet><sheetData><row r='1'><c r='A1' s='5'><v>1</v></c><c r='B1' s='6'><v>2</v></c><c r='C1' s='7'><v>2</v></c></row></sheetData></worksheet>",
+        "<worksheet><sheetData><row r='1'><c r='A1' s='6'><v>3</v></c><c r='B1' s='4'><v>4</v></c><c r='C1'/></row></sheetData></worksheet>",0,10);
+    assert(got && strstr(got,"s=\"16\"><v>3</v>") && strstr(got,"s=\"14\"><v>4</v>") && strstr(got,"<c r='C1' s=\"10\"/>"));free(got);
+    got=xedit_worksheet("<worksheet><sheetData><row r='1'><c r='A1' s='5'><v>1</v></c><c r='B1' s='6'><v>2</v></c><c r='C1' s='7'><v>2</v></c></row></sheetData></worksheet>",
+        "<worksheet><sheetData><row r='1'><c r='A1' s='6'><v>3</v></c><c r='B1' s='4'><v>4</v></c><c r='C1' s='5'/></row></sheetData></worksheet>",1,10);
+    assert(got && strstr(got,"s=\"5\"><v>3</v>") && strstr(got,"s=\"14\"><v>4</v>") && strstr(got,"<c r='C1' s=\"15\"/>"));free(got);
     /* Text with leading or trailing whitespace keeps it: xml:space="preserve" */
     {
         XLSXExportContext ctx;xlsx_context_init(&ctx);
@@ -412,6 +439,31 @@ int main(void) {
         assert(strstr(a.sb.data,"<c r=\"A2\" t=\"inlineStr\"><is><t xml:space=\"preserve\">abc </t>"));
         assert(strstr(a.sb.data,"<c r=\"A3\" t=\"inlineStr\"><is><t>a b</t>"));
         free(a.sb.data);
+    }
+    /* Numbers carry their column's style code, a blank cell too; a missing()
+     * number keeps only the style of a %t format, as export excel writes them */
+    for(int fill=0;fill<2;fill++) {
+        XLSXExportContext ctx;xlsx_context_init(&ctx);
+        int types[2]={5,5};unsigned char codes[2]={10,1};
+        static ST_plugin spi;spi.ismissing=edit_missing;_stata_=&spi;
+        double x[2]={2.5,8.98846567431158e307},y[2]={8.98846567431158e307,40000};
+        stata_variable vars[2];memset(vars,0,sizeof(vars));
+        vars[0].nobs=vars[1].nobs=2;vars[0].data.dbl=x;vars[1].data.dbl=y;
+        ctools_filtered_data fd;memset(&fd,0,sizeof(fd));fd.data.nobs=2;fd.data.nvars=2;fd.data.vars=vars;
+        ctx.nvars=2;ctx.vartypes=types;
+        if(fill){ctx.missing_numeric=true;ctx.missing_number=99;}
+        char letters[2][8]={"A","B"};size_t letters_len[2]={1,1};
+        char prefix[2][24]={"      <c r=\"A","      <c r=\"B"};size_t prefix_len[2]={strlen(prefix[0]),strlen(prefix[1])};
+        xlsx_chunk_args_t a={0};
+        a.ctx=&ctx;a.filtered=&fd;a.start_idx=0;a.end_idx=2;a.start_row_num=1;
+        a.col_letters_arr=letters;a.col_letters_len=letters_len;a.col_prefix=prefix;a.col_prefix_len=prefix_len;a.date_cols=codes;
+        assert(strbuf_init(&a.sb,256));
+        assert(!xlsx_format_chunk(&a) && !a.failed && a.sb.data);
+        assert(strstr(a.sb.data,"<c r=\"A1\" s=\"10\"><v>2.5</v></c>"));
+        assert(strstr(a.sb.data,"<c r=\"B2\" s=\"1\"><v>40000</v></c>"));
+        assert(strstr(a.sb.data,fill ? "<c r=\"A2\"><v>99</v></c>" : "<c r=\"A2\" s=\"10\"/>"));
+        assert(strstr(a.sb.data,fill ? "<c r=\"B1\" s=\"1\"><v>99</v></c>" : "<c r=\"B1\" s=\"1\"/>"));
+        free(a.sb.data);_stata_=NULL;
     }
     return 0;
 }

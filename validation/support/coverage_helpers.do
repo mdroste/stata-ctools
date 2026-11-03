@@ -310,12 +310,18 @@ capture program drop coverage_sampling
 program define coverage_sampling
     syntax, REFerence(string asis) CANDidate(string asis) NAME(string)
     local stratified = strpos(`"`reference'"',"strata(group)") | strpos(`"`reference'"',"by(group)")
+    local idcluster = strpos(`"`candidate'"',"idcluster(newid)")
+    local ids_ref
     preserve
     tempfile original
     quietly save `original'
     capture quietly `reference'
     local nr=_rc
     if !`nr' {
+        if `idcluster' {
+            coverage_idcluster
+            local ids_ref `"`r(ids)'"'
+        }
         if !`stratified' replace group=0
         * Compare exact draws per group, and the eligibility of retained rows.
         if _N {
@@ -341,6 +347,10 @@ program define coverage_sampling
             quietly use `sampled', clear
             if `cluster_rc' local cr=9
         }
+        if `idcluster' {
+            coverage_idcluster
+            if `"`r(ids)'"' != `"`ids_ref'"' local cr=9
+        }
         if strpos(`"`candidate'"',"csample ")==1 {
             capture isid id
             if _rc & _N local cr=9
@@ -358,6 +368,22 @@ program define coverage_sampling
     restore
     if `nr' | `cr' | !`same' coverage_failure "`name'" "reference rc=`nr'; candidate rc=`cr'; group counts equal=`same'"
     else test_pass "`name' sampling counts"
+end
+
+* idcluster(newid): each id one whole cluster g (3 rows), ids 1..K, and the
+* id's storage type, label and the sort order
+capture program drop coverage_idcluster
+program define coverage_idcluster, rclass
+    local meta "`: type newid' `: variable label newid' [`: sortedby']"
+    tempvar n
+    bysort newid: gen `n' = _N
+    capture by newid: assert `n' == 3 & g == g[1]
+    local ok = !_rc
+    by newid: replace `n' = _n == 1
+    summarize `n', meanonly
+    local k = r(sum)
+    summarize newid, meanonly
+    return local ids "`ok' `k' `r(min)' `r(max)' `meta'"
 end
 
 capture program drop coverage_destring_reference

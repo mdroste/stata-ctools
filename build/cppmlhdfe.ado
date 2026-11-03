@@ -1,4 +1,4 @@
-*! version 1.2.3 20261030 github.com/mdroste/stata-ctools
+*! version 1.2.4 20261103 github.com/mdroste/stata-ctools
 
 program define cppmlhdfe, eclass
     version 14.1
@@ -853,6 +853,17 @@ program define cppmlhdfe, eclass
     ereturn local predict "cppmlhdfe_p"
     ereturn local cmd "cppmlhdfe"
     ereturn local cmdline `"cppmlhdfe `cmdline_typed'"'
+    * As ppmlhdfe (from reghdfe's solve of the final working regression): the
+    * weighted residual sum of squares and its root mean square on
+    * N - df_a - rank - df_a_nested, the partialling subiterations, and the
+    * replay helpers (ppmlhdfe names reghdfe's, which refuse other commands)
+    local rss_df = `N_final' - `df_a_adjusted' - `K_keep' - `df_a_nested'
+    ereturn scalar rss = __cppmlhdfe_rss
+    ereturn scalar rmse = cond(`rss_df' == 0, sqrt(__cppmlhdfe_rss), sqrt(__cppmlhdfe_rss / `rss_df'))
+    ereturn scalar ic2 = __cppmlhdfe_ic2
+    if `has_absorb' ereturn local title2 = "Absorbing `=e(N_hdfe)' HDFE " + cond(e(N_hdfe) > 1, "groups", "group")
+    ereturn local footnote "_cppmlhdfe_footnote"
+    ereturn local estat_cmd "_cppmlhdfe_estat"
 
     * Publication follows the last posted result and precedes the display
     if "`publish_targets'" != "" {
@@ -893,9 +904,7 @@ program define cppmlhdfe, eclass
     di as text ""
     ereturn display, `eform_opt' `diopts'
 
-    di as text ""
-    di as text "Absorbed degrees of freedom:"
-    matrix list e(dof_table), noheader format(%9.0g)
+    _cppmlhdfe_footnote
 
     _ctools_cleanup cppmlhdfe
 

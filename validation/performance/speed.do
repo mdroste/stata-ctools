@@ -46,6 +46,7 @@ local G1 = 10000
 local G2 = 10000000   
 noi di as text _n "Creating test data with N = `N' observations..."
 
+set seed 510271
 set obs `N'
 forval i = 1/4 {
     gen double x`i' = rnormal()
@@ -895,6 +896,7 @@ local G2 10000
 *-------------------------------------------------------------------------------
 
 * Main 25M obs test dataset
+set seed 901613
 clear
 set obs `N'
 forval i=1/4 {

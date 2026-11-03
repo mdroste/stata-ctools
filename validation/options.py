@@ -350,6 +350,30 @@ estimate(
     names=["iterate", "coeflegend", "cformat", "robust cluster"],
     predict="xb",
 )
+# ivreg2's b0() and nocollin; reghdfe's dofadjustments() and keepsingletons,
+# which ivreghdfe passes on; a real bandwidth
+estimate(
+    "civreghdfe",
+    "ivreghdfe",
+    "y x (endog=z z2)",
+    [
+        "absorb(g) b0(b0_iv)",
+        "absorb(g) nocollin",
+        "absorb(g h) dofadjustments(pairwise)",
+        "absorb(g h) keepsingletons",
+    ],
+    names=["b0", "nocollin", "dofadjustments", "keepsingletons"],
+    predict="xb",
+    setup="matrix b0_iv = (1, .5)\nmatrix colnames b0_iv = endog x",
+)
+estimate(
+    "civreghdfe",
+    "ivreghdfe",
+    "y x (endog=z z2)",
+    ["absorb(g) bw(2.5) kernel(bartlett) robust"],
+    names=["bw kernel robust"],
+    predict="xb",
+)
 # PPML option interactions already have native comparisons in the advanced suite;
 # repeat numerical/display/tuning aliases across independent distributions here.
 ppmlopts = [
@@ -665,6 +689,16 @@ for opt in ["cluster(g)", "cluster(g) strata(group)"]:
         "sampling",
         setup="replace g=ceil(id/3)\nreplace group=mod(g,4)",
     )
+for opt in ["cluster(g) idcluster(newid)", "cluster(g) strata(group) idcluster(newid)"]:
+    case(
+        "cbsample",
+        "cluster bootstrap " + opt,
+        "cluster strata idcluster",
+        f"bsample, {opt}",
+        f"cbsample, {opt}",
+        "sampling",
+        setup="replace g=ceil(id/3)\nreplace group=mod(g,4)",
+    )
 for opt in ["", "strata(group)", "cluster(g)", "cluster(g) strata(group)"]:
     case(
         "cbsample",
@@ -684,7 +718,7 @@ for residual in ["residuals(saved_resid)", "residuals2"]:
         ["absorb(g) " + residual],
         ["absorb(g) residuals(saved_resid)"],
         [residual.split("(")[0]],
-        predict="residuals xbd",
+        predict="residuals xbd d dresiduals",
     )
 for dopt in ["d(saved_d)", "d2"]:
     estimate(
@@ -756,7 +790,7 @@ for cmd, ref in [("creghdfe", "reghdfe"), ("civreghdfe", "ivreghdfe")]:
 # Inputs for native time-series covariance options must have declared time.
 for c in CASES:
     if c["command"] == "civreghdfe" and any(
-        o in c["candidate"] for o in ["bw(3)", "dkraay(3)", "kiefer"]
+        o in c["candidate"] for o in ["bw(3)", "bw(2.5)", "dkraay(3)", "kiefer"]
     ):
         c["setup"] = "bysort g (id): gen time_iv=_n\nxtset g time_iv"
     if c["command"] == "cbinscatter" and "discrete" in c["candidate"]:

@@ -69,16 +69,17 @@ not measure `cinterpolate, cubic` against SSC `cipolate`.
 - [Computer and software details](../benchmarks/readme_profile/manifest.json)
 - [Fixed-effects regression comparisons](HDFE_DATASETS.md)
 
-To refresh the published profiler evidence, collect and summarize a complete run
+To refresh the published timing results, collect and summarize a complete run
 under `temp/`, then copy only `timings.csv` and `results.md` into
 `docs/benchmarks/readme_profile/`. Update `manifest.json` from the actual run's
-machine, Stata, reference-package, thread, and build identities. The profiler
-writes the CSV and the summarizer writes the table; neither creates that
-provenance file. Keep logs, driver do-files, generated data, and exploratory
+machine, Stata and reference-package versions, thread settings, build versions,
+and source revisions. The profiler writes the CSV and the summarizer writes the
+table; neither creates that
+run-information file. Keep logs, driver do-files, generated data, and exploratory
 results under `reports/performance/` or `temp/`.
 
 For a single-command refresh, replace that command's six rows in the published
 CSV and regenerate the combined table. Record its machine, settings, checks,
 and build/reference hashes in the manifest's `command_runs` entry; those values
 override the shared manifest fields for that command. Preserve the measured
-rows and provenance for commands that were not rerun.
+rows and run information for commands that were not rerun.

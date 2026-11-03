@@ -1080,6 +1080,126 @@ local pmax = r(max)
 if `rc' == 0 & `nt' == 0 & "`cmin'" == "`pmin'" & "`cmax'" == "`pmax'" test_pass "no treated observations: fresh session"
 else test_fail "no treated observations: fresh session" "rc=`rc' common_min=`cmin' (`pmin') common_max=`cmax' (`pmax')"
 
+* P3-9/P3-10: psmatch2's treatment coding. psmatch2 runs on any coding:
+* _treated == 1 is matched to _treated == 0 (gen byte _treated, so 1.5 is
+* treated and .5 a control); other codes stay in the sample, on support, with
+* _weight = _treated; an all-zero or all-one treatment runs with a missing
+* ATT. Every generated variable is compared on every row, with the results.
+capture program drop _cpsm_codes
+program define _cpsm_codes
+    syntax varname, testname(string) [OPTions(string) REFerence(string) ROWS(string)]
+    if `"`rows'"' == "" local rows 1
+    local treat `varlist'
+    tempvar obs ref_tr ref_s ref_w ref_ps ref_nn ref_m byid
+    quietly gen long `obs' = _n
+    if "`reference'" == "" local reference `treat'
+    capture quietly psmatch2 `reference', outcome(y) `options'
+    local rc_ref = _rc
+    foreach r in att seatt att_y seatt_y {
+        local `r'_ref = r(`r')
+    }
+    if !`rc_ref' {
+        quietly gen double `ref_tr' = _treated
+        quietly gen double `ref_s' = _support
+        quietly gen double `ref_w' = _weight
+        quietly gen double `ref_ps' = _pscore
+        * _nn and _n1 exist for nearest-neighbor matching
+        capture confirm variable _n1
+        local has_nn = !_rc
+        if `has_nn' {
+            quietly gen double `ref_nn' = cond(missing(_nn), 0, _nn)
+            sort _id
+            quietly gen long `byid' = `obs'
+            quietly gen long `ref_m' = `byid'[_n1] if _n1 < .
+            sort `obs'
+        }
+    }
+    capture drop _pscore _weight _treated _support _nn _id _n* _pdif _y
+    capture quietly cpsmatch `treat', outcome(y) `options'
+    local rc_ct = _rc
+    if `rc_ref' | `rc_ct' {
+        if `rc_ref' == `rc_ct' test_pass "`testname': same error"
+        else test_fail "`testname'" "rc psmatch2=`rc_ref' cpsmatch=`rc_ct'"
+        capture drop _pscore _weight _treated _support _nn _id
+        exit
+    }
+    local bad
+    foreach r in att seatt att_y seatt_y {
+        local `r'_ct = r(`r')
+    }
+    foreach r in att seatt att_y seatt_y {
+        local ct ``r'_ct'
+        if missing(``r'_ref') | missing(`ct') {
+            if "``r'_ref'" != "`ct'" local bad `bad' `r':``r'_ref'/`ct'
+        }
+        else {
+            sigfigs ``r'_ref' `ct'
+            if r(sigfigs) < $DEFAULT_SIGFIGS local bad `bad' `r':``r'_ref'/`ct'
+        }
+    }
+    foreach v in _treated _support _weight _pscore {
+        local ref = cond("`v'" == "_treated", "`ref_tr'", cond("`v'" == "_support", "`ref_s'", ///
+            cond("`v'" == "_weight", "`ref_w'", "`ref_ps'")))
+        quietly count if !(`v' == `ref' | reldif(`v', `ref') <= 10^-$DEFAULT_SIGFIGS) & (`rows')
+        if r(N) local bad `bad' `v':`r(N)'
+    }
+    if `has_nn' {
+        quietly count if _treated == 1 & cond(missing(_nn), 0, _nn) != `ref_nn'
+        if r(N) local bad `bad' _nn:`r(N)'
+        quietly count if _treated == 1 & `ref_m' < . & _id != `ref_m'
+        if r(N) local bad `bad' match:`r(N)'
+        quietly count if _treated == 1 & `ref_m' >= . & _id < .
+        if r(N) local bad `bad' unmatched:`r(N)'
+    }
+    if "`bad'" == "" test_pass "`testname'"
+    else test_fail "`testname'" "`bad'"
+    capture drop _pscore _weight _treated _support _nn _id
+end
+foreach coding in "0 2" "0 1 2" "0" "1" "1 2" "0 1 300" "0 1 1.5" "0 .5 1" {
+    foreach method in "" "kernel" "radius caliper(.2)" "neighbor(2)" "common" "noreplacement" ///
+        "ties" "kernel kerneltype(normal)" "common radius caliper(.1)" {
+        clear
+        set seed 7
+        quietly set obs 40
+        gen ps = runiform()
+        gen y = rnormal()
+        local nc : word count `coding'
+        gen double t = real(word("`coding'", 1 + mod(_n, `nc')))
+        replace ps = . in 40
+        _cpsm_codes t, options(pscore(ps) `method') testname("P3-9/10 coding `coding': `method'")
+    }
+}
+* An all-zero treatment with covariates fails in the score model, as in psmatch2
+clear
+set seed 8
+quietly set obs 40
+gen x = rnormal()
+gen y = rnormal()
+gen t = 0
+_cpsm_codes t, options(x) testname("P3-9 all-zero treatment, estimated score")
+* psmatch2 assumes every other code sorts after the controls: a code below
+* zero enters its positional control and treated ranges (rows coded -1 are
+* matched as controls and high-score controls as treated), so its results are
+* not psmatch2's coding rule. cpsmatch keeps such rows out of matching, on
+* support with _weight = _treated; the reference is psmatch2 on the 0/1 rows,
+* with those rows' own values.
+clear
+set seed 9
+quietly set obs 40
+gen ps = runiform()
+gen y = rnormal()
+gen double t = real(word("0 1 -1", 1 + mod(_n, 3)))
+gen double t01 = cond(t >= 0, t, .)
+foreach method in "" "kernel" "radius caliper(.2)" "noreplacement" {
+    _cpsm_codes t, options(pscore(ps) `method') reference(t01) rows(t >= 0) ///
+        testname("P3-10 negative code: `method'")
+}
+capture drop _*
+cpsmatch t, pscore(ps) outcome(y)
+capture assert _support == 1 & _weight == -1 & missing(_nn) & missing(_id) if t == -1
+if _rc test_fail "P3-10 negative code: generated variables" "rows coded -1"
+else test_pass "P3-10 negative code: generated variables"
+
 * SUMMARY
 noi print_summary "cpsmatch"
 }

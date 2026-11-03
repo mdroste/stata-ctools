@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.3 20261030}{...}
+{* *! version 1.2.4 20261103}{...}
 {viewerjumpto "Syntax" "crangestat##syntax"}{...}
 {viewerjumpto "Description" "crangestat##description"}{...}
 {viewerjumpto "Options" "crangestat##options"}{...}
@@ -77,7 +77,7 @@ and computes the specified statistics using the values of the source variables
 from those observations.
 
 {pstd}
-This is particularly useful for:
+Applications include:
 
 {p 8 12 2}- Rolling window statistics over time series{p_end}
 {p 8 12 2}- Computing statistics using observations with similar values{p_end}
@@ -110,9 +110,8 @@ within groups defined by the variables in {it:varlist}. Observations in
 different groups are never included in each other's calculations.
 
 {phang}
-{opt excludeself} specifies that the current observation should be excluded
-from its own calculation. This is useful for computing leave-one-out
-statistics like the mean of all {it:other} observations in the range.
+{opt excludeself} excludes the current observation from its calculation,
+giving statistics such as the mean of the other observations in the interval.
 
 {phang}
 {opt threads(#)} sets the maximum number of threads, from 1 to 256.

@@ -1,37 +1,37 @@
 v 3
 d ctools: C-accelerated tools for Stata
 d
-d ctools provides high-performance C plugins for Stata that dramatically
-d accelerate common data operations through parallelization and optimized
-d algorithms.
+d ctools is a set of really fast drop-in replacements for a variety
+d of Stata programs. All of the numerical heavy lifting for each
+d command is implemented in highly optimized C.
 d
 d Included commands:
-d   csort       - Parallel sorting (IPS4o, radix, timsort, etc.)
-d   cmerge      - C-accelerated dataset merging
-d   cimport     - Delimited text, Excel, and binary statistical file import
-d   cexport     - Delimited text, Excel, and binary statistical file export
-d   creghdfe    - HDFE regression with CG solver
-d   civreghdfe  - IV/2SLS regression with HDFE
-d   cqreg       - Quantile regression with IPM solver
-d   cbinscatter - Binned scatter plots
+d   csort           - Parallel sorting (IPS4o, radix, timsort, etc.)
+d   cmerge          - C-accelerated dataset merging
+d   cimport         - Delimited text, Excel, and binary statistical file import
+d   cexport         - Delimited text, Excel, and binary statistical file export
+d   creghdfe        - HDFE regression with CG solver
+d   civreghdfe      - IV/2SLS regression with HDFE
+d   cqreg           - Quantile regression with IPM solver
+d   cbinscatter     - Binned scatter plots
 d   cencode/cdecode - Convert value labels
-d   cdestring   - Convert strings to numeric data
+d   cdestring       - Convert strings to numeric data
 d   csample/cbsample - Sampling and bootstrap draws
-d   cwinsor     - Winsorize or trim variables
-d   crangestat  - Range statistics
+d   cwinsor         - Winsorize or trim variables
+d   crangestat      - Range statistics
 d   cinterpolate    - Linear and cubic interpolation
-d   csplit      - String splitting
-d   crangejoin  - Interval joins
-d   cpsmatch    - Propensity score matching (ATT)
-d   cppmlhdfe   - PPML with high-dimensional fixed effects
-d   cdistinct   - Distinct value counts
-d   chdfe       - Partial out high-dimensional fixed effects
+d   csplit          - String splitting
+d   crangejoin      - Interval joins
+d   cdistinct       - Distinct value counts
+d   cpsmatch        - Propensity score matching (ATT)
+d   cppmlhdfe       - PPML with high-dimensional fixed effects
+d   chdfe           - Partial out high-dimensional fixed effects
 d
-d Version: 1.2.3
+d Version: 1.2.4
 d
 d Requires: Stata 14.1 or later
 d
-d Distribution-Date: 20261030
+d Distribution-Date: 20261103
 
 f ctools.ado
 f ctools.sthlp
@@ -107,6 +107,7 @@ f _ctools_hdfe_vce.ado
 f _ctools_hdfe_post.ado
 f _civreghdfe_fvstrip.ado
 f _civreghdfe_optflags.ado
+f _civreghdfe_collin.ado
 f _cmerge_assert.ado
 f _cmerge_clear_sortedby.ado
 f _cmerge_keys_sorted.ado
@@ -116,6 +117,8 @@ f _cmerge_results.ado
 f _cmerge_table.ado
 f _cmerge_template.ado
 f _cppmlhdfe_abs_options.ado
+f _cppmlhdfe_estat.ado
+f _cppmlhdfe_footnote.ado
 f cdistinct.ado
 f cdistinct.sthlp
 f chdfe.ado

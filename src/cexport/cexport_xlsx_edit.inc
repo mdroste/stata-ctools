@@ -227,10 +227,10 @@ static void xedit_write_cell(StringBuffer *sb, const xedit_node *fresh,
   char *style = xedit_attr(fresh, "s");
   unsigned index = style ? (unsigned)strtoul(style, NULL, 10) : 0;
   free(style);
-  /* Fresh cells carry a style only for dates; keepcellfmt keeps the old
-   * style of every other cell, but a date keeps its date style, as native
-   * export does. */
-  if (keep && old && !index) {
+  /* keepcellfmt keeps the old style of every cell but one with a %t
+   * format, which keeps its own, as native export does; fresh numbers then
+   * carry no number format. */
+  if (keep && old && !CEXPORT_STYLE_IS_TFORMAT(index)) {
     style = xedit_attr(old, "s");
     index = style ? (unsigned)strtoul(style, NULL, 10) : 0;
     free(style);
@@ -423,7 +423,8 @@ static char *xedit_worksheet(const char *oldxml, const char *newxml, int keep,
   }
   return sb.data;
 }
-/* Append our three cell styles while retaining every existing style index. */
+/* Append our cell styles, one per CEXPORT_STYLE_* code in order, while
+   retaining every existing style index. */
 static char *xedit_styles(char *xml, unsigned *base) {
   xedit_node xfs, xf, nfmt;
   if (!xedit_find(xml, xml + strlen(xml), "cellXfs", &xfs))
@@ -491,7 +492,7 @@ static char *xedit_styles(char *xml, unsigned *base) {
     free(result);
     return NULL;
   }
-  char *node = xedit_set_attr(&xfs, "count", *base + 3);
+  char *node = xedit_set_attr(&xfs, "count", *base + CEXPORT_STYLE_COUNT);
   if (!node) {
     free(result);
     return NULL;
@@ -501,16 +502,20 @@ static char *xedit_styles(char *xml, unsigned *base) {
   free(result);
   if (!updated)
     return NULL;
-  snprintf(
-      child, sizeof(child),
-      "<xf xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" "
-      "numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/>"
-      "<xf xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" "
-      "numFmtId=\"14\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/>"
-      "<xf xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" "
-      "numFmtId=\"%u\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/>",
-      fmt);
-  result = xedit_insert(updated, "cellXfs", child);
+  const unsigned ids[CEXPORT_STYLE_COUNT] = {0, 14, fmt, 22, 19, 1, 1, 2, 3, 4, 11};
+  StringBuffer cells;
+  if (!strbuf_init(&cells, 1536)) {
+    free(updated);
+    return NULL;
+  }
+  for (int i = 0; i < CEXPORT_STYLE_COUNT; i++)
+    strbuf_appendf(
+        &cells,
+        "<xf xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" "
+        "numFmtId=\"%u\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"%s/>",
+        ids[i], ids[i] ? " applyNumberFormat=\"1\"" : "");
+  result = cells.data ? xedit_insert(updated, "cellXfs", cells.data) : NULL;
+  free(cells.data);
   free(updated);
   return result;
 }
@@ -525,11 +530,12 @@ static ST_retcode xlsx_edit_file(XLSXExportContext *ctx,
   char shared_path[MAX_PATH_LEN] = "xl/sharedStrings.xml";
   char target[MAX_PATH_LEN] = {0}, chain[MAX_PATH_LEN] = {0}, rid[256] = {0};
   /* A file that is not a workbook: native export reports that the file
-   * exists (r(602)), or under modify or replace that it cannot be loaded. */
-  ST_retcode unreadable = ctx->sheet_action ? 603 : 602;
+   * exists (r(602)), or with sheet() that it cannot be loaded. */
+  int named = ctx->sheet_action || ctx->sheet_specified;
+  ST_retcode unreadable = named ? 603 : 602;
   snprintf(ctx->error_message, sizeof(ctx->error_message),
-           ctx->sheet_action ? "file %.400s could not be loaded\n"
-                             : "file %.400s already exists\n",
+           named ? "file %.400s could not be loaded\n"
+                 : "file %.400s already exists\n",
            ctx->input_filename);
   if (!mz_zip_reader_init_file(&in, ctx->input_filename, 0)) {
     rc = unreadable;
@@ -545,6 +551,12 @@ static ST_retcode xlsx_edit_file(XLSXExportContext *ctx,
     goto done;
   }
   ctx->error_message[0] = 0;
+  if (ctx->invalid_sheet) {
+    rc = 9901;
+    snprintf(ctx->error_message, sizeof(ctx->error_message),
+             "invalid worksheet name %.150s\n", ctx->sheet_name);
+    goto done;
+  }
   if (!styles)
     styles = strdup(STYLES_XML);
   if (!styles) {
@@ -715,7 +727,7 @@ static ST_retcode xlsx_edit_file(XLSXExportContext *ctx,
     char *flag = xedit_attr(&node, "date1904");
     if (flag && (!strcmp(flag, "1") || !strcmp(flag, "true"))) {
       for (int j = 0; j < ctx->nvars; j++)
-        if (ctx->date_cols[j])
+        if (CEXPORT_STYLE_IS_DATE(ctx->date_cols[j]))
           for (size_t i = 0; i < filtered->data.nobs; i++)
             if (!SF_is_missing(filtered->data.vars[j].data.dbl[i]))
               filtered->data.vars[j].data.dbl[i] -= 1462;

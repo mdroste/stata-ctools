@@ -118,6 +118,13 @@ static int cpsmatch_match_psmatch2_ties(const sorted_control_t *controls, size_t
     return 0;
 }
 
+/* psmatch2's _weight for a row coded neither 0 nor 1: generate double
+ * _weight = _treated if _support==1, then missing where it is zero */
+static double cpsmatch_other_weight(double code)
+{
+    return (code == 0.0 || SF_is_missing(code)) ? SV_missval : code;
+}
+
 ST_retcode cpsmatch_main(const char *args)
 {
     int match_failed = 0;
@@ -203,6 +210,10 @@ ST_retcode cpsmatch_main(const char *args)
      * existing two-level validation accepts. Matching still uses the original. */
     double *stat_treatment = opts.statistics
         ? filtered.data.vars[nvars_to_load - 1].data.dbl : NULL;
+    /* psmatch2 matches on _treated (gen byte _treated = treatvar): treated
+     * are _treated == 1 and controls _treated == 0. Rows with another code
+     * stay in the sample, on support, with _weight = _treated. */
+    const double *arm = stat_treatment ? stat_treatment : treatment;
 
     t_load = ctools_timer_seconds() - t_load;
 
@@ -217,8 +228,8 @@ ST_retcode cpsmatch_main(const char *args)
     for (size_t i = 0; i < n_filtered; i++) {
         /* psmatch2 excludes observations without a score from matching */
         if (SF_is_missing(treatment[i]) || SF_is_missing(pscore[i])) continue;
-        if (treatment[i] == 1.0) n_treated++;
-        else if (treatment[i] == 0.0) n_controls++;
+        if (arm[i] == 1.0) n_treated++;
+        else if (arm[i] == 0.0) n_controls++;
     }
 
     /* psmatch2 defines the arms by ==1 and ==0, not by truthiness.
@@ -228,7 +239,7 @@ ST_retcode cpsmatch_main(const char *args)
          * there are treated rows (missing without controls) */
         double control_min = SV_missval, control_max = SV_missval;
         for (size_t i = 0; i < n_filtered; i++) {
-            if (SF_is_missing(treatment[i]) || SF_is_missing(pscore[i]) || treatment[i] != 0.0)
+            if (SF_is_missing(treatment[i]) || SF_is_missing(pscore[i]) || arm[i] != 0.0)
                 continue;
             if (SF_is_missing(control_min) || pscore[i] < control_min) control_min = pscore[i];
             if (SF_is_missing(control_max) || pscore[i] > control_max) control_max = pscore[i];
@@ -243,7 +254,7 @@ ST_retcode cpsmatch_main(const char *args)
         for (size_t i=0; i<n_filtered && !rc; i++) {
             ST_int obs=(ST_int)obs_map[i];
             if (opts.out_nn_idx>0) rc=SF_vstore(opts.out_nn_idx,obs,SV_missval);
-            if (!rc && opts.out_weight_idx>0) rc=SF_vstore(opts.out_weight_idx,obs,SV_missval);
+            if (!rc && opts.out_weight_idx>0) rc=SF_vstore(opts.out_weight_idx,obs,cpsmatch_other_weight(arm[i]));
             if (!rc && opts.out_match_idx>0) rc=SF_vstore(opts.out_match_idx,obs,SV_missval);
             if (!rc && opts.out_support_idx>0) rc=SF_vstore(opts.out_support_idx,obs,1.0);
         }
@@ -263,10 +274,48 @@ ST_retcode cpsmatch_main(const char *args)
         ctools_filtered_data_free(&filtered);
         return rc;
     }
-    if (n_treated == 0 || n_controls == 0) {
+    if (n_controls == 0) {
+        /* psmatch2 finds no match for any treated row: all are off support,
+         * with _nn zero; r(common_min)/r(common_max) are missing */
+        double *support = malloc((n_filtered ? n_filtered : 1) * sizeof(double));
+        if (!support) {
+            ctools_filtered_data_free(&filtered);
+            SF_error("cpsmatch: memory allocation failed\n");
+            return 920;
+        }
+        for (size_t i = 0; i < n_filtered; i++) support[i] = arm[i] == 1.0 ? 0.0 : 1.0;
+        if (opts.statistics) {
+            cpsmatch_statistics statistics;
+            double started = ctools_timer_seconds();
+            cpsmatch_compute_statistics(n_filtered, stat_treatment, outcome, NULL, support, &statistics);
+            rc = cpsmatch_save_statistics(&statistics);
+            t_stats = ctools_timer_seconds() - started;
+        }
+        for (size_t i = 0; i < n_filtered && !rc; i++) {
+            ST_int obs = (ST_int)obs_map[i];
+            int treated = arm[i] == 1.0;
+            if (opts.out_nn_idx > 0) rc = SF_vstore(opts.out_nn_idx, obs, treated ? 0.0 : SV_missval);
+            if (!rc && opts.out_weight_idx > 0)
+                rc = SF_vstore(opts.out_weight_idx, obs, treated ? SV_missval : cpsmatch_other_weight(arm[i]));
+            if (!rc && opts.out_match_idx > 0) rc = SF_vstore(opts.out_match_idx, obs, SV_missval);
+            if (!rc && opts.out_support_idx > 0) rc = SF_vstore(opts.out_support_idx, obs, support[i]);
+        }
+        free(support);
+        SF_scal_save("_cpsmatch_n_treated", (double)n_treated);
+        SF_scal_save("_cpsmatch_n_controls", 0);
+        SF_scal_save("_cpsmatch_n_matched", 0);
+        SF_scal_save("_cpsmatch_n_off_support", (double)n_treated);
+        SF_scal_save("_cpsmatch_common_min", SV_missval);
+        SF_scal_save("_cpsmatch_common_max", SV_missval);
+        SF_scal_save("_cpsmatch_time_load", t_load);
+        SF_scal_save("_cpsmatch_time_setup", 0);
+        SF_scal_save("_cpsmatch_time_sort", 0);
+        SF_scal_save("_cpsmatch_time_match", 0);
+        SF_scal_save("_cpsmatch_time_store", 0);
+        SF_scal_save("_cpsmatch_time_stats", t_stats);
+        SF_scal_save("_cpsmatch_time_total", ctools_timer_seconds() - t_start);
         ctools_filtered_data_free(&filtered);
-        SF_error("cpsmatch: need both treated and control observations\n");
-        return 198;
+        return rc;
     }
 
     /* Build index arrays - indices now refer to position in filtered array */
@@ -288,11 +337,11 @@ ST_retcode cpsmatch_main(const char *args)
     size_t ti = 0, ci = 0;
     for (size_t i = 0; i < n_filtered; i++) {
         if (SF_is_missing(treatment[i]) || SF_is_missing(pscore[i])) continue;
-        if (treatment[i] == 1.0) {
+        if (arm[i] == 1.0) {
             treated_idx[ti] = i;  /* Index in filtered array */
             treated_pscore[ti] = pscore[i];
             ti++;
-        } else if (treatment[i] == 0.0) {
+        } else if (arm[i] == 0.0) {
             control_idx[ci] = i;  /* Index in filtered array */
             control_pscore[ci] = pscore[i];
             ci++;
@@ -775,6 +824,12 @@ ST_retcode cpsmatch_main(const char *args)
     for (size_t i = 0; i < n_controls; i++) {
         size_t obs_idx = control_idx[i];
         out_support[obs_idx] = 1.0;
+    }
+    /* Other treatment codes: on support, _weight = _treated */
+    for (size_t i = 0; i < n_filtered; i++) {
+        if (arm[i] == 0.0 || arm[i] == 1.0) continue;
+        out_support[i] = 1.0;
+        out_weight[i] = cpsmatch_other_weight(arm[i]);
     }
 
     t_match = ctools_timer_seconds() - t_match;

@@ -1,4 +1,4 @@
-*! version 1.2.3 20261030 github.com/mdroste/stata-ctools
+*! version 1.2.4 20261103 github.com/mdroste/stata-ctools
 *! Private monotonic timestamp in seconds; no public Stata timer IDs.
 program define _ctools_clock
     version 14.1

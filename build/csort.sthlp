@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.3 20261030}{...}
+{* *! version 1.2.4 20261103}{...}
 {viewerjumpto "Syntax" "csort##syntax"}{...}
 {viewerjumpto "Description" "csort##description"}{...}
 {viewerjumpto "Options" "csort##options"}{...}
@@ -44,8 +44,8 @@ where {it:name} is one of: {opt auto} (default), {opt counting}, {opt lsd}, {opt
 
 {pstd}
 {cmd:csort} sorts the observations of the current dataset by the values of the
-variables in {varlist}. The sort is {it:stable}, meaning observations with equal
-key values maintain their relative order.
+variables in {varlist}. The sort is {it:stable}, meaning observations with
+equal key values maintain their relative order.
 
 
 {pstd}
@@ -66,11 +66,10 @@ See
 {help csort##algorithms:Algorithms} for details on manual algorithm selection.
 
 {phang}
-{opt stream(#)} enables streaming mode, which reduces memory usage for wide datasets.
-In streaming mode, only the sort key variables are loaded into C memory. After
-sorting, the permutation is applied to non-key variables using sequential Stata
-I/O. This is useful when sorting datasets with many columns that would otherwise
-exceed available memory.
+{opt stream(#)} enables streaming mode, which reduces memory usage for wide
+datasets. In streaming mode, {cmd:csort} first loads the sorting variables. It
+then reorders the remaining variables in groups of up to {it:#} variables,
+reducing memory use for datasets with many variables.
 
 {pmore}
 The argument {it:#} specifies how many variables to process at a time (1-16).
@@ -122,17 +121,19 @@ or with numeric variables: Uses LSD radix sort, which reads each string as one o
 two 8-byte words and sorts them together with the numeric keys, comparing later
 keys only for observations tied on the earlier ones.{p_end}
 
-{p 8 12 2}- {bf:Wider string variables}: Uses MSD radix sort, which handles long
-variable-length strings efficiently by processing from the most significant
-byte.{p_end}
+{p 8 12 2}- {bf:Wider string variables}: Uses MSD radix sort, which compares
+string bytes from the beginning of each string.{p_end}
 
 {pstd}
-The benefit depends on key ranges, dataset shape, and hardware.
+Sorting time depends on the values being sorted, the number of observations
+and variables, and the computer.
 
 {dlgtab:Manual Algorithm Selection}
 
 {pstd}
-For specialized use cases, you can manually select an algorithm:
+{opt algorithm()} accepts the following choices. In the running-time
+expressions below, n is the number of observations and k is the number of
+possible integer values in the range being sorted.
 
 {p2colset 5 28 30 2}{...}
 {p2col :{opt counting}}Integer data with small range (dates, years, categories). O(n+k) performance.
@@ -142,7 +143,7 @@ Falls back to LSD radix if range is too large.{p_end}
 {p2col :{opt ips4o}}General-purpose parallel samplesort.{p_end}
 {p2col :{opt timsort}}Comparison sort that uses existing ordered runs; O(n log n) worst case.{p_end}
 {p2col :{opt sample}}Parallel sample sort.{p_end}
-{p2col :{opt merge}}Guaranteed stable O(n log n). Predictable performance.{p_end}
+{p2col :{opt merge}}Stable merge sort with worst-case running time proportional to n log n.{p_end}
 
 
 {marker remarks}{...}
@@ -199,7 +200,7 @@ byte order. Numeric missing values sort after finite numbers, in the order
 {phang2}{cmd:. sysuse auto, clear}{p_end}
 {phang2}{cmd:. csort price, threads(4)}{p_end}
 
-{pstd}Sort without setting Stata's sortedby attribute (faster for intermediate ops):{p_end}
+{pstd}Sort without registering the sort order with Stata:{p_end}
 {phang2}{cmd:. csort price, nosortedby}{p_end}
 
 
@@ -214,7 +215,7 @@ byte order. Numeric missing values sort after finite numbers, in the order
 {synopt:{cmd:r(N)}}number of observations sorted{p_end}
 {synopt:{cmd:r(time_load)}}time to load data from Stata to C (seconds){p_end}
 {synopt:{cmd:r(time_sort)}}time to sort data (seconds){p_end}
-{synopt:{cmd:r(time_permute)}}time to apply permutation (seconds){p_end}
+{synopt:{cmd:r(time_permute)}}time to reorder observations (seconds){p_end}
 {synopt:{cmd:r(time_store)}}time to store data back to Stata (seconds){p_end}
 {synopt:{cmd:r(time_stream)}}time to stream non-key variables (streaming mode only){p_end}
 {synopt:{cmd:r(time_cleanup)}}time to free C memory (seconds){p_end}

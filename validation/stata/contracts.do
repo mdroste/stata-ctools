@@ -31,6 +31,7 @@ foreach cmd in "cimport clear" "cio clear" "cmerge clear" "csplit clear" "crange
     plugin call p1_contracts_plugin, "`cmd'"
     test_pass "repeated cleanup"
 }
+set seed 340127
 csample 100
 assert _N == 3 & result == 17
 test_pass "successful command after malformed calls"

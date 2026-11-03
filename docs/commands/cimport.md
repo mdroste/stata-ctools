@@ -35,7 +35,7 @@ data-loading options.
 
 ## Overview
 
-`cimport delimited` uses C parsing and native-command differential tests to implement Stata's `import delimited` interface.
+`cimport delimited` reads delimited files in C using Stata's `import delimited` syntax. Tests compare its results with `import delimited`.
 
 ## Syntax
 
@@ -66,7 +66,7 @@ As in `import delimited`, an `extvarlist` renames the first imported variables i
 | `bindquotes(option)` | Quote handling: `loose` (default), `strict`, or `nobind` |
 | `stripquotes(default\|yes\|no)` | Control quote removal; `no` retains literal quotes |
 | `encoding(encoding)` | Automatic detection or explicit UTF-8/16/32 and system code pages |
-| `rowrange([start][:end])` / `colrange([start][:end])` | Select rows and columns before inference; rows are file lines as in native (the header, blank lines and quoted line breaks count) |
+| `rowrange([start][:end])` / `colrange([start][:end])` | Select rows and columns before determining variable types. Row numbers count file lines, including headers, blank lines, and line breaks within quoted fields |
 | `maxquotedrows(#)` | Strict quoted-row limit; accepts `unlimited` |
 | `parselocale(locale)` | C numeric profiles from the pinned OpenJDK locale tables; no installed Java runtime is needed |
 | `favorstrfixed` | Prefer fixed strings up to Stata's 2,045-byte limit |
@@ -78,7 +78,7 @@ As in `import delimited`, an `extvarlist` renames the first imported variables i
 | Option | Description |
 |--------|-------------|
 | `verbose` | Display progress information and throughput (MB/s) |
-| `threads(#)` | Maximum workers; zero uses the ctools thread setting |
+| `threads(#)` | Maximum threads; zero uses the ctools thread setting |
 | `snapshot`, `fast` | Use a whole-dataset recovery snapshot, or skip recovery; mutually exclusive |
 
 ## Examples
@@ -108,7 +108,7 @@ cimport delimited using data.csv, clear varnames(nonames)
 
 ## Performance
 
-`cimport` uses a three-phase approach for maximum efficiency:
+Import proceeds in three stages: scan the file, create variables, and load values.
 
 ### Phase 1: Scan
 - Parse the file to determine column types and widths
@@ -117,7 +117,7 @@ cimport delimited using data.csv, clear varnames(nonames)
 
 ### Phase 2: Create
 - Create Stata variables with appropriate types
-- Allocate memory efficiently based on scan results
+- Allocate memory using the column types and widths found during the scan
 
 ### Phase 3: Load
 - Load data into variables using parallel processing
@@ -146,14 +146,14 @@ The cache budget excludes worker scratch space, allocator overhead, input
 buffers and Stata datasets; it is not a limit on total process memory or a
 measurement of free RAM. `verbose` reports cached bytes and row coverage.
 
-### Speedup Tricks
+### Implementation details
 
 - **Memory-mapped I/O**: The entire CSV file is `mmap`'d for zero-copy access, avoiding `read()` syscall overhead and letting the OS handle page-level caching
-- **OS-level prefetch hints**: `madvise(MADV_SEQUENTIAL | MADV_WILLNEED)` on POSIX tells the kernel to read ahead aggressively
+- **OS-level prefetch hints**: `madvise(MADV_SEQUENTIAL | MADV_WILLNEED)` on POSIX requests that the operating system read upcoming file data in advance
 - **SIMD CSV parsing**: SSE2 (x86) and NEON (ARM64) intrinsics scan 16 bytes at a time for delimiters and newlines, accelerating field boundary detection
-- **8-way unrolled quote detection**: Inner loop processes 8 characters per iteration to validate quoted fields with minimal branch overhead
+- **8-way unrolled quote detection**: Checks eight characters per iteration for quotation marks
 - **Parallel row processing**: Each OpenMP thread processes an independent chunk of rows; chunk boundaries are determined by a fast newline pre-scan
-- **Compact block storage**: Large inputs use typed column payloads and a shared allocation budget; cached prefixes remain usable if the budget fills
+- **Compact block storage**: Large inputs are cached in blocks using storage appropriate to each column's type. When the cache reaches its memory limit, previously cached rows are retained and the remaining rows are read again during loading
 - **Arena allocator for strings**: String values are bulk-allocated in a thread-safe arena with atomic CAS, avoiding per-string `malloc` calls
 - **Persistent thread pool**: Worker threads are reused across scan and load phases
 
@@ -203,7 +203,7 @@ With `verbose` output, you'll see:
 ## Technical Notes
 
 - Automatic encoding detection uses a C adaptation of ICU 67.1's statistical recognizers and its 8,000-byte sample. Explicit Unicode encodings include UTF-8, UTF-16LE/BE and UTF-32LE/BE; named legacy encodings use system C conversion. Charset alias coverage differs by platform.
-- Fields exceeding 2,045 UTF-8 bytes use strL. Shorter fields follow native width/average selection unless favorstrfixed is specified.
+- Fields exceeding 2,045 UTF-8 bytes use strL. For shorter text, storage type follows `import delimited`'s rules based on maximum and average text length, unless `favorstrfixed` is specified.
 - Empty cells are imported as missing (`.` for numeric, `""` for string)
 - Quoted fields handle embedded delimiters and newlines correctly
 - Variable names are sanitized to be valid Stata names
@@ -214,7 +214,8 @@ With `verbose` output, you'll see:
 |---------|--------------------------|---------------------|
 | Implementation | Stata | C with OpenMP |
 | Parallelization | No | Yes |
-| Memory Efficiency | Standard | Optimized |
+
+Memory use depends on the dataset, options, and number of threads.
 
 ## See Also
 

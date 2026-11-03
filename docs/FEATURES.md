@@ -1,13 +1,11 @@
 # ctools New Features
 
-This document describes ctools extensions to the commands they replace and the controls available for their C implementations.
+ctools adds the following features to the commands it replaces. See [Compatibility](COMPATIBILITY.md) for supported options and differences.
 
 Most ctools commands use C implementations with parallel processing. `cdecode`
-reads value labels directly from Stata and writes the text in C; results it
-does not produce there (strL, multibyte `maxlength()` cuts) come from Stata's
-own `decode`.
-This document describes added capabilities; see [compatibility](COMPATIBILITY.md) for the
-supported scope and differences from reference commands.
+reads value labels directly from Stata and writes the text in C. It calls
+Stata's `decode` when the output requires `strL` or when `maxlength()` cuts
+through a multibyte character.
 
 ---
 
@@ -39,14 +37,15 @@ supported scope and differences from reference commands.
 | `cbinscatter` | `binscatter` | Yes |
 
 `cinterpolate`, `csplit`, and `crangejoin` support `threads()` and `verbose` for
-controlling C workers and inspecting phase timings. Their full syntax, examples,
-and limits are in the [usage notes](USAGE.md#interpolation-cinterpolate).
+setting the maximum number of threads and reporting time spent in each computation
+stage. Their full syntax, examples, and limits are in the
+[usage notes](USAGE.md#interpolation-cinterpolate).
 `cinterpolate` defaults to linear interpolation; `cubic` selects four-point local
 cubic interpolation as in SSC `cipolate`. Cubic mode does not extrapolate.
 
-By default every command uses one thread per CPU it may run on, but at most 16,
-so large shared servers are not saturated. `ctools, threads(#)` changes this for
-the session and `ctools, threads(#) permanently` saves it for later sessions;
+By default, each command uses at most one thread per available CPU, up to 16
+threads. `ctools, threads(#)` changes this for the session and
+`ctools, threads(#) permanently` saves it for later sessions;
 `CTOOLS_NUM_THREADS` and `OMP_NUM_THREADS` are also honored. On Linux the usable
 CPUs follow taskset/Slurm affinity and container CPU limits. See `help ctools`.
 
@@ -75,7 +74,7 @@ Stata's native `sort` command provides no user control over memory usage or algo
 **ctools adds:**
 
 - **Algorithm selection**: `algorithm()` option to choose from `auto`, `counting`, `lsd`, `msd`, `ips4o`, `timsort`, `sample`, or `merge`
-- **Streaming mode**: `stream()` option reduces memory usage for wide datasets by permuting non-key variables sequentially
+- **Streaming mode**: `stream()` option reduces memory usage for wide datasets by reordering variables outside the sort key in batches
 
 ```stata
 * Use counting sort for integer data
@@ -89,8 +88,8 @@ csort id, stream(4)
 
 ## cimport / cexport
 
-The command family reads and writes delimited text, XLS/XLSX, dBase, SAS7BDAT,
-SAS XPORT5/8, SPSS and ESRI shapefiles through C engines. Catalog and ZSAV import
+`cimport` and `cexport` use C code to read and write delimited text, XLS/XLSX,
+dBase, SAS7BDAT, SAS XPORT5/8, SPSS and ESRI shapefiles. Catalog and ZSAV import
 are supported; FRED, Haver, and Parquet are not. See
 [import and export formats](IO_PARITY.md) for details.
 
@@ -98,7 +97,7 @@ are supported; FRED, Haver, and Parquet are not. See
 
 - **Workbook editing**: XLSX and BIFF8 XLS support adding worksheets, `sheet(..., modify/replace)` and `keepcellfmt`.
 - **Long text and encodings**: Delimited fields use strL when needed; UTF-8/16/32 and named code pages are supported.
-- **Locale-aware number parsing** (cimport delimited): `parselocale()` uses C profiles for 1,016 locale names, Unicode digits, decimal/grouping separators and signs.
+- **Locale-aware number parsing** (cimport delimited): `parselocale()` supports 1,016 locale names and their conventions for digits, decimal and grouping separators, and signs.
 
 ```stata
 * Import a CSV file

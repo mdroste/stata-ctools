@@ -1,4 +1,4 @@
-*! version 1.2.3 20261030 github.com/mdroste/stata-ctools
+*! version 1.2.4 20261103 github.com/mdroste/stata-ctools
 
 program define cpsmatch, rclass sortpreserve
     version 14.1
@@ -49,12 +49,9 @@ program define cpsmatch, rclass sortpreserve
         exit 198
     }
 
-    * Check treatment is binary
-    quietly tab `depvar' `if' `in'
-    if r(r) != 2 {
-        di as error "cpsmatch: treatment variable must be binary (0/1)"
-        exit 2000
-    }
+    * As in psmatch2, the treatment needs no particular coding: rows with
+    * _treated == 1 are matched to rows with _treated == 0, and other codes
+    * stay in the sample, on support, with _weight = _treated.
 
     if `neighbor' <= 0 {
         di as error "variable _n1 not found"
@@ -442,7 +439,8 @@ program define cpsmatch, rclass sortpreserve
     return scalar common_min = _cpsmatch_common_min
     return scalar common_max = _cpsmatch_common_max
 
-    if "`outcome'" != "" & `att' != . {
+    * psmatch2 returns the ATT and its standard error, missing when undefined
+    if "`outcome'" != "" {
         return scalar att = `att'
         return scalar att_se = `att_se'
         return scalar seatt = `att_se'

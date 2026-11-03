@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.3 20261030}{...}
+{* *! version 1.2.4 20261103}{...}
 {viewerjumpto "Syntax" "ctools##syntax"}{...}
 {viewerjumpto "Description" "ctools##description"}{...}
 {viewerjumpto "Options" "ctools##options"}{...}

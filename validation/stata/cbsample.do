@@ -594,6 +594,225 @@ foreach call in "_N/2" "round(0.1*_N)" "5*4" "0" "2.5" "70" "_N/2, strata(s)" //
     restore
 }
 
+* P2-2: idcluster(), bsample's new cluster id. The draws differ from
+* bsample's (another RNG), so every output is checked against bsample's rules:
+* each id is one whole copy of one cluster in observation order; ids run
+* 1, 2, ... by stratum (on across strata under version 14+, within strata
+* under version 13); rows sorted by (strata, id, observation); copies numbered
+* in cluster order for full-size draws; the same draw as weight() and the same
+* RNG use; and, against bsample on the same data, the variable's type, format,
+* label, position and the sort order.
+capture program drop _cbs_idcheck
+program define _cbs_idcheck, rclass
+    args strata cluster id full uniq clsize
+    local bad
+    tempvar o n
+    gen long `o' = _n
+    local newstratum = cond("`strata'" != "", "(`strata' != `strata'[_n-1]) |", "")
+    capture assert `newstratum' (`id' > `id'[_n-1]) | (`id' == `id'[_n-1] & obs > obs[_n-1]) if _n > 1
+    if _rc local bad `bad' order
+    bysort `strata' `id' (`o'): gen `n' = _N
+    capture by `strata' `id': assert `cluster' == `cluster'[1]
+    if _rc local bad `bad' onecluster
+    capture assert `n' == `clsize'
+    if _rc local bad `bad' wholecluster
+    sort `o'
+    if `uniq' | "`strata'" == "" capture assert `id' == 1 if _n == 1
+    else capture assert `id' == 1 if _n == 1 | `strata' != `strata'[_n-1]
+    if _rc local bad `bad' firstid
+    local same = cond("`strata'" != "", "& `strata' == `strata'[_n-1]", "")
+    if `uniq' | "`strata'" == "" capture assert inlist(`id' - `id'[_n-1], 0, 1) if _n > 1
+    else capture assert inlist(`id' - `id'[_n-1], 0, 1) if _n > 1 `same'
+    if _rc local bad `bad' ids
+    if `full' {
+        capture assert `cluster' >= `cluster'[_n-1] if _n > 1 `same'
+        if _rc local bad `bad' clusterorder
+    }
+    return local bad `bad'
+end
+foreach cfg in "" ", strata(s)" ", strata(ss)" "5, strata(s)" "4" "if keep, strata(s)" ///
+    "sz, strata(s)" "v13, strata(s)" "v13 sz, strata(s)" {
+    local fails
+    forvalues seed = 1/20 {
+        clear
+        set seed `seed'
+        set obs 120
+        gen long obs = _n
+        gen s = mod(_n, 3) + 1
+        gen str3 ss = cond(s == 1, "b", cond(s == 2, "a", "c c"))
+        gen cl = ceil(runiform() * 20)
+        replace cl = . if mod(_n, 17) == 0
+        replace cl = .a if mod(_n, 19) == 0
+        gen keep = runiform() < .8
+        gen sz = cond(s == 1, 3, cond(s == 2, 7, 5))
+        local call `cfg'
+        local ver
+        if strpos("`call'", "v13") {
+            local ver "version 13:"
+            local call = subinstr("`call'", "v13", "", 1)
+        }
+        local st = cond(strpos("`call'", "ss)"), "ss", cond(strpos("`call'", "s)"), "s", ""))
+        if strpos("`call'", "if keep") bysort `st' cl: egen clsize = total(keep)
+        else bysort `st' cl: gen clsize = _N
+        sort obs
+        local full = !regexm("`call'", "^ *[0-9]") & !strpos("`call'", "sz")
+        local uniq = "`ver'" == ""
+        local call = cond(strpos("`call'", ","), "`call' cluster(cl)", "`call', cluster(cl)")
+        preserve
+        `ver' bsample `call' idcluster(nid)
+        local meta_b "`: type nid' `: format nid' `: variable label nid' [`: sortedby']"
+        unab vars_b : *
+        _cbs_idcheck "`st'" cl nid `full' `uniq' clsize
+        if "`r(bad)'" != "" local fails `fails' bsample`seed':`r(bad)'
+        restore, preserve
+        set seed `seed'
+        gen double w = .
+        `ver' cbsample `call' weight(w)
+        local rng_w `c(rngstate)'
+        tempfile draws
+        keep obs w
+        save `draws'
+        restore, preserve
+        set seed `seed'
+        `ver' cbsample `call' idcluster(nid)
+        local rng_id `c(rngstate)'
+        local meta_c "`: type nid' `: format nid' `: variable label nid' [`: sortedby']"
+        unab vars_c : *
+        _cbs_idcheck "`st'" cl nid `full' `uniq' clsize
+        local bad `r(bad)'
+        if `"`meta_b' `vars_b'"' != `"`meta_c' `vars_c'"' local bad `bad' meta
+        if "`rng_w'" != "`rng_id'" local bad `bad' rng
+        bysort obs: gen copies = _N
+        by obs: keep if _n == 1
+        merge 1:1 obs using `draws', nogenerate
+        capture assert (w == copies) | (w == 0 & missing(copies))
+        if _rc local bad `bad' draw
+        if "`bad'" != "" local fails `fails' cbsample`seed':`bad'
+        restore
+    }
+    if "`fails'" == "" test_pass "P2-2 idcluster rules vs bsample: `cfg' (20 seeds)"
+    else test_fail "P2-2 idcluster rules vs bsample: `cfg'" "`fails'"
+}
+* Full-size draws number the copies deterministically: the exact dataset
+* bsample's NewClustID builds from the same draw (taken from weight())
+local fails
+forvalues seed = 1/20 {
+    foreach ver in 13 19 {
+        clear
+        set seed `seed'
+        set obs 90
+        gen long obs = _n
+        gen s = mod(_n, 3) + 1
+        gen cl = ceil(runiform() * 12)
+        preserve
+        gen double w = .
+        set seed `seed'
+        cbsample, cluster(cl) strata(s) weight(w)
+        keep if w > 0
+        sort s cl obs
+        expand w
+        bysort obs: gen copy = _n
+        sort s cl copy obs
+        by s cl copy: gen byte first = _n == 1
+        if `ver' > 13 gen nid = sum(first)
+        else by s: gen nid = sum(first)
+        sort s nid obs
+        drop w copy first
+        tempfile expected
+        save `expected'
+        restore, preserve
+        set seed `seed'
+        version `ver': cbsample, cluster(cl) strata(s) idcluster(nid)
+        capture cf _all using `expected'
+        if _rc local fails `fails' `seed'/v`ver'
+        restore
+    }
+}
+if "`fails'" == "" test_pass "P2-2 idcluster ids equal NewClustID on the same draw (20 seeds, v13/v19)"
+else test_fail "P2-2 idcluster exact ids" "seeds `fails'"
+* Storage type (bsample's byte id promoted by replace), errors, empty sample
+local bad
+foreach n in 100 101 32740 32741 {
+    clear
+    set seed 4
+    set obs `n'
+    gen id = _n
+    cbsample, cluster(id) idcluster(nid)
+    local want = cond(`n' <= 100, "byte", cond(`n' <= 32740, "int", "long"))
+    if "`: type nid'" != "`want'" | "`: format nid'" != "%8.0g" local bad `bad' `n':`: type nid'
+}
+if "`bad'" == "" test_pass "P2-2 idcluster storage type and format"
+else test_fail "P2-2 idcluster storage type" "`bad'"
+clear
+set obs 10
+gen id = _n
+gen w = .
+gen s = 1
+foreach o in "idcluster(x)" "strata(id) idcluster(x)" "cluster(id) idcluster(x) weight(w)" ///
+    "cluster(id) idcluster(1x)" "cluster(id) idcluster(w)" "if 0, cluster(id) strata(s) idcluster(nid)" ///
+    "if 0, cluster(id) idcluster(nid)" "in 1, cluster(id) idcluster(nid)" {
+    local opt = cond(strpos("`o'", ","), "`o'", ", `o'")
+    preserve
+    capture bsample `opt'
+    local rc_b = _rc
+    unab vars_b : *
+    local meta_b "`c(N)' [`: sortedby']"
+    capture local meta_b "`meta_b' `: type nid' `: variable label nid'"
+    restore, preserve
+    capture cbsample `opt'
+    local rc_c = _rc
+    unab vars_c : *
+    local meta_c "`c(N)' [`: sortedby']"
+    capture local meta_c "`meta_c' `: type nid' `: variable label nid'"
+    restore
+    if `rc_b' == `rc_c' & "`vars_b' `meta_b'" == "`vars_c' `meta_c'" test_pass "P2-2 idcluster parity: `o' (r(`rc_b'))"
+    else test_fail "P2-2 idcluster parity: `o'" "bsample r(`rc_b') `vars_b' `meta_b'; cbsample r(`rc_c') `vars_c' `meta_c'"
+}
+
+* P3-13: resample sizes that differ across strata, as bsample draws them:
+* the same rc, and the same number of draws in every stratum
+clear
+set seed 2026
+set obs 90
+gen long obs = _n
+gen cl = ceil(_n / 3)
+gen s = mod(cl, 3) + 1
+gen double w = .
+gen sz = cond(s == 1, 3, cond(s == 2, 7, 5))
+gen szfrac = sz + (s == 2) / 2
+gen szzero = sz * (s != 3)
+gen szbig = sz + 40 * (s == 1)
+gen s2 = _n <= 30
+foreach call in "sz, strata(s)" "sz, strata(s) weight(w)" "sz, strata(s) cluster(cl)" ///
+    "sz, strata(s) cluster(cl) weight(w)" "_N/2, strata(s2)" "_N/3, strata(s2) cluster(cl)" ///
+    "szfrac, strata(s)" "szzero, strata(s)" "szbig, strata(s)" "szbig, strata(s) cluster(cl)" ///
+    "sz if obs > 9, strata(s)" {
+    local draws_bsample
+    local draws_cbsample
+    foreach cmd in bsample cbsample {
+        preserve
+        set seed 11
+        capture `cmd' `call'
+        local rc_`cmd' = _rc
+        if !_rc {
+            local st = cond(strpos("`call'", "s2)"), "s2", "s")
+            * clusters drawn per stratum: weight() counts each copy once per
+            * cluster, expanded data once per row
+            if strpos("`call'", "weight(w)") {
+                if strpos("`call'", "cluster(cl)") bysort `st' cl: keep if _n == 1
+                gen double drawn = w
+            }
+            else gen double drawn = cond(strpos("`call'", "cluster(cl)"), 1 / 3, 1)
+            collapse (sum) drawn, by(`st')
+            mata: st_local("draws_`cmd'", invtokens(strofreal(round(st_data(., "drawn"))')))
+        }
+        restore
+    }
+    if `rc_bsample' == `rc_cbsample' & "`draws_bsample'" == "`draws_cbsample'" ///
+        test_pass "P3-13 per-stratum sizes: `call' (r(`rc_bsample')) draws `draws_bsample'"
+    else test_fail "P3-13 per-stratum sizes: `call'" "bsample r(`rc_bsample') [`draws_bsample'], cbsample r(`rc_cbsample') [`draws_cbsample']"
+}
+
 * End of cbsample validation
 noi print_summary "cbsample"
 }

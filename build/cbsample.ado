@@ -1,4 +1,4 @@
-*! version 1.2.3 20261030 github.com/mdroste/stata-ctools
+*! version 1.2.4 20261103 github.com/mdroste/stata-ctools
 
 program define cbsample
     version 14.1
@@ -15,8 +15,8 @@ program define cbsample
     quietly _ctools_clock __ct_start90
 
     * Parse syntax to match bsample exactly:
-    * bsample [exp] [if] [in], [strata(varlist) cluster(varlist) weight(varname)]
-    syntax [anything(name=n)] [if] [in], [STRata(varlist) CLuster(varlist) Weight(varname) Verbose THReads(integer 0)]
+    * bsample [exp] [if] [in], [strata(varlist) cluster(varlist) idcluster(newvar) weight(varname)]
+    syntax [anything(name=n)] [if] [in], [STRata(varlist) CLuster(varlist) IDcluster(string) Weight(varname) Verbose THReads(integer 0)]
     local __wgtvar `weight'
     local weight
     _ctools_cleanup cbsample
@@ -35,6 +35,7 @@ program define cbsample
         if "`strata'" != "" local empty_opts `empty_opts' strata(`strata')
         if "`cluster'" != "" local empty_opts `empty_opts' cluster(`cluster')
         if "`__wgtvar'" != "" local empty_opts `empty_opts' weight(`__wgtvar')
+        if `"`idcluster'"' != "" local empty_opts `empty_opts' idcluster(`idcluster')
         quietly bsample `n' `if' `in', `empty_opts'
         foreach result in nobs n_selected total_weight nclusters nstrata {
             scalar _cbsample_`result' = 0
@@ -45,8 +46,9 @@ program define cbsample
 
     local n_exp `"`n'"'
 
-    * Validate weight variable exists if specified (matches bsample behavior)
-    if "`__wgtvar'" != "" {
+    * Validate weight variable exists if specified (matches bsample behavior;
+    * with idcluster() bsample reports the idcluster() error first)
+    if "`__wgtvar'" != "" & `"`idcluster'"' == "" {
         confirm numeric variable `__wgtvar'
     }
 
@@ -60,10 +62,41 @@ program define cbsample
     quietly count if `touse'
     local nobs_sample = r(N)
     _return restore `__rhold'
+    * idcluster(), checked and an existing variable of that name dropped
+    * before the draw, as bsample does. bsample has sorted the data by
+    * sample, strata and cluster when it reports these errors.
+    if `"`idcluster'"' != "" {
+        local id_error
+        if "`cluster'" == "" local id_error "option idcluster() requires option cluster()"
+        else if "`__wgtvar'" != "" local id_error "options idcluster() and weight() may not be combined"
+        else {
+            capture confirm new variable `idcluster'
+            if _rc {
+                capture confirm variable `idcluster'
+                if _rc local id_error confirm
+            }
+        }
+        if "`id_error'" != "" {
+            if `nobs_sample' < _N {
+                tempvar presort
+                quietly generate byte `presort' = cond(`touse', 1, .)
+                sort `presort' `strata' `cluster', stable
+                drop `presort'
+            }
+            else if "`strata'`cluster'" != "" sort `strata' `cluster', stable
+            if "`id_error'" == "confirm" confirm variable `idcluster'
+            di as error "`id_error'"
+            exit 198
+        }
+        capture confirm new variable `idcluster'
+        if _rc drop `idcluster'
+    }
     * The resample size is an expression, evaluated as bsample does: on the
     * sample, within each stratum under strata() (so _N counts the stratum)
+    * Sizes that differ across strata are stored by stratum in a variable.
+    tempvar nsampvar
     if `"`n_exp'"' == "" | `nobs_sample' == 0 local n = 0
-    else _cbsample_size n : `"`n_exp'"' `touse' "`strata'"
+    else _cbsample_size n : `"`n_exp'"' `touse' "`strata'" `nsampvar'
     if `nobs_sample' == 0 {
         if "`strata'" == "" {
             di as error "cbsample: no observations in sampling sample"
@@ -71,6 +104,11 @@ program define cbsample
         }
         if "`__wgtvar'" != "" quietly replace `__wgtvar' = 0
         else quietly drop if 1
+        if `"`idcluster'"' != "" {
+            quietly generate byte `idcluster' = .
+            label variable `idcluster' "Bootstrap sample cluster id"
+            sort `strata'
+        }
         foreach result in nobs n_selected total_weight nclusters nstrata {
             scalar _cbsample_`result' = 0
         }
@@ -104,6 +142,14 @@ program define cbsample
     * Create temporary frequency weight variable
     tempvar __cbsample_weight__
     quietly gen double `__cbsample_weight__' = 0
+    * idcluster(): the draw also writes each sampled observation's sorted
+    * position and its cluster and stratum ordinals
+    if `"`idcluster'"' != "" {
+        tempvar __cbsample_pos__ __cbsample_cl__ __cbsample_st__ __cbsample_key__
+        foreach v in pos cl st {
+            quietly gen double `__cbsample_`v'__' = .
+        }
+    }
 
     * Get ALL variables and find indices. The sample marker goes last, in
     * place of an if: Stata answers an if one observation at a time, while
@@ -111,13 +157,24 @@ program define cbsample
     unab allvars : *
     local allvars : list allvars - touse
     local freq_idx = 0
+    local size_idx = 0
+    local id_opts
     local idx = 1
     foreach v of local allvars {
         if ("`v'" == "`__cbsample_weight__'") {
             local freq_idx = `idx'
         }
+        if "`n'" == "var" & "`v'" == "`nsampvar'" local size_idx = `idx'
+        if `"`idcluster'"' != "" {
+            if "`v'" == "`__cbsample_pos__'" local id_opts `id_opts' posidx=`idx'
+            if "`v'" == "`__cbsample_cl__'" local id_opts `id_opts' clidx=`idx'
+            if "`v'" == "`__cbsample_st__'" local id_opts `id_opts' stidx=`idx'
+        }
         local ++idx
     }
+    * bsample numbers the cluster copies across strata under version 14 or
+    * later, within each stratum otherwise
+    if `"`idcluster'"' != "" & _caller() > 13 local id_opts `id_opts' iduniq
 
     * Build cluster variable indices
     local cluster_indices ""
@@ -150,8 +207,10 @@ program define cbsample
     }
 
     * Build options
-    local n_s = strtrim(string(`n', "%20.0f"))
-    local opts "n=`n_s' seedhi=`seed_hi' seedlo=`seed_lo'"
+    if "`n'" == "var" local n_s 0
+    else local n_s = strtrim(string(`n', "%20.0f"))
+    local opts "n=`n_s' seedhi=`seed_hi' seedlo=`seed_lo' `id_opts'"
+    if `size_idx' local opts "`opts' sizeidx=`size_idx'"
     if "`verbose'" != "" local opts "`opts' verbose"
     if `nobs_sample' == _N local opts "`opts' skipif"
     else local opts "`opts' touse"
@@ -192,6 +251,22 @@ program define cbsample
         quietly drop if `__cbsample_weight__' == 0
         * Expand based on weight (creates duplicates for weight > 1)
         quietly expand `__cbsample_weight__'
+        if `"`idcluster'"' != "" {
+            * Stata's replace promotes bsample's byte id as its values grow
+            local idmax = scalar(_cbsample_idmax)
+            local idtype = cond(`idmax' <= 100, "byte", cond(`idmax' <= 32740, "int", "long"))
+            quietly generate `idtype' `idcluster' = .
+            format `idcluster' %8.0g
+            quietly generate double `__cbsample_key__' = .
+            local id_pass "seedhi=`seed_hi' seedlo=`seed_lo'"
+            if _caller() > 13 local id_pass "`id_pass' iduniq"
+            if scalar(_cbsample_idrandom) local id_pass "`id_pass' idrandom"
+            plugin call ctools_plugin `__cbsample_pos__' `__cbsample_cl__' `__cbsample_st__' ///
+                `idcluster' `__cbsample_key__', "cbsample idpass `id_pass'"
+            label variable `idcluster' "Bootstrap sample cluster id"
+            * bsample's row order: strata, id, then the observation order
+            sort `strata' `__cbsample_key__'
+        }
     }
 
     * Finish timing
@@ -240,9 +315,9 @@ end
 * The resample size bsample takes from [exp]: constant (within each stratum
 * under strata()), an integer, and greater than zero. Stata evaluates _N in
 * the sample (strata: in the stratum). Sizes that differ across strata are
-* not supported.
+* stored by observation in the new variable sizevar and macname is "var".
 program define _cbsample_size
-    args macname colon exp touse strata
+    args macname colon exp touse strata sizevar
     capture confirm number `exp'
     if !_rc {
         local values `exp'
@@ -257,19 +332,28 @@ program define _cbsample_size
         mata: mata drop __cb_v
     }
     else {
+        * bsample evaluates the expression by stratum, the data sorted by
+        * (strata, cluster) with ties in their order
+        quietly generate double `sizevar' = .
         preserve
+        tempvar nsamp first obs
+        quietly generate double `obs' = _n
         quietly keep if `touse'
-        tempvar nsamp first
-        quietly bysort `strata': generate double `nsamp' = (`exp')
+        sort `strata', stable
+        quietly by `strata': generate double `nsamp' = (`exp')
         quietly by `strata': generate byte `first' = _n == 1
         quietly by `strata': replace `first' = . if `nsamp' != `nsamp'[1]
         quietly count if missing(`first')
         local constant = r(N) == 0
         mata: __cb_v = uniqrows(st_data(., st_local("nsamp"), st_local("first"))); ///
             st_local("values", invtokens(strofreal(__cb_v', "%21.0g")))
+        if `constant' & `: word count `values'' > 1 {
+            mata: __cb_s = st_data(., (st_local("obs"), st_local("nsamp")))
+        }
         mata: mata drop __cb_v
         restore
         if !`constant' {
+            capture drop `sizevar'
             di as error "expression: `exp': is not constant within strata"
             exit 198
         }
@@ -278,19 +362,31 @@ program define _cbsample_size
         di as error "expression: `exp': is not constant"
         exit 198
     }
+    * bsample checks every size is an integer, then that every size is
+    * greater than zero
+    foreach value of local values {
+        if !(abs(`value' - int(`value')) < 1e-7) {
+            capture mata: mata drop __cb_s
+            capture drop `sizevar'
+            di as error "expression: `exp': is not an integer"
+            exit 198
+        }
+    }
+    foreach value of local values {
+        if !(`value' > 0) {
+            capture mata: mata drop __cb_s
+            capture drop `sizevar'
+            di as error "resample size must be greater than zero"
+            exit 498
+        }
+    }
     if `: word count `values'' > 1 {
-        di as error "cbsample: resample sizes that differ across strata are not supported; use bsample"
-        exit 198
+        mata: st_store(__cb_s[., 1], st_local("sizevar"), round(__cb_s[., 2]))
+        mata: mata drop __cb_s
+        c_local `macname' var
+        exit
     }
-    local value = real("`values'")
-    if !(abs(`value' - int(`value')) < 1e-7) {
-        di as error "expression: `exp': is not an integer"
-        exit 198
-    }
-    if !(`value' > 0) {
-        di as error "resample size must be greater than zero"
-        exit 498
-    }
-    local value = round(`value')
+    capture drop `sizevar'
+    local value = round(`values')
     c_local `macname' `value'
 end

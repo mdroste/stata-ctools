@@ -51,6 +51,7 @@ sysuse auto, clear
 benchmark_winsor price mpg weight, testname("vs winsor2: multiple variables")
 
 * Test 2.4: Variable with missing values
+set seed 560219
 clear
 set obs 100
 gen x = rnormal()

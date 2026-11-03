@@ -1,10 +1,10 @@
 # cqreg
 
-High-performance C-accelerated quantile regression.
+Quantile regression.
 
 ## Overview
 
-`cqreg` implements selected syntax of Stata's `qreg` command that uses an Interior Point Method (IPM) solver implemented in C. It provides significant performance improvements, especially for large datasets (N > 100,000). `absorb()` is currently unsupported; use explicit factor-variable indicators to estimate fixed effects jointly with the slopes.
+`cqreg` estimates quantile regressions using an interior-point solver written in C. See the [published benchmarks](../benchmarks/readme_profile/results.md) for timing comparisons with `qreg`. `absorb()` is currently unsupported; use explicit factor-variable indicators to estimate fixed effects jointly with the slopes.
 
 Weight expressions are not supported. Solver and VCE differences are described in the [compatibility table](../COMPATIBILITY.md).
 
@@ -40,7 +40,7 @@ Without `indepvars` the constant-only model is fitted. Typed without a variable 
 | `maxiter(#)` | Maximum IPM iterations (default: 200) |
 | `nopreprocess(#)` | Accepted for backward compatibility; has no effect (`nopreprocess(-1)` returns error 198) |
 
-Exhausting the iteration limit, numerical breakdown, or nonfinite results returns error 430 without posting new estimates.
+If the solver reaches its iteration limit before converging, encounters a numerical failure, or produces nonfinite results, the command returns error 430 and does not store new estimates.
 
 ### Reporting Options
 | Option | Description |
@@ -49,7 +49,7 @@ Exhausting the iteration limit, numerical breakdown, or nonfinite results return
 | display options | `qreg`'s estimation display options, such as `cformat()` |
 | `nolog` | Accepted for compatibility; `cqreg` prints no iteration log |
 | `verbose` | Display progress information |
-| `threads(#)` | Maximum workers; zero uses the ctools thread setting |
+| `threads(#)` | Maximum threads; zero uses the ctools thread setting |
 
 ## Examples
 
@@ -86,13 +86,13 @@ cqreg price mpg weight, verbose
 
 `cqreg` achieves its speed through:
 
-### Speedup Tricks
+### Implementation details
 
 **IPM Solver:**
 - **Mehrotra predictor-corrector**: Each Newton step computes a predictor and a corrector direction. Runtime depends on sample size, the number of regressors, conditioning, and the iterations needed to converge.
 
 **Linear Algebra:**
-- **BLAS/LAPACK dispatch**: Automatically uses Apple Accelerate (macOS) or OpenBLAS when available for matrix-matrix and matrix-vector operations, falling back to hand-tuned C kernels
+- **BLAS/LAPACK dispatch**: Automatically uses Apple Accelerate (macOS) or OpenBLAS when available for matrix-matrix and matrix-vector operations, and uses C routines when those libraries are unavailable
 - **K-way unrolled dot product**: `ctools_dot_unrolled` (8/16-way) used in the fallback path when BLAS is unavailable
 - **4-way unrolled scaling**: Custom `dscal`-equivalent loop processes 4 elements per iteration when BLAS is not linked
 - **OpenMP parallelization**: Parallel matrix operations in the IPM core
@@ -147,12 +147,18 @@ difference, so a difference below sqrt(epsilon) in the scaled response units is 
 the cutoff `qreg` applies to the per-observation robust densities, which `cqreg` also applies in
 those units.
 
+### Non-unique optima
+`cqreg` checks whether coefficients can change without increasing the
+quantile-regression objective. If it finds such a change, it reports a nonunique
+solution and sets `e(nonunique)` to 1. The check does not detect every nonunique
+solution, so a value of 0 does not establish uniqueness.
+
 ### Bandwidth Methods
 | Method | Description |
 |--------|-------------|
-| `hsheather` | Hall-Sheather (1988) - default, generally recommended |
-| `bofinger` | Bofinger (1975) - more conservative |
-| `chamberlain` | Chamberlain (1994) - less smoothing |
+| `hsheather` | Hall–Sheather (1988); default |
+| `bofinger` | Bofinger (1975) |
+| `chamberlain` | Chamberlain (1994) |
 
 ## Stored Results
 
@@ -216,7 +222,7 @@ coefficients with the same `e(sum_adev)`. `validation/stata/cqreg.do` checks suc
 `benchmark_qreg_altopt`, which verifies that cqreg's coefficients attain qreg's minimum.
 
 ### Solver
-`cqreg` always uses the direct Frisch-Newton interior point solver. The experimental preprocessing solver that `nopreprocess(-1)` used to select has been removed; the option is still parsed so existing do-files with `nopreprocess(0)` or `nopreprocess(1)` keep running.
+`cqreg` uses the Frisch–Newton interior-point solver. `nopreprocess(0)` and `nopreprocess(1)` are accepted for compatibility and do not change the solver.
 
 ## Comparison with qreg
 

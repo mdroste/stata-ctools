@@ -1,4 +1,4 @@
-*! version 1.2.3 20261030 github.com/mdroste/stata-ctools
+*! version 1.2.4 20261103 github.com/mdroste/stata-ctools
 *! Binary statistical writers; serialization is provided by C.
 program define _cio_export, rclass
     version 14.1
@@ -115,7 +115,9 @@ program define _cio_export, rclass
     }
     quietly label dir
     local allsets `r(names)'
-    if inlist("`kind'","sasxport5","sasxport8") {
+    * Version 5 transport writes, and checks the names of, only the value
+    * labels that variables use, as export sasxport5 does.
+    if "`kind'"=="sasxport8" {
         foreach set of local allsets {
             if !`: list set in referenced' {
                 local ++j

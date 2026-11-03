@@ -18,6 +18,17 @@
 ST_retcode cexport_read_local(const char *field, char **value);
 ST_retcode cexport_column_metadata(size_t column, char **name, int *type, int *date);
 
+/* Excel cell style codes that cexport.ado passes per column in the date
+   field, assigned from display formats as export excel assigns them. The
+   writers keep cell formats in this order: General, m/d/yy, a datetime with
+   milliseconds, m/d/yy h:mm, h:mm:ss AM/PM, 0 for %tg, then 0, 0.00,
+   #,##0, #,##0.00 and 0.00E+00 for other numbers. Codes 1-4 are dates
+   (Excel serial values). Codes 1-5, the %t formats, keep their format under
+   keepcellfmt and for a missing() number, as in export excel. */
+#define CEXPORT_STYLE_COUNT 11
+#define CEXPORT_STYLE_IS_DATE(code) ((code) >= 1 && (code) <= 4)
+#define CEXPORT_STYLE_IS_TFORMAT(code) ((code) >= 1 && (code) <= 5)
+
 /* ========================================================================
    Context Management
    ======================================================================== */

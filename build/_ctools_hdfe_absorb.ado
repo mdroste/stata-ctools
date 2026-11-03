@@ -1,4 +1,4 @@
-*! version 1.2.3 20261030 github.com/mdroste/stata-ctools
+*! version 1.2.4 20261103 github.com/mdroste/stata-ctools
 *! Absorbed effects of creghdfe and civreghdfe.
 * _ctools_hdfe_absorb terms, touse(varname) cmd(name)
 *

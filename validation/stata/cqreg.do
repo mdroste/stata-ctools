@@ -433,6 +433,7 @@ print_section "Pathological - Small Datasets"
 
 * Minimum size for 2 covariates + constant = 4 observations (bare minimum)
 * Test with just enough observations
+set seed 438201
 clear
 set obs 10
 gen x = runiform()
@@ -1581,6 +1582,86 @@ foreach density in fitted kernel {
         & e(N_clust) == 1 & _se[x] == 0 test_pass "one cluster `density': V, rank, df_r as qreg"
     else test_fail "one cluster `density': V, rank, df_r as qreg" ///
         "rank `=e(rank)' vs `one_q_rank', df_r `=e(df_r)' vs `one_q_df_r'"
+}
+
+* Non-unique optima: e(nonunique) is 1 (and a note is displayed) when an edge
+* of optimal solutions leaves the reported vertex. Each design below is shown
+* non-unique in the test itself: qreg (wlsiter 1 or 20) and cqreg report
+* coefficient vectors that differ while their check-function objectives,
+* recomputed from the data, agree to 7 significant figures. Designs with
+* continuous outcomes have a unique optimum and must report 0.
+capture program drop _cqreg_nonunique_case
+program define _cqreg_nonunique_case
+    syntax varlist(fv) [, Quantile(real .5) expect(integer 1) testname(string)]
+    tempvar touse
+    quietly qreg `varlist', quantile(`quantile')
+    matrix nu_b1 = e(b)
+    quietly generate byte `touse' = e(sample)
+    quietly qreg `varlist', quantile(`quantile') wlsiter(20)
+    matrix nu_b20 = e(b)
+    quietly cqreg `varlist', quantile(`quantile')
+    matrix nu_bc = e(b)
+    local nu_flag = e(nonunique)
+    gettoken depvar : varlist
+    if `expect' {
+        local shown 0
+        _qreg_altopt_objective nu_bc `depvar' `touse' `quantile'
+        local obj_c = r(objective)
+        foreach other in nu_b1 nu_b20 {
+            if mreldif(`other', nu_bc) > 1e-7 {
+                _qreg_altopt_objective `other' `depvar' `touse' `quantile'
+                sigfigs `obj_c' `r(objective)'
+                if r(sigfigs) >= $DEFAULT_SIGFIGS local shown 1
+            }
+        }
+        if !`shown' {
+            test_fail "`testname'" "no second optimal e(b) found to establish non-uniqueness"
+            exit
+        }
+    }
+    if `nu_flag' == `expect' test_pass "`testname'"
+    else test_fail "`testname'" "e(nonunique) = `nu_flag', expected `expect'"
+end
+clear
+set seed 4
+set obs 3000
+gen id = ceil(_n/10)
+gen cat = 1 + mod(_n*7, 4)
+gen r = 1 + mod(id, 3)
+gen r2 = r
+gen double x = rnormal() + cat/3
+gen double y = 1 + .5*x + .3*cat + rnormal() + mod(id,7)/3
+_cqreg_nonunique_case y x i.r i.r2, testname("e(nonunique): x i.r i.r2")
+_cqreg_nonunique_case y x i.cat, testname("e(nonunique): x i.cat")
+clear
+set seed 403
+set obs 100
+gen f = ceil(6*runiform())
+gen y = 1 + .5*f + rnormal()
+_cqreg_nonunique_case y i.f, testname("e(nonunique): i.f, N=100")
+clear
+set seed 2026
+set obs 5000
+gen g = 1 + mod(_n, 6)
+gen x = rnormal()
+gen y2 = rpoisson(exp(.2 + .1*g + .5*x))
+_cqreg_nonunique_case y2 i.g x, testname("e(nonunique): discrete outcome, i.g x")
+sysuse auto, clear
+_cqreg_nonunique_case price mpg i.foreign i.rep78, testname("e(nonunique): auto i.foreign i.rep78")
+_cqreg_nonunique_case price mpg ib3.rep78, testname("e(nonunique): auto ib3.rep78")
+_cqreg_nonunique_case price mpg ib3.rep78, quantile(.75) testname("e(nonunique): auto ib3.rep78, q=.75")
+_cqreg_nonunique_case price mpg weight, expect(0) testname("e(nonunique): auto price mpg weight (unique)")
+_cqreg_nonunique_case price c.mpg#i.foreign weight, quantile(.25) expect(0) testname("e(nonunique): auto c.mpg#i.foreign weight, q=.25 (unique)")
+sysuse nlsw88, clear
+_cqreg_nonunique_case wage age tenure i.occupation, testname("e(nonunique): nlsw88 i.occupation")
+clear
+set seed 7
+set obs 1000
+gen double x = runiform()
+gen double z = rnormal()
+gen double y = x + z + rnormal()
+foreach q in .1 .5 .9 {
+    _cqreg_nonunique_case y x z, quantile(`q') expect(0) testname("e(nonunique): continuous y x z, q=`q' (unique)")
 }
 
 * Summary

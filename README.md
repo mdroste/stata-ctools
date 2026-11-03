@@ -9,13 +9,13 @@
 ```
 
 [![Build](https://github.com/mdroste/stata-ctools/actions/workflows/build.yml/badge.svg)](https://github.com/mdroste/stata-ctools/actions/workflows/build.yml)
-![Version](https://img.shields.io/badge/version-1.2.3-blue)
+![Version](https://img.shields.io/badge/version-1.2.4-blue)
 
 **This is an initial release. Please report problems/suggestions on [Issues](https://github.com/mdroste/stata-ctools/issues).**
 
 ## Overview
 
-**ctools** provides really fast implementations of common Stata routines. The syntax is largely unchanged from the commands they replace, sometimes with additional features; see the [compatibility table](docs/COMPATIBILITY.md).
+**ctools** provides really fast drop-in replacements for common Stata programs. The syntax of ctools is largely unchanged from the commands they replace, sometimes with additional features; see the [compatibility table](docs/COMPATIBILITY.md).
 
 ### Stata built-in commands
 
@@ -39,23 +39,23 @@
 | Stata command | Replaced with | Description | Approx. speedup¹ |
 | --- | --- | --- | ---: |
 | `distinct` | [`cdistinct`](docs/commands/cdistinct.md) | Report distinct values | 10–30× |
-| `hdfe` | [`chdfe`](docs/commands/chdfe.md) | Remove fixed effects from variables | — |
 | `cipolate` | [`cinterpolate, cubic`](docs/USAGE.md#interpolation-cinterpolate) | Local cubic interpolation | — |
 | `rangejoin` | [`crangejoin`](docs/USAGE.md#interval-joins-crangejoin) | Join observations within inclusive intervals | 10–20× |
 | `winsor2`, `gstats winsor` | `cwinsor` | Winsorize variables | 2–5× vs. `gstats winsor` |
 | `rangestat` | `crangestat` | Range statistics of variables | 80–110× |
-| `psmatch2` | `cpsmatch` | Propensity score matching | 2–4× |
 | `binscatter`, `binsreg` | `cbinscatter` | Binned scatter plots | 8–60× vs. `binscatter` |
+| `psmatch2` | `cpsmatch` | Propensity score matching | 2–4× |
 | `reghdfe` | `creghdfe` | OLS with multi-way fixed effects | 10–20× |
 | `ivreghdfe` | `civreghdfe` | 2SLS/GMM with multi-way fixed effects | 10–20× |
 | `ppmlhdfe` | `cppmlhdfe` | PPML with multi-way fixed effects | 5–6× |
+| `hdfe` | [`chdfe`](docs/commands/chdfe.md) | Remove fixed effects from variables | — |
 
 ¹ These are approximate speedups from a small number of benchmarks on data with **1M, 10M, and 25M observations** and 20 mixed-type variables. Values below 1× mean ctools was slower. Your machine's mileage may vary. See [benchmark details and results](docs/performance/README.md).
 
 ## Installation
 
-Requires Stata 14.1 or later on macOS 11 or later (Apple Silicon or Intel), Windows 10 or
-later (x86-64), or x86-64 Linux with glibc 2.17 or later. See the [platform contract](docs/development/PLATFORMS.md). In Stata:
+ctools requires Stata 14.1+, macOS 11 or later (Apple Silicon or Intel), Windows 10 or
+later (x86-64), or x86-64 Linux with glibc 2.17 or later. See [PLATFORMS.md](docs/development/PLATFORMS.md). In Stata:
 
 ```stata
 net install ctools, from("https://raw.githubusercontent.com/mdroste/stata-ctools/main/build") replace
@@ -79,7 +79,7 @@ See the [documentation index](docs/README.md) for command guides, development an
 
 ## Authorship
 
-99.9% of this code was written by large language models. The early stuff was written in January 2026 by Claude Opus 4.5 and ChatGPT 5.2, back when it was still surprising for programs to be written like this. More recent bugfixes and improvements were written by Claude Fable 5.1, Claude Opus 5.5, and GPT 6.0/6.1 Astra/Sol. 
+99.9% of this code was written by AI. Most of the package was written in January 2026 by Claude Opus 4.5 and ChatGPT 5.2, back when it was still surprising for programs to be written like this. More recent bugfixes and improvements were written by Claude Fable 5.1, Claude Opus 5.5, and GPT 6.0/6.1 Astra/Sol.
 
 
 ## Thanks

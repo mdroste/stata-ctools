@@ -36,6 +36,7 @@ python3 validation/run.py cencode
 | `cbinscatter` | `mlabels` | Compare command results |
 | `cbsample` | `strata` | Compare command results |
 | `cbsample` | `cluster` | Compare command results |
+| `cbsample` | `idcluster` | Compare command results |
 | `cbsample` | `weight` | Check option behavior |
 | `cbsample` | `verbose` | Compare command results |
 | `cbsample` | `threads` | Compare command results |
@@ -184,7 +185,7 @@ python3 validation/run.py cencode
 | `civreghdfe` | `dkraay` | Compare command results |
 | `civreghdfe` | `kiefer` | Compare command results |
 | `civreghdfe` | `center` | Check rejection of an unsupported option |
-| `civreghdfe` | `b0` | Check rejection of an unsupported option |
+| `civreghdfe` | `b0` | Compare command results |
 | `civreghdfe` | `residuals` | Compare command results |
 | `civreghdfe` | `residuals2` | Compare command results |
 | `civreghdfe` | `noconstant` | Compare command results |
@@ -219,12 +220,22 @@ python3 validation/run.py cencode
 | `civreghdfe` | `threads` | Compare command results |
 | `civreghdfe` | `coeflegend` | Compare command results |
 | `civreghdfe` | `cformat` | Compare command results |
+| `civreghdfe` | `nocollin` | Compare command results |
+| `civreghdfe` | `dofadjustments` | Compare command results |
+| `civreghdfe` | `keepsingletons` | Compare command results |
+| `civreghdfe` | `sfirst` | Check rejection of an unsupported option |
+| `civreghdfe` | `civrerun` | Check option behavior |
+| `civreghdfe` | `civcollin` | Check option behavior |
+| `civreghdfe` | `civecollin` | Check option behavior |
+| `civreghdfe` | `civdups` | Check option behavior |
 | `civreghdfe` | `noreturn` | Check option behavior |
 | `civreghdfe_p` | `score` | Compare command results |
 | `civreghdfe_p` | `xb` | Compare command results |
 | `civreghdfe_p` | `stdp` | Compare command results |
 | `civreghdfe_p` | `residuals` | Compare command results |
 | `civreghdfe_p` | `xbd` | Compare command results |
+| `civreghdfe_p` | `d` | Compare command results |
+| `civreghdfe_p` | `dresiduals` | Compare command results |
 | `cmerge` | `keep` | Compare command results |
 | `cmerge` | `assert` | Compare command results |
 | `cmerge` | `generate` | Compare command results |

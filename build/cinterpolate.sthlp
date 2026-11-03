@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.3 20261030}{...}
+{* *! version 1.2.4 20261103}{...}
 {viewerjumpto "Syntax" "cinterpolate##syntax"}{...}
 {viewerjumpto "Description" "cinterpolate##description"}{...}
 {viewerjumpto "Options" "cinterpolate##options"}{...}
@@ -21,15 +21,16 @@
 
 {title:Description}
 
-{pstd}Defaults to the linear interpolation performed by {help ipolate}; {opt cubic}
-selects local cubic interpolation as in Nicholas J. Cox's SSC {help cipolate}.
-Neither reference command is required. Within each
-by-group, nonmissing y values at the same x are averaged. Missing y values between
-known points are interpolated. Missing x values and observations outside if/in
-produce missing results. The output is double precision and the input observation
-order is preserved. Without epolate, results outside the known range are missing.
-For cubic interpolation, additional gaps near the ends remain missing unless
-two distinct known x points are available on each side.
+{pstd}Defaults to the linear interpolation performed by {help ipolate};
+{opt cubic} selects local cubic interpolation as in Nicholas J. Cox's SSC
+{help cipolate}. {cmd:cinterpolate} does not call {cmd:ipolate} or require the
+SSC {cmd:cipolate} package. Within each by-group, nonmissing y values at the
+same x are averaged. Missing y values between known points are interpolated.
+Missing x values and observations outside if/in produce missing results. The
+output is double precision and the input observation order is preserved.
+Without epolate, results outside the known range are missing. For cubic
+interpolation, additional gaps near the ends remain missing unless two
+distinct known x points are available on each side.
 
 {marker options}{...}
 
@@ -44,13 +45,14 @@ group values remain distinct. Group string data must fit within 2045 bytes.
 {pstd}{opt epolate} extrapolates at both ends using the nearest two distinct
 known x points. A group with only one known point cannot extrapolate.
 
-{pstd}{opt cubic} fits a cubic polynomial through the nearest two distinct known
-x points on each side of a missing value. If either side has fewer than two
-anchors, the result remains missing. This is local Lagrange interpolation, not
-a spline, and can overshoot. Duplicate x values are averaged before choosing
-distinct anchors; extended missing x and y values are treated as missing.
-These rules avoid repeated anchors and extended-missing quirks in legacy SSC
-{cmd:cipolate}. The options {opt cubic} and {opt epolate} cannot be combined.
+{pstd}{opt cubic} fits a cubic polynomial through the nearest two distinct
+known x points on each side of a missing value. The result is missing unless
+there are at least two distinct known x values on each side. Cubic
+interpolation fits a polynomial through these four points; interpolated y
+values can lie outside the range of the known y values. For repeated x values,
+the nonmissing y values are averaged before selecting interpolation points.
+Extended missing values in x and y are treated as missing. The options
+{opt cubic} and {opt epolate} cannot be combined.
 
 {pstd}{opt threads(#)} sets the maximum number of threads, from 1 to 256.
 Omitting it or specifying zero uses the {help ctools##threads:ctools setting}.
@@ -80,11 +82,12 @@ The output variable must be new. Interpolation uses the selected sample only;
 {cmd:if}/{cmd:in} excludes observations from both the known points and the output.
 
 
-{pstd}For scripts using the former ctools linear command, replace {cmd:cipolate}
-with {cmd:cinterpolate}. No ctools alias named {cmd:cipolate} is provided, so the
-SSC command can coexist. Remove stale ctools {cmd:cipolate.ado} and
-{cmd:cipolate.sthlp} files when updating an existing installation; locate them
-with {cmd:which cipolate} and inspect their headers before removal.
+{pstd}For scripts using the former ctools linear command, replace
+{cmd:cipolate} with {cmd:cinterpolate}. No ctools alias named {cmd:cipolate}
+is provided, so the SSC command can coexist. Remove stale ctools
+{cmd:cipolate.ado} and {cmd:cipolate.sthlp} files when updating an existing
+installation; locate them with {cmd:which cipolate} and inspect their headers
+before removal.
 
 {title:Also see}
 

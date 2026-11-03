@@ -136,6 +136,13 @@ foreach opt in "" "bindquotes(strict)" "bindquotes(nobind)" {
 foreach opt in "bindquotes(strict)" "bindquotes(strict) stripquotes(yes)" "bindquotes(strict) stripquotes(no)" {
     cio_import_test using "`root'/quote_crlf.csv", kind(delimited) name("CSV CRLF inside quotes `opt'") opts(`opt')
 }
+* Under bindquotes(strict) a quote still open at the end of the file keeps
+* the line ends after it (CRLF as CR).
+forvalues i = 0/10 {
+    foreach opt in "bindquotes(strict)" "bindquotes(strict) stripquotes(yes)" "bindquotes(strict) stripquotes(no)" "bindquotes(strict) stringcols(_all)" {
+        cio_import_test using "`root'/quote_eof_`i'.csv", kind(delimited) name("CSV quote open at end of file `i' `opt'") opts(`opt')
+    }
+}
 * NaN and Infinity (exact case, signed or not) are missing values, and d/D
 * exponents read as e; nan, NA and malformed exponents stay text.
 cio_import_test using "`root'/number_tokens.csv", kind(delimited) name("CSV NaN, Infinity and d exponents")
@@ -165,6 +172,45 @@ foreach case in preserve lower upper {
     cio_import_test using "`root'/unicode_headers.csv", kind(delimited) name("CSV Unicode header names `case'") opts(case(`case') encoding(utf8))
 }
 cio_import_test using "`root'/wide_names.csv", kind(delimited) name("CSV 2,000 columns with 32-character names")
+* Display formats also follow native's later sample: groups of 512 lines
+* from line 1,026, 2,050, 4,098, ... and a last group that is not full.
+foreach file in 10000_1023_h 10000_1024_h 10000_1535_h 10000_1536_h 10000_6000_h 10000_9728_h 5120_5119_h 5121_5120_h 10000_1024_nh 10000_1025_nh 10000_9729_nh {
+    cio_import_test using "`root'/window_`file'.csv", kind(delimited) name("CSV format sample window `file'")
+}
+* Rows wider than 32,767 fields load whole when maxvar allows them (a later
+* row wider still adds columns); more columns than maxvar fail r(900).
+* set maxvar needs Mata cleared, so the helpers are reloaded around it.
+local maxvar = c(maxvar)
+local passed = $IO_FORMATS_PASSED
+local failed = $IO_FORMATS_FAILED
+clear all
+set maxvar 33000
+do "validation/support/io_test_helpers.do"
+global IO_FORMATS_PASSED `passed'
+global IO_FORMATS_FAILED `failed'
+mata: _p = st_local("root") + "/wide_32770.csv"; if (fileexists(_p)) unlink(_p); _f = fopen(_p, "w"); fput(_f, invtokens("v" :+ strofreal(1..32770), ",")); for (_r = 1; _r <= 3; _r++) { _t = strofreal((1..(32768 + _r)) :* _r); _t[32769] = "x" + strofreal(_r); fput(_f, invtokens(_t, ",")); }; fclose(_f)
+cio_import_test using "`root'/wide_32770.csv", kind(delimited) name("CSV rows of 32,769 to 32,771 fields")
+mata: _p = st_local("root") + "/wide_33010.csv"; if (fileexists(_p)) unlink(_p); _f = fopen(_p, "w"); fput(_f, invtokens(strofreal(1..33010), ",")); fclose(_f)
+capture noisily import delimited using "`root'/wide_33010.csv", clear
+local nr=_rc
+capture noisily cimport delimited using "`root'/wide_33010.csv", clear
+local cr=_rc
+cio_record "CSV more columns than maxvar error" `=cond(`nr'==900 & `cr'==900,0,9)'
+cio_import_test using "`root'/wide_33010.csv", kind(delimited) name("CSV colrange() within maxvar of a wider file") opts(colrange(33001:33010))
+local passed = $IO_FORMATS_PASSED
+local failed = $IO_FORMATS_FAILED
+clear all
+set maxvar `maxvar'
+do "validation/support/io_test_helpers.do"
+global IO_FORMATS_PASSED `passed'
+global IO_FORMATS_FAILED `failed'
+* numericcols() on a column of text only: the type follows the column's
+* string width (1 byte, 2 int, 3 long, 4 float, 5 double, wider byte).
+mata: _p = st_local("root") + "/forced_text.csv"; if (fileexists(_p)) unlink(_p); _f = fopen(_p, "w"); fput(_f, "w1,w2,w3,w4,w5,w6,w8,blank,quoted,mixed"); _q = char(34); fput(_f, "a,ab,abc,abcd,abcde,abcdef,abcdefgh,," + _q + "q,r" + _q + ",x"); fput(_f, "b,c,de,fg,hi,jk,lm,," + _q + "s" + _q + ",abcd"); fclose(_f)
+mata: mata drop _p _f _q
+foreach opt in "numericcols(_all)" "numericcols(1 3 5 7 9)" "numericcols(2 4 6 8 10) bindquotes(strict)" {
+    cio_import_test using "`root'/forced_text.csv", kind(delimited) name("CSV text forced numeric `opt'") opts(`opt')
+}
 di "CSV_OPTIONS_PASSED=$IO_FORMATS_PASSED FAILED=$IO_FORMATS_FAILED"
 if $IO_FORMATS_FAILED exit 9
     global CTOOLS_CASE_COMPLETE "io_delimited_options"
@@ -836,8 +882,147 @@ foreach ext in xlsx xls {
     }
     cio_record "`ext' %tb through its calendar, %tg as a number" `rc'
 }
+/* Cell formats as export excel assigns them, read back from every cell of
+   the workbook: 0.00 for .2f, #,##0.00 for .2fc, #,##0 for gc, 0.00E+00
+   for .2e, 0 for other numbers; m/d/yy for dates, m/d/yy h:mm for date and
+   time, h:mm:ss AM/PM when a %tc format starts with an hour, minute or
+   am/pm code; blanks keep the column's format; under missing(#) numbers
+   are General; keepcellfmt keeps old formats except for dates. Formats
+   with seconds as s (native writes empty text), %-td and %-tc are
+   documented differences and not listed. */
+capture program drop _h4b_formats
+program define _h4b_formats
+    syntax, root(string) name(string) ext(string) [setup(string) opts(string asis) select(string)]
+    tempfile source
+    quietly save `source'
+    foreach side in native result {
+        local cmd = cond("`side'" == "native", "export", "cexport")
+        use `source', clear
+        if "`setup'" != "" {
+            preserve
+            clear
+            quietly set obs 4
+            forvalues j = 1/6 {
+                quietly gen double c`j' = _n * `j' + 0.5
+                format c`j' %9.2fc
+            }
+            quietly replace c6 = td(01jan2020) + _n
+            format c6 %td
+            gen str3 c7 = "abc"
+            quietly export excel using "`root'/h4b_`side'.`ext'", replace
+            restore
+        }
+        else capture erase "`root'/h4b_`side'.`ext'"
+        capture noisily `cmd' excel `select' using "`root'/h4b_`side'.`ext'", `opts'
+        local rc_`side' = _rc
+        mata: cio_excel_styles_out = J(0, 1, "")
+        if !`rc_`side'' cio_excel_styles using "`root'/h4b_`side'.`ext'", scratch("`root'/h4b_unz_`side'_`ext'")
+        mata: _h4b_`side' = cio_excel_styles_out
+        capture mata: mata drop cio_excel_styles_out
+    }
+    mata: st_local("same", strofreal(rows(_h4b_native) == rows(_h4b_result) & rows(_h4b_native) > 0 ? all(_h4b_native :== _h4b_result) : 0))
+    if !`same' mata: cio_wb_diff(_h4b_native, _h4b_result)
+    cio_record "`ext' cell formats: `name' (native rc=`rc_native', C rc=`rc_result')" `=cond(`rc_native' == `rc_result' & !`rc_native' & `same', 0, 9)'
+    use `source', clear
+end
+set seed 20261103
+clear
+quietly set obs 3
+local i 0
+foreach f in %9.0g %9.2f %-9.2f %09.2f %10.2fc %-10.2fc %9.0fc %9.1fc %12.0gc %9.2gc %9,0gc %9.2e %10.3e %5.1f %9,2f %9,2fc %10.4g %21x %8L %tg ///
+    %td %tdCCYY-NN-DD %tdDDmonCCYY %tm %tq %tw %th %ty %d %tc %tcDDmonCCYY_HH:MM:SS %tcCCYY-NN-DD %tcSS %tc_HH:MM ///
+    %tcHH:MM %tcHH:MM:SS %tchh:MM_am %tcHH %tcMM:SS %tcmm %tca.m. %tcmon %tcm %tC %tCHH:MM {
+    local ++i
+    quietly gen double v`i' = 1234.5678 + runiform()
+    if substr("`f'", 1, 3) == "%td" | "`f'" == "%d" quietly replace v`i' = 21000 + _n
+    if inlist(substr("`f'", 1, 3), "%tc", "%tC") quietly replace v`i' = 1.9e12 + _n * 3600123
+    if inlist("`f'", "%tm", "%tq", "%tw", "%th") quietly replace v`i' = 700 + _n
+    if "`f'" == "%ty" quietly replace v`i' = 2000 + _n
+    quietly replace v`i' = . in 2
+    format v`i' `f'
+}
+gen byte b = _n
+gen long l = 100000 * _n
+gen float fl = _n / 4
+gen str4 s = "t" + string(_n)
+foreach ext in xlsx xls {
+    _h4b_formats, root("`root'") ext(`ext') name("display formats") opts(replace firstrow(variables))
+    _h4b_formats, root("`root'") ext(`ext') name("display formats, missing(99)") opts(replace missing(99))
+    _h4b_formats, root("`root'") ext(`ext') name("display formats, missing(NA)") opts(replace missing("NA"))
+    _h4b_formats, root("`root'") ext(`ext') name("display formats, keepcellfmt") opts(keepcellfmt)
+    _h4b_formats, root("`root'") ext(`ext') name("display formats, keepcellfmt replace") opts(keepcellfmt replace)
+    _h4b_formats, root("`root'") ext(`ext') name("modify over formatted cells") select(v2 v5 v9 v12 v1 v21 v30 v35 s) opts(sheet("Sheet1", modify) cell(A2)) setup(yes)
+    _h4b_formats, root("`root'") ext(`ext') name("modify keepcellfmt over formatted cells") select(v2 v5 v9 v12 v1 v21 v30 v35 s) opts(sheet("Sheet1", modify) cell(A2) keepcellfmt) setup(yes)
+    _h4b_formats, root("`root'") ext(`ext') name("new sheet keepcellfmt") select(v2 v21 v30 s) opts(sheet("Other", modify) keepcellfmt) setup(yes)
+    _h4b_formats, root("`root'") ext(`ext') name("new sheet") select(v2 v21 v30 s) opts(sheet("Other")) setup(yes)
+    _h4b_formats, root("`root'") ext(`ext') name("sheet replace keepcellfmt") select(v2 v21 v30 s) opts(sheet("Sheet1", replace) keepcellfmt) setup(yes)
+}
+/* Date and time cells display as native's: import excel, allstring renders
+   each through its cell format. */
+foreach ext in xlsx xls {
+    foreach side in native result {
+        local cmd = cond("`side'" == "native", "export", "cexport")
+        capture noisily `cmd' excel v21-v43 using "`root'/h4b_show_`side'.`ext'", replace firstrow(variables)
+        local rc_`side' = _rc
+        preserve
+        quietly import excel using "`root'/h4b_show_`side'.`ext'", allstring firstrow clear
+        mata: _h4b_`side' = st_sdata(., .)
+        restore
+    }
+    mata: st_local("same", strofreal(rows(_h4b_native) == rows(_h4b_result) & cols(_h4b_native) == cols(_h4b_result) ? all(_h4b_native :== _h4b_result) : 0))
+    cio_record "`ext' date and time cells display as native (native rc=`rc_native', C rc=`rc_result')" `=cond(`rc_native' == `rc_result' & `same', 0, 9)'
+}
+capture mata: mata drop _h4b_native _h4b_result
+/* Worksheet names Excel refuses fail r(9901) after the range checks and
+   after loading an existing workbook; with sheet(), a file that is not a
+   workbook cannot be loaded (603). */
+clear
+quietly set obs 2
+gen a = _n
+quietly export excel using "`root'/h4b_valid.xlsx", replace
+quietly export excel using "`root'/h4b_valid.xls", replace
+local long = 32 * "x"
+local e32 = 32 * "é"
+foreach ext in xlsx xls {
+    foreach s in "'a'" "'a" "a'" "'" "a[b" "a]b" "a:b" "a*b" "a?b" "a/b" "a\b" "`long'" "`e32'" "a'b" "History" {
+        foreach o in "replace" "existing" "modify" "cell(ZZZZ1) replace" "notbook" "notbook modify" {
+            foreach side in native result {
+                local cmd = cond("`side'" == "native", "export", "cexport")
+                local opts = cond("`o'" == "existing", "", subinstr("`o'", "notbook", "", 1))
+                local opts = subinstr("`opts'", "modify", "", 1)
+                capture erase "`root'/h4b_sheet_`side'.`ext'"
+                if inlist("`o'", "existing", "modify") copy "`root'/h4b_valid.`ext'" "`root'/h4b_sheet_`side'.`ext'"
+                if strpos("`o'", "notbook") {
+                    file open fh using "`root'/h4b_sheet_`side'.`ext'", write text replace
+                    file write fh "not a workbook" _n
+                    file close fh
+                }
+                if strpos("`o'", "modify") capture `cmd' excel using "`root'/h4b_sheet_`side'.`ext'", sheet("`s'", modify) `opts'
+                else capture `cmd' excel using "`root'/h4b_sheet_`side'.`ext'", sheet("`s'") `opts'
+                local rc_`side' = _rc
+            }
+            cio_record "`ext' sheet name [`s'] `o' (native rc=`rc_native', C rc=`rc_result')" `=cond(`rc_native' == `rc_result', 0, 9)'
+        }
+    }
+}
 adopath - "`root'"
 capture mata: mata drop _g4b_state _g4b_native _g4b_result
+* Date and time cells: display formats of mixed columns (times of day and
+* elapsed times, custom formats), their text in string columns (also beyond
+* 9999), date-styled header labels, cells without s= (cellXfs[0] a date),
+* UTF-16 parts, and long text under allstring() with a format.
+foreach opt in "" "allstring" {
+    cio_import_test using "`root'/format_mix.xlsx", kind(excel) name("xlsx time and custom formats `opt'") opts(`opt')
+    cio_import_test using "`root'/format_text.xlsx", kind(excel) name("xlsx date text in string columns `opt'") opts(`opt')
+    cio_import_test using "`root'/style_zero.xlsx", kind(excel) name("xlsx cells without a style `opt'") opts(`opt')
+}
+cio_import_test using "`root'/format_header.xlsx", kind(excel) name("xlsx date-styled header labels") opts(firstrow)
+foreach tag in le be {
+    cio_import_test using "`root'/utf16_`tag'.xlsx", kind(excel) name("xlsx UTF-16 `tag' parts") opts(firstrow)
+}
+cio_import_test using "`root'/long_text.xlsx", kind(excel) name("xlsx long text allstring(%9.2f)") opts(firstrow allstring("%9.2f"))
+cio_import_test using "`root'/long_text.xlsx", kind(excel) name("xlsx long text allstring(%20.0g)") opts(firstrow allstring("%20.0g"))
+cio_import_test using "`root'/long_text.xlsx", kind(excel) name("xlsx long text allstring") opts(firstrow allstring)
 di "IO_OPTIONS_PASSED=$IO_FORMATS_PASSED FAILED=$IO_FORMATS_FAILED"
 if $IO_FORMATS_FAILED exit 9
     global CTOOLS_CASE_COMPLETE "io_excel_options"
@@ -1248,6 +1433,22 @@ _fio_case, native(import sasxport5 "temp/io_allformats/inj_label.xpt", clear) //
 _fio_case, native(_fio_export export "temp/io_allformats/native/inj_header.xlsx") ///
     ctools(_fio_export cexport "temp/io_allformats/result/inj_header.xlsx") ///
     name("file text: variable labels as exported headers")
+* A data label that label data cannot quote (an unbalanced compound quote)
+* imports as native stores it. The files are written from empty datasets
+* that hold such labels.
+forvalues i = 0/3 {
+    use "temp/io_allformats/inj_datalabel_`i'.dta", clear
+    quietly set obs 2
+    gen double a = _n
+    quietly export sasxport5 a using "temp/io_allformats/inj_datalabel_`i'.xpt", replace
+    quietly export sasxport8 a using "temp/io_allformats/inj_datalabel_`i'.v8xpt", replace
+    quietly export spss a using "temp/io_allformats/inj_datalabel_`i'.sav", replace
+    quietly cexport sas a using "temp/io_allformats/inj_datalabel_`i'.sas7bdat", replace
+    cio_import_test using "temp/io_allformats/inj_datalabel_`i'.xpt", kind(sasxport5) name("file text: XPORT v5 data label `i'")
+    cio_import_test using "temp/io_allformats/inj_datalabel_`i'.v8xpt", kind(sasxport8) name("file text: XPORT v8 data label `i'")
+    cio_import_test using "temp/io_allformats/inj_datalabel_`i'.sav", kind(spss) name("file text: SPSS data label `i'")
+    cio_import_test using "temp/io_allformats/inj_datalabel_`i'.sas7bdat", kind(sas) name("file text: SAS data label `i'")
+}
 mata: mata drop _fio_q _fio_b _fio_a _fio_p
 capture mata: mata drop _fio_r_native _fio_r_ctools _fio_m_native _fio_m_ctools
 
@@ -1481,6 +1682,41 @@ foreach f in %1.0f %5.1f %9.2f %12.2fc %12.0gc %10.3e %8.2gc %-9.2f %09.2f %9,2f
     format v`i' `f'
 }
 cio_export_test, kind(spss) ext(sav) name("SPSS numeric display formats")
+/* XPORT 5 names that must change: without rename native fails r(110)
+   (variables first); with rename variables take digits (ABCDEFG2) and
+   value labels letters (A-J as digits: A2, A3 -> A, AA), a SAS format name
+   becomes USER, and value labels that no variable uses are not written. */
+capture program drop _h4b_xport
+program define _h4b_xport
+    args spec
+    gettoken sets vars : spec, parse("|")
+    local vars = subinstr(`"`vars'"', "|", "", 1)
+    clear
+    quietly set obs 2
+    local i 0
+    foreach s of local sets {
+        local ++i
+        local v : word `i' of `vars'
+        if "`v'" == "" local v v`i'
+        gen `v' = _n
+        if "`s'" != "-" {
+            capture label define `s' 1 "x`i'"
+            label values `v' `s'
+        }
+    }
+    label define unused 1 "u"
+    label define unused1 1 "w"
+end
+foreach spec in "a2 a3" "a a1 a2" "lab1 lab2 lab" "abcdefgh1 abcdefgh2" "abcdefghijk" "q1 qa q2" "p p1 p2 p3 p4" "z9 z" "comma10 dollar8 d user" ///
+    "x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13" "abcdefg1x abcdefg" "c c1" "- -|abcdefghij abcdefghik" "lab1 lab2 -|abcdefghij abcdefghik x" "- - -|_abc abcdefgh ABCDEFGH" {
+    _h4b_xport "`spec'"
+    capture noisily export sasxport5 * using "temp/io_allformats/native/h4b.xpt", replace
+    local nr = _rc
+    capture noisily cexport sasxport5 * using "temp/io_allformats/result/h4b.xpt", replace
+    cio_record "XPORT5 names without rename: `spec' (native rc=`nr', C rc=`=_rc')" `=cond(`nr' == _rc, 0, 9)'
+    _h4b_xport "`spec'"
+    cio_export_test, kind(sasxport5) ext(xpt) name("XPORT5 rename: `spec'") opts(rename)
+}
 
 di "IO_FORMATS_PASSED=$IO_FORMATS_PASSED FAILED=$IO_FORMATS_FAILED"
 if $IO_FORMATS_FAILED exit 9

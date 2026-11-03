@@ -223,6 +223,24 @@ static bool cimport_row_is_empty(const char *file_base, const CImportFieldRef *f
     return len == 0 || (len == 1 && file_base[fields[0].offset] == '\r');
 }
 
+/* Parse one row into *fields, doubling the buffer until the whole row fits:
+ * native reads rows of any width (colrange() and maxvar decide what loads).
+ * The buffer starts at CTOOLS_MAX_COLUMNS refs. Returns -1 if it cannot grow. */
+static int cimport_parse_row_grow(const CImportContext *ctx, const char *row, const char *end,
+                                  CImportFieldRef **fields, int *capacity,
+                                  const char **next_row, bool *had_unmatched) {
+    for (;;) {
+        int count = cimport_parse_row_fast(row, end, ctx->delimiter, ctx->quote_char, *fields, *capacity,
+                                           ctx->file_data, ctx->bindquotes, next_row, had_unmatched);
+        if (count < *capacity) return count;
+        if (*capacity > INT_MAX / 2) return -1;
+        CImportFieldRef *grown = realloc(*fields, 2 * (size_t)*capacity * sizeof(**fields));
+        if (!grown) return -1;
+        *fields = grown;
+        *capacity *= 2;
+    }
+}
+
 /* Display warnings for unmatched quotes (Stata-compatible format) */
 /* emptylines(include): native counts the empty text after a final line
  * terminator as one more empty line, so the row parsed at that terminator is
@@ -330,17 +348,17 @@ static CImportNumericSubtype cimport_determine_numeric_subtype(CImportColumnInfo
  * emptylines(skip) mode, as native reads it; the chunk parsers skip the same
  * empty rows before taking row 0. Returns its field count, or 0 when only
  * empty rows remain; *row_start and *next_row bound the row. */
-static int cimport_parse_header_row(const CImportContext *ctx, CImportFieldRef *fields,
+static int cimport_parse_header_row(const CImportContext *ctx, CImportFieldRef **fields, int *capacity,
                                     const char **row_start, const char **next_row) {
     const char *end = ctx->file_data + ctx->file_size;
     const char *row = cimport_skip_rows(ctx->file_data, end, ctx->skip_rows, ctx->quote_char, ctx->bindquotes);
     const char *next = end;
     int count = 0;
     while (row < end) {
-        count = cimport_parse_row_fast(row, end, ctx->delimiter, ctx->quote_char, fields, CTOOLS_MAX_COLUMNS,
-                                       ctx->file_data, ctx->bindquotes, &next, NULL);
+        count = cimport_parse_row_grow(ctx, row, end, fields, capacity, &next, NULL);
+        if (count < 0) return -1;
         if (ctx->emptylines_mode != CIMPORT_EMPTYLINES_SKIP ||
-            !cimport_row_is_empty(ctx->file_data, fields, count)) break;
+            !cimport_row_is_empty(ctx->file_data, *fields, count)) break;
         row = next;
         count = 0;
     }
@@ -350,14 +368,16 @@ static int cimport_parse_header_row(const CImportContext *ctx, CImportFieldRef *
 }
 
 static int cimport_parse_header(CImportContext *ctx) {
-    /* fields and next_fields (512 KiB each) share one heap block, off the
-     * Stata thread's stack. */
-    CImportFieldRef *fields = ctools_safe_malloc2(2 * (size_t)CTOOLS_MAX_COLUMNS, sizeof(CImportFieldRef));
+    /* The header's field refs (512 KiB, grown for wider rows) live on the
+     * heap, off the Stata thread's stack. */
+    int capacity = CTOOLS_MAX_COLUMNS;
+    CImportFieldRef *fields = ctools_safe_malloc2((size_t)capacity, sizeof(CImportFieldRef));
     const char *end = ctx->file_data + ctx->file_size;
     const char *header_start, *next;
     if (!fields) return -1;
 
-    ctx->num_columns = cimport_parse_header_row(ctx, fields, &header_start, &next);
+    ctx->num_columns = cimport_parse_header_row(ctx, &fields, &capacity, &header_start, &next);
+    if (ctx->num_columns < 0) { ctx->num_columns = 0; free(fields); return -1; }
     /* Chunked parsing starts at this row, so chunk 0 always holds the header. */
     ctx->first_row_offset = (size_t)(header_start - ctx->file_data);
     /* Only empty rows: native imports nothing, like an empty file. */
@@ -373,9 +393,11 @@ static int cimport_parse_header(CImportContext *ctx) {
     SF_macro_use("___cimport_autoheader", autoheader, sizeof(autoheader) - 1);
     if (strcmp(autoheader, "1") == 0) {
         ctx->has_header = false;
-        CImportFieldRef *next_fields = fields + CTOOLS_MAX_COLUMNS;
+        /* Only the header's columns are inspected; the parser skips any
+         * further fields of a wider row. */
+        CImportFieldRef *next_fields = ctools_safe_malloc2((size_t)ctx->num_columns + 1, sizeof(CImportFieldRef));
         bool *candidates = calloc((size_t)ctx->num_columns, sizeof(bool));
-        if (!candidates) { free(fields); return -1; }
+        if (!candidates || !next_fields) { free(candidates); free(next_fields); free(fields); return -1; }
         for (int i = 0; i < ctx->num_columns; i++) {
             int len = CIMPORT_FIELD_LENGTH(fields[i]);
             candidates[i] = len && cimport_col_selected(ctx, i) && !cimport_context_numeric(ctx,&fields[i]);
@@ -395,7 +417,7 @@ static int cimport_parse_header(CImportContext *ctx) {
                 }
             }
             int count = cimport_parse_row_fast(row, end, ctx->delimiter, ctx->quote_char,
-                        next_fields, CTOOLS_MAX_COLUMNS, ctx->file_data, ctx->bindquotes, &next, NULL);
+                        next_fields, ctx->num_columns + 1, ctx->file_data, ctx->bindquotes, &next, NULL);
             if (ctx->emptylines_mode == CIMPORT_EMPTYLINES_SKIP &&
                 cimport_row_is_empty(ctx->file_data, next_fields, count)) continue;
             if (first || last) prev = cimport_row_last_line(&cursor, row, next);
@@ -408,6 +430,7 @@ static int cimport_parse_header(CImportContext *ctx) {
             if (candidates[i]) { ctx->has_header = true; break; }
         }
         free(candidates);
+        free(next_fields);
     }
 
     ctx->columns = ctools_safe_calloc2(ctx->num_columns, sizeof(CImportColumnInfo));
@@ -592,7 +615,14 @@ static void cimport_infer_column_types(CImportContext *ctx) {
         if (!colinfo->is_integer && ctx->numeric_type_mode == CIMPORT_NUMTYPE_DOUBLE) {
             colinfo->num_subtype = CIMPORT_NUM_DOUBLE;
         } else if (colinfo->min_value == DBL_MAX) {
-            colinfo->num_subtype = force == CIMPORT_FORCE_NUMERIC ? CIMPORT_NUM_DOUBLE : CIMPORT_NUM_BYTE;
+            /* No number in the column. Text that numericcols() forces to
+             * missing takes the type native gives it, by the column's string
+             * width: 1 byte, 2 int, 3 long, 4 float, 5 double, wider byte.
+             * (Native is not deterministic when text and numbers mix.) */
+            static const int by_width[] = {CIMPORT_NUM_BYTE, CIMPORT_NUM_BYTE, CIMPORT_NUM_INT,
+                                           CIMPORT_NUM_LONG, CIMPORT_NUM_FLOAT, CIMPORT_NUM_DOUBLE};
+            colinfo->num_subtype = force == CIMPORT_FORCE_NUMERIC && is_string && decoded_len <= 5
+                ? by_width[decoded_len] : CIMPORT_NUM_BYTE;
         } else {
             colinfo->num_subtype = cimport_determine_numeric_subtype(colinfo, false);
         }
@@ -828,8 +858,10 @@ static void *cimport_parse_chunk_parallel(void *arg) {
     }
     cimport_init_col_stats(chunk->col_stats, ctx->num_columns);
 
-    /* 512 KiB of field refs: on the heap, as a worker stack may be no larger. */
-    CImportFieldRef *field_buf = ctools_safe_malloc2(CTOOLS_MAX_COLUMNS, sizeof(CImportFieldRef));
+    /* 512 KiB of field refs (grown for wider rows): on the heap, as a worker
+     * stack may be no larger. */
+    int field_capacity = CTOOLS_MAX_COLUMNS;
+    CImportFieldRef *field_buf = ctools_safe_malloc2((size_t)field_capacity, sizeof(CImportFieldRef));
     if (!field_buf) {
         atomic_store(&ctx->error_code, 920);
         return NULL;
@@ -852,9 +884,12 @@ static void *cimport_parse_chunk_parallel(void *arg) {
         }
         const char *next_row;
         bool had_unmatched;
-        int num_fields = cimport_parse_row_fast(ptr, end, ctx->delimiter, ctx->quote_char,
-                                                 field_buf, CTOOLS_MAX_COLUMNS, ctx->file_data,
-                                                 ctx->bindquotes, &next_row, &had_unmatched);
+        int num_fields = cimport_parse_row_grow(ctx, ptr, end, &field_buf, &field_capacity,
+                                                &next_row, &had_unmatched);
+        if (num_fields < 0) {
+            atomic_store(&ctx->error_code, 920);
+            break;
+        }
 
         /* Handle empty lines (including CRLF blank lines) based on emptylines mode */
         if (ctx->emptylines_mode == CIMPORT_EMPTYLINES_SKIP &&
@@ -1032,7 +1067,6 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
     char msg[512];
 
     g_cimport_parse_status = 601;
-    cimport_fields_overflow_reset();
 
     char locale[128]="",locale_decimal[8]="",locale_group[8]="";
     SF_macro_use("___cimport_parselocale",locale,sizeof(locale)-1);
@@ -1272,8 +1306,10 @@ parse_rows:
         }
         cimport_init_col_stats(chunk->col_stats, ctx->num_columns);
 
-        /* 512 KiB of field refs: on the heap, off the Stata thread's stack. */
-        CImportFieldRef *field_buf = ctools_safe_malloc2(CTOOLS_MAX_COLUMNS, sizeof(CImportFieldRef));
+        /* 512 KiB of field refs (grown for wider rows): on the heap, off the
+         * Stata thread's stack. */
+        int field_capacity = CTOOLS_MAX_COLUMNS;
+        CImportFieldRef *field_buf = ctools_safe_malloc2((size_t)field_capacity, sizeof(CImportFieldRef));
         if (!field_buf) {
             return cimport_fail(ctx, 920);
         }
@@ -1294,9 +1330,12 @@ parse_rows:
             }
             const char *next_row;
             bool had_unmatched;
-            int num_fields = cimport_parse_row_fast(ptr, end, ctx->delimiter, ctx->quote_char,
-                                                     field_buf, CTOOLS_MAX_COLUMNS, ctx->file_data,
-                                                     ctx->bindquotes, &next_row, &had_unmatched);
+            int num_fields = cimport_parse_row_grow(ctx, ptr, end, &field_buf, &field_capacity,
+                                                    &next_row, &had_unmatched);
+            if (num_fields < 0) {
+                failed = true;
+                break;
+            }
 
             /* Handle empty lines (including CRLF blank lines) based on emptylines mode */
             if (ctx->emptylines_mode == CIMPORT_EMPTYLINES_SKIP &&
@@ -1421,12 +1460,6 @@ parse_rows:
 
     t_end = ctools_timer_ms();
     ctx->time_parse += t_end - t_start;
-    if (cimport_fields_overflowed()) {
-        snprintf(msg, sizeof(msg), "cimport: a row has more than %d fields; use import delimited\n",
-                 CTOOLS_MAX_COLUMNS);
-        cimport_display_error(msg);
-        return cimport_fail(ctx, 902);
-    }
 
     ctx->total_rows = 0;
     for (int c = 0; c < ctx->num_chunks; c++) {
@@ -2018,17 +2051,20 @@ static ST_retcode cimport_do_scan(const char *filename, char delimiter, bool has
     }
 
     /* Transport original headings independently, including quotes and spaces.
-     * The 512 KiB of field refs live on the heap, off the Stata thread's stack. */
+     * The field refs (512 KiB, grown for wider rows) live on the heap, off the
+     * Stata thread's stack. */
     CImportFieldRef *headings = NULL;
     int count = 0;
     if (ctx->has_header) {
-        headings = ctools_safe_malloc2(CTOOLS_MAX_COLUMNS, sizeof(CImportFieldRef));
-        if (!headings) {
+        int capacity = CTOOLS_MAX_COLUMNS;
+        headings = ctools_safe_malloc2((size_t)capacity, sizeof(CImportFieldRef));
+        if (headings) count = cimport_parse_header_row(ctx, &headings, &capacity, NULL, NULL);
+        if (!headings || count < 0) {
+            free(headings);
             cimport_free_context(g_cimport_ctx);
             g_cimport_ctx = NULL;
             return 920;
         }
-        count = cimport_parse_header_row(ctx, headings, NULL, NULL);
     }
     for (int i = first; i < stop; i++) {
         char key[64], value[CTOOLS_MAX_STRING_LEN + 1] = "";
@@ -2147,7 +2183,8 @@ static void *cimport_store_stream_worker(void *arg)
     CImportStoreTile *task = (CImportStoreTile *)arg;
     CImportContext *ctx = task->ctx;
     CImportParsedChunk *chunk = &ctx->chunks[task->chunk];
-    CImportFieldRef *fields = ctools_safe_malloc2(CTOOLS_MAX_COLUMNS, sizeof(*fields));
+    /* Fields past the columns are skipped: a wider row is an error below. */
+    CImportFieldRef *fields = ctools_safe_malloc2((size_t)ctx->num_columns + 1, sizeof(*fields));
     task->error = 0;
     if (!fields)
     {
@@ -2173,7 +2210,7 @@ static void *cimport_store_stream_worker(void *arg)
         }
         const char *next;
         int nfields = cimport_parse_row_fast(ptr, end, ctx->delimiter, ctx->quote_char, fields,
-                                             CTOOLS_MAX_COLUMNS, ctx->file_data, ctx->bindquotes,
+                                             ctx->num_columns + 1, ctx->file_data, ctx->bindquotes,
                                              &next, NULL);
         ptr = next;
         if (ctx->emptylines_mode == CIMPORT_EMPTYLINES_SKIP &&
@@ -2241,7 +2278,8 @@ static void *cimport_store_compact_worker(void *arg)
     CImportContext *ctx = task->ctx;
     CImportParsedChunk *chunk = &ctx->chunks[task->chunk];
     unsigned char *repair = malloc((size_t)ctx->num_columns);
-    CImportFieldRef *fields = ctools_safe_malloc2(CTOOLS_MAX_COLUMNS, sizeof(*fields));
+    /* Only the columns are stored; the parser skips any further fields. */
+    CImportFieldRef *fields = ctools_safe_malloc2((size_t)ctx->num_columns + 1, sizeof(*fields));
     task->error = 0;
     if (!repair || !fields) { free(repair); free(fields); task->error = 920; return NULL; }
     const double missing = SV_missval;
@@ -2271,7 +2309,7 @@ static void *cimport_store_compact_worker(void *arg)
                     }
                     const char *next;
                     nfields = cimport_parse_row_fast(ptr, end, ctx->delimiter, ctx->quote_char,
-                        fields, CTOOLS_MAX_COLUMNS, ctx->file_data, ctx->bindquotes, &next, NULL);
+                        fields, ctx->num_columns + 1, ctx->file_data, ctx->bindquotes, &next, NULL);
                     ptr = next;
                 } while (ctx->emptylines_mode == CIMPORT_EMPTYLINES_SKIP &&
                          cimport_row_is_empty(ctx->file_data, fields, nfields));

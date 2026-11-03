@@ -24,6 +24,16 @@ ST_plugin *_stata_=&mock;
 #include "cppmlhdfe/cppmlhdfe_moments.c"
 static PPML_Options ppml_options = PPML_OPTIONS_DEFAULT;
 static int message(char *s) { (void)s; return 0; }
+static double input_K;
+static int input_errors;
+static int input_error(char *s) { (void)s; input_errors++; return 0; }
+static ST_int input_scalar(char *name, ST_double *value) {
+ const char *required[]={"__cppmlhdfe_G","__cppmlhdfe_verbose","__cppmlhdfe_maxiter",
+  "__cppmlhdfe_tolerance","__cppmlhdfe_vce_type"};
+ if(!strcmp(name,"__cppmlhdfe_K")){*value=input_K;return 0;}
+ for(int r=0;r<5;r++)if(!strcmp(name,required[r])){*value=r==3?1e-8:r==2?1000:r==0?1:0;return 0;}
+ return 1;
+}
 static void init(HDFE_State *s, int n, int groups) {
  memset(s,0,sizeof(*s));s->N=n;s->G=groups;s->num_threads=1;
  s->tolerance=1e-12;s->maxiter=10000;s->has_weights=1;
@@ -106,6 +116,18 @@ int main(void) {
   for(int i=0;i<60;i++)assert(fabs(y[i]-baseline[i])<1e-8);
  }
  destroy(&s);
+ {
+  /* Regressor limit: (K_x + 1)^2 must fit an int, where K = K_x + 1 counts y */
+  mock.scalaruse=input_scalar;mock.spouterr=input_error;
+  cppmlhdfe_input in;
+  input_K=CPPMLHDFE_MAX_REGRESSORS+1;input_errors=0;
+  assert(cppmlhdfe_read_input(&in)==0 && in.K==CPPMLHDFE_MAX_REGRESSORS+1 && !input_errors);
+  assert((long long)in.K*in.K<=2147483647LL);
+  input_K=CPPMLHDFE_MAX_REGRESSORS+2;
+  assert(cppmlhdfe_read_input(&in)==920 && input_errors==1);
+  assert((long long)(CPPMLHDFE_MAX_REGRESSORS+2)*(CPPMLHDFE_MAX_REGRESSORS+2)>2147483647LL);
+  mock.spouterr=message;
+ }
  return 0;
 }
 #endif

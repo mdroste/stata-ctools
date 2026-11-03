@@ -52,6 +52,9 @@ typedef struct {
     int sheet_action; /* 0 = add, 1 = modify, 2 = replace worksheet */
     char input_filename[MAX_PATH_LEN]; /* existing workbook, before staging output */
     bool sheet_specified;
+    /* A name Excel refuses (export excel fails r(9901) when it adds the
+     * sheet, after its range checks and loading an existing workbook) */
+    bool invalid_sheet;
 
     /* Starting cell (default A1) */
     int start_col;       /* 1-based column number */
@@ -67,7 +70,7 @@ typedef struct {
     ST_int nvars;
     char **varnames;
     int *vartypes;  /* 0=string, 1-5=numeric types */
-    unsigned char *date_cols; /* 0 = numeric, 1 = daily date, 2 = datetime */
+    unsigned char *date_cols; /* cell style code per column (CEXPORT_STYLE_*) */
     bool has_dates;  /* true if any column is a date */
 
     /* Shared strings for deduplication */
@@ -123,10 +126,19 @@ static const char *STYLES_XML =
     "  <fills count=\"2\"><fill><patternFill patternType=\"none\"/></fill><fill><patternFill patternType=\"gray125\"/></fill></fills>\n"
     "  <borders count=\"1\"><border><left/><right/><top/><bottom/><diagonal/></border></borders>\n"
     "  <cellStyleXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/></cellStyleXfs>\n"
-    "  <cellXfs count=\"3\">"
+    /* One cell format per style code, in CEXPORT_STYLE_* order */
+    "  <cellXfs count=\"11\">"
     "<xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/>"
     "<xf numFmtId=\"14\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"true\"/>"
     "<xf numFmtId=\"164\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"true\"/>"
+    "<xf numFmtId=\"22\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"true\"/>"
+    "<xf numFmtId=\"19\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"true\"/>"
+    "<xf numFmtId=\"1\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"true\"/>"
+    "<xf numFmtId=\"1\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"true\"/>"
+    "<xf numFmtId=\"2\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"true\"/>"
+    "<xf numFmtId=\"3\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"true\"/>"
+    "<xf numFmtId=\"4\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"true\"/>"
+    "<xf numFmtId=\"11\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"true\"/>"
     "</cellXfs>\n"
     "</styleSheet>";
 
@@ -416,11 +428,12 @@ static ST_retcode xlsx_parse_args(XLSXExportContext *ctx, const char *args) {
     ST_retcode rc = cexport_read_local("filename", &filename);
     if (!rc) rc = cexport_read_local("sheet", &sheet);
     if (!rc) rc = cexport_read_local("missing", &missing);
-    if (!rc && (!filename[0] || strlen(filename) >= sizeof(ctx->filename) ||
-                strlen(sheet) > MAX_SHEET_NAME)) rc = 198;
+    if (!rc && (!filename[0] || strlen(filename) >= sizeof(ctx->filename))) rc = 198;
     if (!rc) {
         strcpy(ctx->filename, filename);
-        if (sheet[0]) { strcpy(ctx->sheet_name, sheet); ctx->sheet_specified = true; }
+        /* A longer name is over 31 characters: kept in part for the error */
+        if (strlen(sheet) > MAX_SHEET_NAME) ctx->invalid_sheet = true;
+        if (sheet[0]) { snprintf(ctx->sheet_name, sizeof(ctx->sheet_name), "%s", sheet); ctx->sheet_specified = true; }
         if (missing[0]) { ctx->missing_value = missing; missing = NULL; }
     }
     free(filename); free(sheet); free(missing);
@@ -509,7 +522,7 @@ static ST_retcode xlsx_load_var_metadata(XLSXExportContext *ctx) {
             return rc;
         }
         ctx->date_cols[i] = (unsigned char)date;
-        if (date) ctx->has_dates = true;
+        if (CEXPORT_STYLE_IS_DATE(date)) ctx->has_dates = true;
     }
 
     return 0;
@@ -1056,7 +1069,7 @@ typedef struct {
     size_t *col_letters_len;    /* shared pre-computed column letter lengths */
     char (*col_prefix)[24];     /* pre-computed "      <c r=\"" + col letters */
     size_t *col_prefix_len;     /* length of each prefix */
-    const unsigned char *date_cols;      /* 0 = numeric, 1 = daily date, 2 = datetime */
+    const unsigned char *date_cols;      /* cell style code per column (CEXPORT_STYLE_*) */
     const char *escaped_missing;
     size_t escaped_missing_len;
     StringBuffer sb;            /* output buffer */
@@ -1211,12 +1224,20 @@ static void *xlsx_format_chunk(void *arg) {
             } else {
                 /* Numeric variable */
                 double val = filtered->data.vars[j].data.dbl[i];
+                /* The column's style code, at most two digits */
+                unsigned style = a->date_cols ? a->date_cols[j] : 0;
 
                 if (SF_is_missing(val)) {
                     if (ctx->missing_numeric) {
+                        /* As export excel does, a missing() number takes
+                         * the format of a %t column only */
                         int pos=0;
                         memcpy(cell_buf,prefix,prefix_len);pos=(int)prefix_len;
                         pos+=ctools_int64_to_str((int64_t)row_num,cell_buf+pos);
+                        if (CEXPORT_STYLE_IS_TFORMAT(style)) {
+                            memcpy(cell_buf+pos,"\" s=\"",5);pos+=5;
+                            pos+=ctools_int64_to_str((int64_t)style,cell_buf+pos);
+                        }
                         memcpy(cell_buf+pos,"\"><v>",5);pos+=5;
                         pos+=xlsx_fast_dtoa(ctx->missing_number,cell_buf+pos);
                         memcpy(cell_buf+pos,"</v></c>\n",9);pos+=9;
@@ -1233,9 +1254,15 @@ static void *xlsx_format_chunk(void *arg) {
                         strbuf_append_n(sb, a->escaped_missing, a->escaped_missing_len);
                         strbuf_append_n(sb, "</t></is></c>\n", 14);
                     } else {
+                        /* A blank cell keeps the column's style, as in
+                         * export excel */
                         int pos = 0;
                         memcpy(cell_buf, prefix, prefix_len); pos = (int)prefix_len;
                         pos += ctools_int64_to_str((int64_t)row_num, cell_buf + pos);
+                        if (style) {
+                            memcpy(cell_buf + pos, "\" s=\"", 5); pos += 5;
+                            pos += ctools_int64_to_str((int64_t)style, cell_buf + pos);
+                        }
                         memcpy(cell_buf + pos, "\"/>\n", 4); pos += 4;
                         strbuf_append_n(sb, cell_buf, (size_t)pos);
                     }
@@ -1244,8 +1271,10 @@ static void *xlsx_format_chunk(void *arg) {
                     int pos = 0;
                     memcpy(cell_buf, prefix, prefix_len); pos = (int)prefix_len;
                     pos += ctools_int64_to_str((int64_t)row_num, cell_buf + pos);
-                    if (a->date_cols && a->date_cols[j]) {
-                        memcpy(cell_buf + pos, a->date_cols[j] == 2 ? "\" s=\"2\"><v>" : "\" s=\"1\"><v>", 11); pos += 11;
+                    if (style) {
+                        memcpy(cell_buf + pos, "\" s=\"", 5); pos += 5;
+                        pos += ctools_int64_to_str((int64_t)style, cell_buf + pos);
+                        memcpy(cell_buf + pos, "\"><v>", 5); pos += 5;
                     } else {
                         memcpy(cell_buf + pos, "\"><v>", 5); pos += 5;
                     }
@@ -1727,12 +1756,13 @@ ST_retcode cexport_xlsx_main(const char *args) {
 
     unsigned sheet_units=0;
     for (const unsigned char *p=(const unsigned char*)ctx.sheet_name; *p; p++) {
-        if (*p<32 || strchr("[]:*?/\\",*p)) {xlsx_context_free(&ctx); return 198;}
+        if (*p<32) {xlsx_context_free(&ctx); return 198;}
         if ((*p&0xc0)!=0x80) sheet_units+=*p>=0xf0?2:1;
     }
-    if (sheet_units>31 || ctx.sheet_name[0]=='\'' || ctx.sheet_name[strlen(ctx.sheet_name)-1]=='\'') {
-        xlsx_context_free(&ctx);return 198;
-    }
+    for (const char *p=ctx.sheet_name; *p; p++)
+        if (strchr("[]:*?/\\",*p)) ctx.invalid_sheet=true;
+    if (sheet_units>31 || ctx.sheet_name[0]=='\'' || ctx.sheet_name[strlen(ctx.sheet_name)-1]=='\'')
+        ctx.invalid_sheet=true;
 
     /* Load variable metadata */
     rc = xlsx_load_var_metadata(&ctx);
@@ -1779,6 +1809,12 @@ ST_retcode cexport_xlsx_main(const char *args) {
     if ((size_t)ctx.start_col+(size_t)ctx.nvars-1>16384 ||
         (size_t)ctx.start_row+filtered.data.nobs+(ctx.firstrow?1:0)-1>1048576) {
         ctools_filtered_data_free(&filtered);xlsx_context_free(&ctx);return 198;
+    }
+    if (ctx.invalid_sheet && !ctx.input_filename[0]) {
+        char msg[200];
+        snprintf(msg,sizeof(msg),"invalid worksheet name %.150s\n",ctx.sheet_name);
+        SF_error(msg);
+        ctools_filtered_data_free(&filtered);xlsx_context_free(&ctx);return 9901;
     }
 
     /* Text that is not valid UTF-8 cannot be written as XML; native export

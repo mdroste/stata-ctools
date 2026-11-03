@@ -137,10 +137,11 @@ static int string_cell(FILE *f, unsigned row, unsigned col, unsigned index) {
     put32(b + 6, index);
     return record(f, 0xfd, b, 10);
 }
-static int blank_cell(FILE *f, unsigned row, unsigned col) {
+static int blank_cell(FILE *f, unsigned row, unsigned col, unsigned style) {
     unsigned char b[6] = {0};
     put16(b, row);
     put16(b + 2, col);
+    put16(b + 4, style);
     return record(f, 0x201, b, 6);
 }
 static int string_value(int var, int obs, char **buffer, size_t *capacity) {
@@ -335,6 +336,18 @@ ST_retcode cexport_xls_main(const char *args) {
         if ((rc = cexport_column_metadata((size_t)j, &names[j], &type, &dates[j])))
             goto done;
     }
+    /* A name Excel refuses: export excel fails r(9901) when it adds the
+     * sheet, after its range checks and loading an existing workbook. */
+    size_t units = 0;
+    int invalid_sheet = *sheet && (sheet[0] == '\'' || sheet[strlen(sheet) - 1] == '\'');
+    for (const unsigned char *p = (const unsigned char *)sheet; *p; p++) {
+        if (strchr("[]:*?/\\", *p))
+            invalid_sheet = 1;
+        if ((*p & 0xc0) != 0x80)
+            units += *p >= 0xf0 ? 2 : 1;
+    }
+    if (units > 31)
+        invalid_sheet = 1;
     biff = tmpfile();
     if (!biff) {
         rc = 603;
@@ -346,15 +359,19 @@ ST_retcode cexport_xls_main(const char *args) {
     put16(b, 1200);
     if ((rc = record(biff, 0x42, b, 2)))
         goto done;
-    memset(b, 0, 20);
-    if ((rc = record(biff, 0xe0, b, 20)))
-        goto done;
-    put16(b + 2, 14);
-    if ((rc = record(biff, 0xe0, b, 20)))
-        goto done;
-    put16(b + 2, 22);
-    if ((rc = record(biff, 0xe0, b, 20)))
-        goto done;
+    /* One cell XF per CEXPORT_STYLE_* code, with built-in number formats
+     * (BIFF8 has no milliseconds without a custom format, so that datetime
+     * code uses m/d/yy h:mm); fAtrNum marks a format of its own, as native
+     * export sets it. */
+    static const unsigned xf_formats[CEXPORT_STYLE_COUNT] = {0, 14, 22, 22, 19, 1, 1, 2, 3, 4, 11};
+    for (int style = 0; style < CEXPORT_STYLE_COUNT; style++) {
+        memset(b, 0, 20);
+        put16(b + 2, xf_formats[style]);
+        if (xf_formats[style])
+            b[9] = 0x04;
+        if ((rc = record(biff, 0xe0, b, 20)))
+            goto done;
+    }
     xls_sst sst = {0};
     sst.file = biff;
     sst.first = 1;
@@ -397,7 +414,7 @@ ST_retcode cexport_xls_main(const char *args) {
     }
     memset(b, 0, sizeof(b));
     size_t chars;
-    rc = utf16(*sheet ? sheet : "Sheet1", b + 8, 31, &chars);
+    rc = utf16(*sheet && !invalid_sheet ? sheet : "Sheet1", b + 8, 31, &chars);
     if (rc)
         goto done;
     b[6] = (unsigned char)chars;
@@ -447,26 +464,31 @@ ST_retcode cexport_xls_main(const char *args) {
                     goto done;
                 if (*text && (rc = string_cell(biff, r, (unsigned)(col0 + j), stringindex++)))
                     goto done;
-                if (!*text && (rc = blank_cell(biff, r, (unsigned)(col0 + j))))
+                if (!*text && (rc = blank_cell(biff, r, (unsigned)(col0 + j), 0)))
                     goto done;
             } else {
                 double x;
                 if ((rc = (_stata_)->safevdata(j + 1, i, &x)))
                     goto done;
+                /* As in export excel, a blank cell keeps the column's style
+                 * and a missing() number only the style of a %t format. */
+                unsigned style = (unsigned)dates[j];
                 if (SF_is_missing(x)) {
-                    if (missing_numeric)
+                    if (missing_numeric) {
                         x = missing_number;
-                    else {
+                        if (!CEXPORT_STYLE_IS_TFORMAT(style))
+                            style = 0;
+                    } else {
                         if ((rc = *missing
                                       ? string_cell(biff, r, (unsigned)(col0 + j), stringindex++)
-                                      : blank_cell(biff, r, (unsigned)(col0 + j))))
+                                      : blank_cell(biff, r, (unsigned)(col0 + j), style)))
                             goto done;
                         continue;
                     }
                 }
                 put16(b, r);
                 put16(b + 2, (unsigned)(col0 + j));
-                put16(b + 4, (unsigned)dates[j]);
+                put16(b + 4, style);
                 uint64_t bits;
                 memcpy(&bits, &x, 8);
                 put64(b + 6, bits);
@@ -496,6 +518,18 @@ ST_retcode cexport_xls_main(const char *args) {
             }
             free(filename);
             filename = target;
+        }
+    }
+    if (invalid_sheet) {
+        xls_error_t error;
+        xlsWorkBook *loaded = existing ? xls_open_file(filename, "UTF-8", &error) : NULL;
+        /* xe_edit reports a file that is not a workbook */
+        if (!existing || loaded) {
+            if (loaded)
+                xls_close_WB(loaded);
+            ctools_error("cexport", "invalid worksheet name %s", sheet);
+            rc = 9901;
+            goto done;
         }
     }
     if (existing) {

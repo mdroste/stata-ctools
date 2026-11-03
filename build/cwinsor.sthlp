@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.3 20261030}{...}
+{* *! version 1.2.4 20261103}{...}
 {viewerjumpto "Syntax" "cwinsor##syntax"}{...}
 {viewerjumpto "Description" "cwinsor##description"}{...}
 {viewerjumpto "Options" "cwinsor##options"}{...}
@@ -90,8 +90,8 @@ be less than, the lower cutoff.
 {dlgtab:Treatment options}
 
 {phang}
-{opt trim} specifies that extreme values should be trimmed (set to missing) rather
-than winsorized (clamped to the percentile bounds).
+{opt trim} sets values outside the percentile cutoffs to missing instead of
+replacing them with the cutoffs.
 
 {dlgtab:By-group options}
 
@@ -152,21 +152,21 @@ variable and, with {opt by()}, each group. Groups with one or two nonmissing
 observations are included. Missing numeric or string group values form groups.
 
 {pstd}
-The percentile rule follows {cmd:winsor2}. For sorted nonmissing values
-x[1], ..., x[N] and p between 0 and 100, let h=N*p/100. If h is an integer,
-the cutoff is (x[h]+x[h+1])/2; otherwise it is x[ceil(h)]. The endpoints
-are the minimum and maximum. Ungrouped cutoffs pass through Stata numeric
-local macros, which can round values at a cutoff.
+The percentile rule follows {cmd:winsor2}. For sorted nonmissing values x[1],
+..., x[N] and p between 0 and 100, let h=N*p/100. If h is an integer, the
+cutoff is (x[h]+x[h+1])/2; otherwise it is x[ceil(h)]. The endpoints are the
+minimum and maximum. Without {opt by()}, storing the cutoffs in Stata local
+macros can round their values.
 
 {pstd}
 New variables from grouped winsorization use Stata's default numeric storage
-type. Other outputs retain the source storage type, except that winsorizing a
-byte, int, or long variable in place to a fractional cutoff promotes it to
-float (byte, int) or double (long), as {cmd:replace} does. With {opt by()},
-each group's cutoffs are first stored in the source's type, as {cmd:winsor2}
-stores them: truncated for byte, int, and long, and rounded for float. Missing
-source values do not enter percentile calculations; generated outputs use
-system missing for them.
+type. Other outputs retain the source storage type, except when a fractional
+cutoff replaces values in an integer variable: its storage type changes from
+{cmd:byte} or {cmd:int} to {cmd:float}, or from {cmd:long} to {cmd:double},
+following Stata's {cmd:replace}. With {opt by()}, each group's cutoffs are
+first stored in the source's type, as {cmd:winsor2} stores them: truncated for
+byte, int, and long, and rounded for float. Missing source values do not enter
+percentile calculations; generated outputs use system missing for them.
 
 
 {marker examples}{...}
@@ -231,7 +231,7 @@ Michael Droste{break}
 {title:Acknowledgments}
 
 {pstd}
-This command provides similar functionality to {cmd:winsor2} by Yujun Lian.
+{cmd:cwinsor} implements winsorization similar to Yujun Lian's {cmd:winsor2}.
 The original {cmd:winsor2} package is available from SSC:
 {browse "https://ideas.repec.org/c/boc/bocode/s457765.html"}.
 

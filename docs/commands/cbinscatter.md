@@ -1,10 +1,10 @@
 # cbinscatter
 
-High-performance C-accelerated binned scatter plots.
+Create binned scatter plots.
 
 ## Overview
 
-`cbinscatter` is a high-performance replacement for `binscatter` that uses a C plugin for all data computations. It creates binned scatter plots by dividing the x variable into equal-sized quantile bins and plotting the mean of y within each bin. All heavy computation (data loading, residualization, bin computation, and line fitting) is performed in optimized C code with OpenMP parallelization.
+`cbinscatter` groups x values into quantile bins and plots the mean of y against the mean of x in each bin. C code performs the calculations; Stata draws the graph.
 
 With `method(binsreg)`, observations in singleton fixed-effect groups remain in
 the bins and in the sample used to center adjusted means. Comparisons with
@@ -31,7 +31,7 @@ cbinscatter yvar xvar [if] [in] [weight] [, options]
 | `absorb(varlist)` | Fixed effects to absorb via HDFE (numeric or string; any codes) |
 | `by(varname)` | Create separate series by group |
 | `method(string)` | `classic` (default) residualizes x and y; `binsreg` bins raw x and adjusts bin means jointly with controls |
-| `threads(#)` | Maximum workers; zero uses the ctools thread setting |
+| `threads(#)` | Maximum threads; zero uses the ctools thread setting |
 
 ### Line Fitting Options
 | Option | Description |
@@ -104,12 +104,12 @@ cbinscatter price mpg, linetype(cubic) verbose
 
 ## Performance
 
-`cbinscatter` achieves dramatic speedups through:
+`cbinscatter` uses the following methods to compute bins and summary statistics:
 
-### Speedup Tricks
+### Implementation details
 
 **Binning Algorithm:**
-- **Exact quantile binning in O(N)**: Sorts the x values with a radix sort, then takes the same (weighted) percentile cutpoints as `xtile`/`_pctile`, so bins match `binscatter` at any sample size
+- **Exact quantile binning in O(N)**: Sorts the x values with a radix sort and uses the weighted percentile definitions of `xtile` and `_pctile` to determine bin boundaries
 - **Direct bin assignment from sorted order**: When data is sorted, bin boundaries are read off directly without binary search
 - **O(N) weighted quantile computation**: Accumulates cumulative weights in a single pass to find quantile boundaries
 
@@ -127,7 +127,7 @@ cbinscatter price mpg, linetype(cubic) verbose
 - **Overflow-safe allocation**: `ctools_safe_mul_size` checks prevent silent overflow on datasets with many bins or groups
 
 ### Performance Benchmark
-Use the validation benchmarks to measure a particular dataset and configuration. Record the source revision, dimensions, options, hardware, and reference package versions; no universal runtime is promised.
+Use the validation benchmarks to measure a particular dataset and configuration. Record the source revision, dimensions, options, hardware, and reference package versions. Runtime depends on the dataset, options, hardware, and thread count.
 
 ## Timing Breakdown
 
@@ -217,7 +217,8 @@ With `verbose`, you'll see time spent in:
 Weight expressions such as `[aw=1+abs(z)]` are evaluated once on the candidate
 sample. Missing weights are excluded; selected weights must be positive, and
 frequency weights must be integers. `controls()` accepts factor terms and
-interactions, which the wrapper materializes before calling the plugin. For
+interactions, which the command expands into indicator and interaction variables
+before estimation. For
 example, `controls(i.category c.z#i.category)` is supported. The two plotted
 variables must be numeric variables.
 

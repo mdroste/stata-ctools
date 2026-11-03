@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.3 20261030}{...}
+{* *! version 1.2.4 20261103}{...}
 {viewerjumpto "Syntax" "creghdfe##syntax"}{...}
 {viewerjumpto "Description" "creghdfe##description"}{...}
 {viewerjumpto "Options" "creghdfe##options"}{...}
@@ -85,14 +85,16 @@ groups are dropped repeatedly until none remain (unless {opt keepsingletons}).
 regressors, the model is the fixed effects and the constant.
 
 {pstd}
-Collinear regressors are omitted as {cmd:reghdfe} omits them: a regressor whose
-partialled sum of squares is at most min(1e-6, {opt tolerance()}/10) times its
-uncentered sum of squares is collinear with the fixed effects (with a note), and
-among the others Mata's {cmd:invsym()} of their cross products, in their order,
-drops the dependent ones. A dependent variable that passes the first rule is
-perfectly explained by the fixed effects: as in {cmd:reghdfe} it is set to zero,
-with a warning, so the coefficients and {cmd:e(rss)} are zero and {cmd:e(F)}
-missing. A coefficient with zero estimate and zero variance is marked omitted.
+Collinear regressors are omitted as {cmd:reghdfe} omits them: a regressor
+whose partialled sum of squares is at most min(1e-6, {opt tolerance()}/10)
+times its uncentered sum of squares is collinear with the fixed effects (with
+a note). Among the remaining regressors, collinear variables are identified
+using Mata's {cmd:invsym()} applied to the cross-product matrix in the
+specified variable order. A dependent variable that passes the first rule is
+perfectly explained by the fixed effects: as in {cmd:reghdfe} it is set to
+zero, with a warning, so the coefficients and {cmd:e(rss)} are zero and
+{cmd:e(F)} missing. A coefficient with zero estimate and zero variance is
+marked omitted.
 
 {pstd}
 A saturated model (no residual degrees of freedom) is estimated as in
@@ -103,10 +105,10 @@ deficient.
 
 {pstd}
 Typing {cmd:creghdfe} without arguments replays the results with the same
-options as estimation. Not available from {cmd:reghdfe}: its solver options
-({opt technique()}, {opt transform()}, {opt acceleration()}, {opt poolsize()},
-{opt compact}, {opt parallel()}), group and individual fixed effects, and
-heterogeneous slopes in {opt absorb()}.
+options as estimation. {cmd:creghdfe} does not support {cmd:reghdfe}'s options
+{opt technique()}, {opt transform()}, {opt acceleration()}, {opt poolsize()},
+{opt compact}, or {opt parallel()}. It also does not support group and
+individual fixed effects or heterogeneous slopes in {opt absorb()}.
 
 
 {marker options}{...}
@@ -115,18 +117,17 @@ heterogeneous slopes in {opt absorb()}.
 {dlgtab:Model}
 
 {phang}
-{opt absorb(varlist[, savefe])} specifies one or more categorical variables whose fixed
-effects are to be absorbed. Each term
-is a numeric or string variable, an {cmd:i.}{it:var}, or an interaction
-{it:var1}{cmd:#}{it:var2} absorbed as one effect; heterogeneous slopes
-({cmd:c.}{it:var}), {cmd:##} and {it:newvar}{cmd:=} terms are not supported. The optional {opt savefe}
+{opt absorb(varlist[, savefe])} specifies one or more categorical variables
+whose fixed effects are to be absorbed. Each term is a numeric or string
+variable, an {cmd:i.}{it:var}, or an interaction {it:var1}{cmd:#}{it:var2}
+absorbed as one effect; heterogeneous slopes ({cmd:c.}{it:var}), {cmd:##} and
+{it:newvar}{cmd:=} terms are not supported. The optional {opt savefe}
 suboption creates variables {cmd:__hdfe1__}, {cmd:__hdfe2__}, etc. containing
 the estimated fixed effect for each retained observation. The output names
-must be new. Individual fixed-effect levels depend on normalization; they are
-recovered as {cmd:reghdfe} recovers them (Kaczmarz sweeps accelerated by steepest
-descent) within {opt iterate()} steps, and their sum is y - xb - residual. On a
-poorly connected graph (low mobility between, say, workers and firms) the
-individual levels are poorly determined in both commands.
+must be new. Individual fixed effects depend on the normalization used. They
+are calculated iteratively, subject to {opt iterate()}, and sum to y - xb -
+residual. On a poorly connected graph (low mobility between, say, workers and
+firms) the individual levels are poorly determined in both commands.
 
 {phang}
 {opt dofadjustments(list)} selects how redundant fixed-effect coefficients are
@@ -206,7 +207,8 @@ compatibility with {help reghdfe:reghdfe}.
 
 {pstd}
 By default, an error or interruption removes new output variables and clears
-{cmd:e()}. An exhausted projection solver returns error 430.
+{cmd:e()}. Failure to remove fixed effects within the iteration limit returns
+error 430.
 
 {phang}
 {opt snapshot} uses {help preserve} to copy the whole dataset for recovery.
@@ -231,8 +233,8 @@ filled output variables. It cannot be combined with {opt snapshot}.
 of absorbed degrees of freedom. These options also apply on replay.
 
 {phang}
-{opt keepsingletons} keeps singleton groups, as in {cmd:reghdfe} (which warns that
-inference is then biased).
+{opt keepsingletons} retains singleton groups. Keeping these groups can bias
+inference.
 
 
 {marker prediction}{...}
@@ -362,8 +364,8 @@ Michael Droste{break}
 {title:Acknowledgments}
 
 {pstd}
-This command provides similar functionality to {cmd:reghdfe} by Sergio Correia.
-The original {cmd:reghdfe} package is available at
+{cmd:creghdfe} estimates fixed-effects regressions similar to Sergio Correia's
+{cmd:reghdfe}. The original {cmd:reghdfe} package is available at
 {browse "https://github.com/sergiocorreia/reghdfe"}.
 
 {pstd}

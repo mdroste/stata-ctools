@@ -155,6 +155,7 @@ if "`__workload'" == "merge" {
 * the NOBATCH key is important!
 * global ctools_nobatch 1
 clear all
+set seed 161907
 set obs 25000000
 gen long i = _n
 forval i=1/10 {
@@ -185,6 +186,7 @@ exit
 
 if "`__workload'" == "nobatch" {
 clear all
+set seed 190357
 set obs 25000000
 forval i=1/10 {
 	gen x`i' = rnormal()
@@ -208,6 +210,7 @@ exit
 if "`__workload'" == "settings" {
 clear all
 adopath + build
+set seed 213749
 set obs 10000000
 forval i=1/10 {
 	gen x`i' = rnormal()

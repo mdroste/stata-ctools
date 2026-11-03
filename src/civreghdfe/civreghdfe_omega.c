@@ -39,7 +39,7 @@
 
 /* Lags summed by a kernel: bw for lag windows; every lag up to
    T/tdelta - 1 for the spectral Quadratic Spectral window (m_omega's TAU) */
-static ST_int omega_max_lag(ST_int kernel, ST_int bw, ST_int tmax_idx, ST_double tdelta)
+static ST_int omega_max_lag(ST_int kernel, ST_double bw, ST_int tmax_idx, ST_double tdelta)
 {
     if (kernel <= 0) return 0;
     if (kernel == CIVREGHDFE_KERNEL_QS) {
@@ -48,7 +48,8 @@ static ST_int omega_max_lag(ST_int kernel, ST_int bw, ST_int tmax_idx, ST_double
         /* clamped in double: 1/tdelta can push it past INT_MAX */
         return tau > 0.0 ? (tau < 2147483646.0 ? (ST_int)tau : 2147483646) : 0;
     }
-    return bw > 0 ? bw : 0;
+    /* the lags up to a real bandwidth */
+    return bw >= 1.0 ? (bw < 2147483646.0 ? (ST_int)floor(bw) : 2147483646) : 0;
 }
 
 typedef struct { ST_int a, b, i; } omega_key;
@@ -61,7 +62,7 @@ static int cmp_key(const void *x, const void *y)
     return (p->i > q->i) - (p->i < q->i);
 }
 
-ST_retcode civ_omega_init(civ_omega *om, ST_int kind, ST_int kernel, ST_int bw,
+ST_retcode civ_omega_init(civ_omega *om, ST_int kind, ST_int kernel, ST_double bw,
                           ST_int N, ST_double N_eff, const ST_double *w, ST_int wtype,
                           const ST_int *cl1, ST_int ncl1,
                           const ST_int *cl2, ST_int ncl2,

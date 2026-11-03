@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.3 20261030}{...}
+{* *! version 1.2.4 20261103}{...}
 {viewerjumpto "Syntax" "cdistinct##syntax"}{...}
 {viewerjumpto "Description" "cdistinct##description"}{...}
 {viewerjumpto "Options" "cdistinct##options"}{...}
@@ -27,16 +27,16 @@ variable list selects all variables. Numeric and string variables are allowed.
 Missing values are excluded separately for each variable unless {opt missing}
 is specified. The command leaves values and observation order unchanged.
 
-{pstd}The C backend scans ordered keys directly and counts repeated values in
-a bounded hash table. It switches to sorting when the table fills. Counts are
-exact. Text in {cmd:strL} variables
-is limited to 2,045 bytes; longer values produce an error rather than being truncated.
+{pstd}{cmd:cdistinct} counts distinct values exactly. Text in {cmd:strL}
+variables is limited to 2,045 bytes; longer values produce an error rather
+than being truncated.
 
 {marker options}{...}
 {title:Options}
 
 {pstd}{opt joint} counts combinations of the entire variable list. Without
-{opt missing}, a row with any missing key is excluded.
+{opt missing}, an observation is excluded if any variable in the list is
+missing.
 
 {pstd}{opt missing} includes numeric missing values and empty strings.
 Extended numeric missing codes count separately.
@@ -48,8 +48,8 @@ display. The default is the longest variable name; the minimum width is five.
 specified range. The defaults are zero and no upper bound. Reversed limits
 are exchanged. These options do not change the returned results.
 
-{pstd}{opt threads(#)} sets the maximum worker count, from 1 to 256.
-Zero or omission uses the {help ctools##threads:ctools setting}.
+{pstd}{opt threads(#)} sets the maximum number of threads, from 1 to 256. Zero
+or omission uses the {help ctools##threads:ctools setting}.
 
 {pstd}{opt verbose} reports load and count times above the table.
 
@@ -70,10 +70,10 @@ returns zero.
 
 {title:Remarks}
 
-{pstd}{cmd:in} selects the same original rows for every variable. In {cmd:distinct}
-1.2.1, internal sorting can change which rows {cmd:in} selects after the first
-variable. Use a sample indicator with that reference command when comparing
-several variables under a row restriction.
+{pstd}{cmd:in} selects the same original rows for every variable. In
+{cmd:distinct} 1.2.1, sorting can change which observations {cmd:in} selects
+after the first variable. To compare results across commands, create a sample
+indicator and select observations with {cmd:if}.
 
 {title:Also see}
 {pstd}{help ctools}, {help distinct}

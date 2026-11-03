@@ -286,11 +286,6 @@ const char *cimport_find_next_row(const char *ptr, const char *end, char quote, 
  * Field Parsing
  * ============================================================================ */
 
-static atomic_int cimport_overflow_flag;
-
-void cimport_fields_overflow_reset(void) { atomic_store(&cimport_overflow_flag, 0); }
-bool cimport_fields_overflowed(void) { return atomic_load(&cimport_overflow_flag) != 0; }
-
 int cimport_parse_row_fast(const char *start, const char *end, char delim, char quote,
                            CImportFieldRef *fields, int max_fields, const char *file_base,
                            CImportBindQuotesMode bindquotes,
@@ -363,13 +358,13 @@ int cimport_parse_row_fast(const char *start, const char *end, char delim, char 
         }
     }
 
-    /* The loop stops at max_fields only after a delimiter: fields remain. */
-    if (field_count >= max_fields) atomic_store(&cimport_overflow_flag, 1);
-
     /* Trailing field: reached end of buffer or max_fields */
     if (field_start < end && field_count < max_fields) {
         const char *field_end = end;
-        while (field_end > field_start && (field_end[-1] == '\r' || field_end[-1] == '\n')) {
+        /* A strict quote still open at the end of the file keeps its line
+         * ends, as native does. */
+        while (!(in_quotes && bindquotes == CIMPORT_BINDQUOTES_STRICT) &&
+               field_end > field_start && (field_end[-1] == '\r' || field_end[-1] == '\n')) {
             field_end--;
         }
         if (field_end > field_start) {
@@ -415,8 +410,11 @@ int cimport_extract_field_fast(const char *file_base, CImportFieldRef *field,
 #define CIMPORT_PUT(c) do { if (!count_only) output[out_len] = (c); out_len++; } while (0)
     if (strip_all) quote = '"';
 
-    /* Only strip trailing CR/LF (not spaces/tabs - those are preserved like Stata) */
-    while (src_len > 0 && (src[src_len-1] == '\r' || src[src_len-1] == '\n')) {
+    /* Only strip trailing CR/LF (not spaces/tabs - those are preserved like
+     * Stata). A field still ending in LF is a strict quote open at the end of
+     * the file (no other field keeps one): native keeps its line ends. */
+    while (!(src_len > 0 && src[src_len-1] == '\n') &&
+           src_len > 0 && (src[src_len-1] == '\r' || src[src_len-1] == '\n')) {
         src_len--;
     }
     if(strip_all || quote=='\2') {

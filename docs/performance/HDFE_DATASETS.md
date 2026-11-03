@@ -4,11 +4,10 @@ Sergio Correia's [HDFE benchmark collection](https://www.scorreia.com/data/hdfe/
 
 [`validation/performance/datasets.do`](../../validation/performance/datasets.do) runs `creghdfe` and `reghdfe` on every dataset with one, two, three and four fixed effects, with regrouped identifiers, and with unadjusted, robust and clustered covariances, and compares what the two commands store. This page walks through those tests and what they show. The tables are generated from the run described under [Environment](#environment). The underlying rows are in [`benchmarks/hdfe_datasets_results.csv`](../benchmarks/hdfe_datasets_results.csv) and [`benchmarks/hdfe_datasets_oracle.csv`](../benchmarks/hdfe_datasets_oracle.csv).
 
-The suite is opt-in. It needs about 227 MB of downloaded data and is not part of the offline release gate.
+These tests require a separate download of about 227 MB and are not included in the release checks that run without network access.
 
-The results below belong to the build recorded under [Environment](#environment).
-Run the reproduction commands to assess the current checkout; the recorded pass
-counts and timings do not certify a different build.
+The results below apply to the build recorded under [Environment](#environment).
+Rerun the tests to evaluate another build.
 
 ## Results in brief
 
@@ -269,7 +268,7 @@ Agreement between two iterative solvers does not show that either is right. Thre
 - **`credit2` and `soccer`** are small enough for `areg y x1 x2 i.id2, absorb(id1)`, which solves the second effect as explicit dummies. Both commands match it.
 - **`synthetic-zigzag`** is a path: 10,000 distinct `(id1, id2)` cells linking 10,001 nodes. On a tree, any vector of cell means can be written as an `id1` effect plus an `id2` effect, so projecting on the two effects is the same as projecting on the cells, and `areg y x1, absorb(cell)` is exact. Two cells hold two rows each. All the within variation is in those four rows.
 
-  At default tolerance both commands stop about one percent from the exact slope, which is two digits. This is the stopping rule meeting a graph whose projections converge extremely slowly. It is not a difference between the commands, and it is recorded, not tested. With `tolerance(1e-10)`, `creghdfe` reproduces the exact solution, and that is the test. In runs made while writing this suite, `reghdfe`'s default projection stayed 0.6 percent from the exact slope at every tolerance down to `1e-14`, and its `technique(lsmr)` reproduced it.
+  At default tolerance both commands stop about one percent from the exact slope, which is two digits. Projection converges slowly on this graph, and both commands stop before reaching an accurate coefficient at default tolerance. The suite records those default results but does not require them to pass the accuracy threshold. With `tolerance(1e-10)`, `creghdfe` reproduces the exact solution, and that is the test. In runs made while writing this suite, `reghdfe`'s default projection stayed 0.6 percent from the exact slope at every tolerance down to `1e-14`, and its `technique(lsmr)` reproduced it.
 
 - **Saturated model.** With both `x1` and `x2` the zigzag model has 10,002 rows, 10,000 absorbed coefficients and two regressors: no residual degrees of freedom. `reghdfe` posts coefficients with a missing covariance. `creghdfe` returns `r(498)`. The suite asserts both behaviours, so a change to either is noticed.
 
@@ -287,7 +286,7 @@ Agreement between two iterative solvers does not show that either is right. Thre
 
 ## Absorbed degrees of freedom
 
-Both commands report, for each absorbed effect, its levels minus its redundant coefficients, and `e(df_a)` is the total. Two of `reghdfe`'s rules for the redundant count only matter on graphs like these, and the suite is what brought `creghdfe` into line with them.
+Both commands report, for each absorbed effect, its levels minus its redundant coefficients, and `e(df_a)` is the total. The tests check the following two rules for counting redundant fixed-effect coefficients.
 
 1. **Effects nested within the clusters are set aside first.** With `absorb(id1 id2) vce(cluster id1)`, `id1` costs no degrees of freedom, and mobility groups are then counted only among the effects that remain. `id2` is the only one, so it loses a single redundant coefficient: `e(df_a)` is the number of `id2` levels minus 1, not minus the number of mobility groups between `id1` and `id2`.
 2. **Later effects are counted pairwise.** A third or later effect is compared with every earlier effect that is not nested, and its redundant count is the largest number of mobility groups it forms with any of them. In the credit files each year contains whole months, so all 12 year levels are redundant. `reghdfe` marks such counts as possibly too low in its table.
@@ -308,11 +307,11 @@ On `synthetic-zigzag` both commands report convergence at `tolerance(1e-8)` whil
 
 ### 3. Stored results the suite does not compare
 
-The fourth column of `e(dof_table)` differs: `reghdfe` flags redundant counts that are only bounds, while `creghdfe` does not compute the flag and leaves it missing. Since 27 October 2026, `e(N_hdfe_extended)` and `e(df_a_initial)` follow `reghdfe` (the absorbed effects; the levels before any redundancy is removed). Earlier versions of `creghdfe` stored the mobility groups and the count after redundancy there.
+The fourth column of `e(dof_table)` differs: `reghdfe` flags redundant counts that are only bounds, while `creghdfe` does not compute the flag and leaves it missing. `e(N_hdfe_extended)` records the absorbed effects, and `e(df_a_initial)` records their levels before redundant coefficients are subtracted, following `reghdfe`.
 
 ## Timing notes
 
-The totals above and the per-row seconds are single wall-clock runs taken during a correctness run, with the desktop in use. They include each command's parsing, singleton detection, degrees-of-freedom computation and estimation. `reghdfe` runs under Stata/MP with the licensed processor count, and `creghdfe`'s plugin uses its default thread count on the same machine. They show how the two commands behaved on these graphs on this machine on this day. They are not a controlled benchmark, and, as [COMPATIBILITY.md](../COMPATIBILITY.md) says, no general speedup is promised.
+The totals above and the per-row seconds are single wall-clock runs taken during a correctness run, with the desktop in use. They include each command's parsing, singleton detection, degrees-of-freedom computation and estimation. `reghdfe` runs under Stata/MP with the licensed processor count, and `creghdfe`'s plugin uses its default thread count on the same machine. These measurements describe the recorded datasets and machine; they are not repeated timings under controlled conditions.
 
 ## Files
 

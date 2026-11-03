@@ -44,7 +44,7 @@ typedef struct {
     ST_int wtype;               /* 0 none, 1 aw, 2 fw, 3 pw */
     ST_int kind;                /* CIV_OMEGA_* */
     ST_int kernel;              /* CIVREGHDFE_KERNEL_*, 0 = none */
-    ST_int bw;
+    ST_double bw;
     ST_int max_lag;             /* lags 1..max_lag enter a kernel sum */
     const ST_int *cl1; ST_int ncl1;   /* 1-based cluster ids */
     const ST_int *cl2; ST_int ncl2;
@@ -64,7 +64,7 @@ typedef struct {
     come from ts); ts is required for kernels and Driscoll-Kraay.
     Returns 0, 920 (memory) or 198 (missing time structure).
 */
-ST_retcode civ_omega_init(civ_omega *om, ST_int kind, ST_int kernel, ST_int bw,
+ST_retcode civ_omega_init(civ_omega *om, ST_int kind, ST_int kernel, ST_double bw,
                           ST_int N, ST_double N_eff, const ST_double *w, ST_int wtype,
                           const ST_int *cl1, ST_int ncl1,
                           const ST_int *cl2, ST_int ncl2,

@@ -19,11 +19,11 @@ value in any key excludes the row. Numeric and string keys can be combined.
 limits are exchanged. `abbrev()` controls the displayed name width, with a
 minimum of five. `by:` is supported.
 
-The C backend scans ordered keys directly and uses a bounded hash table for
-repeated values. When the table fills, it uses the shared C sorting routines.
-Counts are exact, and the dataset's values and row order are preserved.
+`cdistinct` counts sorted values in one pass. For other data, it records
+distinct values in a table and switches to sorting if that table fills.
+Counts are exact, and values and observation order are preserved.
 strL text is limited to 2,045 bytes; longer values cause an error.
-`threads()` sets the worker limit. `verbose` reports load and count times above
+`threads()` sets the thread limit. `verbose` reports load and count times above
 the table.
 
 `in` selects the same original rows for every variable. In `distinct` 1.2.1,

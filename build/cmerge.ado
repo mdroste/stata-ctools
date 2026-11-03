@@ -1,4 +1,4 @@
-*! version 1.2.3 20261030 github.com/mdroste/stata-ctools
+*! version 1.2.4 20261103 github.com/mdroste/stata-ctools
 
 * Mata helpers for optimized operations
 capture mata: mata drop _cmerge_shared_flags()

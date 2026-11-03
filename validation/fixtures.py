@@ -722,6 +722,26 @@ def injection_fixtures(directory):
     with ZipFile(directory / "inj_text.xlsx", "w", ZIP_DEFLATED) as archive:
         for key, value in parts.items():
             archive.writestr(key, value)
+    # Empty datasets (.dta 118) whose data labels label data cannot quote: an
+    # unbalanced compound quote closing or opening, and a payload.
+    def dta_stub(name, label):
+        def le(value, size):
+            return value.to_bytes(size, "little")
+        text = label.encode("utf-8")
+        head = (b"<stata_dta><header><release>118</release><byteorder>LSF</byteorder><K>" + le(0, 2) + b"</K><N>"
+                + le(0, 8) + b"</N><label>" + le(len(text), 2) + text + b"</label><timestamp>\x00</timestamp></header>")
+        tags = ["variable_types", "varnames", "sortlist", "formats", "value_label_names", "variable_labels",
+                "characteristics", "data", "strls", "value_labels"]
+        start = len(head) + len(b"<map>") + 14 * 8 + len(b"</map>")
+        offsets, body = [0, len(head)], b""
+        for tag in tags:
+            offsets.append(start + len(body))
+            body += f"<{tag}>".encode() + (le(0, 2) if tag == "sortlist" else b"") + f"</{tag}>".encode()
+        offsets += [start + len(body), start + len(body) + len(b"</stata_dta>")]
+        (directory / name).write_bytes(head + b"<map>" + b"".join(le(o, 8) for o in offsets) + b"</map>" + body
+                                       + b"</stata_dta>")
+    for i, label in enumerate(['a"\' b', 'a`"b', payloads[0], 'x"\' "y"\' `"z']):
+        dta_stub(f"inj_datalabel_{i}.dta", label)
 
 
 def regression_fixtures(folder):
@@ -880,6 +900,88 @@ def excel_import_fixtures(directory):
     book("numeric_headers.xlsx", [("Sheet1", row(1, value("A1", 0.25) + value("B1", 43831.5) + value("C1", "1e-7") + text("D1", "name"))
                                    + row(2, value("A2", 1) + value("B2", 2) + value("C2", 3) + value("D2", 4)))])
 
+    # Display formats, string-column text and header labels of date and time
+    # cells; cells without s= (cellXfs[0] is a date); UTF-16 parts; long text
+    # under allstring("%9.2f").
+    def styled_book(name, rows, numfmts=(), xfs=("0",), strings=(), encoding=None):
+        def col(index):
+            out = ""
+            index += 1
+            while index:
+                index, digit = divmod(index - 1, 26)
+                out = chr(65 + digit) + out
+            return out
+        sheet_rows = ""
+        for r, cells in enumerate(rows, 1):
+            sheet_rows += f'<row r="{r}">'
+            for c, cell in enumerate(cells):
+                ref = f"{col(c)}{r}"
+                if cell is None:
+                    continue
+                if isinstance(cell, str):
+                    sheet_rows += text(ref, cell)
+                else:
+                    number, style = cell
+                    sheet_rows += f'<c r="{ref}"' + ("" if style is None else f' s="{style}"') + f"><v>{number}</v></c>"
+            sheet_rows += "</row>"
+        numfmt_xml = "".join(f'<numFmt numFmtId="{i}" formatCode="{escape(code, {chr(34): "&quot;"})}"/>' for i, code in numfmts)
+        parts = {
+            "[Content_Types].xml": '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+            '<Default Extension="xml" ContentType="application/xml"/>'
+            '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+            '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+            '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'
+            '<Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/></Types>',
+            "_rels/.rels": f'<Relationships xmlns="{pns}"><Relationship Id="rId1" Type="{rns}/officeDocument" Target="xl/workbook.xml"/></Relationships>',
+            "xl/workbook.xml": f'<workbook xmlns="{NS}" xmlns:r="{rns}"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>',
+            "xl/_rels/workbook.xml.rels": f'<Relationships xmlns="{pns}"><Relationship Id="rId1" Type="{rns}/worksheet" Target="worksheets/sheet1.xml"/>'
+            f'<Relationship Id="rId2" Type="{rns}/styles" Target="styles.xml"/><Relationship Id="rId3" Type="{rns}/sharedStrings" Target="sharedStrings.xml"/></Relationships>',
+            "xl/styles.xml": f'<?xml version="1.0" encoding="UTF-8"?><styleSheet xmlns="{NS}">'
+            + (f'<numFmts count="{len(numfmts)}">{numfmt_xml}</numFmts>' if numfmts else "")
+            + "<cellXfs>" + "".join(f'<xf numFmtId="{x}"/>' for x in xfs) + "</cellXfs></styleSheet>",
+            "xl/worksheets/sheet1.xml": f'<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="{NS}"><sheetData>{sheet_rows}</sheetData></worksheet>',
+            "xl/sharedStrings.xml": f'<?xml version="1.0" encoding="UTF-8"?><sst xmlns="{NS}">'
+            + "".join(f"<si><t>{escape(t)}</t></si>" for t in strings) + "</sst>",
+        }
+        with ZipFile(directory / name, "w", ZIP_DEFLATED) as archive:
+            for key, part in parts.items():
+                data = part.encode("utf-8")
+                if encoding and key in ("xl/worksheets/sheet1.xml", "xl/sharedStrings.xml"):
+                    part = part.replace('encoding="UTF-8"', 'encoding="UTF-16"')
+                    data = (b"\xff\xfe" if encoding == "utf-16-le" else b"") + part.encode(encoding)
+                archive.writestr(key, data)
+
+    custom = ["h:mm:ss", "[h]:mm", "mm:ss.0", "yyyy-mm-dd", "dd/mm/yyyy hh:mm", "h:mm", "h:mm AM/PM", "[m]", "mmss",
+              "m/d/yy h:mm", "am/pm", "mmm h:mm", "0.00h", "m"]
+    numfmts = [(170 + i, code) for i, code in enumerate(custom)]
+    xfs = ["0"] + [str(170 + i) for i in range(len(custom))] + ["14", "18", "20", "21", "22", "45", "47", "2", "7", "3", "38"]
+    style = {name: i for i, name in enumerate(["G"] + custom + ["14", "18", "20", "21", "22", "45", "47", "2", "7", "3", "38"])}
+    style["G"] = None
+    pairs = [("h:mm:ss", "G"), ("G", "h:mm:ss"), ("[h]:mm", "G"), ("[h]:mm", "[h]:mm"), ("mm:ss.0", "mm:ss.0"),
+             ("h:mm:ss", "[h]:mm"), ("45", "47"), ("45", "21"), ("14", "h:mm:ss"), ("yyyy-mm-dd", "G"), ("22", "G"),
+             ("20", "20"), ("18", "18"), ("h:mm", "h:mm"), ("h:mm AM/PM", "h:mm AM/PM"), ("[m]", "[m]"),
+             ("mmss", "G"), ("m/d/yy h:mm", "m/d/yy h:mm"), ("am/pm", "am/pm"), ("mmm h:mm", "G"), ("0.00h", "0.00h"),
+             ("m", "m"), ("dd/mm/yyyy hh:mm", "h:mm"), ("2", "7"), ("3", "38"), ("2", "3")]
+    styled_book("format_mix.xlsx", [[(43831.25, style[a]) for a, _ in pairs], [(1.5, style[b]) for _, b in pairs]],
+                numfmts, xfs)
+    serials = [0.25, 43831.75, -1.5, 2958465.9999, 2958466, 2958466.75, 1e10, -657435, -657434.5, -700000, 1e15, 1e300]
+    shown = ["G"] + custom + ["14", "18", "20", "21", "22", "45", "47"]
+    styled_book("format_text.xlsx", [["x"] * len(shown)] + [[(v, style[name]) for name in shown] for v in serials],
+                numfmts, xfs)
+    styled_book("format_header.xlsx", [[(43831, style["14"]), (43831.5, style["22"]), (0.25, style["h:mm:ss"]),
+                                        (2958466, style["14"]), (43831, style["yyyy-mm-dd"]), (1, None)],
+                                       [(1, None), (2, None), (3, None), (4, None), (5, None), (6, None)]], numfmts, xfs)
+    styled_book("style_zero.xlsx", [["alpha", "beta", (1, None)], [(1, None), (2.5, None), (2, None)],
+                                    [(43831, None), (0.5, 1), (3, None)]], (), ["14", "0"])
+    # (Native drops characters beyond the BMP from UTF-16 parts; not copied.)
+    for encoding, tag in [("utf-16-le", "le"), ("utf-16-be", "be")]:
+        styled_book(f"utf16_{tag}.xlsx", [["name", "label"], [(1, None), "é ü ж"], [(2.5, None), "x"]],
+                    strings=["unused"], encoding=encoding)
+    long_text = "".join(chr(97 + i % 26) for i in range(190))
+    styled_book("long_text.xlsx", [["a", "b"], [long_text, (1.5, None)], [(2.25, None), long_text + "z" * 65],
+                                   [(1e10, None), "s"]])
+
 
 def delimited_parity_fixtures(directory):
     """CSV inputs for native parity of quoting, number tokens, header names,
@@ -920,3 +1022,16 @@ def delimited_parity_fixtures(directory):
                 f"{i},{outlier if i == row else 1}\n" for i in range(1, 20002)))
     wide = [f"c{i:05d}" + "x" * 26 for i in range(2000)]
     write("wide_names.csv", ",".join(wide) + "\n" + ",".join(str(i) for i in range(2000)) + "\n")
+    # A long outlier among ones, inside or beyond native's later format sample
+    # (groups of 512 lines from line 1,026, 2,050, ... and a last partial group).
+    for rows, row, header in [(10000, 1023, True), (10000, 1024, True), (10000, 1535, True), (10000, 1536, True),
+                              (10000, 6000, True), (10000, 9728, True), (5120, 5119, True), (5121, 5120, True),
+                              (10000, 1024, False), (10000, 1025, False), (10000, 9729, False)]:
+        write(f"window_{rows}_{row}_{'h' if header else 'nh'}.csv", ("v\n" if header else "") + "".join(
+            f"{1000000000 if i == row else 1}\n" for i in range(rows)))
+    # A quote still open at the end of the file, after LF, CRLF, blank lines
+    # or more rows (native keeps those line ends under bindquotes(strict)).
+    for i, text in enumerate(['a,b\n1,"x\n', 'a,b\n1,"x\r\n', 'a,b\n1,"x\n2,y\n', 'a,b\n1,"x\n\n\n',
+                              'a,b\n1,x\n2,"\n', 'a,b\n1,"x""\n', 'a,b\n1,"x\r\n\r\n', 'a,b\n1,"x\ny\r\n',
+                              'a,b,c\n1,"x\n,z\n', 'a,b\n1,"5\n', 'a,b\n1,"x']):
+        (directory / f"quote_eof_{i}.csv").write_bytes(text.encode("utf-8"))
