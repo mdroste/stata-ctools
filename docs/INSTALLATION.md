@@ -2,7 +2,7 @@
 
 ## Compatibility and Requirements
 
-ctools is compatible with Stata 14.1+ (plugin interface version 3.0). The [platform contract](development/PLATFORMS.md) specifies CPU/OS baselines and runtime dependencies. In short: macOS 11 or later on Apple Silicon or Intel; Windows 10 or later on x86-64; x86-64 Linux with glibc 2.17 or later and `libgomp.so.1` from GCC 6 or later (the system `libgomp` on RHEL/CentOS 7; package `libgomp1` on Debian and Ubuntu).
+ctools is compatible with Stata 14.1+ (plugin interface version 3.0). The [platform contract](development/PLATFORMS.md) specifies CPU/OS baselines and runtime dependencies. In short: macOS 11 or later on Apple Silicon or Intel; Windows 10 or later on x86-64; x86-64 Linux with glibc 2.17 or later (RHEL/CentOS 7 and newer); the OpenMP runtime is built into the plugin.
 
 **Note:** ctools does not support datasets exceeding 2^31−1 (2,147,483,647) observations. This is a [known limitation](https://github.com/mcaceresb/stata-gtools/issues/43) of Stata's plugin API for C and can only be addressed with an internal Stata update. ctools will gracefully exit with an error if your dataset exceeds this limit.
 
@@ -79,12 +79,10 @@ Stata's plugin loader; the command exits with the loader's return code.
 
 - **File not found:** reinstall ctools. A manual installation must include all four
   `ctools_*.plugin` files in the same directory as the ado files.
-- **Linux:** the plugin needs x86-64, glibc 2.17 or later (`ldd --version`) and
-  `libgomp.so.1` with the `GOMP_4.5` interface (GCC 6 or later's runtime; the system
-  `libgomp` on RHEL/CentOS 7; `sudo apt-get install libgomp1` on Debian and Ubuntu).
-  Messages such as ``version `GLIBC_2.xx' not found`` or `libgomp.so.1: cannot open
-  shared object file` name the missing piece; `ldd -r` on the plugin path from the
-  error lists every unresolved library and symbol.
+- **Linux:** the plugin needs x86-64 and glibc 2.17 or later (`ldd --version`); its
+  OpenMP runtime is linked in, so no `libgomp` is required. A message such as
+  ``version `GLIBC_2.xx' not found`` names the missing piece; `ldd -r` on the plugin
+  path from the error lists every unresolved library and symbol.
 - **macOS:** release plugins are signed with a Developer ID and notarized, and the
   first load may need internet access to check the notarization ticket. A plugin
   built locally, or one Gatekeeper has quarantined, can fail with a code-signature

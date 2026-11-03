@@ -92,13 +92,20 @@ jobs:
 
       # The distribution floor is manylinux2014 (glibc 2.17). JavaScript actions
       # cannot run inside its container, so only the compile and the load test do.
+      # The static LLVM libomp is built there once per pinned runtime version.
+      - name: Restore static Linux OpenMP runtime
+        uses: actions/cache@v4
+        with:
+          path: temp/linux-openmp
+          key: linux-openmp-manylinux2014-${{ hashFiles('scripts/build_linux_openmp.py', 'scripts/build_macos_openmp.py') }}
+
       - name: Build Linux plugin in manylinux2014
         run: make linux-docker BUILD_REVISION=${{ github.sha }}
 
       - name: Check Linux dependency contract
         run: python3 validation/run.py --checks dependencies linux build/ctools_linux.plugin
 
-      - name: Load Linux plugin with glibc 2.17 and the system libgomp
+      - name: Load Linux plugin on manylinux2014, CentOS 7 and Rocky Linux 8
         run: make linux-docker-load
 
       - name: Upload Linux plugin

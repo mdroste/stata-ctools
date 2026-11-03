@@ -383,7 +383,7 @@ src/vendor/miniz/miniz_zip.c
  **************************************************************************/
 
 
-LLVM OpenMP 21.1.8 (static macOS runtime)
+LLVM OpenMP 21.1.8 (static macOS and Linux runtime)
 https://github.com/llvm/llvm-project/tree/llvmorg-21.1.8/openmp
 
 ==============================================================================

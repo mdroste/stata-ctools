@@ -232,12 +232,11 @@ else
     LINUX_HAS_OMP = no
 endif
 
-# Note: Static linking of libgomp.a doesn't work on Linux for shared libraries
-# because libgomp uses TLS relocations incompatible with PIC code.
-# Linux plugins require libgomp.so at runtime. Distribution plugins are built in
-# manylinux2014 (linux-docker) against CentOS 7's glibc and libgomp.so.1, so they
-# need glibc 2.17 and GOMP_4.5 at most (`--checks dependencies linux` and
-# linux-docker-load check both).
+# GCC's libgomp.a is not position-independent, so it cannot go into a shared
+# plugin. Distribution plugins instead link LLVM's static, position-independent
+# libomp (LIBOMP_LINUX, built in manylinux2014 by scripts/build_linux_openmp.py)
+# and need only glibc 2.17 at run time, no libgomp.so.1. A plain `make linux`
+# without LIBOMP_LINUX still links the host's libgomp.so.1 for local builds.
 # -lm: the plugin names libm itself rather than relying on Stata's executable.
 
 # Optional OpenBLAS is for custom builds; distribution plugins do not use it.
@@ -268,6 +267,19 @@ else
     else
         CFLAGS_LINUX = $(LINUX_BASE_FLAGS)
         LDFLAGS_LINUX = -flto -Wl,--gc-sections -Wl,-S $(LINUX_EXPORT_FLAGS) -lm -ldl
+    endif
+endif
+
+# GCC still compiles the OpenMP regions. The link also sees -fopenmp (the
+# compile flags) and appends -lgomp, so libomp.a comes first: every GOMP_* and
+# omp_* reference resolves to libomp's GOMP layer inside the plugin, and
+# --as-needed then drops the unused libgomp.so.1. The version script keeps the
+# runtime's symbols local; -z defs fails the link on anything left unresolved.
+LIBOMP_LINUX ?=
+ifneq ($(LIBOMP_LINUX),)
+    ifeq ($(LINUX_HAS_OMP),yes)
+        LDFLAGS_LINUX := $(filter-out -fopenmp,$(LDFLAGS_LINUX)) -Wl,--as-needed \
+                         $(LIBOMP_LINUX)/lib/libomp.a -lm -lpthread -ldl -lrt -Wl,-z,defs
     endif
 endif
 
@@ -559,22 +571,40 @@ DOCKER = docker
 MANYLINUX_IMAGE ?= quay.io/pypa/manylinux2014_x86_64
 MANYLINUX_PYTHON = /opt/python/cp312-cp312/bin
 DOCKER_WINDOWS_IMAGE = ctools-build-windows
+# The static OpenMP runtime linked into the distribution Linux plugin.
+LINUX_OPENMP_DIR ?= temp/linux-openmp
 
-linux-docker: $(BUILD_DIR)
+linux-openmp:
+	@test -f $(LINUX_OPENMP_DIR)/lib/libomp.a || \
+		$(DOCKER) run --rm --platform linux/amd64 --user "$$(id -u):$$(id -g)" -e HOME=/tmp \
+		-v "$$(pwd)":/src -w /src $(MANYLINUX_IMAGE) \
+		sh -c 'PATH=$(MANYLINUX_PYTHON):$$PATH python3 scripts/build_linux_openmp.py $(LINUX_OPENMP_DIR) --work $(LINUX_OPENMP_DIR)-work'
+
+linux-docker: $(BUILD_DIR) linux-openmp
 	@command -v $(DOCKER) >/dev/null 2>&1 || \
 		{ echo ""; echo "  ERROR: Docker is not installed."; echo "    Install: https://docs.docker.com/get-docker/"; echo ""; exit 1; }
 	@echo ""
-	@echo " Building Linux plugin in $(MANYLINUX_IMAGE) (glibc 2.17)"
+	@echo " Building Linux plugin in $(MANYLINUX_IMAGE) (glibc 2.17, static libomp)"
 	@$(DOCKER) run --rm --platform linux/amd64 --user "$$(id -u):$$(id -g)" -e HOME=/tmp \
 		-v "$$(pwd)":/src -w /src $(MANYLINUX_IMAGE) \
-		sh -c 'PATH=$(MANYLINUX_PYTHON):$$PATH make linux BUILD_DIR="$(BUILD_DIR)" BUILD_REVISION="$(BUILD_REVISION)"'
+		sh -c 'PATH=$(MANYLINUX_PYTHON):$$PATH make linux BUILD_DIR="$(BUILD_DIR)" BUILD_REVISION="$(BUILD_REVISION)" LIBOMP_LINUX="/src/$(LINUX_OPENMP_DIR)"'
 	@echo ""
 
-# Loads the plugin with every symbol bound against manylinux2014's glibc 2.17
-# and system libgomp.so.1, the oldest runtime the Linux plugin supports.
+# Loads the plugin with every symbol bound (RTLD_NOW = 2) under the oldest
+# supported userlands with a clean environment: manylinux2014 without its
+# devtoolset library path, plain CentOS 7 (glibc 2.17, GCC 4.8 libgomp) and
+# Rocky Linux 8. ldd shows that no OpenMP runtime is resolved from the system.
+LINUX_LOAD_IMAGES = $(MANYLINUX_IMAGE)=$(MANYLINUX_PYTHON)/python3 centos:7=/usr/bin/python rockylinux:8=/usr/libexec/platform-python
 linux-docker-load:
-	@$(DOCKER) run --rm --platform linux/amd64 -v "$$(pwd)":/src:ro -w /src $(MANYLINUX_IMAGE) \
-		$(MANYLINUX_PYTHON)/python3 -c 'import ctypes, os; ctypes.CDLL("$(PLUGIN_LINUX)", mode=os.RTLD_NOW); print("Loaded $(PLUGIN_LINUX) with glibc 2.17 and the system libgomp")'
+	@set -e; for spec in $(LINUX_LOAD_IMAGES); do \
+		image=$${spec%%=*}; python=$${spec#*=}; \
+		echo " Loading $(PLUGIN_LINUX) in $$image"; \
+		out=$$($(DOCKER) run --rm --platform linux/amd64 -v "$$(pwd)":/src:ro -w /src $$image \
+			env -i PATH=/usr/bin:/bin sh -c "ldd $(PLUGIN_LINUX) && $$python -c 'import ctypes; ctypes.CDLL(\"$(PLUGIN_LINUX)\", 2); print(\"Loaded with every symbol bound\")'"); \
+		echo "$$out"; \
+		if echo "$$out" | grep -E 'libgomp|libomp|libiomp|not found'; then \
+			echo "  ERROR: the plugin needs a runtime library that $$image does not provide"; exit 1; fi; \
+	done
 
 windows-docker: $(BUILD_DIR)
 	@command -v $(DOCKER) >/dev/null 2>&1 || \

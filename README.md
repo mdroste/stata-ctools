@@ -55,8 +55,7 @@
 ## Installation
 
 Requires Stata 14.1 or later on macOS 11 or later (Apple Silicon or Intel), Windows 10 or
-later (x86-64), or x86-64 Linux with glibc 2.17 or later and `libgomp.so.1` from GCC 6 or
-later. See the [platform contract](docs/development/PLATFORMS.md). In Stata:
+later (x86-64), or x86-64 Linux with glibc 2.17 or later. See the [platform contract](docs/development/PLATFORMS.md). In Stata:
 
 ```stata
 net install ctools, from("https://raw.githubusercontent.com/mdroste/stata-ctools/main/build") replace

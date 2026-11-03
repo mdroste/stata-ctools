@@ -48,8 +48,10 @@ def dependencies_check_macos(path, arch=None, archive=False):
             raise ValueError(f"{path}: non-system dynamic dependencies: {unexpected}")
 
 
-# The Linux floor is manylinux2014: CentOS 7's glibc 2.17 and its libgomp.so.1.
-dependencies_LINUX_FLOOR = {"GLIBC": "2.17", "GOMP": "4.5", "OMP": "4.5"}
+# The Linux floor is manylinux2014: CentOS 7's glibc 2.17. The OpenMP runtime
+# is LLVM's libomp linked statically, so no OpenMP symbol version may be needed.
+dependencies_LINUX_FLOOR = {"GLIBC": "2.17"}
+dependencies_LINUX_EXPORTS = {"stata_call", "pginit"}
 
 
 def dependencies_check_linux(path):
@@ -59,7 +61,6 @@ def dependencies_check_linux(path):
     allowed = {
         "libc.so.6",
         "libm.so.6",
-        "libgomp.so.1",
         "libpthread.so.0",
         "librt.so.1",
         "libdl.so.2",
@@ -81,7 +82,20 @@ def dependencies_check_linux(path):
         )
         if newer:
             raise ValueError(f"{path}: requires {prefix} {newer}, newer than {prefix}_{floor}")
+    openmp = sorted(set(re.findall(r"\b((?:GOMP|OMP|GOMP_PLUGIN)_\d[\d.]*)", versions)))
+    if openmp:
+        raise ValueError(f"{path}: needs a system OpenMP runtime ({openmp}); link the static libomp")
     symbols = dependencies_output("readelf", "-W", "--dyn-syms", str(path))
+    # Only the plugin entry points may be exported; a leaked runtime symbol
+    # could bind to another OpenMP runtime loaded in the same Stata process.
+    exported = {
+        name.split("@")[0]
+        for name in re.findall(
+            r"^\s*\d+:\s+\S+\s+\S+\s+(?:FUNC|OBJECT|TLS)\s+(?:GLOBAL|WEAK)\s+\S+\s+(?!UND)\S+\s+(\S+)", symbols, re.M
+        )
+    }
+    if exported - dependencies_LINUX_EXPORTS:
+        raise ValueError(f"{path}: exports symbols besides the plugin entry points: {sorted(exported - dependencies_LINUX_EXPORTS)[:8]}")
     unbound = [
         name
         for name in re.findall(r"^\s*\d+:\s+\S+\s+\S+\s+\S+\s+GLOBAL\s+\S+\s+UND\s+(\S+)", symbols, re.M)
@@ -198,13 +212,15 @@ def build_dependency_metadata():
     mac["otool-L"] += " /opt/homebrew/lib/libomp.dylib (compatibility version 5.0.0)\n"
     build_must_reject(lambda: deps.dependencies_check_macos(Path("plugin"), "arm64"))
     linux = {
-        "-d": "Shared library: [libc.so.6]\nShared library: [libm.so.6]\nShared library: [libgomp.so.1]",
-        "--version-info": "Name: GLIBC_2.2.5\nName: GLIBC_2.17\nName: GOMP_4.5\nName: GOMP_PLUGIN_1.0\nName: OMP_1.0",
+        "-d": "Shared library: [libc.so.6]\nShared library: [libm.so.6]\nShared library: [libpthread.so.0]",
+        "--version-info": "Name: GLIBC_2.2.5\nName: GLIBC_2.17",
         "--dyn-syms": (
             "  1: 0000000000000000 0 FUNC GLOBAL DEFAULT UND exp@GLIBC_2.2.5 (2)\n"
             "  2: 0000000000000000 0 NOTYPE WEAK DEFAULT UND __gmon_start__\n"
+            "  3: 00000000000a1b20 120 FUNC GLOBAL DEFAULT 12 stata_call\n"
+            "  4: 00000000000a1ba0 40 FUNC GLOBAL DEFAULT 12 pginit\n"
         ),
-        "ldd": "libgomp.so.1 => /usr/lib/libgomp.so.1",
+        "ldd": "libm.so.6 => /lib64/libm.so.6",
     }
     deps.dependencies_output = lambda *args: linux["ldd" if args[0] == "ldd" else args[-2]]
     deps.dependencies_check_linux(Path("plugin"))
@@ -212,12 +228,15 @@ def build_dependency_metadata():
     for key, value in (
         ("--version-info", "Name: GLIBC_2.18"),
         ("--version-info", "Name: GLIBC_2.34"),
-        ("--version-info", "Name: GOMP_5.0"),
-        ("--version-info", "Name: OMP_5.0"),
-        ("-d", "Shared library: [libc.so.6]\nShared library: [libgomp.so.1]"),
+        ("--version-info", "Name: GOMP_4.0"),
+        ("--version-info", "Name: OMP_1.0"),
+        ("-d", "Shared library: [libc.so.6]\nShared library: [libpthread.so.0]"),
+        ("-d", accepted["-d"] + "\nShared library: [libgomp.so.1]"),
         ("-d", accepted["-d"] + "\nShared library: [libstdc++.so.6]"),
-        ("--dyn-syms", accepted["--dyn-syms"] + "  3: 0000000000000000 0 NOTYPE GLOBAL DEFAULT UND exp\n"),
-        ("ldd", "libgomp.so.1 => not found"),
+        ("--dyn-syms", accepted["--dyn-syms"] + "  5: 0000000000000000 0 NOTYPE GLOBAL DEFAULT UND exp\n"),
+        ("--dyn-syms", accepted["--dyn-syms"] + "  5: 00000000000b0000 64 FUNC GLOBAL DEFAULT 12 omp_get_thread_num\n"),
+        ("--dyn-syms", accepted["--dyn-syms"] + "  5: 00000000000c0000 8 OBJECT WEAK DEFAULT 23 __kmp_global\n"),
+        ("ldd", "libm.so.6 => not found"),
     ):
         linux.update(accepted)
         linux[key] = accepted[key] + "\n" + value if key == "--version-info" else value
