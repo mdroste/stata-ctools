@@ -276,7 +276,7 @@ int main(int argc,char **argv) {
     snprintf(embedpath,sizeof(embedpath),"%s/embed.xls",argv[1]);snprintf(embededit,sizeof(embededit),"%s/embed_edit.xls",argv[1]);
     old=book(a,0,0,0);out=fopen(embedpath,"wb");assert(out);assert(!compound(out,old,(size_t)ftell(old)));fclose(out);fclose(old);
     out=fopen(embedpath,"r+b");assert(out);assert(!fseek(out,0,SEEK_END));length=ftell(out);
-    raw=malloc((size_t)length+512);assert(raw);rewind(out);assert(fread(raw,1,length,out)==(size_t)length);
+    free(raw);raw=malloc((size_t)length+512);assert(raw);rewind(out);assert(fread(raw,1,length,out)==(size_t)length);
     sector=(unsigned)length/512-1;fatsector=xe32(raw+76);dirsector=xe32(raw+48);
     directory_entry(raw+512*(1+dirsector)+256,"MBD00000001",1,3,0xfffffffe,0);
     directory_entry(raw+512*(1+dirsector)+384,"Workbook",2,UINT32_MAX,sector,512);

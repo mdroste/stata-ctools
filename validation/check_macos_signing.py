@@ -29,6 +29,8 @@ if command == 'security':
         sys.exit(1)
     if args[0] == 'delete-keychain':
         Path(args[-1]).unlink()
+    if args[0] == 'list-keychains' and '-s' not in args:
+        print('    "/Users/runner/Library/Keychains/login.keychain-db"')
     if args[0] == 'find-identity' and scenario != 'missing-identity':
         team = 'WRONGTEAM0' if scenario == 'wrong-team' else 'ABCDE12345'
         print('  1) ' + 'A' * 40 + f' "Developer ID Application: Test ({team})"')
@@ -133,6 +135,15 @@ def main():
             calls = [json.loads(line) for line in journal.read_text().splitlines()] if journal.exists() else []
             if scenario != 'missing-config':
                 assert any(c[:2] == ['security', 'delete-keychain'] for c in calls), scenario
+                # The temporary keychain joins the search list before signing,
+                # and the user's original list is restored on every exit.
+                login = '/Users/runner/Library/Keychains/login.keychain-db'
+                searches = [c for c in calls if c[:4] == ['security', 'list-keychains', '-d', 'user'] and '-s' in c]
+                assert searches and searches[0][6:] == [login], (scenario, searches)
+                assert Path(searches[0][5]).name == 'signing.keychain-db', (scenario, searches)
+                assert searches[-1][5:] == [login], (scenario, searches)
+                first_search = calls.index(searches[0])
+                assert all(i > first_search for i, c in enumerate(calls) if c[0] == 'codesign'), scenario
             if scenario == 'accepted':
                 signs = [c for c in calls if c[0] == 'codesign' and '--sign' in c]
                 tickets = [c for c in calls if c[0] == 'codesign' and '--check-notarization' in c]

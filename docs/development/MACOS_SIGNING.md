@@ -64,6 +64,8 @@ keychain password. Store credentials directly in GitHub, never in the repository
 The compiler jobs upload `macos-arm-unsigned` and `macos-intel-unsigned`. A separate
 job downloads those artifacts from the same workflow run and invokes
 `scripts/sign_macos.sh`. It imports the identity into a temporary keychain,
+places that keychain first in the user keychain search list for the run (codesign
+finds the private key only through that list) and restores the list on exit,
 requires exactly one valid Developer ID Application identity for the specified
 team, signs each plugin with a secure timestamp, and checks its signature and
 team. These Mach-O bundles run inside Stata; they need no app entitlements or

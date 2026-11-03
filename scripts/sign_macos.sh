@@ -25,10 +25,15 @@ done
 mkdir -p "$results"
 work=$(mktemp -d "${RUNNER_TEMP:?}/ctools-signing.XXXXXX")
 keychain="$work/signing.keychain-db"
+search_list_changed=false
+original_keychains=()
 cleanup() {
     # Preserve the original failure, but never report success if cleanup fails.
     result=$?
     trap - EXIT
+    if [[ "$search_list_changed" == true ]]; then
+        security list-keychains -d user -s ${original_keychains[@]+"${original_keychains[@]}"} || result=1
+    fi
     if [[ -f "$keychain" ]]; then
         security delete-keychain "$keychain" || result=1
     fi
@@ -45,6 +50,15 @@ echo "Decoded signing identity: $(wc -c < "$work/certificate.p12" | tr -d ' ') b
 security create-keychain -p "$keychain_password" "$keychain"
 security set-keychain-settings -lut 3600 "$keychain"
 security unlock-keychain -p "$keychain_password" "$keychain"
+# codesign finds the identity's private key only through the user search list;
+# --keychain alone is not enough. Put this keychain first; cleanup restores it.
+while IFS= read -r entry; do
+    entry="${entry//\"/}"
+    entry="${entry#"${entry%%[![:space:]]*}"}"
+    if [[ -n "$entry" ]]; then original_keychains+=("$entry"); fi
+done < <(security list-keychains -d user)
+search_list_changed=true
+security list-keychains -d user -s "$keychain" ${original_keychains[@]+"${original_keychains[@]}"}
 security import "$work/certificate.p12" -P "$APPLE_CERTIFICATE_PASSWORD" \
     -t cert -f pkcs12 -k "$keychain" -T /usr/bin/codesign -T /usr/bin/security
 security set-key-partition-list -S apple-tool:,apple:,codesign: -s \
