@@ -76,6 +76,8 @@ typedef enum
     STAT_P99,
     STAT_SKEWNESS,
     STAT_KURTOSIS,
+    STAT_OBS,     /* rows in the window, as rangestat's obs */
+    STAT_MISSING, /* rows in the window minus nonmissing values (self counts under excludeself) */
     STAT_COUNT_ALL /* Total number of statistic types */
 } stat_type;
 

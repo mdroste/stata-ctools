@@ -27,6 +27,12 @@ program define _cio_shp_export, rclass
     local variables `id' _X _Y rec_header
     if inlist(`shape',11,13,15,18,31) local variables `variables' _Z
     if inlist(`shape',11,13,15,18,21,23,25,28,31) local variables `variables' _M
-    plugin call ctools_plugin `variables', "cio export shp"
+    capture noisily plugin call ctools_plugin `variables', "cio export shp"
+    * A write-protected destination (plugin r(608)) gives native's code and text
+    if _rc == 608 {
+        di as error "could not copy shp file"
+        exit 602
+    }
+    if _rc exit _rc
     return local filename `"`using'"'
 end

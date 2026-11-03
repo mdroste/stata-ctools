@@ -10,7 +10,7 @@ program define cpsmatch, rclass sortpreserve
         exit 920
     }
 
-    capture noisily syntax varlist(min=1 numeric) [if] [in], ///
+    capture noisily syntax varlist(min=1 numeric fv) [if] [in], ///
         [OUTcome(varname numeric) Pscore(varname numeric) ///
          Logit Probit ///
          Neighbor(integer 1) Caliper(real 0) Radius Kernel ///
@@ -34,7 +34,20 @@ program define cpsmatch, rclass sortpreserve
     * Split varlist into treatment variable and covariates
     gettoken depvar treatvar : varlist
     * depvar = treatment variable (first var)
-    * treatvar = covariates (remaining vars)
+    * treatvar = covariates (remaining vars); factor variables are allowed,
+    * as in psmatch2, and expanded by the score model
+    _fv_check_depvar `depvar'
+    local treatvar = strtrim(`"`treatvar'"')
+
+    * psmatch2's option checks, in its order
+    if "`pscore'" != "" & "`treatvar'" != "" {
+        di as error "You cannot specify both a varlist AND a propensity score"
+        exit 198
+    }
+    if "`descending'" != "" & "`noreplacement'" == "" {
+        di as error "Option descending makes only sense when matching without replacement"
+        exit 198
+    }
 
     * Check treatment is binary
     quietly tab `depvar' `if' `in'
@@ -59,16 +72,17 @@ program define cpsmatch, rclass sortpreserve
         }
     }
 
-    * Determine matching method
+    * Determine matching method. As in psmatch2, radius takes precedence
+    * over kernel.
     local method = 0  /* 0=nearest, 1=radius, 2=kernel */
+    if "`kernel'" != "" {
+        local method = 2
+    }
     if "`radius'" != "" {
         local method = 1
         if `caliper' == 0 {
             local caliper = 0.25  /* Default radius */
         }
-    }
-    if "`kernel'" != "" {
-        local method = 2
     }
 
     if "`noreplacement'" != "" & (`method' != 0 | `neighbor' != 1) {
@@ -433,6 +447,9 @@ program define cpsmatch, rclass sortpreserve
         return scalar att_se = `att_se'
         return scalar seatt = `att_se'
         return scalar att_t = `att_t'
+        * psmatch2's per-outcome names, where they fit in 32 characters
+        if strlen("att_`outcome'") <= 32 return scalar att_`outcome' = `att'
+        if strlen("seatt_`outcome'") <= 32 return scalar seatt_`outcome' = `att_se'
     }
 
     return local method = cond(`method'==0, "nearest", cond(`method'==1, "radius", "kernel"))

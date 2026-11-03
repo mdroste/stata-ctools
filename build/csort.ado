@@ -144,9 +144,13 @@ program define csort, rclass
     }
 
     * Set string width metadata for flat buffer optimization
-    * _ctools_strw sets local __ctools_strw (read automatically by C plugin)
+    * _ctools_strw sets local __ctools_strw (read automatically by C plugin).
+    * The widths and key positions stay in locals: listed in the plugin
+    * argument they exceed Stata's plugin-call argument length on wide data.
     _ctools_strw `allvars'
-    local strw_code "strw:`__ctools_strw'"
+    local strw_code ""
+    local __csort_keys `var_indices'
+    local var_indices "keyslocal"
 
     * Build stream option string
     * stream(#) enables streaming mode with # variables loaded at a time (1-16)

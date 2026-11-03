@@ -16,5 +16,6 @@ typedef struct
 ST_retcode ctools_output_prepare(ctools_output *out, const char *filename, bool replace);
 ST_retcode ctools_output_commit(ctools_output *out);
 ST_retcode ctools_output_commit_group(ctools_output **outputs, size_t count);
+char *ctools_output_target(const char *filename);
 void ctools_output_cleanup(ctools_output *out);
 #endif

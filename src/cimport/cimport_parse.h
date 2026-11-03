@@ -129,6 +129,11 @@ int cimport_parse_row_fast(const char *start, const char *end, char delim, char 
                            CImportBindQuotesMode bindquotes,
                            const char **next_row_out, bool *had_unmatched_quote);
 
+/* Set when a row had more than max_fields fields (the rest was skipped);
+ * the scan fails instead of dropping them. */
+void cimport_fields_overflow_reset(void);
+bool cimport_fields_overflowed(void);
+
 /*
  * Extract field value with quote handling.
  * Handles: quoted fields, escaped quotes (""), orphan quotes.

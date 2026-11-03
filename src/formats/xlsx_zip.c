@@ -16,7 +16,34 @@ struct xlsx_zip_archive
 {
     mz_zip_archive zip;
     bool is_memory; /* Track whether opened from memory */
+    uint64_t entry_limit; /* most bytes one part may inflate to (0 = none) */
+    int refused;          /* why the last extraction was refused by size */
 };
+
+void xlsx_zip_set_entry_limit(xlsx_zip_archive *archive, uint64_t limit)
+{
+    if (archive)
+        archive->entry_limit = limit;
+}
+
+int xlsx_zip_refused(const xlsx_zip_archive *archive)
+{
+    return archive ? archive->refused : XLSX_ZIP_SIZE_OK;
+}
+
+/* Declared sizes come from the file. A deflate stream inflates at most about
+ * 1032:1, so a larger declared ratio is false; a declared size beyond the
+ * caller's memory limit is refused before anything is allocated. */
+static bool xlsx_zip_size_ok(xlsx_zip_archive *archive, const mz_zip_archive_file_stat *stat)
+{
+    archive->refused = XLSX_ZIP_SIZE_OK;
+    if (stat->m_method == MZ_DEFLATED && stat->m_uncomp_size > 65536 &&
+        stat->m_uncomp_size / 1100 > stat->m_comp_size)
+        archive->refused = XLSX_ZIP_SIZE_FALSE;
+    else if (archive->entry_limit && stat->m_uncomp_size > archive->entry_limit)
+        archive->refused = XLSX_ZIP_SIZE_MEMORY;
+    return archive->refused == XLSX_ZIP_SIZE_OK;
+}
 
 xlsx_zip_archive *xlsx_zip_open_file(const char *filename)
 {
@@ -68,6 +95,10 @@ void *xlsx_zip_extract_to_heap(xlsx_zip_archive *archive, size_t file_index, siz
     mz_uint num_files = mz_zip_reader_get_num_files(&archive->zip);
     if (file_index >= num_files)
         return NULL;
+    mz_zip_archive_file_stat stat;
+    if (mz_zip_reader_file_stat(&archive->zip, (mz_uint)file_index, &stat) &&
+        !xlsx_zip_size_ok(archive, &stat))
+        return NULL;
 
     size_t size = 0;
     void *data = mz_zip_reader_extract_to_heap(&archive->zip, (mz_uint)file_index, &size, 0);
@@ -110,6 +141,8 @@ static void *xlsx_zip_extract_fast(xlsx_zip_archive *archive, size_t file_index,
         return NULL;
 
     if (stat.m_uncomp_size >= SIZE_MAX || stat.m_comp_size > SIZE_MAX)
+        return NULL;
+    if (!xlsx_zip_size_ok(archive, &stat))
         return NULL;
     size_t uncomp_size = (size_t)stat.m_uncomp_size;
     size_t comp_size = (size_t)stat.m_comp_size;
@@ -193,6 +226,8 @@ void *xlsx_zip_extract_direct(xlsx_zip_archive *archive, size_t file_index, size
         return xlsx_zip_extract_fast(archive, file_index, out_size);
 
     if (stat.m_uncomp_size >= SIZE_MAX || stat.m_comp_size > SIZE_MAX)
+        return NULL;
+    if (!xlsx_zip_size_ok(archive, &stat))
         return NULL;
     size_t uncomp_size = (size_t)stat.m_uncomp_size;
     size_t comp_size = (size_t)stat.m_comp_size;

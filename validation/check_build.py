@@ -48,6 +48,10 @@ def dependencies_check_macos(path, arch=None, archive=False):
             raise ValueError(f"{path}: non-system dynamic dependencies: {unexpected}")
 
 
+# The Linux floor is manylinux2014: CentOS 7's glibc 2.17 and its libgomp.so.1.
+dependencies_LINUX_FLOOR = {"GLIBC": "2.17", "GOMP": "4.5", "OMP": "4.5"}
+
+
 def dependencies_check_linux(path):
     needed = set(
         re.findall(r"Shared library: \[(.*?)\]", dependencies_output("readelf", "-d", str(path)))
@@ -64,11 +68,27 @@ def dependencies_check_linux(path):
     }
     if needed - allowed:
         raise ValueError(f"{path}: unsupported dependencies: {needed - allowed}")
-    versions = re.findall(
-        r"GLIBC_([\d.]+)", dependencies_output("readelf", "--version-info", str(path))
-    )
-    if any(dependencies_version(v) > dependencies_version("2.35") for v in versions):
-        raise ValueError(f"{path}: requires glibc newer than 2.35")
+    if "libm.so.6" not in needed:
+        raise ValueError(f"{path}: libm.so.6 is not linked; math symbols would rely on the host")
+    versions = dependencies_output("readelf", "-W", "--version-info", str(path))
+    for prefix, floor in dependencies_LINUX_FLOOR.items():
+        newer = sorted(
+            {
+                v
+                for v in re.findall(rf"\b{prefix}_(\d[\d.]*)", versions)
+                if dependencies_version(v.rstrip(".")) > dependencies_version(floor)
+            }
+        )
+        if newer:
+            raise ValueError(f"{path}: requires {prefix} {newer}, newer than {prefix}_{floor}")
+    symbols = dependencies_output("readelf", "-W", "--dyn-syms", str(path))
+    unbound = [
+        name
+        for name in re.findall(r"^\s*\d+:\s+\S+\s+\S+\s+\S+\s+GLOBAL\s+\S+\s+UND\s+(\S+)", symbols, re.M)
+        if "@" not in name
+    ]
+    if unbound:
+        raise ValueError(f"{path}: undefined symbols bound to no library version: {sorted(unbound)[:8]}")
     if "not found" in dependencies_output("ldd", str(path)):
         raise ValueError(f"{path}: unresolved dynamic dependency")
 
@@ -178,17 +198,31 @@ def build_dependency_metadata():
     mac["otool-L"] += " /opt/homebrew/lib/libomp.dylib (compatibility version 5.0.0)\n"
     build_must_reject(lambda: deps.dependencies_check_macos(Path("plugin"), "arm64"))
     linux = {
-        "-d": "Shared library: [libc.so.6]\nShared library: [libgomp.so.1]",
-        "--version-info": "GLIBC_2.35",
+        "-d": "Shared library: [libc.so.6]\nShared library: [libm.so.6]\nShared library: [libgomp.so.1]",
+        "--version-info": "Name: GLIBC_2.2.5\nName: GLIBC_2.17\nName: GOMP_4.5\nName: GOMP_PLUGIN_1.0\nName: OMP_1.0",
+        "--dyn-syms": (
+            "  1: 0000000000000000 0 FUNC GLOBAL DEFAULT UND exp@GLIBC_2.2.5 (2)\n"
+            "  2: 0000000000000000 0 NOTYPE WEAK DEFAULT UND __gmon_start__\n"
+        ),
         "ldd": "libgomp.so.1 => /usr/lib/libgomp.so.1",
     }
-    deps.dependencies_output = lambda *args: linux["ldd" if args[0] == "ldd" else args[1]]
+    deps.dependencies_output = lambda *args: linux["ldd" if args[0] == "ldd" else args[-2]]
     deps.dependencies_check_linux(Path("plugin"))
-    linux["--version-info"] = "GLIBC_2.38"
-    build_must_reject(lambda: deps.dependencies_check_linux(Path("plugin")))
-    linux["--version-info"] = "GLIBC_2.35"
-    linux["ldd"] = "libgomp.so.1 => not found"
-    build_must_reject(lambda: deps.dependencies_check_linux(Path("plugin")))
+    accepted = dict(linux)
+    for key, value in (
+        ("--version-info", "Name: GLIBC_2.18"),
+        ("--version-info", "Name: GLIBC_2.34"),
+        ("--version-info", "Name: GOMP_5.0"),
+        ("--version-info", "Name: OMP_5.0"),
+        ("-d", "Shared library: [libc.so.6]\nShared library: [libgomp.so.1]"),
+        ("-d", accepted["-d"] + "\nShared library: [libstdc++.so.6]"),
+        ("--dyn-syms", accepted["--dyn-syms"] + "  3: 0000000000000000 0 NOTYPE GLOBAL DEFAULT UND exp\n"),
+        ("ldd", "libgomp.so.1 => not found"),
+    ):
+        linux.update(accepted)
+        linux[key] = accepted[key] + "\n" + value if key == "--version-info" else value
+        build_must_reject(lambda: deps.dependencies_check_linux(Path("plugin")))
+    linux.update(accepted)
     for dll in ("libwinpthread-1.dll", "libgomp-1.dll", "libomp.dll"):
         deps.dependencies_output = lambda *args: "DLL Name: KERNEL32.dll\nDLL Name: " + dll
         build_must_reject(lambda: deps.dependencies_check_windows(Path("plugin")))

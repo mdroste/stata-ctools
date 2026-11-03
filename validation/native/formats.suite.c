@@ -146,7 +146,10 @@ int main(void) {
         assert(parsed == x);
     }
     assert(!cimport_field_looks_numeric_sep("NA", 2, '.', 0));
-    assert(!cimport_field_looks_numeric_sep("NaN", 3, '.', 0));
+    /* As native: exact-case NaN is a missing value; nan and NAN are text. */
+    assert(cimport_field_looks_numeric_sep("NaN", 3, '.', 0));
+    assert(!cimport_field_looks_numeric_sep("nan", 3, '.', 0));
+    assert(!cimport_field_looks_numeric_sep("NAN", 3, '.', 0));
     double number;
     assert(cimport_parse_number("\"1.25\"", 6, &number, mock.missval, '.', 0) && number == 1.25);
     const char *raw = "1e-2";
@@ -314,7 +317,8 @@ int main(void) {
     const char *fresh="<worksheet><sheetData><row r='2'><c r='B2' s='1'><v>20</v></c><c r='C2'/></row>"
         "<row r='3'><c r='B3'><is><t>new &amp; text</t></is></c></row></sheetData></worksheet>";
     char *got=xedit_worksheet(old,fresh,1,20);
-    assert(got && strstr(got,"s=\"7\"") && strstr(got,"s=\"20\""));
+    /* keepcellfmt keeps old styles, but the fresh date style of B2 wins */
+    assert(got && strstr(got,"<c r='B2' s=\"21\">") && strstr(got,"s=\"20\""));
     assert(strstr(got,"<x:c r='A2' s='8'><x:f>SUM(A1)&gt;0</x:f><x:v>9</x:v></x:c>"));
     assert(strstr(got,"<x:c r='F9'><x:v>12</x:v></x:c>"));
     assert(strstr(got,"ht='30' customHeight='1'"));
@@ -384,6 +388,30 @@ int main(void) {
         char *truncated=malloc(i+1);memcpy(truncated,old,i);truncated[i]=0;
         xedit_find(truncated,truncated+i,"sheetData",&n);
         got=xedit_worksheet(truncated,fresh,1,0);free(got);free(truncated);
+    }
+    /* keepcellfmt: a number keeps the old cell's style, a date its own */
+    got=xedit_worksheet("<worksheet><sheetData><row r='1'><c r='A1' s='5'><v>1</v></c><c r='B1' s='6'><v>2</v></c></row></sheetData></worksheet>",
+        "<worksheet><sheetData><row r='1'><c r='A1'><v>3</v></c><c r='B1' s='1'><v>4</v></c></row></sheetData></worksheet>",1,10);
+    assert(got && strstr(got,"s=\"5\"><v>3</v>") && strstr(got,"s=\"11\"><v>4</v>"));free(got);
+    /* Text with leading or trailing whitespace keeps it: xml:space="preserve" */
+    {
+        XLSXExportContext ctx;xlsx_context_init(&ctx);
+        int types[1]={0};unsigned char dates[1]={0};
+        char *text[4]={"  01","abc ","a b",""};
+        stata_variable var;memset(&var,0,sizeof(var));var.nobs=4;var.data.str=text;
+        ctools_filtered_data fd;memset(&fd,0,sizeof(fd));fd.data.nobs=4;fd.data.nvars=1;fd.data.vars=&var;
+        ctx.nvars=1;ctx.vartypes=types;
+        char letters[1][8]={"A"};size_t letters_len[1]={1};
+        char prefix[1][24]={"      <c r=\"A"};size_t prefix_len[1]={strlen(prefix[0])};
+        xlsx_chunk_args_t a={0};
+        a.ctx=&ctx;a.filtered=&fd;a.start_idx=0;a.end_idx=4;a.start_row_num=1;
+        a.col_letters_arr=letters;a.col_letters_len=letters_len;a.col_prefix=prefix;a.col_prefix_len=prefix_len;a.date_cols=dates;
+        assert(strbuf_init(&a.sb,256));
+        assert(!xlsx_format_chunk(&a) && !a.failed && a.sb.data);
+        assert(strstr(a.sb.data,"<c r=\"A1\" t=\"inlineStr\"><is><t xml:space=\"preserve\">  01</t>"));
+        assert(strstr(a.sb.data,"<c r=\"A2\" t=\"inlineStr\"><is><t xml:space=\"preserve\">abc </t>"));
+        assert(strstr(a.sb.data,"<c r=\"A3\" t=\"inlineStr\"><is><t>a b</t>"));
+        free(a.sb.data);
     }
     return 0;
 }
@@ -661,6 +689,31 @@ int main(int argc, char **argv)
     write_file("alias", "original"); prepare(&a, "alias", 1); prepare(&b, "./alias", 1);
     assert(ctools_output_commit_group(pair, 2) == 198); contents("alias", "original");
     ctools_output_cleanup(&a); ctools_output_cleanup(&b);
+    /* replace turns a symbolic link into a regular file and leaves its target;
+     * a dangling link still exists without replace; an edit follows a link. */
+    write_file("target", "old"); assert(!symlink("target", "link"));
+    prepare(&a, "link", 1); assert(!ctools_output_commit(&a)); ctools_output_cleanup(&a);
+    assert(!lstat("link", &st) && S_ISREG(st.st_mode)); contents("link", "new"); contents("target", "old");
+    assert(!symlink("missing", "dangling"));
+    prepare(&a, "dangling", 0); assert(ctools_output_commit(&a) == 602); ctools_output_cleanup(&a);
+    assert(!lstat("dangling", &st) && S_ISLNK(st.st_mode));
+    assert(!symlink("target", "edit"));
+    char *resolved = ctools_output_target("edit"), *expected = realpath("target", NULL);
+    assert(resolved && expected && !strcmp(resolved, expected)); free(resolved); free(expected);
+    resolved = ctools_output_target("target"); assert(resolved && !strcmp(resolved, "target")); free(resolved);
+    /* A write-protected file is refused (608) and kept; a directory is not replaced. */
+    if (geteuid()) {
+        write_file("readonly", "old"); assert(!chmod("readonly", 0444));
+        prepare(&a, "readonly", 1); assert(ctools_output_commit(&a) == 608); ctools_output_cleanup(&a);
+        contents("readonly", "old");
+        prepare(&a, "readonly", 1); write_file("b", "old-b"); prepare(&b, "b", 1);
+        pair[0] = &b; pair[1] = &a;
+        assert(ctools_output_commit_group(pair, 2) == 608); contents("readonly", "old"); contents("b", "old-b");
+        ctools_output_cleanup(&a); ctools_output_cleanup(&b); pair[0] = &a; pair[1] = &b;
+    }
+    assert(!mkdir("folder", 0700));
+    prepare(&a, "folder", 1); assert(ctools_output_commit(&a) == 603); ctools_output_cleanup(&a);
+    assert(!stat("folder", &st) && S_ISDIR(st.st_mode));
     puts("PASS output rollback, permissions/ACLs, long names, and no-hardlink fallback");
     return 0;
 }
@@ -937,5 +990,70 @@ int main(void) {
     check("","<x:v>42</x:v>",XLSX_CELL_NUMBER,42,NULL);
     check("note='a>b'","<v>7</v><v>8</v>",XLSX_CELL_NUMBER,7,NULL);
     check("t=\"inlineStr\"","<is><t/></is>",XLSX_CELL_EMPTY,0,NULL);
+}
+#endif
+
+#if defined(CTOOLS_CASE_io_perf_export)
+/* cexport's mapped writer must not map blocks it could not reserve (a full
+ * disk would fault with SIGBUS); positioned writes extend past the pre-size. */
+#include <assert.h>
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+static int reserve_error;
+static int test_reserve(int fd, size_t size) { (void)fd; (void)size; return reserve_error; }
+#define CEXPORT_IO_TEST_RESERVE test_reserve
+#include "cexport/cexport_io.c"
+static void contents(const char *path, const char *expected, size_t n)
+{
+    char *buf = malloc(n + 1);
+    FILE *fp = fopen(path, "rb");
+    assert(buf && fp);
+    assert(fread(buf, 1, n + 1, fp) == n);
+    fclose(fp);
+    assert(!memcmp(buf, expected, n));
+    free(buf);
+}
+int main(void)
+{
+    char path[] = "/tmp/ctools-io-export-XXXXXX";
+    int fd = mkstemp(path);
+    assert(fd >= 0);
+    close(fd);
+    cexport_io_file file;
+    reserve_error = ENOSPC;
+    assert(!cexport_io_open(&file, path, CEXPORT_IO_MMAP, CEXPORT_IO_FLAG_NOFSYNC));
+    assert(cexport_io_presize(&file, 1 << 20) == CEXPORT_IO_UNRESERVED);
+    assert(file.mapped_data == NULL && strstr(file.error_message, "cannot reserve"));
+    assert(!cexport_io_close(&file, 0));
+    reserve_error = 0;
+    assert(!cexport_io_open(&file, path, CEXPORT_IO_MMAP, CEXPORT_IO_FLAG_NOFSYNC));
+    assert(!cexport_io_presize(&file, 4096) && file.mapped_data != NULL);
+    assert(cexport_io_write_at(&file, "mapped", 6, 0) == 6);
+    assert(cexport_io_write_at(&file, "x", 1, 4096) == -1);
+    assert(!cexport_io_close(&file, 6));
+    contents(path, "mapped", 6);
+    char rows[6500];
+    cexport_io_batch_entry entries[65];
+    for (int i = 0; i < 65; i++) {
+        memset(rows + 100 * i, 'a' + i % 26, 100);
+        entries[i].buf = rows + 100 * i;
+        entries[i].len = 100;
+        entries[i].offset = 100 * (size_t)i;
+    }
+    assert(!cexport_io_open(&file, path, CEXPORT_IO_PWRITE, CEXPORT_IO_FLAG_NOFSYNC));
+    assert(!cexport_io_presize(&file, 1024));
+    assert(cexport_io_write_batch(&file, entries, 65) == 6500);
+    assert(cexport_io_write_at(&file, "!", 1, 6500) == 1);
+    assert(!cexport_io_close(&file, 6501));
+    char expected[6501];
+    memcpy(expected, rows, 6500);
+    expected[6500] = '!';
+    contents(path, expected, 6501);
+    unlink(path);
+    puts("PASS cexport I/O reservation fallback and growth past the pre-size");
+    return 0;
 }
 #endif

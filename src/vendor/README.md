@@ -17,6 +17,12 @@ repeated header definitions. SAS string conversion preserves spaces before a
 NUL terminator, matching Stata. Records padded with spaces use ReadStat's
 original trimming behavior.
 
+Two changes in `sas/readstat_xport_write.c` match Stata's XPORT writer. A
+format that is a bare name, with no width, is copied as the format name, since
+the generated format parser rejects two-character names such as `YN`. A
+version 5 member name is checked only for its eight-byte length, because Stata
+names the member after the file name as written.
+
 `zlib/zlib.h` maps the zlib functions used by ReadStat's SPSS `.zsav` reader to
 miniz, the MIT-licensed library in `miniz/` also used for XLSX files. The header
 provides this translation; ctools does not include the zlib library itself.
@@ -35,6 +41,11 @@ provides five C source files and their public headers. It uses `iconv` on Unix
 and the same Windows adapter as ReadStat. Integer type names have `XLS` prefixes
 to avoid collisions with `windows.h`. The locale and endian headers have
 `xls_` prefixes so the compiler can distinguish them from system headers.
+
+One local change, marked `ctools:` in `src/xls.c`: `xls_preparseWorkSheet` and
+`xls_parseWorkSheet` skip a BOF..EOF substream nested in a worksheet (an
+embedded chart), so its cached series values are not read as worksheet cells
+and its EOF does not end the sheet. Native Stata reads such sheets the same way.
 
 ## Character encoding detection
 

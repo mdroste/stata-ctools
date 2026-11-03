@@ -61,7 +61,8 @@
 supplied propensity score. With {opt outcome()}, it reports the average
 treatment effect on the treated (ATT) for the matched sample. The treatment
 variable must be coded 0/1, with both groups present. Supply covariates for
-score estimation or specify {opt pscore()}.
+score estimation or specify {opt pscore()}, not both. Covariates may include
+factor variables ({help fvvarlist}).
 
 
 {pstd}
@@ -124,14 +125,18 @@ strictly below the caliper, and kernel matching ignores {opt caliper()}.
 {phang}
 {opt radius} specifies radius matching, where each treated observation is
 matched to all controls within the specified caliper distance. Equal weights
-are assigned to all matches. The default radius is 0.25 when no positive
-{opt caliper()} is specified.
+are assigned to all matches. The default radius is 0.25 when {opt caliper()}
+is not specified or is 0; as in {cmd:psmatch2}, a negative {opt caliper()}
+matches nothing. With both {opt radius} and {opt kernel}, radius matching is
+performed, as in {cmd:psmatch2}.
 
 {phang}
 {opt kernel} specifies kernel matching, where all control observations
 receive a weight based on a kernel function of their propensity score
 distance from the treated observation. Compact-support kernels assign zero weight outside
-the bandwidth; the normal kernel has unbounded support.
+the bandwidth, and match nothing when {opt bwidth()} is 0 or negative; the
+normal kernel has unbounded support and uses the absolute value of
+{opt bwidth()}, as in {cmd:psmatch2}.
 
 {phang}
 {opth kerneltype(string)} specifies the kernel function for kernel matching:
@@ -174,8 +179,8 @@ distance, all tied observations should be included as matches.
 
 {phang}
 {opt descending} specifies that matching should proceed in descending
-order of propensity score. This can affect results when matching without
-replacement.
+order of propensity score. As in {cmd:psmatch2}, it requires
+{opt noreplacement}.
 
 {dlgtab:Outcome Analysis}
 
@@ -206,6 +211,14 @@ score model's estimation sample.
 Each run replaces existing {cmd:_pscore}, {cmd:_weight}, {cmd:_id},
 {cmd:_support}, {cmd:_treated}, and {cmd:_nn} variables. These names cannot be
 used as inputs. Observation order is preserved.
+
+{pstd}
+When propensity scores tie (for example, with only discrete covariates),
+nearest-neighbor results depend on the sort order of the data, exactly as with
+{cmd:psmatch2}: among tied controls, the first in the current order is used.
+To avoid results that depend on an arbitrary order, set the seed and sort the
+data randomly before matching, for example
+{cmd:set seed 1}, {cmd:generate double u = runiform()}, {cmd:sort u}.
 
 
 {pstd}
@@ -282,6 +295,8 @@ least-squares regression of the outcome on treatment, as in {cmd:psmatch2}.
 {synopt:{cmd:r(att_se)}}approximate ATT standard error (see Remarks){p_end}
 {synopt:{cmd:r(seatt)}}alias for {cmd:r(att_se)}, as in {cmd:psmatch2}{p_end}
 {synopt:{cmd:r(att_t)}}t-statistic for ATT (if outcome specified){p_end}
+{synopt:{cmd:r(att_}{it:outcome}{cmd:)}}alias for {cmd:r(att)}, as in {cmd:psmatch2} (when the name fits in 32 characters){p_end}
+{synopt:{cmd:r(seatt_}{it:outcome}{cmd:)}}alias for {cmd:r(att_se)}, as in {cmd:psmatch2} (when the name fits in 32 characters){p_end}
 
 {p2col 5 24 28 2: Macros}{p_end}
 {synopt:{cmd:r(method)}}matching method: nearest, radius, or kernel{p_end}

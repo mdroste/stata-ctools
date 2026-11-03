@@ -103,7 +103,7 @@ cexport delimited using output.csv, quote replace
 - **Zero-copy mmap access**: Data is formatted directly into memory-mapped output buffers, bypassing userspace buffering
 - **Deferred fsync**: Optional `CEXPORT_IO_FLAG_NOFSYNC` skips the final `fsync`, trading durability for speed on non-critical exports
 - **Windows async batching**: `WaitForMultipleObjects` allows concurrent overlapped writes, saturating disk bandwidth
-- **Optional direct I/O**: `FILE_FLAG_NO_BUFFERING` on Windows bypasses the OS page cache for large exports, avoiding cache pollution
+- **Optional write-through**: `direct` opens the file with `FILE_FLAG_WRITE_THROUGH` on Windows; it does not bypass the page cache, because unbuffered writes would need sector-aligned rows. macOS and Linux builds ignore it
 - **SIMD-accelerated data loading**: AVX2/SSE2/NEON bulk load from Stata with 16x loop unrolling in `ctools_data_io`
 - **Parallel formatting**: Multiple OpenMP threads convert numeric values to text concurrently
 - **Smart quoting**: Only quotes fields containing delimiters, quotes, or newlines—avoids unnecessary work
@@ -145,7 +145,7 @@ Embedded quotes within strings are escaped by doubling them (`"` becomes `""`).
 
 - Ordinary numeric missing values are written as empty fields; `.a`–`.z` retain their codes
 - String missing values are written as empty strings
-- Line endings use the system default (LF on Unix/Mac, CRLF on Windows)
+- Lines end with LF on every platform; the `crlf` option writes CRLF instead
 - UTF-8 encoding is used for output
 
 ## Technical Notes
@@ -178,14 +178,19 @@ Delimited and Excel exports validate per-column metadata and write a sibling tem
 file before publishing it. A failed export leaves an existing destination intact;
 without `replace`, publication refuses an existing file, including one created
 while export is running. The destination directory must allow temporary files.
+As with `export`, `replace` turns a symbolic-link destination into a regular file
+and leaves its target unchanged, sheet modification writes through the link, and a
+write-protected destination is not replaced.
 
 New Excel workbooks use the 1900 date system; edits preserve the existing workbook's date system. Daily dates retain their calendar day;
 `%tc` retains milliseconds as fractional days, and `%tC` is converted to `%tc`
 with `cofC()` first. Leap seconds cannot be represented in Excel. Monthly,
-quarterly, weekly, half-yearly, and yearly dates use the first day of the period.
+quarterly, weekly, half-yearly, and yearly dates use the first day of the period;
+`%tb` dates are converted through their business calendar and `%tg` values are
+written as numbers.
 `datafmt` and `datestring()` instead export date/time values as text.
 
-`keepcellfmt` preserves the existing cell formats in the written rectangle when modifying a worksheet. Cells outside that rectangle and other worksheets retain their content and formatting. Use `sheet(..., modify)` for edits and `sheet(..., replace)` to replace the selected worksheet. Whole-workbook `replace` retains only style definitions with `keepcellfmt`, not the old cells, their style assignments, or other sheets.
+`keepcellfmt` preserves the existing cell formats in the written rectangle when modifying a worksheet; exported dates still receive date formats, as with `export excel`. Cells outside that rectangle and other worksheets retain their content and formatting. Use `sheet(..., modify)` for edits and `sheet(..., replace)` to replace the selected worksheet. Whole-workbook `replace` retains only style definitions with `keepcellfmt`, not the old cells, their style assignments, or other sheets.
 
 ## More details
 

@@ -763,6 +763,16 @@
           "anchor": "/* Presentation controls must change the actual displayed output. */"
         }
       ]
+    },
+    "b0": {
+      "kind": "unsupported",
+      "reason": "ivreg2's b0() (the CUE objective at a given coefficient vector) is not implemented; the option is refused with r(198).",
+      "evidence": [
+        {
+          "path": "validation/stata/civreghdfe.do",
+          "anchor": "b0(matrix) refused"
+        }
+      ]
     }
   },
   "cppmlhdfe": {
@@ -906,6 +916,16 @@
     }
   },
   "cmerge": {
+    "nolabels": {
+      "kind": "differential",
+      "reason": "merge's spelling of nolabel; the result is compared with merge's in output order.",
+      "evidence": [
+        {
+          "path": "validation/stata/cmerge.do",
+          "anchor": "_g3_merge_order \"MRG-04 nolabels\""
+        }
+      ]
+    },
     "force": {
       "kind": "differential",
       "reason": "Specialized fixtures activate error/type-mismatch behavior as well as ordinary differential cases.",

@@ -386,7 +386,19 @@ static ST_retcode export_mmap(size_t nobs, size_t avg_row_size, size_t chunk_siz
         return 603;
     }
 
-    if (cexport_io_presize(&outfile, estimated_total) != 0) {
+    int presize = cexport_io_presize(&outfile, estimated_total);
+    if (presize == CEXPORT_IO_UNRESERVED) {
+        /* Without reserved blocks a mapped write could fault with SIGBUS on
+         * a full disk; write the (unpublished) temporary through pwrite. */
+        if (g_ctx.verbose) {
+            snprintf(msg, sizeof(msg), "  %s; using pwrite\n", outfile.error_message);
+            SF_display(msg);
+        }
+        cexport_io_close(&outfile, 0);
+        free(header_buf);
+        return CEXPORT_RETRY_PWRITE;
+    }
+    if (presize != 0) {
         snprintf(msg, sizeof(msg), "cexport: failed to pre-size file: %s\n",
                 outfile.error_message);
         SF_error(msg);

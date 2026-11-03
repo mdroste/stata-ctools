@@ -18,7 +18,15 @@ Where `merge_type` is one of:
 - `1:m` - One-to-many merge
 - `m:m` - Pair repeated keys sequentially, repeating the shorter group's last row; this does not form all combinations
 
+As with `merge`, `1:n`, `n:1`, `n:n`, `n:m` and `m:n` are accepted for these types.
 Use `cmerge 1:1 _n using filename` to merge by observation number.
+
+Rows come out in `merge`'s order: the master observations in key order (the first
+output row of each), then every other row, that is the using-only rows and the
+later `1:m` or `m:m` pairings of a master row, in key order. A `1:1` result
+without using-only rows is sorted by the keys. Where `merge` sorts a master whose
+keys have ties, `merge`'s order within the ties depends on `set sortseed`;
+`cmerge` keeps their existing order.
 
 ## Options
 
@@ -33,7 +41,7 @@ Use `cmerge 1:1 _n using filename` to merge by observation number.
 | `force` | Retain master type for incompatible non-key variables; key types must match |
 | `noreport` | Suppress merge result table |
 | `verbose` | Display timing and progress information |
-| `nolabel` | Do not copy value labels from using data |
+| `nolabel` | Do not copy value labels from using data (`nolabels` is accepted, as in `merge`) |
 | `nonotes` | Do not copy notes from using data |
 | `update` | Fill missing master values from same-named using variables |
 | `replace` | Replace conflicting nonmissing values; requires `update` |
@@ -151,7 +159,7 @@ The `_merge` variable (or variable specified by `generate()`) indicates:
 
 Shared numeric and fixed-string variables are widened before updates or using-only rows are written. A long/float combination uses double to preserve both inputs. Key variables must have matching string/numeric types even with force. For incompatible non-key types, force retains the master type and treats the using-side values as missing. String writes retain the shared plugin limit of str2045; strL output is unsupported. If `assert()` fails, the merged result stays in memory, as with `merge`; any other failed or interrupted merge (including Break) restores the master dataset.
 
-By default `cmerge` keeps that guarantee without writing a snapshot to disk. A `preserve` snapshot of the whole dataset, which Stata writes to disk above `c(max_preservemem)` (1 GB by default), took about a quarter of the merge time at 10 and 25 million observations. Key, sortedness and uniqueness errors are found before the master is changed. Before the plugin overwrites a master observation it keeps a copy of every master observation in memory (the staged rows, or full columns for strings too wide to stage, that the output is written from); a failure, or Break, restores the observations from it, and `cmerge` undoes its own changes: added variables and observations, promoted storage types and formats, value labels, notes and characteristics, the sort marker and `c(changed)`. The copy is released when the merge completes. The few merges that cannot be undone that way keep a snapshot in memory, in a frame dropped when `cmerge` finishes: merges involving strL variables (run by `merge`, which sorts the master before it checks the keys), and empty-data merges whose `keep()` or 1:1 sort would drop or reorder master observations. If that copy does not fit in memory the merge fails before changing anything. Stata 15 and earlier have no frames and use `preserve` for these merges.
+By default `cmerge` keeps that guarantee without writing a snapshot to disk. A `preserve` snapshot of the whole dataset, which Stata writes to disk above `c(max_preservemem)` (1 GB by default), took about a quarter of the merge time at 10 and 25 million observations. Key, sortedness and uniqueness errors are found before the master is changed. Before the plugin overwrites a master observation it keeps a copy of every master observation in memory (the staged rows, or full columns for strings too wide to stage, that the output is written from); a failure, or Break, restores the observations from it, and `cmerge` undoes its own changes: added variables and observations, promoted storage types and formats, value labels, notes and characteristics, the sort marker and `c(changed)`. The copy is released when the merge completes. The few merges that cannot be undone that way keep a snapshot in memory, in a frame dropped when `cmerge` finishes: merges involving strL variables (run by `merge`, which sorts the master before it checks the keys), and empty-data merges whose `keep()` or key sort would drop or reorder master observations. If that copy does not fit in memory the merge fails before changing anything. Stata 15 and earlier have no frames and use `preserve` for these merges.
 
 Two options change this:
 

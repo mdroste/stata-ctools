@@ -736,6 +736,7 @@ ST_retcode compute_bins_discrete(
     const ST_double *weights,
     ST_int N,
     ST_int compute_se,
+    ST_int max_bins,
     ByGroupResult *result,
     ST_int *bin_ids_out
 ) {
@@ -773,6 +774,11 @@ ST_retcode compute_bins_discrete(
     if (unique_count < 1) {
         free(sort_idx);
         return CBINSCATTER_ERR_NOOBS;
+    }
+    /* Refuse before the per-bin accumulators, which grow with N * bins */
+    if (unique_count > max_bins) {
+        free(sort_idx);
+        return CBINSCATTER_ERR_CAPACITY;
     }
 
     /* Collect unique x values and assign bins in one pass */

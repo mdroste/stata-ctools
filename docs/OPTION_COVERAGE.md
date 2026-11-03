@@ -167,6 +167,7 @@ python3 validation/run.py cencode
 | `civreghdfe` | `cluster` | Compare command results |
 | `civreghdfe` | `tolerance` | Compare command results |
 | `civreghdfe` | `maxiter` | Compare command results |
+| `civreghdfe` | `iterate` | Compare command results |
 | `civreghdfe` | `verbose` | Compare command results |
 | `civreghdfe` | `first` | Compare command results |
 | `civreghdfe` | `ffirst` | Compare command results |
@@ -183,7 +184,7 @@ python3 validation/run.py cencode
 | `civreghdfe` | `dkraay` | Compare command results |
 | `civreghdfe` | `kiefer` | Compare command results |
 | `civreghdfe` | `center` | Check rejection of an unsupported option |
-| `civreghdfe` | `b0` | Compare command results |
+| `civreghdfe` | `b0` | Check rejection of an unsupported option |
 | `civreghdfe` | `residuals` | Compare command results |
 | `civreghdfe` | `residuals2` | Compare command results |
 | `civreghdfe` | `noconstant` | Compare command results |
@@ -216,6 +217,8 @@ python3 validation/run.py cencode
 | `civreghdfe` | `saverf` | Compare command results |
 | `civreghdfe` | `saverfprefix` | Compare command results |
 | `civreghdfe` | `threads` | Compare command results |
+| `civreghdfe` | `coeflegend` | Compare command results |
+| `civreghdfe` | `cformat` | Compare command results |
 | `civreghdfe` | `noreturn` | Check option behavior |
 | `civreghdfe_p` | `score` | Compare command results |
 | `civreghdfe_p` | `xb` | Compare command results |
@@ -231,7 +234,7 @@ python3 validation/run.py cencode
 | `cmerge` | `force` | Compare command results |
 | `cmerge` | `noreport` | Compare command results |
 | `cmerge` | `verbose` | Compare command results |
-| `cmerge` | `nolabel` | Compare command results |
+| `cmerge` | `nolabels` | Compare command results |
 | `cmerge` | `nonotes` | Compare command results |
 | `cmerge` | `update` | Compare command results |
 | `cmerge` | `replace` | Compare command results |
@@ -320,6 +323,7 @@ python3 validation/run.py cencode
 | `cpsmatch` | `descending` | Compare command results |
 | `cpsmatch` | `verbose` | Compare command results |
 | `cpsmatch` | `threads` | Compare command results |
+| `cqreg` | `level` | Compare command results |
 | `cqreg` | `quantile` | Compare command results |
 | `cqreg` | `absorb` | Check rejection of an unsupported option |
 | `cqreg` | `vce` | Compare command results |
@@ -330,6 +334,8 @@ python3 validation/run.py cencode
 | `cqreg` | `maxiter` | Compare command results |
 | `cqreg` | `nopreprocess` | Compare command results |
 | `cqreg` | `threads` | Compare command results |
+| `cqreg` | `nolog` | Compare command results |
+| `cqreg` | `log` | Compare command results |
 | `crangejoin` | `by` | Compare command results |
 | `crangejoin` | `keepusing` | Compare command results |
 | `crangejoin` | `prefix` | Compare command results |
@@ -347,7 +353,9 @@ python3 validation/run.py cencode
 | `crangestat` | `snapshot` | Check option behavior |
 | `crangestat` | `fast` | Check option behavior |
 | `creghdfe` | `absorb` | Compare command results |
+| `creghdfe` | `noabsorb` | Compare command results |
 | `creghdfe` | `vce` | Compare command results |
+| `creghdfe` | `cluster` | Compare command results |
 | `creghdfe` | `verbose` | Compare command results |
 | `creghdfe` | `tolerance` | Compare command results |
 | `creghdfe` | `iterate` | Compare command results |
@@ -361,6 +369,11 @@ python3 validation/run.py cencode
 | `creghdfe` | `quad` | Compare command results |
 | `creghdfe` | `snapshot` | Check option behavior |
 | `creghdfe` | `fast` | Check option behavior |
+| `creghdfe` | `noconstant` | Compare command results |
+| `creghdfe` | `keepsingletons` | Compare command results |
+| `creghdfe` | `noheader` | Compare command results |
+| `creghdfe` | `notable` | Compare command results |
+| `creghdfe` | `nofootnote` | Compare command results |
 | `creghdfe_p` | `score` | Compare command results |
 | `creghdfe_p` | `xb` | Compare command results |
 | `creghdfe_p` | `stdp` | Compare command results |

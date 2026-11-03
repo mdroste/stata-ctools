@@ -394,6 +394,16 @@ static void ips4o_sequential_numeric(perm_idx_t * IPS4O_RESTRICT order,
         bucket_sizes[ips4o_classify(keys[order[start + i]], tree, log_buckets, num_buckets)]++;
     }
 
+    /* No progress (every key in one bucket, as with a value repeated more
+     * than IPS4O_RADIX_THRESHOLD times): the radix sort skips uniform digits */
+    for (int b = 0; b < num_buckets; b++) {
+        if (bucket_sizes[b] == len) {
+            ctools_aligned_free(tree); free(bucket_sizes); free(bucket_offsets);
+            radix_sort_numeric(order, temp, keys, start, len);
+            return;
+        }
+    }
+
     bucket_offsets[0] = 0;
     for (int b = 1; b <= num_buckets; b++) {
         bucket_offsets[b] = bucket_offsets[b - 1] + bucket_sizes[b - 1];
@@ -486,6 +496,15 @@ static void ips4o_sequential_string(perm_idx_t * IPS4O_RESTRICT order,
         bucket_sizes[ips4o_classify_string(strings[order[start + i]], tree, log_buckets, num_buckets)]++;
     }
 
+    /* No progress: the MSD radix sort skips shared prefixes */
+    for (int b = 0; b < num_buckets; b++) {
+        if (bucket_sizes[b] == len) {
+            free(tree); free(bucket_sizes); free(bucket_offsets);
+            radix_sort_string(order, temp, strings, start, len, 0, max_len);
+            return;
+        }
+    }
+
     bucket_offsets[0] = 0;
     for (int b = 1; b <= num_buckets; b++) {
         bucket_offsets[b] = bucket_offsets[b - 1] + bucket_sizes[b - 1];
@@ -538,7 +557,7 @@ static stata_retcode ips4o_parallel_numeric(perm_idx_t * IPS4O_RESTRICT order,
     if (num_threads > 16) num_threads = 16;  /* Cap threads */
 
     /* Initialize arena - estimate total memory needed:
-     * temp (nobs * 4) + tree (512 * 8) + counts/offsets (~16KB) + bucket_temps
+     * temp (nobs * 4, also the buckets' scratch) + tree (512 * 8) + counts/offsets (~16KB)
      * Use 2MB blocks to minimize block allocations */
     ctools_arena_init(&arena, 2 * 1024 * 1024);
 
@@ -686,28 +705,13 @@ static stata_retcode ips4o_parallel_numeric(perm_idx_t * IPS4O_RESTRICT order,
     /* Copy back */
     memcpy(order, temp, nobs * sizeof(perm_idx_t));
 
-    /* Pre-allocate per-thread temp buffers for bucket sorting */
-    size_t max_bucket = 0;
-    for (int b = 0; b < num_buckets; b++) {
-        if (bucket_sizes[b] > max_bucket) max_bucket = bucket_sizes[b];
-    }
-
-    perm_idx_t **bucket_temps = (perm_idx_t **)ctools_arena_alloc(&arena,
-                                        num_threads * sizeof(perm_idx_t *));
-    if (!bucket_temps) { rc = STATA_ERR_MEMORY; goto cleanup; }
-
-    for (t = 0; t < num_threads; t++) {
-        bucket_temps[t] = (perm_idx_t *)ctools_arena_alloc(&arena,
-                                        max_bucket * sizeof(perm_idx_t));
-        if (!bucket_temps[t]) { rc = STATA_ERR_MEMORY; goto cleanup; }
-    }
-
-    /* Parallel bucket sorting using dynamic scheduling */
+    /* Parallel bucket sorting using dynamic scheduling. temp is idle after
+     * the copy back; each bucket sorts with its own disjoint slice, which
+     * the sequential and radix routines index from zero. */
     #pragma omp parallel for schedule(dynamic, 1) num_threads(num_threads)
     for (int b = 0; b < num_buckets; b++) {
         if (bucket_sizes[b] > 1) {
-            int tid = omp_get_thread_num();
-            ips4o_sequential_numeric(order, bucket_temps[tid], keys,
+            ips4o_sequential_numeric(order, temp + bucket_offsets[b], keys,
                                      bucket_offsets[b], bucket_sizes[b], 0);
         }
     }
@@ -723,7 +727,6 @@ static stata_retcode ips4o_parallel_string(perm_idx_t * IPS4O_RESTRICT order,
 {
     ctools_arena arena;
     stata_retcode rc = STATA_OK;
-    int t;
 
     int num_threads = ctools_get_openmp_threads();
     if (num_threads > 16) num_threads = 16;
@@ -799,28 +802,11 @@ static stata_retcode ips4o_parallel_string(perm_idx_t * IPS4O_RESTRICT order,
     }
     memcpy(order, temp, nobs * sizeof(perm_idx_t));
 
-    /* Pre-allocate per-thread temp buffers */
-    size_t max_bucket = 0;
-    for (int b = 0; b < num_buckets; b++) {
-        if (bucket_sizes[b] > max_bucket) max_bucket = bucket_sizes[b];
-    }
-
-    perm_idx_t **bucket_temps = (perm_idx_t **)ctools_arena_alloc(&arena,
-                                        num_threads * sizeof(perm_idx_t *));
-    if (!bucket_temps) { rc = STATA_ERR_MEMORY; goto cleanup; }
-
-    for (t = 0; t < num_threads; t++) {
-        bucket_temps[t] = (perm_idx_t *)ctools_arena_alloc(&arena,
-                                        max_bucket * sizeof(perm_idx_t));
-        if (!bucket_temps[t]) { rc = STATA_ERR_MEMORY; goto cleanup; }
-    }
-
-    /* Parallel bucket sorting */
+    /* Parallel bucket sorting, each bucket in its own slice of temp */
     #pragma omp parallel for schedule(dynamic, 1) num_threads(num_threads)
     for (int b = 0; b < num_buckets; b++) {
         if (bucket_sizes[b] > 1) {
-            int tid = omp_get_thread_num();
-            ips4o_sequential_string(order, bucket_temps[tid], strings,
+            ips4o_sequential_string(order, temp + bucket_offsets[b], strings,
                                     bucket_offsets[b], bucket_sizes[b], max_len, 0);
         }
     }

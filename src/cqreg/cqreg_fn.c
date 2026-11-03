@@ -1167,9 +1167,18 @@ static ST_int cqreg_fn_solve_core(cqreg_ipm_state *ipm,
     }
 
     /* Solve (X'X) * tmp = X'Y, then y_d = -tmp */
-    /* Add small regularization */
+    /* Diagonal ridge for every factorization: IPM_SMALL, but at most
+     * IPM_SMALL times the column's sum of squares, so it cannot dominate a
+     * regressor measured on a small scale (a column with sum x^2 near 1e-13
+     * would otherwise be shrunk by a few percent and the objective missed).
+     * Columns with sum x^2 >= 1 keep the absolute IPM_SMALL. Without the
+     * workspace every column gets IPM_SMALL. */
+    ST_double *ridge = (ST_double *)malloc((size_t)K * sizeof(ST_double));
     for (j = 0; j < K; j++) {
-        XqX[j * K + j] += IPM_SMALL;
+        ST_double ridge_j = IPM_SMALL * fmin(1.0, XqX[j * K + j]);
+        if (!(ridge_j > 0.0)) ridge_j = IPM_SMALL;
+        if (ridge) ridge[j] = ridge_j;
+        XqX[j * K + j] += ridge ? ridge_j : IPM_SMALL;
     }
 
     if (cqreg_cholesky(XqX, K) != 0) {
@@ -1281,7 +1290,7 @@ static ST_int cqreg_fn_solve_core(cqreg_ipm_state *ipm,
 
         /* Add regularization */
         if (!use_qr) {
-            for (j = 0; j < K; j++) XqX[j * K + j] += IPM_SMALL;
+            for (j = 0; j < K; j++) XqX[j * K + j] += ridge ? ridge[j] : IPM_SMALL;
         }
 
         /* Compute qr = q .* r for the RHS */
@@ -1464,6 +1473,7 @@ static ST_int cqreg_fn_solve_core(cqreg_ipm_state *ipm,
 #endif
 
     } /* End main loop */
+    free(ridge);
 
     ipm->time_iterate = ctools_timer_seconds() - rt_phase_start;
     rt_phase_start = ctools_timer_seconds();

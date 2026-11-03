@@ -20,6 +20,7 @@
 #include "ctools_config.h"
 #include "ctools_runtime.h"
 #include "ctools_rowstage.h"
+#include "ctools_transport_internal.h"
 #include "csort_impl.h"
 #include "csort_stream.h"
 
@@ -134,8 +135,41 @@ static sort_algorithm_t parse_algorithm(const char *args)
 /* Parse the sort variable indices from the argument string.
    Only parse numbers that appear before options (alg=, stream, threads) to avoid
    picking up numbers from option values. */
+/* Read a local macro of any length (SPI name, "_" + local name) into a heap
+   string; NULL if it is unset or cannot be read whole. */
+static char *csort_read_local(const char *spi_name)
+{
+    size_t cap = 4096;
+    for (;;) {
+        char *buf = (char *)malloc(cap);
+        if (!buf) return NULL;
+        buf[0] = buf[cap - 1] = '\0';
+        if (SF_macro_use((char *)spi_name, buf, (ST_int)(cap - 1)) != 0) {
+            free(buf);
+            return NULL;
+        }
+        if (strlen(buf) + 2 < cap) return buf;
+        free(buf);
+        if (cap > (size_t)64 * 1024 * 1024) return NULL;
+        cap *= 2;
+    }
+}
+
 static int parse_sort_vars(const char *args, int **sort_vars, size_t *nsort)
 {
+    /* keyslocal: the indices are in local __csort_keys, since a list in the
+       argument exceeds Stata's plugin-call argument length on wide data */
+    if (strstr(args, "keyslocal") != NULL) {
+        char *keys = csort_read_local("___csort_keys");
+        if (keys == NULL || strstr(keys, "keyslocal") != NULL) {
+            free(keys);
+            return -1;
+        }
+        int rc = parse_sort_vars(keys, sort_vars, nsort);
+        free(keys);
+        return rc;
+    }
+
     const char *p;
     const char *opts_start;
     char *endptr;
@@ -217,7 +251,8 @@ static int parse_sort_vars(const char *args, int **sort_vars, size_t *nsort)
 static int *parse_string_widths(const char *args, size_t nvars)
 {
     const char *p = strstr(args, "strw:");
-    if (!p) return NULL;
+    /* Without strw:, the widths come from local __ctools_strw */
+    if (!p) return ctools_io_ctools_read_strw_from_stata(nvars);
     p += 5;  /* skip "strw:" */
 
     int *widths = (int *)calloc(nvars, sizeof(int));

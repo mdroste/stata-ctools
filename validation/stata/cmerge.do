@@ -2497,6 +2497,240 @@ foreach fault in schema post keep {
 global CTOOLS_esample_using
 global CTOOLS_esample_mgrp
 
+* Row order, spellings, wide using data, metadata and the changed flag
+* against merge, in output order (no sorting before the comparison).
+capture program drop _g3_merge_order
+program define _g3_merge_order
+    * _g3_merge_order testname : merge-arguments (master in memory)
+    gettoken testname 0 : 0
+    gettoken colon 0 : 0
+    tempfile master expected
+    quietly save `master'
+    * merge sorts an unsorted master with sort, whose order of tied keys
+    * depends on set sortseed (two sortseeds give two different m:1 results);
+    * with $G3_STABLE the reference sorts the master stably first, the
+    * deterministic order cmerge gives
+    if "$G3_STABLE" != "" sort $G3_STABLE, stable
+    capture quietly merge `0'
+    local rc_native = _rc
+    if !`rc_native' quietly save `expected'
+    quietly use `master', clear
+    capture quietly cmerge `0'
+    local rc_ctools = _rc
+    if `rc_native' | `rc_ctools' {
+        if `rc_native' == `rc_ctools' test_pass "`testname' (both r(`rc_native'))"
+        else test_fail "`testname'" "merge r(`rc_native'), cmerge r(`rc_ctools')"
+    }
+    else {
+        capture cf _all using `expected'
+        if _rc test_fail "`testname'" "rows or values differ from merge in output order"
+        else test_pass "`testname'"
+    }
+    quietly use `master', clear
+end
+tempfile g3_u1 g3_u2 g3_ur g3_u3 g3_e g3_uw g3_u8 g3_u9 g3_m3
+clear
+input id u
+2 20
+3 30
+end
+save `g3_u1'
+clear
+input id u
+1 1
+1 2
+2 3
+3 4
+3 5
+end
+gen r = _n
+save `g3_u2'
+clear
+input id m
+1 1
+3 3
+end
+_g3_merge_order "MRG-01 1:1 using-only key inside the master range" : 1:1 id using `g3_u1'
+_g3_merge_order "MRG-01 m:1 using-only key inside the master range" : m:1 id using `g3_u1'
+clear
+input id m
+1 1
+3 3
+4 4
+end
+_g3_merge_order "MRG-01 1:m expansion rows" : 1:m id using `g3_u2'
+_g3_merge_order "MRG-01 m:m expansion rows" : m:m id using `g3_u2'
+set seed 20261102
+foreach t in 1:1 m:1 1:m m:m {
+    clear
+    set obs 600
+    gen id = floor(runiform() * 400)
+    if inlist("`t'", "1:1", "m:1") bysort id: keep if _n == 1
+    gen r = runiform()
+    sort id r
+    save `g3_ur', replace
+    clear
+    set obs 500
+    gen id = floor(runiform() * 400)
+    if inlist("`t'", "1:1", "1:m") bysort id: keep if _n == 1
+    gen mr = runiform()
+    sort id mr
+    _g3_merge_order "MRG-01 random `t'" : `t' id using `g3_ur'
+    _g3_merge_order "MRG-01 random `t' keep(match using)" : `t' id using `g3_ur', keep(match using)
+    gen double shuffle = runiform()
+    sort shuffle
+    drop shuffle
+    global G3_STABLE id
+    _g3_merge_order "MRG-01 random `t', unsorted master" : `t' id using `g3_ur'
+    global G3_STABLE
+}
+* MRG-03: empty master or using data still come out in key order
+clear
+set obs 3
+gen id = 4 - _n
+gen y = _n
+save `g3_u3'
+clear
+set obs 0
+gen id = .
+gen y = .
+save `g3_e', emptyok
+foreach t in 1:1 m:1 1:m m:m {
+    clear
+    set obs 0
+    gen id = .
+    _g3_merge_order "MRG-03 empty master `t'" : `t' id using `g3_u3'
+    clear
+    set obs 3
+    gen id = cond(_n == 1, 3, _n - 1)
+    gen x = _n
+    _g3_merge_order "MRG-03 empty using `t'" : `t' id using `g3_e'
+}
+* MRG-04: merge's type spellings and nolabels
+clear
+input id m
+1 1
+3 3
+end
+label define g3_ml 1 "one"
+label values m g3_ml
+foreach t in 1:n n:1 n:n n:m m:n {
+    _g3_merge_order "MRG-04 type `t'" : `t' id using `g3_u1'
+}
+_g3_merge_order "MRG-04 nolabels" : 1:1 id using `g3_u1', nolabels
+* MRG-02: using data wider than the plugin argument allows
+clear
+set obs 3
+gen id = _n
+forvalues j = 1/1500 {
+    gen double v`j' = _n * `j'
+}
+save `g3_uw'
+clear
+set obs 3
+gen id = _n
+gen m = 1
+_g3_merge_order "MRG-02 using with 1,500 variables" : 1:1 id using `g3_uw'
+_g3_merge_order "MRG-02 keepusing() naming 1,500 variables" : 1:1 id using `g3_uw', keepusing(v*)
+gen v1 = 0
+_g3_merge_order "MRG-02 wide using with update" : 1:1 id using `g3_uw', update replace
+* DATA-08: _dta notes and characteristics, and attached labels, when the
+* merge adds no new variable from using
+clear
+set obs 3
+gen id = _n
+gen x = _n
+gen y = 1
+label define g3_yl 1 "a"
+label values y g3_yl
+char _dta[g3zz] usingchar
+note: using note
+save `g3_u8'
+foreach opts in "update replace keepusing(x)" "keepusing(x) nogenerate" "update replace" {
+    clear
+    set obs 3
+    gen id = _n
+    gen x = 9
+    note: master note
+    preserve
+    quietly merge 1:1 id using `g3_u8', `opts'
+    quietly label dir
+    local native_labels `r(names)'
+    local native_char : char _dta[g3zz]
+    local native_notes : char _dta[note0]
+    restore
+    quietly cmerge 1:1 id using `g3_u8', `opts'
+    quietly label dir
+    if "`r(names)'" == "`native_labels'" & "`: char _dta[g3zz]'" == "`native_char'" & ///
+        "`: char _dta[note0]'" == "`native_notes'" test_pass "DATA-08 using metadata: `opts'"
+    else test_fail "DATA-08 using metadata: `opts'" "labels `r(names)' vs `native_labels'; char `: char _dta[g3zz]' vs `native_char'; notes `: char _dta[note0]' vs `native_notes'"
+}
+* DATA-09: a key that abbreviates another using variable
+clear
+set obs 3
+gen idx = _n
+save `g3_u9'
+clear
+set obs 3
+gen id = _n
+capture merge 1:1 id using `g3_u9'
+local rc_native = _rc
+capture cmerge 1:1 id using `g3_u9'
+if _rc == `rc_native' & `rc_native' == 111 test_pass "DATA-09 abbreviated using key (r(111))"
+else test_fail "DATA-09 abbreviated using key" "merge r(`rc_native'), cmerge r(`=_rc')"
+* DATA-03: merge always marks the data changed
+clear
+set obs 3
+gen id = _n
+gen x = 1
+save `g3_m3'
+foreach opts in "keepusing(id) nogenerate" "update replace keepusing(x) nogenerate" {
+    use `g3_m3', clear
+    quietly cmerge 1:1 id using `g3_u8', `opts'
+    local changed = c(changed)
+    capture use `g3_m3'
+    if `changed' == 1 & _rc == 4 test_pass "DATA-03 cmerge marks the data changed: `opts'"
+    else test_fail "DATA-03 cmerge marks the data changed: `opts'" "c(changed)=`changed', use r(`=_rc')"
+}
+* DATA-04: a frame alias shared with the using data is refused as merge does
+if c(stata_version) >= 18 {
+    clear
+    set obs 3
+    gen id = _n
+    gen y = _n
+    gen w = 100
+    save `g3_u9', replace
+    capture frame drop g3_alias
+    frame create g3_alias
+    frame g3_alias {
+        set obs 3
+        gen id = _n
+        gen v = _n * 10
+    }
+    clear
+    set obs 3
+    gen id = _n
+    frlink 1:1 id, frame(g3_alias)
+    fralias add w = v, from(g3_alias)
+    foreach opts in "" "update replace" "keepusing(y)" {
+        capture merge 1:1 id using `g3_u9', `opts' nogenerate
+        local rc_native = _rc
+        capture drop y
+        quietly datasignature
+        local before `r(datasignature)'
+        capture cmerge 1:1 id using `g3_u9', `opts' nogenerate
+        local rc_ctools = _rc
+        if `rc_ctools' == 0 capture drop y
+        quietly datasignature
+        if `rc_ctools' == `rc_native' & (`rc_ctools' == 0 | "`r(datasignature)'" == "`before'") ///
+            test_pass "DATA-04 alias shared variable: [`opts'] r(`rc_native')"
+        else test_fail "DATA-04 alias shared variable: [`opts']" "merge r(`rc_native'), cmerge r(`rc_ctools')"
+    }
+    clear
+    frame drop g3_alias
+}
+program drop _g3_merge_order
+
 * End of cmerge validation
 noi print_summary "cmerge"
 }

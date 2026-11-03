@@ -96,6 +96,93 @@ static void nonint(const char *path) {
     }
     checked(readstat_end_writing(w));readstat_writer_free(w);if(fclose(file))exit(1);
 }
+/* A string variable with string value labels before a labeled numeric. */
+static void strlab(const char *path) {
+    FILE *file=fopen(path,"wb");if(!file)exit(1);
+    readstat_writer_t *w=readstat_writer_init();readstat_set_data_writer(w,output);
+    readstat_variable_t *id=readstat_add_variable(w,"id",READSTAT_TYPE_DOUBLE,0);
+    readstat_variable_t *cc=readstat_add_variable(w,"cc",READSTAT_TYPE_STRING,2);
+    readstat_variable_t *q=readstat_add_variable(w,"q",READSTAT_TYPE_DOUBLE,0);
+    readstat_label_set_t *names=readstat_add_label_set(w,READSTAT_TYPE_STRING,"country");
+    readstat_label_string_value(names,"US","United States");readstat_label_string_value(names,"CA","Canada");
+    readstat_variable_set_label_set(cc,names);
+    readstat_label_set_t *answers=readstat_add_label_set(w,READSTAT_TYPE_DOUBLE,"answer");
+    readstat_label_double_value(answers,1,"Yes");readstat_label_double_value(answers,2,"No");
+    readstat_variable_set_label_set(q,answers);
+    checked(readstat_begin_writing_sav(w,file,2));
+    for(int i=0;i<2;i++) {
+        checked(readstat_begin_row(w));checked(readstat_insert_double_value(w,id,i+1));
+        checked(readstat_insert_string_value(w,cc,i?"CA":"US"));
+        checked(readstat_insert_double_value(w,q,i+1));checked(readstat_end_row(w));
+    }
+    checked(readstat_end_writing(w));readstat_writer_free(w);if(fclose(file))exit(1);
+}
+/* Label sets written in the opposite order to the variables using them. */
+static void order(const char *path) {
+    FILE *file=fopen(path,"wb");if(!file)exit(1);
+    readstat_writer_t *w=readstat_writer_init();readstat_set_data_writer(w,output);
+    readstat_variable_t *a=readstat_add_variable(w,"a",READSTAT_TYPE_DOUBLE,0);
+    readstat_variable_t *b=readstat_add_variable(w,"b",READSTAT_TYPE_DOUBLE,0);
+    readstat_variable_t *c=readstat_add_variable(w,"c",READSTAT_TYPE_DOUBLE,0);
+    readstat_label_set_t *first=readstat_add_label_set(w,READSTAT_TYPE_DOUBLE,"first");
+    readstat_label_double_value(first,1,"A-one");
+    readstat_label_set_t *second=readstat_add_label_set(w,READSTAT_TYPE_DOUBLE,"second");
+    readstat_label_double_value(second,1,"B-one");
+    readstat_variable_set_label_set(c,first);readstat_variable_set_label_set(a,second);
+    checked(readstat_begin_writing_sav(w,file,1));
+    checked(readstat_begin_row(w));
+    checked(readstat_insert_double_value(w,a,1));checked(readstat_insert_double_value(w,b,1));
+    checked(readstat_insert_double_value(w,c,1));checked(readstat_end_row(w));
+    checked(readstat_end_writing(w));readstat_writer_free(w);if(fclose(file))exit(1);
+}
+/* XPORT 5 variables with SAS display formats: a character $20., numeric
+   w.d and COMMA, and user formats (YESNO5., FOO5.) named by their width. */
+static void xptformats(const char *path,int which) {
+    FILE *file=fopen(path,"wb");if(!file)exit(1);
+    readstat_writer_t *w=readstat_writer_init();readstat_set_data_writer(w,output);
+    checked(readstat_writer_set_file_format_version(w,5));
+    readstat_variable_t *v[2];
+    if(which==0) {
+        v[0]=readstat_add_variable(w,"C",READSTAT_TYPE_STRING,20);readstat_variable_set_format(v[0],"$20.");
+        v[1]=readstat_add_variable(w,"X",READSTAT_TYPE_DOUBLE,0);
+    } else if(which==1) {
+        v[0]=readstat_add_variable(w,"X",READSTAT_TYPE_DOUBLE,0);readstat_variable_set_format(v[0],"8.2");
+        v[1]=readstat_add_variable(w,"Y",READSTAT_TYPE_DOUBLE,0);readstat_variable_set_format(v[1],"COMMA10.2");
+    } else {
+        v[0]=readstat_add_variable(w,"V",READSTAT_TYPE_DOUBLE,0);readstat_variable_set_format(v[0],"YESNO5.");
+        v[1]=readstat_add_variable(w,"W",READSTAT_TYPE_DOUBLE,0);readstat_variable_set_format(v[1],"FOO5.");
+    }
+    checked(readstat_begin_writing_xport(w,file,2));
+    for(int i=0;i<2;i++) {
+        checked(readstat_begin_row(w));
+        if(which==0) checked(readstat_insert_string_value(w,v[0],i?"second":"first"));
+        else checked(readstat_insert_double_value(w,v[0],i));
+        checked(readstat_insert_double_value(w,v[1],i+1.25));checked(readstat_end_row(w));
+    }
+    checked(readstat_end_writing(w));readstat_writer_free(w);if(fclose(file))exit(1);
+}
+/* One XPORT 5 numeric per SAS format name: native knows some (no value
+   label, %d for its date formats) and names labels after the others. */
+static void xptnames(const char *path) {
+    const char *f[]={"F8.2","COMMA10.2","COMMAX10.2","DOLLAR10.2","DOLLARX10.2","Z8.","E10.","PERCENT8.2",
+        "BEST12.","D8.2","NUMX8.2","WORDS20.","HEX8.","BINARY8.","OCTAL8.","ROMAN8.","PVALUE6.4","NEGPAREN8.2",
+        "SSN11.","YEN8.","EURO8.2","FOO5.","FRACT8.","PERCENTN8.2","NLNUM8.","COMMA","YESNO","BESTD8.","DOLLAR.",
+        "WORDF20.","HHMM5.","MMSS5.","TOD8.","MONYY7.","YEAR4.","QTR1.","WEEKDATE29.","DOWNAME9.","MONNAME9.",
+        "JULDAY3.","EURX8.2","CHAR8.","BESTX8.","TIME8.","DATE9.","DATETIME20.","MMDDYY10.","DDMMYY10.",
+        "YYMMDD10.","JULIAN7.","WEEKDAY1.","DAY2.","MONTH2.","HOUR2.","DTDATE9.","E8601DA10.","NENGO8."};
+    int k=(int)(sizeof(f)/sizeof(*f));
+    FILE *file=fopen(path,"wb");if(!file)exit(1);
+    readstat_writer_t *w=readstat_writer_init();readstat_set_data_writer(w,output);
+    checked(readstat_writer_set_file_format_version(w,5));
+    readstat_variable_t *v[64];char name[16];
+    for(int j=0;j<k;j++) {
+        snprintf(name,sizeof(name),"V%d",j+1);v[j]=readstat_add_variable(w,name,READSTAT_TYPE_DOUBLE,0);
+        readstat_variable_set_format(v[j],f[j]);
+    }
+    checked(readstat_begin_writing_xport(w,file,1));checked(readstat_begin_row(w));
+    for(int j=0;j<k;j++)checked(readstat_insert_double_value(w,v[j],j+1));
+    checked(readstat_end_row(w));checked(readstat_end_writing(w));readstat_writer_free(w);if(fclose(file))exit(1);
+}
 int main(int argc,char **argv) {
     if(argc!=2)return 1;char path[4096];
     snprintf(path,sizeof(path),"%s/fixture.zsav",argv[1]);dataset(path,1);
@@ -105,5 +192,11 @@ int main(int argc,char **argv) {
     snprintf(path,sizeof(path),"%s/formats.sas7bdat",argv[1]);formats(path,0);
     snprintf(path,sizeof(path),"%s/raw.v8xpt",argv[1]);companion(path);
     snprintf(path,sizeof(path),"%s/nonint.sav",argv[1]);nonint(path);
+    snprintf(path,sizeof(path),"%s/strlab.sav",argv[1]);strlab(path);
+    snprintf(path,sizeof(path),"%s/order.sav",argv[1]);order(path);
+    snprintf(path,sizeof(path),"%s/fmtchar.xpt",argv[1]);xptformats(path,0);
+    snprintf(path,sizeof(path),"%s/fmtnum.xpt",argv[1]);xptformats(path,1);
+    snprintf(path,sizeof(path),"%s/fmtuser.xpt",argv[1]);xptformats(path,2);
+    snprintf(path,sizeof(path),"%s/fmtnames.xpt",argv[1]);xptnames(path);
     return 0;
 }

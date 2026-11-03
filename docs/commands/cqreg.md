@@ -11,8 +11,12 @@ Weight expressions are not supported. Solver and VCE differences are described i
 ## Syntax
 
 ```stata
-cqreg depvar indepvars [if] [in] [, options]
+cqreg depvar [indepvars] [if] [in] [, options]
+cqreg [, level(#) display_options]
 ```
+
+Without `indepvars` the constant-only model is fitted. Typed without a variable list, or through
+`estimates replay`, `cqreg` redisplays the last estimates.
 
 ## Options
 
@@ -41,6 +45,9 @@ Exhausting the iteration limit, numerical breakdown, or nonfinite results return
 ### Reporting Options
 | Option | Description |
 |--------|-------------|
+| `level(#)` | Confidence level (default 95); as in `qreg`, alpha = 1 - #/100 also enters the Hall-Sheather and Chamberlain bandwidths |
+| display options | `qreg`'s estimation display options, such as `cformat()` |
+| `nolog` | Accepted for compatibility; `cqreg` prints no iteration log |
 | `verbose` | Display progress information |
 | `threads(#)` | Maximum workers; zero uses the ctools thread setting |
 
@@ -128,7 +135,17 @@ The sparsity 1/f(0) (or, for robust standard errors, the per-observation densiti
 | `kernel[(kernel)]` | Kernel estimate from the residuals with bandwidth min(sd, IQR/1.34)·(Φ⁻¹(q+h) − Φ⁻¹(q−h)); kernels `epanechnikov` (default), `epan2`, `biweight`, `cosine`, `gaussian`, `parzen`, `rectangle`, `triangle` |
 
 ### Clustered
-Cluster-robust standard errors clustered on the specified variable.
+Cluster-robust standard errors clustered on the specified variable. With a single cluster the
+covariance is undefined; as `qreg`, `cqreg` then posts a zero `e(V)` with `e(rank)` 0, so
+`e(df_r)` is N and no standard errors are displayed.
+
+### Zero sparsity
+When the dependent variable has a mass point at the fitted quantile, both auxiliary fits of the
+fitted method give the same quantile at the mean of X. `qreg`'s exact vertices then give a zero
+sparsity and a zero covariance. `cqreg`'s interior-point auxiliary fits leave a rounding-level
+difference, so a difference below sqrt(epsilon) in the scaled response units is treated as zero:
+the cutoff `qreg` applies to the per-observation robust densities, which `cqreg` also applies in
+those units.
 
 ### Bandwidth Methods
 | Method | Description |
@@ -147,12 +164,13 @@ Cluster-robust standard errors clustered on the specified variable.
 | `e(N)` | Number of observations |
 | `e(q)` | Quantile estimated |
 | `e(sum_adev)` | Sum of absolute deviations |
-| `e(sparsity)` | Estimated sparsity (1/f(0)); missing for the kernel method with a robust or cluster VCE, as in `qreg` |
+| `e(sparsity)` | Estimated sparsity (1/f(0)); missing with a robust or cluster VCE, as in `qreg` |
 | `e(bwidth)` | Bandwidth used for sparsity estimation |
 | `e(kbwidth)` | Kernel bandwidth (kernel method) |
 | `e(iterations)` | Number of IPM iterations |
 | `e(convcode)` | 0 for a successfully converged fit |
-| `e(df_r)` | Residual degrees of freedom |
+| `e(df_r)` | Residual degrees of freedom, N - `e(rank)` |
+| `e(rank)` | Rank of `e(V)`, assessed in the scaled response units |
 | `e(df_m)` | Model degrees of freedom |
 | `e(N_clust)` | Number of clusters (if clustered) |
 
@@ -162,6 +180,7 @@ Cluster-robust standard errors clustered on the specified variable.
 | `e(cmd)` | `cqreg` |
 | `e(depvar)` | Dependent variable name |
 | `e(vce)` | Variance estimation method |
+| `e(vcetype)` | `Robust` with a robust or cluster VCE |
 | `e(denmethod)` | Density estimation method |
 | `e(kernel)` | Kernel function (kernel method) |
 | `e(bwmethod)` | Bandwidth selection method |
@@ -179,6 +198,22 @@ Cluster-robust standard errors clustered on the specified variable.
 ### Fixed Effects
 `absorb()` returns an error because least-squares partialling does not preserve
 quantile loss. Use explicit indicators when the number of groups permits it.
+
+### Scale of the regressors
+The collinearity screen runs on the correlation matrix of the regressors, as `_rmcoll`, and the
+diagonal ridge of the solver's normal equations is at most 1e-14 times a column's sum of squares,
+so a regressor measured on a very small scale (sum of squares near 1e-13) is neither omitted nor
+shrunk. `e(rank)` is computed with `invsym()` on the covariance in the scaled response units
+(spread of y between 1 and 2), not on the covariance divided by its largest entry, so a constant
+beside such a regressor keeps its rank. At scales below about 1e-10 `qreg` itself omits the
+regressor or stops with r(2001); `cqreg` gives the rescaled fit.
+
+### Multiple optima
+The quantile regression objective can have a set of minimizers, which is common with indicator
+regressors: when a group's size times q is an integer, the group's coefficient can move within an
+interval at the same objective. `qreg` and `cqreg` then can report different, equally optimal
+coefficients with the same `e(sum_adev)`. `validation/stata/cqreg.do` checks such models with
+`benchmark_qreg_altopt`, which verifies that cqreg's coefficients attain qreg's minimum.
 
 ### Solver
 `cqreg` always uses the direct Frisch-Newton interior point solver. The experimental preprocessing solver that `nopreprocess(-1)` used to select has been removed; the option is still parsed so existing do-files with `nopreprocess(0)` or `nopreprocess(1)` keep running.

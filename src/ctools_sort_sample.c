@@ -352,23 +352,16 @@ static stata_retcode sample_sort_numeric_impl(perm_idx_t * SAMPLE_RESTRICT order
     size_t *bucket_sizes = (size_t *)calloc(num_threads, sizeof(size_t));
     size_t *bucket_offsets = (size_t *)malloc(num_threads * sizeof(size_t));
 
-    /* Per-thread temp buffers for bucket sorting (FIX: avoids race condition) */
-    perm_idx_t **thread_temps = (perm_idx_t **)calloc(num_threads, sizeof(perm_idx_t *));
     size_t *thread_bucket_offsets = NULL;
 
     if (!all_samples || !sample_temp || !splitters || !temp_order ||
-        !bucket_counts || !bucket_sizes || !bucket_offsets || !thread_temps) {
+        !bucket_counts || !bucket_sizes || !bucket_offsets) {
         rc = STATA_ERR_MEMORY;
         goto cleanup;
     }
 
     /* Initialize bucket counts to zero */
     memset(bucket_counts, 0, num_threads * padded_buckets * sizeof(size_t));
-
-    /* Pre-allocate per-thread temp buffers */
-    for (int t = 0; t < num_threads; t++) {
-        thread_temps[t] = NULL;
-    }
 
     /* Phase 1: Parallel sampling */
     #pragma omp parallel for num_threads(num_threads) schedule(static)
@@ -482,36 +475,15 @@ static stata_retcode sample_sort_numeric_impl(perm_idx_t * SAMPLE_RESTRICT order
     }
 
     /* Phase 6: Allocate per-thread temp buffers for bucket sort */
-    size_t max_bucket_size = 0;
-    for (int b = 0; b < num_threads; b++) {
-        if (bucket_sizes[b] > max_bucket_size) {
-            max_bucket_size = bucket_sizes[b];
-        }
-    }
-
-    #pragma omp parallel for num_threads(num_threads) schedule(static)
-    for (int tid = 0; tid < num_threads; tid++) {
-        thread_temps[tid] = (perm_idx_t *)malloc(max_bucket_size * sizeof(perm_idx_t));
-    }
-
-    /* Check allocation success - with dynamic scheduling any thread can process
-     * any bucket, so all thread_temps must be valid */
-    for (int t = 0; t < num_threads; t++) {
-        if (thread_temps[t] == NULL) {
-            rc = STATA_ERR_MEMORY;
-            goto cleanup;
-        }
-    }
-
     /* Scratch is complete; this phase cannot fail. */
     memcpy(order, temp_order, nobs * sizeof(perm_idx_t));
 
-    /* Phase 6: Parallel local bucket sort */
+    /* Phase 6: Parallel local bucket sort. temp_order is idle after the
+     * copy; each bucket uses its own disjoint slice as scratch. */
     #pragma omp parallel for schedule(dynamic, 1) num_threads(num_threads)
     for (int b = 0; b < num_threads; b++) {
         if (bucket_sizes[b] > 0) {
-            int tid = omp_get_thread_num();
-            radix_sort_bucket_numeric(order, thread_temps[tid], keys,
+            radix_sort_bucket_numeric(order, temp_order + bucket_offsets[b], keys,
                                       bucket_offsets[b], bucket_sizes[b]);
         }
     }
@@ -525,12 +497,6 @@ cleanup:
     ctools_aligned_free(bucket_counts);
     free(bucket_sizes);
     free(bucket_offsets);
-    if (thread_temps) {
-        for (int t = 0; t < num_threads; t++) {
-            free(thread_temps[t]);
-        }
-        free(thread_temps);
-    }
 
     return rc;
 }
@@ -564,20 +530,15 @@ static stata_retcode sample_sort_string_impl(perm_idx_t * SAMPLE_RESTRICT order,
                                 num_threads * padded_buckets * sizeof(size_t));
     size_t *bucket_sizes = (size_t *)calloc(num_threads, sizeof(size_t));
     size_t *bucket_offsets = (size_t *)malloc(num_threads * sizeof(size_t));
-    perm_idx_t **thread_temps = (perm_idx_t **)calloc(num_threads, sizeof(perm_idx_t *));
     size_t *thread_bucket_offsets = NULL;
 
     if (!all_samples || !splitters || !temp_order ||
-        !bucket_counts || !bucket_sizes || !bucket_offsets || !thread_temps) {
+        !bucket_counts || !bucket_sizes || !bucket_offsets) {
         rc = STATA_ERR_MEMORY;
         goto cleanup;
     }
 
     memset(bucket_counts, 0, num_threads * padded_buckets * sizeof(size_t));
-
-    for (int t = 0; t < num_threads; t++) {
-        thread_temps[t] = NULL;
-    }
 
     /* Phase 1: Parallel sampling */
     #pragma omp parallel for num_threads(num_threads) schedule(static)
@@ -675,35 +636,15 @@ static stata_retcode sample_sort_string_impl(perm_idx_t * SAMPLE_RESTRICT order,
         }
     }
 
-    /* Phase 6: Allocate per-thread temps */
-    size_t max_bucket_size = 0;
-    for (int b = 0; b < num_threads; b++) {
-        if (bucket_sizes[b] > max_bucket_size) {
-            max_bucket_size = bucket_sizes[b];
-        }
-    }
-
-    #pragma omp parallel for num_threads(num_threads) schedule(static)
-    for (int tid = 0; tid < num_threads; tid++) {
-        thread_temps[tid] = (perm_idx_t *)malloc(max_bucket_size * sizeof(perm_idx_t));
-    }
-
-    for (int t = 0; t < num_threads; t++) {
-        if (thread_temps[t] == NULL) {
-            rc = STATA_ERR_MEMORY;
-            goto cleanup;
-        }
-    }
-
     /* Scratch is complete; this phase cannot fail. */
     memcpy(order, temp_order, nobs * sizeof(perm_idx_t));
 
-    /* Phase 6: Parallel local bucket sort */
+    /* Phase 6: Parallel local bucket sort, each bucket in its own slice of
+     * the idle temp_order */
     #pragma omp parallel for schedule(dynamic, 1) num_threads(num_threads)
     for (int b = 0; b < num_threads; b++) {
         if (bucket_sizes[b] > 0) {
-            int tid = omp_get_thread_num();
-            radix_sort_bucket_string(order, thread_temps[tid], strings,
+            radix_sort_bucket_string(order, temp_order + bucket_offsets[b], strings,
                                      bucket_offsets[b], bucket_sizes[b], 0, max_len);
         }
     }
@@ -716,12 +657,6 @@ cleanup:
     ctools_aligned_free(bucket_counts);
     free(bucket_sizes);
     free(bucket_offsets);
-    if (thread_temps) {
-        for (int t = 0; t < num_threads; t++) {
-            free(thread_temps[t]);
-        }
-        free(thread_temps);
-    }
 
     return rc;
 }

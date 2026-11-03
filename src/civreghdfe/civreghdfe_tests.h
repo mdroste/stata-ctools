@@ -36,6 +36,9 @@
     - X_endog: Endogenous regressors (N x K_endog)
     - Z: All instruments (N x K_iv), included exogenous first
     - weights, weight_type, N, N_eff, K_exog, K_endog, K_iv, df_a: Parameters
+    - dofminus: dofminus(), applied as ivreg2 does: the LM statistic times
+      (N - dofminus)/N without clusters, and dofminus out of the residual
+      degrees of freedom of the Cragg-Donald F and the unclustered rk F
     - rk_om: ranktest's S structure (a kernel becomes Bartlett, Kiefer iid)
     - rk_cluster, rk_nclust: cluster-type F conversion and its cluster count
     - underid_stat: Output - underidentification test statistic
@@ -54,6 +57,7 @@ ST_retcode civreghdfe_compute_underid_test(
     ST_int K_endog,
     ST_int K_iv,
     ST_int df_a,
+    ST_int dofminus,
     const civ_omega *rk_om,
     ST_int rk_cluster,
     ST_int rk_nclust,
@@ -98,7 +102,12 @@ ST_retcode civreghdfe_compute_hansen_j(
     Compute Durbin-Wu-Hausman endogeneity test.
 
     Tests H0: X_endog are exogenous (no endogeneity)
-    Uses augmented regression approach with first-stage residuals.
+    The regression-based Wu-Hausman test under iid errors: the augmented
+    (weighted) regression of y on [X_exog, X_endog, v], v the first-stage
+    residuals, and the Wald test of the coefficients gamma on v,
+    chi2 = gamma' [(X_aug'W X_aug)^-1]_vv^-1 gamma / s^2 with
+    s^2 = e'We / (N_eff - K_aug - df_a), and F = chi2 / K_endog (the F of
+    regress y x v; test v).
 
     Parameters:
     - y: Dependent variable (N x 1)
@@ -106,7 +115,8 @@ ST_retcode civreghdfe_compute_hansen_j(
     - X_endog: Endogenous regressors (N x K_endog)
     - Z: All instruments (N x K_iv)
     - temp1: First-stage coefficients (K_iv x K_total)
-    - N, K_exog, K_endog, K_iv, df_a: Parameters
+    - weights, weight_type: the regression weights (NULL/0 unweighted)
+    - N, N_eff, K_exog, K_endog, K_iv, df_a: Parameters
     - endog_chi2: Output - DWH chi-squared statistic
     - endog_f: Output - DWH F statistic
     - endog_df: Output - degrees of freedom
@@ -117,7 +127,10 @@ ST_retcode civreghdfe_compute_dwh_test(
     const ST_double *X_endog,
     const ST_double *Z,
     const ST_double *temp1,
+    const ST_double *weights,
+    ST_int weight_type,
     ST_int N,
+    ST_double N_eff,
     ST_int K_exog,
     ST_int K_endog,
     ST_int K_iv,

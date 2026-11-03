@@ -1,5 +1,6 @@
 {
   "version": "1.2.3",
   "date": "20261030",
-  "stata_minimum": "14.1"
+  "stata_minimum": "14.1",
+  "protocol": 2
 }

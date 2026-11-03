@@ -12,21 +12,21 @@ In the Weights column, `aw`, `fw`, `pw`, and `iw` are Stata weight types. A dash
 | `chdfe` | `hdfe` | aw/fw/pw | Categorical interactions and heterogeneous slopes are supported. Solver iteration paths may differ. Conjugate gradient requires a symmetric transform. See [details](commands/chdfe.md). |
 | `csort` | `sort` | — | Stable by default. Rejects datasets containing any strL variables, even when already sorted. Adds `stream(#)` and `nosortedby` options. |
 | `cmerge` | `merge` | — | Key variables must be the same type (string or numeric) in both datasets, even with `force`. |
-| `csample` | `sample` | — | Uses `csample, count(20)` instead of `sample 20, count`. Samples need not match `sample` with the same seed. |
-| `cbsample` | `bsample` | — | — |
+| `csample` | `sample` | — | Uses `csample, count(20)` instead of `sample 20, count`. Accepts the `by:` prefix. Samples need not match `sample` with the same seed. |
+| `cbsample` | `bsample` | — | `idcluster()` isn't supported. A resample size that differs across strata (an expression such as `_N/2` with `strata()` and strata of different sizes) isn't supported. Samples need not match `bsample` with the same seed. |
 | `cencode` | `encode` | — | Accepts several variables at once and adds `replace`. |
 | `cdecode` | `decode` | — | Accepts several variables at once and adds `replace`. |
 | `cdestring` | `destring` | — | strL values are limited to 2,045 bytes. |
 | `cinterpolate` | `ipolate`, `cipolate` | — | Linear by default; `cubic` selects local four-point cubic interpolation without extrapolation. Adds `by()` and keeps row order. Cubic anchors use distinct x values after averaging ties; all extended missings are excluded. See [usage](USAGE.md#interpolation-cinterpolate) for migration from the former ctools name. |
 | `csplit` | `split` | — | — |
 | `crangejoin` | `rangejoin` 1.1.3 | — | Numeric and str# variables only. Output is limited to 2,147,483,647 observations. |
-| `cwinsor` | `winsor2`, `gstats winsor` | — | — |
-| `cbinscatter` | `binscatter`, `binsreg` | aw/fw/pw/iw | `method(binsreg)` omits confidence bands and tests. It keeps singleton fixed-effect groups; comparisons with `binsreg` require the same bins and `reghdfeopt(keepsingletons)` there. |
-| `crangestat` | `rangestat` | — | User-written Mata functions aren't supported. |
-| `creghdfe` | `reghdfe` | aw/fw/pw | `absorb()` takes variables, `i.var`, and `var1#var2`, but not heterogeneous slopes (`c.var`), `##`, or `newvar=` terms. Clustering is one-way only. Not every `reghdfe` solver or degrees-of-freedom option is available. |
-| `civreghdfe` | `ivreghdfe` | aw/fw/pw | `absorb()` doesn't take heterogeneous slopes, and `center` isn't supported. Some estimator and VCE combinations aren't available; see the help file. |
-| `cqreg` | `qreg` | — | Adds clustered standard errors. Different solver and density estimator can produce slightly different coefficients and standard errors. Errors on nonconvergence. Centers the response before fitting, so at a large level (around 1e9) its clustered covariance stays accurate where `qreg`'s `vce(excluster)` is wrong in the leading digit. |
-| `cpsmatch` | `psmatch2` | — | ATT for one outcome only; no ATE/ATU or `ai()`. Matching without replacement requires `neighbor(1)`. |
+| `cwinsor` | `winsor2`, `gstats winsor` | — | Without `suffix()` or `prefix()`, replaces the variables in place, where `winsor2` creates `x_w`. |
+| `cbinscatter` | `binscatter`, `binsreg` | aw/fw/pw/iw | `method(binsreg)` omits confidence bands and tests. It keeps singleton fixed-effect groups; comparisons with `binsreg` require the same bins and `reghdfeopt(keepsingletons)` there. `binscatter`'s `medians`, `noaddmean`, `rd()`, `xq()`, `mcolors()`, `lcolors()`, `savegraph()`, `randvar()`, `randcut()` and `randn()` aren't supported and exit with error 198. |
+| `crangestat` | `rangestat` | — | Adds percentiles (`p1` to `p99`, `iqr`), computed with Stata's `_pctile` definition. User-written Mata functions, the `cov`, `corr` and `reg` statistics, variable interval bounds, and the `casewise`, `describe`, `local()` and `nocheck` options aren't supported. |
+| `creghdfe` | `reghdfe` | aw/fw/pw | `absorb()` takes variables, `i.var`, and `var1#var2`, but not heterogeneous slopes (`c.var`), `##`, or `newvar=` terms. Clustering is one-way only. `reghdfe`'s solver options (`technique()`, `transform()`, `acceleration()`, `poolsize()`, `compact`, `parallel()`) and group or individual fixed effects aren't available. |
+| `civreghdfe` | `ivreghdfe` | aw/fw/pw | `absorb()` doesn't take heterogeneous slopes, and `center`, `b0()`, `dofadjustments()`, `keepsingletons`, `nocollin`, `sfirst` and a non-integer `bw()` aren't supported. A regressor or instrument absorbed by the fixed effects is omitted, where `ivreghdfe` keeps its rounding noise. Estimator combinations that `ivreg2`'s parser rejects are errors even where `ivreg2` runs one of them (`fuller()` or `kclass()` with `gmm2s`, `liml` with `kclass()`, a negative `fuller()`). Some estimator and VCE combinations aren't available; see the help file. |
+| `cqreg` | `qreg` | — | Adds clustered standard errors. Different solver and density estimator can produce slightly different coefficients and standard errors. When the optimum is not unique, which is common with indicator regressors (a group whose size times q is an integer), `cqreg` and `qreg` can report different, equally optimal coefficients: `e(sum_adev)` agrees but `e(b)` can differ in the leading digit. Errors on nonconvergence. Centers the response before fitting, so at a large level (around 1e9) its clustered covariance stays accurate where `qreg`'s `vce(excluster)` is wrong in the leading digit. Fits regressors on scales below about 1e-10, which `qreg` omits or rejects. No `wlsiter()` or bootstrap VCE. |
+| `cpsmatch` | `psmatch2` | — | ATT for one outcome only; no ATE/ATU or `ai()`. Matching without replacement requires `neighbor(1)`. `radius` without `caliper()` uses a radius of 0.25, where `psmatch2` matches every control. |
 | `cppmlhdfe` | `ppmlhdfe` | aw/fw/pw | Undocumented debugging options aren't available. The iteration path can differ even when final estimates agree. See [cppmlhdfe details](commands/cppmlhdfe.md). |
 
 ## cpsmatch standard errors
@@ -62,7 +62,7 @@ New variables created by `creghdfe` (residuals, group IDs, saved fixed effects),
 
 ## Estimation errors
 
-- **One cluster.** A clustered covariance matrix isn't defined with a single cluster. `creghdfe` and `civreghdfe` exit with error 498. `cppmlhdfe` exits with error 459, since it needs at least two clusters in every cluster dimension.
+- **One cluster.** A clustered covariance matrix isn't defined with a single cluster. `creghdfe` and `civreghdfe` exit with error 498. `cppmlhdfe` exits with error 459, since it needs at least two clusters in every cluster dimension. `cqreg` posts a zero covariance with `e(rank)` 0 and displays no standard errors, as `qreg` does.
 - **No convergence.** If the fixed-effect projection fails in `creghdfe`, `civreghdfe`, or `cppmlhdfe`, or `cppmlhdfe` runs out of iterations, the command exits with error 430 instead of reporting estimates.
 
 ## Performance

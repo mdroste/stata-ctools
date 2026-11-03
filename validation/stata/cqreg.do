@@ -544,7 +544,10 @@ set obs 200
 gen d1 = runiform() > 0.5
 gen d2 = 1 - d1 + rnormal(0, 0.1)  // almost but not exactly complementary
 gen y = d1 + d2 + rnormal()
-benchmark_qreg y d1 d2, testname("near-dummy trap")
+* With binary d1 and a constant the median LP often has a face of optima: on
+* 97 of 400 seeds qreg and cqreg report vertices whose objectives agree to the
+* last bit and whose e(V) agree to 13 or more figures, with different b_d1.
+benchmark_qreg_altopt y d1 d2, testname("near-dummy trap")
 
 * High but not perfect correlation
 clear
@@ -1349,6 +1352,237 @@ foreach q in .25 .75 {
 * e(b) is checked by optimality; e(V) and the other results by value.
 benchmark_qreg_altopt y2 i.g x, quantile(.5) vce(robust) testname("robust fitted: discrete outcome, i.g x, q=.5")
 
+* Regressors on a very small scale: the collinearity screen works on the
+* correlation matrix (as _rmcoll), the solver's ridge is relative to the
+* diagonal, and the rank is assessed in the scaled response units, so x is
+* estimated as qreg estimates it, not omitted, shrunk or rank-deficient.
+foreach s in 1e-8 3e-8 1e-9 {
+    clear
+    set seed 7
+    set obs 1000
+    gen double x = runiform()*`s'
+    gen double y = x/`s' + rnormal()
+    benchmark_qreg y x, testname("small-scale regressor `s'")
+    quietly qreg y x
+    local qrank = e(rank)
+    local qnames : colfullnames e(b)
+    quietly cqreg y x
+    local cnames : colfullnames e(b)
+    if e(rank) == `qrank' & "`cnames'" == "`qnames'" test_pass "small-scale regressor `s': names and rank"
+    else test_fail "small-scale regressor `s': names and rank" "cqreg `cnames' rank `=e(rank)' vs qreg `qnames' rank `qrank'"
+}
+* At 2^-40 qreg itself omits x (Pseudo R2 0) and at 1e-10 it stops with
+* r(2001), while the same model with x rescaled exactly by 2^40 is well
+* conditioned and fits x: that fit, scaled back, is the reference.
+clear
+set seed 7
+set obs 1000
+gen double x = runiform()*2^-40
+gen double y = x*2^40 + rnormal()
+gen double xs = x*2^40
+quietly qreg y xs
+matrix small_D = (2^40, 0 \ 0, 1)
+matrix small_ref_b = e(b)*small_D
+matrix small_ref_V = small_D*e(V)*small_D
+local small_ref_adev = e(sum_adev)
+local small_ref_rank = e(rank)
+local small_ref_df_r = e(df_r)
+quietly cqreg y x
+matrix small_b = e(b)
+matrix small_V = e(V)
+assert_matrix_equal small_b small_ref_b $DEFAULT_SIGFIGS "small-scale regressor 2^-40: e(b) vs rescaled qreg"
+assert_matrix_equal small_V small_ref_V $DEFAULT_SIGFIGS "small-scale regressor 2^-40: e(V) vs rescaled qreg"
+assert_scalar_equal `=e(sum_adev)' `small_ref_adev' $DEFAULT_SIGFIGS "small-scale regressor 2^-40: e(sum_adev)"
+if e(rank) == `small_ref_rank' & e(df_r) == `small_ref_df_r' test_pass "small-scale regressor 2^-40: rank and df_r"
+else test_fail "small-scale regressor 2^-40: rank and df_r" "rank `=e(rank)' df_r `=e(df_r)' vs `small_ref_rank' `small_ref_df_r'"
+
+* Dummy designs where a group's size times q is an integer have a face of
+* optimal vertices: e(sum_adev) agrees to 15 digits while qreg and cqreg
+* report different, equally optimal factor coefficients. e(b) is checked by
+* optimality and every other result by value.
+clear
+set seed 4
+set obs 3000
+gen id = ceil(_n/10)
+gen cat = 1 + mod(_n*7, 4)
+gen r = 1 + mod(id, 3)
+gen r2 = r
+gen double x = rnormal() + cat/3
+gen double y = 1 + .5*x + .3*cat + rnormal() + mod(id,7)/3
+benchmark_qreg_altopt y x i.r i.r2, testname("non-unique optimum: x i.r i.r2 (collinear factor)")
+benchmark_qreg_altopt y x i.cat, testname("non-unique optimum: x i.cat")
+clear
+set seed 403
+set obs 100
+gen f = ceil(6*runiform())
+gen y = 1 + .5*f + rnormal()
+benchmark_qreg_altopt y i.f, testname("non-unique optimum: i.f, N=100")
+
+* e(vcetype) is Robust and e(sparsity)/e(f_r) are missing for the robust
+* and cluster VCEs, as qreg posts them
+sysuse auto, clear
+foreach vce in iid robust "cluster rep78" {
+    local qvce "`vce'"
+    if "`vce'" == "cluster rep78" local qvce "excluster rep78"
+    quietly qreg price mpg weight if !missing(rep78), vce(`qvce')
+    local q_vcetype "`e(vcetype)'"
+    local q_sparsity_missing = missing(e(sparsity))
+    local q_f_r_missing = missing(e(f_r))
+    quietly cqreg price mpg weight if !missing(rep78), vce(`vce')
+    if "`e(vcetype)'" == "`q_vcetype'" & missing(e(sparsity)) == `q_sparsity_missing' ///
+        & missing(e(f_r)) == `q_f_r_missing' test_pass "e(vcetype), e(sparsity), e(f_r): `vce'"
+    else test_fail "e(vcetype), e(sparsity), e(f_r): `vce'" ///
+        "vcetype [`e(vcetype)'] vs [`q_vcetype'], sparsity `=e(sparsity)', f_r `=e(f_r)'"
+}
+
+* df_r is N - e(rank), as qreg, when the cluster VCE is rank deficient
+clear
+set seed 99
+set obs 50
+forvalues j = 1/10 {
+    gen x`j' = rnormal()
+}
+gen y = x1 + rnormal()
+gen c = mod(_n,4)
+quietly qreg y x*, vce(excluster c)
+local qdf_r = e(df_r)
+local qrank = e(rank)
+quietly cqreg y x*, vce(cluster c)
+if e(df_r) == `qdf_r' & e(rank) == `qrank' test_pass "rank-deficient cluster VCE: df_r and rank"
+else test_fail "rank-deficient cluster VCE: df_r and rank" "df_r `=e(df_r)' rank `=e(rank)' vs `qdf_r' `qrank'"
+
+* A non-converged main solve stops with r(430) and leaves e() untouched
+sysuse auto, clear
+quietly cqreg price mpg weight
+matrix maxiter_b = e(b)
+capture cqreg price mpg weight length, maxiter(1)
+local maxiter_rc = _rc
+matrix maxiter_after = e(b)
+if `maxiter_rc' == 430 & mreldif(maxiter_after, maxiter_b) == 0 test_pass "maxiter(1): r(430), e() unchanged"
+else test_fail "maxiter(1): r(430), e() unchanged" "rc `maxiter_rc'"
+
+* An atom of y at the quantile: zero sparsity, so a zero covariance with
+* rank 0 and df_r = N, as qreg. At N=3000 qreg's sparsity is exactly zero;
+* at N=1000 qreg's -6.6e-15 is rounding (a negative sparsity is impossible),
+* and qreg also reports rank 0 there.
+foreach n in 3000 1000 {
+    clear
+    set seed 404
+    set obs `n'
+    gen x = rnormal()
+    gen z = runiform()
+    gen ydup = cond(runiform()<.4,5,1+2*x+z+rnormal())
+    * (b_x and b_z are zero at this optimum, where qreg reports roundoff of
+    * order 1e-15: e(b) is checked by optimality)
+    if `n' == 3000 benchmark_qreg_altopt ydup x z, quantile(.75) testname("atom of y at the quantile, N=`n'")
+    quietly qreg ydup x z, quantile(.75)
+    local qrank = e(rank)
+    local qdf_r = e(df_r)
+    quietly cqreg ydup x z, quantile(.75)
+    matrix atom_V = e(V)
+    matrix atom_zero = J(3,3,0)
+    if e(rank) == `qrank' & e(df_r) == `qdf_r' & mreldif(atom_V, atom_zero) == 0 ///
+        & e(sparsity) == 0 & missing(e(f_r)) ///
+        test_pass "atom of y at the quantile, N=`n': rank, df_r, V"
+    else test_fail "atom of y at the quantile, N=`n': rank, df_r, V" ///
+        "rank `=e(rank)' vs `qrank', df_r `=e(df_r)' vs `qdf_r', sparsity `=e(sparsity)'"
+}
+
+* Replay: bare cqreg, display options and estimates replay give qreg's table
+sysuse auto, clear
+quietly qreg price mpg weight
+quietly qreg, level(90)
+matrix replay_q90 = r(table)
+quietly cqreg price mpg weight
+quietly ereturn display
+matrix replay_c = r(table)
+estimates store cqreg_replay
+quietly cqreg
+matrix replay_bare = r(table)
+quietly cqreg, level(90)
+matrix replay_c90 = r(table)
+quietly regress price mpg
+capture quietly estimates replay cqreg_replay
+local replay_rc = _rc
+matrix replay_est = r(table)
+estimates drop cqreg_replay
+matrix_min_sigfigs replay_c90 replay_q90
+local replay_sf = r(min_sigfigs)
+if `replay_rc' == 0 & mreldif(replay_bare, replay_c) == 0 & mreldif(replay_est, replay_c) == 0 ///
+    & `replay_sf' >= $DEFAULT_SIGFIGS test_pass "replay: bare, level(90), estimates replay"
+else test_fail "replay: bare, level(90), estimates replay" "rc `replay_rc', level(90) sigfigs `replay_sf'"
+
+* qreg syntax: level(), nolog and the constant-only model
+sysuse auto, clear
+quietly qreg price mpg weight, level(90) nolog
+matrix syntax_q = r(table)
+capture quietly cqreg price mpg weight, level(90) nolog
+local syntax_rc = _rc
+if `syntax_rc' == 0 {
+    matrix syntax_c = r(table)
+    matrix_min_sigfigs syntax_c syntax_q
+}
+if `syntax_rc' == 0 & r(min_sigfigs) >= $DEFAULT_SIGFIGS test_pass "level(90) nolog"
+else test_fail "level(90) nolog" "rc `syntax_rc'"
+* level() also sets qreg's bandwidth (alpha = 1 - level/100)
+foreach bw in hsheather chamberlain bofinger {
+    foreach vce in iid robust {
+        quietly qreg price mpg weight, level(80) vce(`vce', `bw')
+        matrix level_qV = e(V)
+        local level_q_bw = e(bwidth)
+        quietly cqreg price mpg weight, level(80) vce(`vce') bwmethod(`bw')
+        matrix level_cV = e(V)
+        assert_matrix_equal level_cV level_qV $DEFAULT_SIGFIGS "level(80) `vce' `bw': e(V)"
+        assert_scalar_equal `=e(bwidth)' `level_q_bw' $DEFAULT_SIGFIGS "level(80) `vce' `bw': e(bwidth)"
+    }
+}
+foreach q in .25 .5 .9 {
+    foreach vce in iid robust {
+        quietly qreg price, quantile(`q') vce(`vce')
+        matrix const_qb = e(b)
+        matrix const_qV = e(V)
+        local const_q_adev = e(sum_adev)
+        local const_q_df_r = e(df_r)
+        local const_q_rank = e(rank)
+        local const_q_names : colfullnames e(b)
+        capture quietly cqreg price, quantile(`q') vce(`vce')
+        local const_rc = _rc
+        if `const_rc' {
+            test_fail "constant-only model q=`q' `vce'" "rc `const_rc'"
+            continue
+        }
+        matrix const_cb = e(b)
+        matrix const_cV = e(V)
+        local const_c_names : colfullnames e(b)
+        assert_matrix_equal const_cb const_qb $DEFAULT_SIGFIGS "constant-only model q=`q' `vce': e(b)"
+        assert_matrix_equal const_cV const_qV $DEFAULT_SIGFIGS "constant-only model q=`q' `vce': e(V)"
+        assert_scalar_equal `=e(sum_adev)' `const_q_adev' $DEFAULT_SIGFIGS "constant-only model q=`q' `vce': e(sum_adev)"
+        if e(df_r) == `const_q_df_r' & e(rank) == `const_q_rank' & "`const_c_names'" == "`const_q_names'" ///
+            test_pass "constant-only model q=`q' `vce': df_r, rank, names"
+        else test_fail "constant-only model q=`q' `vce': df_r, rank, names" "df_r `=e(df_r)' rank `=e(rank)'"
+    }
+}
+
+* One cluster: qreg posts a zero covariance with rank 0 and df_r = N
+clear
+set seed 1122
+set obs 100
+gen double x = rnormal()
+gen double y = 1 + 2*x + rnormal()
+gen byte one_cluster = 1
+foreach density in fitted kernel {
+    quietly qreg y x, vce(excluster one_cluster, `density')
+    matrix one_qV = e(V)
+    local one_q_rank = e(rank)
+    local one_q_df_r = e(df_r)
+    quietly cqreg y x, vce(cluster one_cluster) denmethod(`density')
+    matrix one_cV = e(V)
+    if mreldif(one_cV, one_qV) == 0 & e(rank) == `one_q_rank' & e(df_r) == `one_q_df_r' ///
+        & e(N_clust) == 1 & _se[x] == 0 test_pass "one cluster `density': V, rank, df_r as qreg"
+    else test_fail "one cluster `density': V, rank, df_r as qreg" ///
+        "rank `=e(rank)' vs `one_q_rank', df_r `=e(df_r)' vs `one_q_df_r'"
+}
+
 * Summary
 
 * End of cqreg validation
@@ -1367,7 +1601,11 @@ if "`__case'" == "cqreg_performance" {
 args builddir
 if `"`builddir'"' == "" local builddir : environment CTOOLS_TEST_PLUGIN_DIR
 if `"`builddir'"' == "" local builddir "build"
-adopath ++ "`builddir'"
+* The repository's ado files, then the candidate plugin directory, as in
+* validate_setup.do; a plugin-only directory must not fall back to an
+* installed copy of cqreg.ado.
+adopath ++ "build"
+if `"`builddir'"' != "build" adopath ++ "`builddir'"
 clear all
 set more off
 set seed 81273
@@ -1539,21 +1777,22 @@ foreach vce in iid robust {
 }
 restore
 
-* A one-cluster covariance is intentionally undefined. Preserve the
-* scalar-extraction convention tested by oct22: the host's matrix posting
-* does not accept canonical Stata missing entries in e(V).
+* A one-cluster covariance is undefined: qreg posts a zero e(V) with rank 0
+* (df_r = N) and displays no uncertainty; cqreg posts the same at every scale.
 replace scale_cluster = 1
 foreach density in fitted kernel {
     quietly qreg y x, vce(excluster scale_cluster, `density')
     matrix single_cluster_reference = r(table)
+    matrix single_cluster_reference_V = e(V)
+    local single_cluster_rank = e(rank)
+    local single_cluster_df_r = e(df_r)
     foreach factor in 1e-14 1 1e100 {
         replace scaled_y = y * `factor'
         quietly cqreg scaled_y x, vce(cluster scale_cluster) denmethod(`density')
         matrix single_cluster_table = r(table)
         matrix single_cluster_V = e(V)
-        scalar single_cluster_variance = single_cluster_V[1,1]
-        scalar single_cluster_constant_variance = single_cluster_V[2,2]
-        assert missing(single_cluster_variance) & missing(single_cluster_constant_variance)
+        assert mreldif(single_cluster_V, single_cluster_reference_V) == 0
+        assert e(rank) == `single_cluster_rank' & e(df_r) == `single_cluster_df_r'
         assert e(N) == 100 & e(N_clust) == 1 & e(convcode) == 0
         forvalues row = 2/6 {
             scalar reference_uncertainty = single_cluster_reference[`row',1]
@@ -1578,6 +1817,23 @@ replace scaled_y = 1e-14
 capture cqreg scaled_y x
 assert _rc == 198
 test_pass "truly constant response remains rejected"
+* A covariance that underflows to subnormal values or zero, or overflows
+* Stata's largest double, in the units of y is refused with r(498) before
+* anything is posted (it would otherwise post a zero matrix, or stop with
+* r(504) after posting); the previous e() is kept, as for other plugin errors
+foreach vce in iid robust {
+    foreach factor in 1e-160 1e-165 1e155 {
+        replace scaled_y = y * `factor'
+        quietly cqreg y x
+        matrix unrepresentable_prior = e(b)
+        capture cqreg scaled_y x, vce(`vce')
+        local scale_rc = _rc
+        matrix unrepresentable_after = e(b)
+        if `scale_rc' == 498 & mreldif(unrepresentable_after, unrepresentable_prior) == 0 ///
+            & "`e(depvar)'" == "y" test_pass "reject unrepresentable covariance `vce' `factor'"
+        else test_fail "reject unrepresentable covariance `vce' `factor'" "rc `scale_rc'"
+    }
+}
 print_summary "cqreg sample and response scales"
 global CTOOLS_COMPONENT_COMPLETE "cqreg_sample_scale"
 global CTOOLS_CASE_COMPLETE "cqreg_sample_scale"

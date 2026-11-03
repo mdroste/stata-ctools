@@ -38,6 +38,7 @@ _Static_assert(sizeof(const char *) <= sizeof(double), "XLSX slot must hold a po
 typedef struct {
     XLSXContext *ctx;
     bool in_sheets;
+    bool nomem;
 } WorkbookParseState;
 
 /* Text of the current <si>: every <t> run except phonetic guides (<rPh>),
@@ -77,6 +78,7 @@ void xlsx_context_init(XLSXContext *ctx)
     ctx->cell_range.end_row = -1;
     ctx->selected_sheet = 0;
     ctx->min_row = INT32_MAX;
+    ctx->min_col = INT32_MAX;
     ctx->area_max_col = -1;
     snprintf(ctx->workbook_path, sizeof(ctx->workbook_path), "%s", XLSX_PATH_WORKBOOK);
     snprintf(ctx->shared_strings_path, sizeof(ctx->shared_strings_path), "%s",
@@ -110,6 +112,11 @@ void xlsx_context_free(XLSXContext *ctx)
     }
 
     free(ctx->excel_formats);ctx->excel_formats=NULL;
+    free(ctx->sheets);
+    ctx->sheets = NULL;
+    ctx->sheets_capacity = 0;
+    ctx->num_sheets = 0;
+
     /* Free date styles */
     if (ctx->date_styles) {
         free(ctx->date_styles);
@@ -178,6 +185,18 @@ typedef struct {
 } RelsParseState;
 
 /* Transitional and strict OOXML type URIs share their final segment. */
+/* A part whose declared size the archive refused: a size its data cannot
+ * reach is a corrupt file (r(603), as native); one beyond the memory limit
+ * is r(909). */
+static ST_retcode xlsx_part_refused(XLSXContext *ctx, const char *part)
+{
+    bool memory = xlsx_zip_refused((xlsx_zip_archive *)ctx->zip_archive) == XLSX_ZIP_SIZE_MEMORY;
+    snprintf(ctx->error_message, sizeof(ctx->error_message),
+             memory ? "%s is larger than the memory available" : "%s declares a size its data cannot hold",
+             part);
+    return memory ? 909 : 603;
+}
+
 static bool xlsx_rel_type(const char *type, const char *name)
 {
     size_t n = strlen(type), m = strlen(name);
@@ -269,7 +288,7 @@ static ST_retcode xlsx_parse_rels(XLSXContext *ctx, const char *part, char *offi
     size_t index = xlsx_zip_locate_file(zip, rels);
     if (index == (size_t)-1) return 0;
     void *data = xlsx_zip_extract_to_heap(zip, index, &size);
-    if (!data) return 610;
+    if (!data) return xlsx_zip_refused(zip) ? xlsx_part_refused(ctx, rels) : 610;
     RelsParseState state = {ctx, dir, office_document};
     xlsx_xml_parser *parser = xlsx_xml_parser_create(rels_callback, &state);
     if (!parser) {
@@ -308,6 +327,7 @@ ST_retcode xlsx_open_file(XLSXContext *ctx, const char *filename)
 
     /* Verify it's a valid XLSX: the package relationships name the workbook */
     xlsx_zip_archive *zip = (xlsx_zip_archive *)ctx->zip_archive;
+    xlsx_zip_set_entry_limit(zip, ctx->max_part_bytes);
     char workbook[XLSX_MAX_PART_PATH] = "";
     ST_retcode rc = xlsx_parse_rels(ctx, "", workbook);
     if (rc) return rc;
@@ -340,19 +360,42 @@ static bool workbook_callback(const xlsx_xml_event *event, void *user_data)
             state->in_sheets = true;
         }
         else if (state->in_sheets && strcmp(event->tag_name, "sheet") == 0) {
-            if (ctx->num_sheets >= XLSX_MAX_SHEETS) return true;
+            if (ctx->num_sheets >= ctx->sheets_capacity) {
+                int capacity = ctx->sheets_capacity ? 2 * ctx->sheets_capacity : 16;
+                XLSXSheetInfo *grown = realloc(ctx->sheets, (size_t)capacity * sizeof(*grown));
+                if (!grown) {
+                    state->nomem = true;
+                    return false;
+                }
+                ctx->sheets = grown;
+                ctx->sheets_capacity = capacity;
+            }
 
             XLSXSheetInfo *info = &ctx->sheets[ctx->num_sheets];
+            memset(info, 0, sizeof(*info));
 
             const char *name = xlsx_xml_get_attr(event, "name");
             const char *sheet_id = xlsx_xml_get_attr(event, "sheetId");
             const char *rel_id = xlsx_xml_get_attr(event, "id");  /* r:id */
 
-            /* Attribute values are raw XML text: "P&amp;L" names sheet P&L */
+            /* Attribute values are raw XML text: "P&amp;L" names sheet P&L.
+             * Decode the whole value before it is cut to the name buffer,
+             * and never cut inside a UTF-8 sequence. */
             if (name) {
-                strncpy(info->name, name, XLSX_MAX_SHEET_NAME - 1);
-                info->name[XLSX_MAX_SHEET_NAME - 1] = '\0';
-                xlsx_xml_decode_entities(info->name, strlen(info->name));
+                char *decoded = strdup(name);
+                if (!decoded) {
+                    state->nomem = true;
+                    return false;
+                }
+                size_t n = xlsx_xml_decode_entities(decoded, strlen(decoded));
+                decoded[n] = '\0';
+                if (n > XLSX_MAX_SHEET_NAME - 1) {
+                    n = XLSX_MAX_SHEET_NAME - 1;
+                    while (n > 0 && ((unsigned char)decoded[n] & 0xC0) == 0x80) n--;
+                }
+                memcpy(info->name, decoded, n);
+                info->name[n] = '\0';
+                free(decoded);
             }
             if (sheet_id) {
                 info->sheet_id = atoi(sheet_id);
@@ -386,6 +429,7 @@ ST_retcode xlsx_parse_workbook(XLSXContext *ctx)
 
     size_t size;
     void *data = xlsx_zip_extract_file(zip, ctx->workbook_path, &size);
+    if (!data && xlsx_zip_refused(zip)) return xlsx_part_refused(ctx, ctx->workbook_path);
     if (!data) {
         snprintf(ctx->error_message, sizeof(ctx->error_message),
                  "Failed to extract workbook.xml");
@@ -407,6 +451,7 @@ ST_retcode xlsx_parse_workbook(XLSXContext *ctx)
     xlsx_xml_parser_destroy(parser);
     free(data);
 
+    if (state.nomem) return 920;
     if (!success) {
         snprintf(ctx->error_message, sizeof(ctx->error_message),
                  "Failed to parse workbook.xml");
@@ -628,6 +673,7 @@ ST_retcode xlsx_parse_shared_strings(XLSXContext *ctx)
 
     size_t size;
     void *data = xlsx_zip_extract_to_heap(zip, idx, &size);
+    if (!data && xlsx_zip_refused(zip)) return xlsx_part_refused(ctx, ctx->shared_strings_path);
     if (!data) {
         snprintf(ctx->error_message, sizeof(ctx->error_message),
                  "Failed to extract sharedStrings.xml");
@@ -745,6 +791,7 @@ ST_retcode xlsx_parse_styles(XLSXContext *ctx)
 
     size_t size;
     void *data = xlsx_zip_extract_to_heap(zip, idx, &size);
+    if (!data && xlsx_zip_refused(zip)) return xlsx_part_refused(ctx, ctx->styles_path);
     if (!data) {
         return 610;  /* A present styles part must be readable. */
     }
@@ -922,8 +969,10 @@ static bool xlsx_number(const char *s, size_t n, double *out)
         if (n >= sizeof(buffer)) return false;
         memcpy(buffer, s, n);
         buffer[n] = '\0';
+        /* Like native, a value that does not begin with a number reads as 0
+         * and one that does reads up to its first other character. */
         x = strtod(buffer, &stop);
-        if (stop == buffer) return false;
+        if (stop == buffer) x = 0;
     }
     if (!isfinite(x) || x >= SV_missval) return false;
     *out = x;
@@ -1010,6 +1059,7 @@ static void xlsx_cm_clear(XLSXContext *ctx)
     ctx->max_col = 0;
     ctx->min_row = INT32_MAX;
     ctx->max_row = 0;
+    ctx->min_col = INT32_MAX;
     ctx->area_max_col = -1;
     ctx->area_max_row = 0;
 }
@@ -1020,7 +1070,7 @@ typedef struct {
     XLSXContext *grow;          /* serial scan only */
     ctools_arena *arena;        /* inline strings (ctx->parse_arena or _arena_storage) */
     ctools_arena _arena_storage;
-    int max_col, min_row, max_row;  /* used range */
+    int max_col, min_row, max_row, min_col;  /* used range */
     int area_max_col, area_max_row; /* whole worksheet, cellrange() ignored */
     int cell_rows, cell_cols;       /* storage that the cells require */
     size_t seen, stored;
@@ -1038,6 +1088,7 @@ static void xlsx_scan_local_init(xlsx_scan_local *loc)
     memset(loc, 0, sizeof(*loc));
     loc->max_col = -1;
     loc->min_row = INT32_MAX;
+    loc->min_col = INT32_MAX;
     loc->area_max_col = -1;
 }
 
@@ -1048,6 +1099,7 @@ static void xlsx_scan_merge(XLSXContext *ctx, xlsx_scan_local *total,
     if (loc->max_col > ctx->max_col) ctx->max_col = loc->max_col;
     if (loc->min_row < ctx->min_row) ctx->min_row = loc->min_row;
     if (loc->max_row > ctx->max_row) ctx->max_row = loc->max_row;
+    if (loc->min_col < ctx->min_col) ctx->min_col = loc->min_col;
     if (loc->area_max_col > ctx->area_max_col) ctx->area_max_col = loc->area_max_col;
     if (loc->area_max_row > ctx->area_max_row) ctx->area_max_row = loc->area_max_row;
     if (loc->cell_rows > total->cell_rows) total->cell_rows = loc->cell_rows;
@@ -1101,14 +1153,18 @@ static void xlsx_store_cell(const XLSXContext *ctx, xlsx_scan_local *loc, int ro
         }
     }
     size_t i = (size_t)row - 1;
-    if (type == XLSX_CELL_STRING)
-        memcpy(&ctx->cm_numeric[col][i], &text, sizeof(text));
-    else
-        ctx->cm_numeric[col][i] = number;
-    ctx->cm_types[col][i] = (uint8_t)type;
-    ctx->cm_formats[col][i] = format;
+    /* A cell without a value still widens the used range, as in native. */
+    if (type != XLSX_CELL_EMPTY) {
+        if (type == XLSX_CELL_STRING)
+            memcpy(&ctx->cm_numeric[col][i], &text, sizeof(text));
+        else
+            ctx->cm_numeric[col][i] = number;
+        ctx->cm_types[col][i] = (uint8_t)type;
+        ctx->cm_formats[col][i] = format;
+    }
     loc->stored++;
     if (col > loc->max_col) loc->max_col = col;
+    if (col < loc->min_col) loc->min_col = col;
     if (row < loc->min_row) loc->min_row = row;
     if (row > loc->max_row) loc->max_row = row;
 }
@@ -1129,7 +1185,7 @@ static const char *xlsx_scan_cell(const XLSXContext *ctx, xlsx_scan_local *loc,
     if (a[0].value && xlsx_cell_ref(a[0].value, a[0].len, &col, &ref_row)) row = ref_row;
     else col = *prev_col + 1;  /* no usable r=: the cell follows its predecessor */
     *prev_col = col;
-    if (gt[-1] == '/') return gt + 1;  /* <c/> holds no value */
+    bool valueless = gt[-1] == '/';  /* <c/> holds no value */
 
     const XLSXCellRange *range = &ctx->cell_range;
     skip = skip || row < 1 || row > XLSX_MAX_ROWS || col >= XLSX_MAX_COLUMNS ||
@@ -1153,6 +1209,7 @@ static const char *xlsx_scan_cell(const XLSXContext *ctx, xlsx_scan_local *loc,
 
     const char *v = NULL, *run = NULL, *p = gt + 1;
     size_t vlen = 0, run_len = 0;
+    if (valueless) goto cell_value;
     /* Most writers emit these complete, unprefixed cell bodies. Recognize
      * the whole envelope before bypassing the general XML walk: attributes,
      * namespaces, rich text, formulas and extra elements still take that path.
@@ -1222,7 +1279,9 @@ static const char *xlsx_scan_cell(const XLSXContext *ctx, xlsx_scan_local *loc,
         }
     }
 cell_value:
-    if (((v && vlen) || run_len) && row >= 1 && row <= XLSX_MAX_ROWS && col < XLSX_MAX_COLUMNS) {
+    /* Native's used range counts every cell element, with or without a
+     * value (styled blanks, error values, formulas without a result). */
+    if (row >= 1 && row <= XLSX_MAX_ROWS && col < XLSX_MAX_COLUMNS) {
         if (col > loc->area_max_col) loc->area_max_col = col;
         if (row > loc->area_max_row) loc->area_max_row = row;
     }
@@ -1232,8 +1291,13 @@ cell_value:
     size_t tn = t ? a[1].len : 0;
     int style = a[2].value ? xlsx_index(a[2].value, a[2].len) : -1;
     uint8_t format = style >= 0 && style < ctx->num_styles ? ctx->excel_formats[style] : 0;
-    if (tn >= 9 && t[0] == 'i') {  /* inlineStr */
-        if (!run_len) return p;
+    if (valueless) {
+        xlsx_store_cell(ctx, loc, row, col, XLSX_CELL_EMPTY, 0, NULL, format);
+    } else if (tn >= 9 && t[0] == 'i') {  /* inlineStr */
+        if (!run_len) {
+            xlsx_store_cell(ctx, loc, row, col, XLSX_CELL_EMPTY, 0, NULL, format);
+            return loc->failed ? NULL : p;
+        }
         const char *text = xlsx_arena_text(loc, run, run_len);
         if (!text) {
             loc->failed = true;
@@ -1241,7 +1305,7 @@ cell_value:
         }
         xlsx_store_cell(ctx, loc, row, col, XLSX_CELL_STRING, 0, text, format);
     } else if (!v || !vlen) {
-        return p;
+        xlsx_store_cell(ctx, loc, row, col, XLSX_CELL_EMPTY, 0, NULL, format);
     } else if (tn == 1 && t[0] == 's') {
         int index = xlsx_index(v, vlen);
         if (index < 0 || (uint32_t)index >= ctx->num_shared_strings) {loc->invalid=true;return NULL;}
@@ -1253,13 +1317,20 @@ cell_value:
             loc->failed = true;
             return NULL;
         }
+        /* Native decodes _xHHHH_ escapes here, as in shared strings. */
+        xlsx_decode_ooxml((char *)text, strlen(text));
         xlsx_store_cell(ctx, loc, row, col, XLSX_CELL_STRING, 0, text, format);
     } else if (tn == 1 && t[0] == 'b') {
         xlsx_store_cell(ctx, loc, row, col, XLSX_CELL_BOOLEAN, v[0] == '1' ? 1.0 : 0.0,
                         NULL, format);
-    } else if (!(tn == 1 && t[0] == 'e')) {  /* error values import as missing */
+    } else if (tn == 1 && t[0] == 'e') {  /* error values import as missing */
+        xlsx_store_cell(ctx, loc, row, col, XLSX_CELL_EMPTY, 0, NULL, format);
+    } else {
         double number;
-        if (!xlsx_number(v, vlen, &number)) return p;
+        if (!xlsx_number(v, vlen, &number)) {
+            xlsx_store_cell(ctx, loc, row, col, XLSX_CELL_EMPTY, 0, NULL, format);
+            return loc->failed ? NULL : p;
+        }
         XLSXCellType type = XLSX_CELL_NUMBER;
         if (style >= 0 && style < ctx->num_styles && ctx->date_styles[style])
             type = ctx->date_styles[style] == 2 ? XLSX_CELL_DATETIME : XLSX_CELL_DATE;
@@ -1581,6 +1652,7 @@ ST_retcode xlsx_parse_worksheet(XLSXContext *ctx)
     /* Inflate the whole part (libdeflate) and scan it in memory */
     size_t xml_size = 0;
     char *xml = (char *)xlsx_zip_extract_direct(zip, file_idx, &xml_size);
+    if (!xml && xlsx_zip_refused(zip)) return xlsx_part_refused(ctx, info->path);
     if (!xml) {
         snprintf(ctx->error_message, sizeof(ctx->error_message),
                  "Failed to extract worksheet: %s", info->path);
@@ -1635,18 +1707,19 @@ bool xlsx_parse_cellrange(const char *range_str, XLSXCellRange *range)
     const char *start = range_str;
     const char *end = colon ? colon : range_str + strlen(range_str);
 
+    /* As native, a corner that is not a cell within the sheet, or corners
+     * in reverse order, make the range invalid (r(198)). */
     if (start < end) {
         char start_ref[32];
         size_t len = end - start;
-        if (len >= sizeof(start_ref)) len = sizeof(start_ref) - 1;
+        if (len >= sizeof(start_ref)) return false;
         memcpy(start_ref, start, len);
         start_ref[len] = '\0';
 
         int col, row;
-        if (xlsx_xml_parse_cell_ref(start_ref, &col, &row)) {
-            range->start_col = col;
-            range->start_row = row;
-        }
+        if (!xlsx_xml_parse_cell_ref(start_ref, &col, &row)) return false;
+        range->start_col = col;
+        range->start_row = row;
     }
 
     /* Parse end reference */
@@ -1654,12 +1727,14 @@ bool xlsx_parse_cellrange(const char *range_str, XLSXCellRange *range)
         const char *end_ref_str = colon + 1;
         if (*end_ref_str) {
             int col, row;
-            if (xlsx_xml_parse_cell_ref(end_ref_str, &col, &row)) {
-                range->end_col = col;
-                range->end_row = row;
-            }
+            if (!xlsx_xml_parse_cell_ref(end_ref_str, &col, &row)) return false;
+            range->end_col = col;
+            range->end_row = row;
         }
     }
+    if (range->start_col >= 0 && range->end_col >= 0 &&
+        (range->end_col < range->start_col || range->end_row < range->start_row))
+        return false;
 
     return true;
 }

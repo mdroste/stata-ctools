@@ -146,11 +146,16 @@ By default, headers are inferred. {opt varnames(1)} explicitly treats the first 
 {opt varnames(nonames)} treats the first row as data and generates default
 variable names (v1, v2, ...). You can also specify {cmd:varnames(}{it:N}{cmd:)}
 to use row {it:N} as variable names (e.g., {opt varnames(3)} uses the third row).
+As in {cmd:import delimited}, a name keeps the header's Unicode letters,
+decimal digits and underscores, drops leading digits and is cut to 32
+characters; a header that leaves no valid name gives {cmd:v}{it:#}.
 
 {phang}
 {opt case(option)} specifies the case of variable names. Delimited import defaults
 to {opt lower}; Excel defaults to {opt preserve}. {opt lower} converts to lowercase.
-{opt upper} converts to uppercase.
+{opt upper} converts to uppercase. Both convert Unicode letters, after the
+32-character cut; a converted name longer than 32 characters falls back to
+{cmd:v}{it:#} ({cmd:V}{it:#} under {opt upper}).
 
 {dlgtab:Variable types}
 
@@ -166,7 +171,9 @@ type, regardless of whether a smaller type would suffice. This retains double pr
 {phang}
 {opt numericcols(numlist)} forces the specified columns to be imported as
 numeric. Column numbers are 1-based. Values that cannot be parsed as numbers
-become missing. This overrides automatic type detection for these columns.
+become missing. This overrides automatic type detection for these columns,
+and, as in {cmd:import delimited}, it takes precedence over {opt stringcols()}
+for a column named in both.
 
 {phang}
 {opt stringcols(numlist)} forces the specified columns to be imported as
@@ -189,7 +196,18 @@ ignores quotes when locating field and row boundaries.
 
 {phang}
 {opt stripquotes(default)} removes enclosing quotes when they bind a field.
+As in {cmd:import delimited}, only a quote that is the field's first character
+opens it, so {cmd: "x"} after a delimiter and a space is read as typed.
 {opt stripquotes(yes)} removes all quotation marks; {opt stripquotes(no)} retains them.
+Under {cmd:bindquotes(strict)}, a CRLF line ending inside quotes is kept as CR.
+
+{pmore}
+{cmd:NaN} and {cmd:Infinity}, in that case and with an optional sign, are
+numeric missing values, and {cmd:d} or {cmd:D} is accepted as the exponent
+marker ({cmd:1d3} is 1000), as in {cmd:import delimited}; {cmd:nan} and
+{cmd:NA} are text. A numeric variable takes the display format of the type
+the values in the file's first 513 lines would need. A file with more than
+32,767 fields in a row fails with error 902.
 
 {phang}
 {opt encoding(encoding)} overrides automatic encoding detection. Supported encodings include UTF-8,
@@ -279,17 +297,24 @@ Chart, dialog, and macro sheets contain no importable worksheet data.
 {opt cellrange(range)} selects a rectangular range, for example {cmd:A1:F100}.
 A single cell such as {cmd:B5} sets the upper-left corner and reads through
 the worksheet's remaining used range. As with {cmd:import excel}, a range that
-extends beyond the worksheet's data area is an error.
+extends beyond the worksheet's data area, a corner that is not a cell, or
+corners in reverse order is an error. The used range includes cells without a
+value (styled blanks, error cells, formulas without a saved result).
 
 {phang}
 {opt firstrow} uses the first imported row as variable names. Without it, names
-are Excel column letters. Invalid header names are replaced with column letters;
-header text is retained as variable labels. {opt case(preserve)} is the default;
-{opt case(lower)} and {opt case(upper)} change variable-name case.
+are Excel column letters. As in {cmd:import excel}, a name keeps the Unicode
+letters, decimal digits and underscores of the header's first 32 characters
+and drops leading digits; a header that leaves no valid name in the requested
+case is replaced with its column letter. Header text is retained as variable
+labels; a numeric header cell's label is its {cmd:%18.0g} text.
+{opt case(preserve)} is the default; {opt case(lower)} and {opt case(upper)}
+change variable-name case, including Unicode letters.
 
 {phang}
 {opt allstring} imports every column as text. {cmd:allstring(%12.2f)}, for
-example, specifies how numeric cells are converted to strings.
+example, specifies how numeric cells are converted to strings. Otherwise a
+number in a text column reads as its {cmd:%18.0g} text, as in {cmd:import excel}.
 
 {phang}
 An Excel column list selects and names columns, for example
@@ -375,7 +400,17 @@ and time cells use their formatted Stata values, truncated to whole seconds.
 Boolean cells become 1 or 0, except in date/datetime columns, where they become
 missing. Error cells become missing. Formula cells use the results saved in
 the workbook; the importer does not recalculate formulas. Unicode text and
-cell text longer than 32,766 bytes are retained.
+cell text longer than 32,766 bytes are retained. A cell value that is not a
+number reads as 0, and one that begins with a number as that number, as in
+{cmd:import excel}. Values cached inside a chart embedded in an .xls worksheet
+are not read as cells.
+
+{pstd}
+Each part of an .xlsx package is checked before it is decompressed. A part
+that declares more data than its compressed size can hold fails with error 603,
+as in {cmd:import excel}; a part larger than half of physical memory, or than
+{cmd:c(max_memory)} when that is set, fails with error 909. Either way the data
+in memory are kept.
 
 
 {marker examples}{...}

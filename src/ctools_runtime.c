@@ -209,7 +209,7 @@ int ctools_command_begin(const ctools_command_descriptor *cmd, const char *args)
         break;
     case CTOOLS_CMD_CIMPORT:
         if (!strcmp(op, "scan")) next_phase = 1;
-        else if (!strcmp(op, "blob")) { required = 1; next_phase = 1; }
+        else if (!strcmp(op, "blob") || !strcmp(op, "blobfile")) { required = 1; next_phase = 1; }
         /* A direct load may parse its file without a preceding scan. */
         else if (!strcmp(op, "load")) preserve = 1;
         break;

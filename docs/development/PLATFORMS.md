@@ -6,7 +6,7 @@ The distribution plugins use Stata's 3.0 plugin interface and require Stata 14.1
 |---|---|---|---|
 | macOS ARM | Apple Silicon (M1) | macOS 11 | System Accelerate; static LLVM OpenMP bundled |
 | macOS Intel | x86-64, without AVX2/FMA requirements | macOS 11 | System Accelerate; static LLVM OpenMP bundled |
-| Linux | x86-64, without AVX2/FMA requirements | glibc 2.35 (Ubuntu 22.04) or newer | `libgomp.so.1` (Ubuntu package `libgomp1`) |
+| Linux | x86-64, without AVX2/FMA requirements | glibc 2.17 (manylinux2014, as on RHEL/CentOS 7) or newer | `libgomp.so.1` with the `GOMP_4.5` interface: GCC 6 or later's runtime, or the RHEL/CentOS 7 system `libgomp` (Debian/Ubuntu package `libgomp1`) |
 | Windows | x86-64, without AVX2/FMA requirements | Windows 10 or newer | System DLLs; GCC/OpenMP/winpthreads linked statically |
 
 These are build and packaging baselines. CI runs on its listed hosted runners and checks imported libraries and deployment versions; it does not emulate an old CPU or certify execution on every minimum OS. Test release candidates on those minimum systems before claiming runtime coverage. Custom builds using OpenBLAS or a dynamic llvm-mingw OpenMP runtime fall outside this distribution contract and must supply their dependencies.
@@ -23,7 +23,7 @@ python3 validation/run.py --checks dependencies macos build/ctools_mac_arm.plugi
 
 For Intel, substitute `x86_64` and `macos-intel`. The helper verifies source archive hashes and builds OpenMP 21.1.8 for macOS 11. Both Make targets check the archive's architecture and deployment version before linking. With no static archive, a local build uses pthreads without OpenMP; it never silently adds a Homebrew dylib dependency. Distribution CI builds the static runtime explicitly.
 
-Linux distribution CI uses Ubuntu 22.04 and disables optional OpenBLAS. `USE_OPENBLAS=yes` enables detection for custom builds. Windows distribution CI uses MSYS2 GCC; dependency validation rejects external compiler DLLs.
+Linux distribution CI compiles inside the `quay.io/pypa/manylinux2014_x86_64` container (`make linux-docker`, CentOS 7's glibc 2.17 and devtoolset GCC) and disables optional OpenBLAS. `python3 validation/run.py --checks dependencies linux build/ctools_linux.plugin` then rejects a plugin that needs a symbol version newer than `GLIBC_2.17`, `GOMP_4.5` or `OMP_4.5`, one that does not link `libm.so.6`, and one with an undefined symbol bound to no library version. `make linux-docker-load` loads the plugin in the same container with every symbol bound (`RTLD_NOW`) against its system `libgomp.so.1`. A plugin built directly on a newer distribution (`make linux`) carries that host's symbol versions and fails the dependency check. `USE_OPENBLAS=yes` enables detection for custom builds. Windows distribution CI uses MSYS2 GCC; dependency validation rejects external compiler DLLs.
 
 macOS branch and release builds require Developer ID Application signing and
 Apple notarization before packaging; see [macOS signing](MACOS_SIGNING.md) for

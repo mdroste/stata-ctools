@@ -34,31 +34,22 @@ program define _crangestat_impl
         exit 920
     }
 
-    * Parse the syntax - similar to rangestat
-    * crangestat (stat) [newvar=]varname [(stat) [newvar=]varname ...], interval(keyvar low high) [by(varlist) excludeself verbose threads(#)]
+    * Parse the syntax as rangestat does:
+    * crangestat (stat) [newvar=]varname [...] [if] [in], interval(keyvar low high) [by(varlist) excludeself verbose threads(#)]
+    syntax anything(name=stat_part id="statistics" equalok) [if] [in], ///
+        Interval(string) [BY(varlist) EXCLudeself Verbose THReads(integer 0) SNAPshot FAST]
 
-    * First, separate the stat specifications from the options
-    local 0_orig "`0'"
-
-    * Find the comma to split stats from options
-    local comma_pos = strpos("`0'", ",")
-    if `comma_pos' == 0 {
-        di as error "crangestat: interval() option is required"
-        exit 198
-    }
-
-    local stat_part = substr("`0'", 1, `comma_pos' - 1)
-    local opt_part = substr("`0'", `comma_pos' + 1, .)
-
-    * Parse options
-    local 0 ", `opt_part'"
-    syntax, INTerval(string) [BY(varlist) EXCLUDEself Verbose THReads(integer 0) SNAPshot FAST]
-
-    * Parse interval specification: keyvar low high
+    * Parse interval specification: keyvar low high, separated by spaces or
+    * commas as in rangestat, which refuses anything more
+    local interval : subinstr local interval "," " ", all
     tokenize "`interval'"
     local keyvar "`1'"
     local int_low "`2'"
     local int_high "`3'"
+    if `"`4'"' != "" {
+        di as error "extra argument in interval() option: `4'"
+        exit 198
+    }
 
     if "`keyvar'" == "" | "`int_low'" == "" | "`int_high'" == "" {
         di as error "crangestat: interval() requires keyvar low high"
@@ -130,6 +121,8 @@ program define _crangestat_impl
     local source_var_list ""
 
     local remaining "`stat_part'"
+    * As in rangestat, a specification without a statistic means (mean).
+    if substr(strtrim("`remaining'"), 1, 1) != "(" local remaining "(mean) `remaining'"
 
     while "`remaining'" != "" {
         * Skip leading whitespace
@@ -178,6 +171,8 @@ program define _crangestat_impl
         else if "`stat_name'" == "p99" local stat_code = 20
         else if "`stat_name'" == "skewness" local stat_code = 21
         else if "`stat_name'" == "kurtosis" local stat_code = 22
+        else if "`stat_name'" == "obs" local stat_code = 23
+        else if "`stat_name'" == "missing" local stat_code = 24
 
         if `stat_code' == -1 {
             di as error "crangestat: unknown statistic '`stat_name''"
@@ -201,41 +196,58 @@ program define _crangestat_impl
             exit 198
         }
 
-        * Check for newvar=varname format
-        local eq_pos = strpos("`var_spec'", "=")
-        if `eq_pos' > 0 {
-            local result_var = strtrim(substr("`var_spec'", 1, `eq_pos' - 1))
-            local source_var = strtrim(substr("`var_spec'", `eq_pos' + 1, .))
-        }
-        else {
-            * Native rangestat names results source_stat.
-            local source_var "`var_spec'"
-            local result_var "`source_var'_`stat_name'"
+        * Each specification holds [newvar=]varname pairs and varlists, as in
+        * rangestat; a varlist gives one result per variable, named
+        * varname_statname.
+        local var_spec : subinstr local var_spec "=" " = ", all
+        local spec_sources ""
+        local spec_results ""
+        while `"`var_spec'"' != "" {
+            gettoken word var_spec : var_spec
+            gettoken eq : var_spec
+            if `"`word'"' == "=" {
+                di as error "crangestat: missing new variable name in (`stat_name')"
+                exit 102
+            }
+            if `"`eq'"' == "=" {
+                gettoken eq var_spec : var_spec
+                gettoken source_var var_spec : var_spec
+                if "`source_var'" == "" | "`source_var'" == "=" {
+                    di as error "crangestat: missing variable after `word'= in (`stat_name')"
+                    exit 198
+                }
+                capture unab source_var : `source_var', max(1)
+                if _rc {
+                    di as error "crangestat: variable `source_var' not found"
+                    exit 111
+                }
+                local spec_sources `spec_sources' `source_var'
+                local spec_results `spec_results' `word'
+            }
+            else {
+                capture unab expanded : `word'
+                if _rc {
+                    di as error "crangestat: variable `word' not found"
+                    exit 111
+                }
+                foreach source_var of local expanded {
+                    local spec_sources `spec_sources' `source_var'
+                    local spec_results `spec_results' `source_var'_`stat_name'
+                }
+            }
         }
 
-        * Validate source variable
-        capture confirm variable `source_var'
-        if _rc != 0 {
-            di as error "crangestat: variable `source_var' not found"
-            exit 111
-        }
+        local nspec : word count `spec_sources'
+        forvalues spec_j = 1/`nspec' {
+        local source_var : word `spec_j' of `spec_sources'
+        local result_var : word `spec_j' of `spec_results'
+
         capture confirm numeric variable `source_var'
         if _rc != 0 {
             di as error "crangestat: source variable `source_var' must be numeric"
             exit 109
         }
-        * One source and one result per statistic: the plugin arguments are
-        * positional, so an extra name would shift every later field.
-        unab __src_names : `source_var'
-        if `: word count `__src_names'' > 1 | `: word count `result_var'' > 1 {
-            di as error "crangestat: too many variables specified in (`stat_name') `var_spec'"
-            di as error "  each statistic takes one [newvar=]varname"
-            exit 103
-        }
-        if "`result_var'" == "" {
-            di as error "crangestat: missing new variable name in (`stat_name') `var_spec'"
-            exit 102
-        }
+        confirm name `result_var'
 
         * Destination creation is deferred until the entire request is valid.
 
@@ -262,6 +274,7 @@ program define _crangestat_impl
         local result_vars "`result_vars' `result_var'"
         local result_label_`=`nstats'+1' "`stat_name' of `source_var'"
         local nstats = `nstats' + 1
+        }
     }
 
     if `nstats' == 0 {
@@ -269,7 +282,27 @@ program define _crangestat_impl
         exit 198
     }
 
+    * rangestat rejects a result name used twice, or already defined, with r(110).
+    local seen_results ""
+    foreach output of local result_vars {
+        if `: list output in seen_results' {
+            di as error "cannot create -`output'-; variable(s) already defined"
+            exit 110
+        }
+        local seen_results `seen_results' `output'
+    }
     _ctools_newvars `result_vars'
+
+    * The sample follows rangestat: if/in and a nonmissing key. Excluded rows
+    * take a missing key, so they neither join a window nor get a result.
+    if `"`if'`in'"' != "" {
+        marksample touse, novarlist
+        tempvar sample_key
+        quietly generate double `sample_key' = `keyvar' if `touse'
+        local keyvar `sample_key'
+    }
+    quietly count if !missing(`keyvar')
+    if r(N) == 0 error 2000
     local result_index=0
     foreach output of local result_vars {
         local ++result_index

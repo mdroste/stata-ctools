@@ -299,6 +299,9 @@ STDLL stata_call(int argc, char *argv[])
     if (argc > 0 && argv[0] && strcmp(argv[0], "version") == 0) {
         ST_retcode version_rc = SF_macro_save("_ctools_plugin_version", CTOOLS_VERSION);
         if (version_rc) return version_rc;
+        /* _ctools_load refuses a plugin whose protocol differs from the ado's. */
+        version_rc = SF_macro_save("_ctools_plugin_protocol", CTOOLS_PROTOCOL);
+        if (version_rc) return version_rc;
         return SF_macro_save("_ctools_plugin_revision", CTOOLS_BUILD_REVISION);
     }
 

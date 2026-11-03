@@ -5,7 +5,7 @@ program define creghdfe, eclass
     * Replay never enters the estimation transaction or clears existing e().
     if replay() {
         if "`e(cmd)'" != "creghdfe" error 301
-        ereturn display `0'
+        _creghdfe_display `0'
         exit
     }
     * A failed or interrupted regression leaves the data as they were without
@@ -56,9 +56,31 @@ program define _creghdfe_impl, eclass
     global CTOOLS_creghdfe_refit_
     local __creghdfe_args `"`0'"'
 
-    syntax varlist(min=2 fv ts) [aw fw pw] [if] [in] [, Absorb(string) VCE(string) Verbose ///
-        TOLerance(real 1e-8) ITERATE(integer 10000) NOSTANDardize RESID RESID2(name) RESIDuals(name) ///
-        DOFadjustments(string) GROUPvar(name) THReads(integer 0) QUAD SNAPshot FAST]
+    syntax varlist(min=1 fv ts) [aw fw pw] [if] [in] [, Absorb(string) NOABsorb VCE(string) ///
+        CLuster(string) Verbose ///
+        TOLerance(real 1e-8) ITERATE(integer 16000) NOSTANDardize RESID RESID2(name) RESIDuals(name) ///
+        DOFadjustments(string) GROUPvar(name) THReads(integer 0) QUAD SNAPshot FAST ///
+        noCONstant KEEPSINgletons noHEADer noTABle noFOOTnote *]
+
+    * As in reghdfe: verbose(#) (a positive level gives the timing
+    * breakdown), and the display options of estimation commands
+    _creghdfe_verbose_opt, `options'
+    local verbose = cond("`verbose'" != "" | `__verbose_level' > 0, "verbose", "")
+    _get_diopts diopts, `__options'
+
+    * cluster(varlist) is vce(cluster varlist); vce(conventional) is the
+    * unadjusted VCE; noabsorb is the default without absorb()
+    if `"`cluster'"' != "" {
+        if `"`vce'"' != "" {
+            di as error "only one of cluster() and vce() can be specified"
+            exit 198
+        }
+        local vce `"cluster `cluster'"'
+    }
+    if inlist(lower(strtrim(`"`vce'"')), "conventional", "conv") local vce unadjusted
+    if "`keepsingletons'" != "" {
+        di as error "WARNING: Singleton observations not dropped; statistical significance is biased"
+    }
 
     if `iterate' < 1 | missing(`tolerance') | `tolerance' <= 0 {
         di as error "creghdfe: iterate() and tolerance() must be positive"
@@ -270,7 +292,7 @@ program define _creghdfe_impl, eclass
     * Set up parameters via Stata scalars (expected by C plugin)
     scalar __creghdfe_K = `nvars'           // depvar + indepvars
     scalar __creghdfe_G = `nfe'             // number of FE groups
-    scalar __creghdfe_drop_singletons = 1   // always drop singletons
+    scalar __creghdfe_drop_singletons = ("`keepsingletons'" == "")
     scalar __creghdfe_verbose = ("`verbose'" != "")
     scalar __creghdfe_maxiter = `iterate'
     scalar __creghdfe_tolerance = `tolerance'
@@ -402,6 +424,23 @@ program define _creghdfe_impl, eclass
         }
     }
     if "`__refit_singletons'" != "" local num_singletons = `__refit_singletons'
+
+    * reghdfe's notes on the regressors it omits, and its warning when the
+    * fixed effects explain the dependent variable (which is then zeroed)
+    local __coltol = min(1e-6, `tolerance'/10)
+    if scalar(__creghdfe_depvar_explained) == 1 {
+        di as text "warning: dependent variable {res}`depvar_orig'{txt} is likely perfectly explained by the fixed effects (tol =" %3.1e `__coltol' ")"
+    }
+    local __k = 0
+    foreach __v of local coef_names {
+        local ++__k
+        if scalar(__creghdfe_fe_collinear_`__k') == 1 {
+            di as text "note: {res}`__v'{txt} is probably collinear with the fixed effects (all partialled-out values are close to zero; tol =" %3.1e `__coltol' ")"
+        }
+        else if scalar(__creghdfe_collinear_`__k') == 1 {
+            di as text "note: {res}`__v'{txt} omitted because of collinearity"
+        }
+    }
     local K_keep = __creghdfe_K_keep
     local df_a = __creghdfe_df_a
     capture local num_iters = __creghdfe_iterations
@@ -462,18 +501,21 @@ program define _creghdfe_impl, eclass
         * Unadjusted or robust: df_r = N - K - df_a
         local df_r = `df_r_ols_base'
     }
-    if `df_r' < 1 {
-        local df_r = 1
+    * A saturated model has no residual degrees of freedom, as in reghdfe
+    if `df_r' < 0 {
+        local df_r = 0
     }
 
     * R2_a and RMSE use df_r adjusted for nested FEs (like reghdfe)
     * used_df_r = N - df_a - df_m - df_a_nested
+    * (both missing or rss itself without residual degrees of freedom)
     local df_r_ols = `N_final' - `df_a_adjusted' - `K_keep' - `df_a_nested'
-    if `df_r_ols' < 1 {
-        local df_r_ols = 1
-    }
     local r2_a = 1 - (scalar(`cr_rss')/`df_r_ols') / (scalar(`cr_tss')/(`N_final'-1))
-    local rmse = sqrt(scalar(`cr_rss') / `df_r_ols')
+    local rmse = cond(`df_r_ols' == 0, sqrt(scalar(`cr_rss')), sqrt(scalar(`cr_rss') / `df_r_ols'))
+    * reghdfe's r2_a_within, ll and ll_0
+    local r2_a_within = 1 - (scalar(`cr_rss')/`df_r_ols') / (scalar(`cr_tss_w')/(`df_r_ols' + `K_keep'))
+    local ll = -0.5 * `N_final' * (1 + ln(2*_pi) + ln(scalar(`cr_rss') / `N_final'))
+    local ll_0 = -0.5 * `N_final' * (1 + ln(2*_pi) + ln(scalar(`cr_tss_w') / `N_final'))
 
     * Calculate F-statistic
     * For unadjusted VCE: use traditional MSS/MSE formula with within-group variation
@@ -482,14 +524,6 @@ program define _creghdfe_impl, eclass
     * But F uses within-group MSS = tss_within - rss
     scalar `cr_mss' = scalar(`cr_tss') - scalar(`cr_rss')
     scalar `cr_mss_w' = scalar(`cr_tss_w') - scalar(`cr_rss')
-    if `vcetype' == 0 {
-        * Traditional F-statistic using within-group variation
-        local F = (scalar(`cr_mss_w') / `df_m') / (scalar(`cr_rss') / `df_r')
-    }
-    else {
-        * Wald F-statistic for robust/cluster VCE - computed after V matrix is built
-        local F = .
-    }
 
     * e(b) and e(V) as reghdfe posts them: every term in order, with zeros for
     * omitted regressors (o. prefix) and for factor-variable base levels
@@ -503,11 +537,19 @@ program define _creghdfe_impl, eclass
     }
 
     * Label the groupvar variable (mobility group identifier), as reghdfe
-    * labels the groups of its first pair of absorbed effects
+    * labels the groups of the first pair of absorbed effects not nested in
+    * the clusters. Where reghdfe forms no such pair (effects nested in the
+    * clusters, dofadjustments() without mobility groups) it creates no
+    * variable, and neither does creghdfe.
     if "`groupvar'" != "" {
-        local __fe1 : word 1 of `absorb_names'
-        local __fe2 : word 2 of `absorb_names'
-        if "`__fe2'" != "" label var `groupvar' "Mobility group between `__fe1' and `__fe2'"
+        if scalar(__creghdfe_groupvar_created) == 0 {
+            drop `groupvar'
+        }
+        else if scalar(__creghdfe_groupvar_fe2) > 0 {
+            local __fe1 : word `=scalar(__creghdfe_groupvar_fe1)' of `absorb_names'
+            local __fe2 : word `=scalar(__creghdfe_groupvar_fe2)' of `absorb_names'
+            label var `groupvar' "Mobility group between `__fe1' and `__fe2'"
+        }
         else label var `groupvar' "Mobility group"
     }
 
@@ -519,24 +561,18 @@ program define _creghdfe_impl, eclass
         }
     }
 
-    * Compute Wald F-statistic for robust/cluster VCE
-    * Test all kept regressors jointly, as reghdfe does. Omitted regressors may
-    * precede kept ones in b/V, so use the plugin's compact results: the kept
-    * coefficients in order and the top-left K_keep x K_keep block of its V.
-    if `vcetype' != 0 & `K_keep' > 0 {
-        tempname V_noconstant Vinv
-        matrix `V_noconstant' = __creghdfe_V[1..`K_keep', 1..`K_keep']
-        matrix `Vinv' = syminv(`V_noconstant')
-        * A rank-deficient V (e.g. too few clusters) gives a missing F, as in reghdfe
-        if diag0cnt(`Vinv') > 0 {
-            local F = .
-        }
-        else {
-            * Wald statistic = b' * V^-1 * b
-            tempname Wald
-            matrix `Wald' = `b_kept' * `Vinv' * `b_kept''
-            local F = `Wald'[1,1] / `df_m'
-        }
+    * The Wald F-statistic of all kept regressors, computed by the plugin as
+    * reghdfe computes it for every VCE (in the units of the standardized
+    * regression; missing when V is rank deficient: too few clusters, a
+    * perfect fit, a saturated model)
+    local F = scalar(__creghdfe_F)
+
+    * noconstant: as reghdfe, _cons is not reported (the constant is still
+    * absorbed with the fixed effects)
+    if "`constant'" == "noconstant" & colsof(`b') > 1 {
+        local __kb = colsof(`b') - 1
+        matrix `b' = `b'[1, 1..`__kb']
+        matrix `V' = `V'[1..`__kb', 1..`__kb']
     }
 
     * Record results building time
@@ -555,6 +591,8 @@ program define _creghdfe_impl, eclass
             if strpos("`__bfv_name'", "o.") & !strpos("`__bfv_name'", "b.") local bfv buildfvinfo
         }
     }
+    * As reghdfe: a coefficient with zero b and zero variance is omitted
+    _ms_findomitted `b' `V'
     ereturn post `b' `V', esample(`final_sample') depname(`depvar_orig') obs(`N_final') `bfv'
     * The weights, which margins and other postestimation commands reuse
     if "`weight'" != "" {
@@ -579,7 +617,15 @@ program define _creghdfe_impl, eclass
     ereturn scalar F = `F'
     ereturn scalar rank = `df_m'
     ereturn scalar num_singletons = `num_singletons'
-    ereturn scalar drop_singletons = 1
+    ereturn scalar drop_singletons = ("`keepsingletons'" == "")
+    * Likelihood, fit and solver results reghdfe posts
+    ereturn scalar r2_a_within = `r2_a_within'
+    ereturn scalar ll = `ll'
+    ereturn scalar ll_0 = `ll_0'
+    ereturn scalar sumweights = scalar(__creghdfe_sumweights)
+    ereturn scalar ic = `num_iters'
+    ereturn scalar converged = 1
+    ereturn scalar report_constant = ("`constant'" != "noconstant")
 
     * The absorbed effects (creghdfe has no slopes to add), the absorbed
     * degrees of freedom table and the covariance labels, as reghdfe posts
@@ -599,6 +645,10 @@ program define _creghdfe_impl, eclass
     }
     _ctools_hdfe_post, stub(__creghdfe) absvars(`absvars') nhdfe(`nfe') vce(`vcename') ///
         dofmethod(`dofmethods') `cluster_post'
+    * reghdfe calls the unadjusted VCE ols
+    if `vcetype' == 0 ereturn local vce "ols"
+    ereturn local model "ols"
+    ereturn local marginsnotok "Residuals SCore"
     ereturn local title "HDFE Linear regression"
     ereturn local title2 = "Absorbing `nfe' HDFE " + cond(`nfe' > 1, "groups", "group")
     ereturn local depvar "`depvar_orig'"
@@ -619,49 +669,9 @@ program define _creghdfe_impl, eclass
     }
     di as text `"({browse "http://scorreia.com/research/hdfe.pdf":MWFE estimator} converged in "' as result `num_iters' as text " iterations)"
 
-    * Display results header
-    di as text ""
-    di as text "HDFE Linear regression" _col(49) "Number of obs" _col(67) "= " as result %10.0fc `N_final'
-    di as text "Absorbing " as result `nfe' as text " HDFE " cond(`nfe'>1, "groups", "group") _col(49) "F(" as result %3.0f `df_m' as text "," as result %8.0f `df_r' as text ")" _col(67) "= " as result %10.2f e(F)
-    di as text _col(49) "Prob > F" _col(67) "= " as result %10.4f Ftail(`df_m', `df_r', e(F))
-    di as text _col(49) "R-squared" _col(67) "= " as result %10.4f `r2'
-    di as text _col(49) "Adj R-squared" _col(67) "= " as result %10.4f `r2_a'
-    di as text _col(49) "Within R-sq." _col(67) "= " as result %10.4f `r2_within'
-    di as text _col(49) "Root MSE" _col(67) "= " as result %10.4f `rmse'
-
-    * Display coefficient table
-    di as text ""
-    ereturn display
-
-    * Display absorbed degrees of freedom table (only when absorb was specified)
-    if !`__noabsorb' {
-    di as text ""
-    di as text "Absorbed degrees of freedom:"
-    di as text "{hline 13}{c TT}{hline 39}{c TRC}"
-    di as text " Absorbed FE {c |} Categories  - Redundant  = Num. Coefs {c |}"
-    di as text "{hline 13}{c +}{hline 39}{c RT}"
-    local total_coefs = 0
-    local has_nested = 0
-    forval g = 1/`nfe' {
-        local fevar : word `g' of `absorb_names'
-        local cats = `fe_levels_`g''
-        * Redundant coefficients as counted by the plugin: every level of an
-        * FE nested within the clusters, otherwise reghdfe's mobility-group count
-        local redundant = __creghdfe_fe_redundant_`g'
-        local nested_marker " "
-        if `fe_nested_`g'' == 1 {
-            local has_nested = 1
-            local nested_marker "*"
-        }
-        local coefs = `cats' - `redundant'
-        local total_coefs = `total_coefs' + `coefs'
-        di as text %12s abbrev("`fevar'", 12) " {c |}" as result %10.0fc `cats' as text "  " as result %10.0fc `redundant' as text "  " as result %10.0fc `coefs' as text "    `nested_marker'{c |}"
-    }
-    di as text "{hline 13}{c BT}{hline 39}{c BRC}"
-    if `has_nested' {
-        di as text "* = FE nested within cluster; treated as redundant for DoF computation"
-    }
-    } /* end if !__noabsorb */
+    * Header, coefficient table and absorbed degrees of freedom, as replay
+    * shows them
+    _creghdfe_display, `header' `table' `footnote' `diopts'
 
     * Record display time and compute total
     _ctools_lap __time_display __ct_lap98 `__ct_lap98'
@@ -715,6 +725,65 @@ program define _creghdfe_impl, eclass
     _ctools_cleanup creghdfe
     * Validation hook: fail after the plugin filled the outputs and e() was posted
     if "$CTOOLS_creghdfe_fault" == "post" error 1
+end
+
+* Results as reghdfe shows them, after estimation and on replay: the header,
+* the coefficient table (display options as for any estimation command) and
+* the absorbed degrees of freedom (e(dof_table)), each of which noheader,
+* notable and nofootnote suppress
+program define _creghdfe_display
+    version 14.1
+    syntax [, noHEADer noTABle noFOOTnote *]
+    _get_diopts diopts, `options'
+    if "`header'" == "" {
+        di as text ""
+        di as text "`e(title)'" _col(49) "Number of obs" _col(67) "= " as result %10.0fc e(N)
+        di as text "`e(title2)'" _col(49) "F(" as result %3.0f e(df_m) as text "," as result %8.0f e(df_r) as text ")" _col(67) "= " as result %10.2f e(F)
+        di as text _col(49) "Prob > F" _col(67) "= " as result %10.4f Ftail(e(df_m), e(df_r), e(F))
+        di as text _col(49) "R-squared" _col(67) "= " as result %10.4f e(r2)
+        di as text _col(49) "Adj R-squared" _col(67) "= " as result %10.4f e(r2_a)
+        di as text _col(49) "Within R-sq." _col(67) "= " as result %10.4f e(r2_within)
+        di as text _col(49) "Root MSE" _col(67) "= " as result %10.4f e(rmse)
+    }
+    if "`table'" == "" {
+        di as text ""
+        ereturn display, `diopts'
+    }
+    * The absorbed degrees of freedom (only when absorb() was specified)
+    if "`footnote'" == "" & "`e(absorb)'" != "" {
+        tempname dof
+        matrix `dof' = e(dof_table)
+        di as text ""
+        di as text "Absorbed degrees of freedom:"
+        di as text "{hline 13}{c TT}{hline 39}{c TRC}"
+        di as text " Absorbed FE {c |} Categories  - Redundant  = Num. Coefs {c |}"
+        di as text "{hline 13}{c +}{hline 39}{c RT}"
+        local has_nested = 0
+        forvalues g = 1/`=rowsof(`dof')' {
+            local fevar : word `g' of `e(absvars)'
+            * Redundant coefficients as counted by the plugin: every level of
+            * an FE nested within the clusters, otherwise reghdfe's
+            * mobility-group count
+            local nested_marker " "
+            if `dof'[`g', 5] == 1 {
+                local has_nested = 1
+                local nested_marker "*"
+            }
+            di as text %12s abbrev("`fevar'", 12) " {c |}" as result %10.0fc `dof'[`g', 1] as text "  " as result %10.0fc `dof'[`g', 2] as text "  " as result %10.0fc `dof'[`g', 3] as text "    `nested_marker'{c |}"
+        }
+        di as text "{hline 13}{c BT}{hline 39}{c BRC}"
+        if `has_nested' {
+            di as text "* = FE nested within cluster; treated as redundant for DoF computation"
+        }
+    }
+end
+
+* verbose(#) among the remaining options, returned in caller locals
+program define _creghdfe_verbose_opt
+    version 14.1
+    syntax [, VERbose(integer 0) *]
+    c_local __verbose_level `verbose'
+    c_local __options `"`options'"'
 end
 
 * absorb(absvars, savefe): reghdfe's only suboption; anything else is an error

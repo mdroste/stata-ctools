@@ -14,6 +14,38 @@ program define _cio_export, rclass
         syntax [if] [in] using/ [, `options']
     }
     if "`varlist'" == "" unab varlist : _all
+    * dBase limits, checked as export dbase does: the variable count of the
+    * selection and of the dataset, names, string widths, then the
+    * observation width of the selection (c(width) after keeping it).
+    if "`kind'"=="dbase" {
+        if `: word count `varlist'' > 255 | c(k) > 255 {
+            di as error "too many variables specified"
+            di as error "    Number of variables must be less than 255."
+            exit 103
+        }
+        local width 0
+        foreach v of local varlist {
+            if strlen("`v'") > 10 {
+                di as error "`v': variable name must be less than 10 characters"
+                exit 693
+            }
+            local type : type `v'
+            if "`type'" == "strL" {
+                di as error "variable `v' cannot be a strL"
+                exit 693
+            }
+            if substr("`type'",1,3) == "str" & real(substr("`type'",4,.)) > 254 {
+                di as error "variable `v' cannot exceed 254 characters in length"
+                exit 108
+            }
+            local width = `width' + cond(substr("`type'",1,3)=="str", real(substr("`type'",4,.)), cond("`type'"=="byte",1,cond("`type'"=="int",2,cond("`type'"=="double",8,4))))
+        }
+        if `width' > 4000 {
+            di as error "invalid observation width"
+            di as error "    Observation width must be less than 4000."
+            exit 902
+        }
+    }
     local ext ".sas7bdat"
     if "`kind'" == "dbase" local ext ".dbf"
     if "`kind'" == "spss" local ext ".sav"
@@ -40,7 +72,8 @@ program define _cio_export, rclass
         }
         if !inlist("`vallabfile'","xpf","sascode","both","none") exit 198
         if inlist("`vallabfile'","xpf","both") {
-            mata: st_local("__cio_xpfoutput",pathjoin(pathgetparent(st_local("using")),"formats.xpf"))
+            * formats.xpf beside the file, using only Stata 14.1 Mata functions.
+            mata: st_local("__cio_xpfoutput",substr(st_local("using"),1,strlen(st_local("using"))-strlen(pathbasename(st_local("using"))))+"formats.xpf")
         }
     }
     local __cio_sascode ""
@@ -53,6 +86,12 @@ program define _cio_export, rclass
     local __cio_replace = ("`replace'" != "")
     local __cio_datalabel : data label
     mata: st_local("__cio_table",strupper(pathrmsuffix(pathbasename(st_local("using")))))
+    * Native names a version 5 member after the file name up to its first
+    * period, unchanged otherwise (the plugin keeps eight bytes).
+    if "`kind'"=="sasxport5" {
+        mata: st_local("__cio_table",strupper(pathbasename(st_local("using"))))
+        mata: st_local("__cio_table",substr(st_local("__cio_table"),1,strpos(st_local("__cio_table")+".",".")-1))
+    }
     local j=0
     foreach v of local varlist {
         local ++j
@@ -135,7 +174,15 @@ program define _cio_export, rclass
     _ctools_load
     capture program ctools_plugin, plugin using("`__ctools_plugin'")
     if _rc != 0 & _rc != 110 exit 601
-    plugin call ctools_plugin `exportvars' `touse' `in', "cio export `kind' `__cio_select'"
+    capture noisily plugin call ctools_plugin `exportvars' `touse' `in', "cio export `kind' `__cio_select'"
+    * A write-protected destination (plugin r(608)) gives native's code and text
+    if _rc == 608 {
+        if inlist("`kind'","spss","sasxport8") di as error `"file `using' already exists"'
+        else if "`kind'"=="dbase" di as error `"file `using' could not be opened"'
+        else di as error `"file `using' is read-only; cannot be modified or erased"'
+        exit cond(inlist("`kind'","spss","sasxport8","dbase"),602,608)
+    }
+    if _rc exit _rc
     return local filename `"`using'"'
     return scalar N = `__cio_N'
     return scalar k = `__cio_nvar'

@@ -18,7 +18,7 @@
 {p 8 17 2}
 {cmdab:creghdfe}
 {depvar}
-{indepvars}
+[{indepvars}]
 {ifin}
 {weight}
 [{cmd:,} {opt a:bsorb(varlist)} {it:options}]
@@ -28,15 +28,19 @@
 {synoptline}
 {syntab:Model}
 {synopt:{opt a:bsorb(varlist[, savefe])}}categorical variables representing fixed effects to absorb; optional{p_end}
+{synopt:{opt noab:sorb}}absorb only the constant (the default without {opt absorb()}){p_end}
+{synopt:{opt nocon:stant}}do not report {cmd:_cons}{p_end}
+{synopt:{opt keepsin:gletons}}keep singleton groups{p_end}
 {synopt:{opt dof:adjustments(doftype)}}degrees of freedom adjustment method{p_end}
 {synopt:{opt group:var(newvar)}}save mobility group identifier{p_end}
 
 {syntab:SE/Robust}
-{synopt:{opt vce(vcetype)}}variance estimator; {opt unadjusted} (default), {opt robust}, or {opt cluster} {it:clustvar}{p_end}
+{synopt:{opt vce(vcetype)}}variance estimator; {opt unadjusted} (default; also {opt ols} or {opt conventional}), {opt robust}, or {opt cluster} {it:clustvar}{p_end}
+{synopt:{opt cl:uster(clustvar)}}synonym for {opt vce(cluster} {it:clustvar}{opt )}{p_end}
 
 {syntab:Convergence}
 {synopt:{opt tol:erance(#)}}convergence tolerance; default is {cmd:1e-8}{p_end}
-{synopt:{opt iterate(#)}}maximum iterations; default is {cmd:10000}{p_end}
+{synopt:{opt iterate(#)}}maximum iterations; default is {cmd:16000}{p_end}
 {synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
 {synopt:{opt nostand:ardize}}do not standardize variables before iteration{p_end}
 
@@ -53,7 +57,11 @@
 {synopt:{opt fast}}skip data recovery after an error or interruption{p_end}
 
 {syntab:Reporting}
-{synopt:{opt verbose}}display progress information and timing{p_end}
+{synopt:{opt verbose}}display progress information and timing; also {opt verbose(#)} with {it:#} > 0{p_end}
+{synopt:{opt l:evel(#)}}confidence level; and the other {help estimation options:display options}{p_end}
+{synopt:{opt nohe:ader}}suppress the header{p_end}
+{synopt:{opt notab:le}}suppress the coefficient table{p_end}
+{synopt:{opt nofoot:note}}suppress the absorbed degrees of freedom table{p_end}
 {synoptline}
 
 {pstd}
@@ -72,8 +80,33 @@ Factor-variable and time-series notation are allowed for the regressors.
 
 {pstd}
 Observations with missing model variables are excluded. Singleton fixed-effect
-groups are dropped repeatedly until none remain. Collinear regressors are
-omitted. {cmd:e(sample)} marks the observations retained for estimation.
+groups are dropped repeatedly until none remain (unless {opt keepsingletons}).
+{cmd:e(sample)} marks the observations retained for estimation. Without
+regressors, the model is the fixed effects and the constant.
+
+{pstd}
+Collinear regressors are omitted as {cmd:reghdfe} omits them: a regressor whose
+partialled sum of squares is at most min(1e-6, {opt tolerance()}/10) times its
+uncentered sum of squares is collinear with the fixed effects (with a note), and
+among the others Mata's {cmd:invsym()} of their cross products, in their order,
+drops the dependent ones. A dependent variable that passes the first rule is
+perfectly explained by the fixed effects: as in {cmd:reghdfe} it is set to zero,
+with a warning, so the coefficients and {cmd:e(rss)} are zero and {cmd:e(F)}
+missing. A coefficient with zero estimate and zero variance is marked omitted.
+
+{pstd}
+A saturated model (no residual degrees of freedom) is estimated as in
+{cmd:reghdfe}: {cmd:e(df_r)} is 0, {cmd:e(V)} is zero, and {cmd:e(F)} and
+{cmd:e(r2_a)} are missing. The F statistic is the Wald test of all retained
+slopes under the chosen VCE, missing when the covariance matrix is rank
+deficient.
+
+{pstd}
+Typing {cmd:creghdfe} without arguments replays the results with the same
+options as estimation. Not available from {cmd:reghdfe}: its solver options
+({opt technique()}, {opt transform()}, {opt acceleration()}, {opt poolsize()},
+{opt compact}, {opt parallel()}), group and individual fixed effects, and
+heterogeneous slopes in {opt absorb()}.
 
 
 {marker options}{...}
@@ -89,7 +122,11 @@ is a numeric or string variable, an {cmd:i.}{it:var}, or an interaction
 ({cmd:c.}{it:var}), {cmd:##} and {it:newvar}{cmd:=} terms are not supported. The optional {opt savefe}
 suboption creates variables {cmd:__hdfe1__}, {cmd:__hdfe2__}, etc. containing
 the estimated fixed effect for each retained observation. The output names
-must be new. Individual fixed-effect levels depend on normalization.
+must be new. Individual fixed-effect levels depend on normalization; they are
+recovered as {cmd:reghdfe} recovers them (Kaczmarz sweeps accelerated by steepest
+descent) within {opt iterate()} steps, and their sum is y - xb - residual. On a
+poorly connected graph (low mobility between, say, workers and firms) the
+individual levels are poorly determined in both commands.
 
 {phang}
 {opt dofadjustments(list)} selects how redundant fixed-effect coefficients are
@@ -105,8 +142,12 @@ aside before mobility groups are counted. {opt all} is {opt pairwise clusters}
 
 {phang}
 {opt groupvar(newvar)} creates a new variable containing the mobility group
-identifier for each observation. Mobility groups are connected components in the network formed by the first
-two fixed effects. With one effect, all retained observations receive 1.
+identifier for each observation. Mobility groups are connected components in the
+network formed by the first two fixed effects that are not nested within the
+cluster variable, as in {cmd:reghdfe}. As there, no variable is created when no
+such pair exists or degrees of freedom are not adjusted for mobility groups
+({cmd:dofadjustments(none)} or {cmd:clusters} alone). With one effect, all
+retained observations receive 1.
 
 {dlgtab:SE/Robust}
 
@@ -131,7 +172,8 @@ demeaning algorithm. The default is {cmd:1e-8}.
 
 {phang}
 {opt iterate(#)} specifies a positive maximum number of iterations for the
-demeaning algorithm. The default is {cmd:10000}.
+demeaning algorithm (and for recovering {opt savefe} effects). The default is
+{cmd:16000}, as in {cmd:reghdfe}.
 
 {phang}
 {opt threads(#)} sets the maximum number of threads, from 1 to 256.
@@ -178,7 +220,19 @@ filled output variables. It cannot be combined with {opt snapshot}.
 {dlgtab:Reporting}
 
 {phang}
-{opt verbose} displays progress and elapsed times.
+{opt verbose} displays progress and elapsed times. {cmd:reghdfe}'s
+{opt verbose(#)} is accepted: a positive level does the same.
+
+{phang}
+{opt level(#)} and the other {help estimation options:display options}
+({opt noomitted}, {opt vsquish}, {opt baselevels}, {opt cformat()},
+{opt coeflegend}, ...) format the coefficient table. {opt noheader},
+{opt notable} and {opt nofootnote} suppress the header, the table and the table
+of absorbed degrees of freedom. These options also apply on replay.
+
+{phang}
+{opt keepsingletons} keeps singleton groups, as in {cmd:reghdfe} (which warns that
+inference is then biased).
 
 
 {marker prediction}{...}
@@ -249,11 +303,18 @@ must be distinct new variables.
 {synopt:{cmd:e(df_a_redundant)}}redundant coefficients of the absorbed effects, nested ones included{p_end}
 {synopt:{cmd:e(df_a_nested)}}degrees of freedom from nested FEs{p_end}
 {synopt:{cmd:e(F)}}F-statistic{p_end}
+{synopt:{cmd:e(r2_a_within)}}adjusted within R-squared{p_end}
+{synopt:{cmd:e(ll)}}log likelihood{p_end}
+{synopt:{cmd:e(ll_0)}}log likelihood of the model with the fixed effects only{p_end}
+{synopt:{cmd:e(sumweights)}}sum of the weights ({cmd:e(N)} unweighted){p_end}
+{synopt:{cmd:e(ic)}}iterations of the fixed-effect projection{p_end}
+{synopt:{cmd:e(converged)}}1: the projection converged{p_end}
+{synopt:{cmd:e(report_constant)}}1 if {cmd:_cons} is reported (0 with {opt noconstant}){p_end}
 {synopt:{cmd:e(rank)}}number of retained slope coefficients{p_end}
 {synopt:{cmd:e(N_hdfe)}}number of absorbed FE groups{p_end}
 {synopt:{cmd:e(N_hdfe_extended)}}number of absorbed effects, as in {cmd:reghdfe} (the mobility groups are the second row's redundant count in {cmd:e(dof_table)}){p_end}
 {synopt:{cmd:e(num_singletons)}}number of singleton observations dropped{p_end}
-{synopt:{cmd:e(drop_singletons)}}1: singletons are always dropped{p_end}
+{synopt:{cmd:e(drop_singletons)}}1 if singletons are dropped (0 with {opt keepsingletons}){p_end}
 {synopt:{cmd:e(N_clust)}}number of clusters (if {cmd:vce(cluster)}){p_end}
 {synopt:{cmd:e(N_clust1)}}number of clusters (if {cmd:vce(cluster)}){p_end}
 {synopt:{cmd:e(N_clustervars)}}number of cluster dimensions (if {cmd:vce(cluster)}){p_end}
@@ -270,12 +331,14 @@ must be distinct new variables.
 {synopt:{cmd:e(title)}}{cmd:HDFE Linear regression}{p_end}
 {synopt:{cmd:e(title2)}}number of absorbed effects{p_end}
 {synopt:{cmd:e(dofmethod)}}degrees-of-freedom adjustments applied{p_end}
-{synopt:{cmd:e(vce)}}VCE type: {cmd:unadjusted}, {cmd:robust}, or {cmd:cluster}{p_end}
+{synopt:{cmd:e(vce)}}VCE type: {cmd:ols} (unadjusted), {cmd:robust}, or {cmd:cluster}{p_end}
 {synopt:{cmd:e(vcetype)}}{cmd:Robust} (if {cmd:vce(robust)} or {cmd:vce(cluster)}){p_end}
 {synopt:{cmd:e(clustvar)}}name of cluster variable (if {cmd:vce(cluster)}){p_end}
 {synopt:{cmd:e(clustvar1)}}name of cluster variable (if {cmd:vce(cluster)}){p_end}
 {synopt:{cmd:e(resid)}}name of residual variable (if {cmd:resid} or {cmd:resid2()} specified){p_end}
 {synopt:{cmd:e(predict)}}program used to implement {cmd:predict}{p_end}
+{synopt:{cmd:e(model)}}{cmd:ols}{p_end}
+{synopt:{cmd:e(marginsnotok)}}predictions {cmd:margins} refuses: {cmd:Residuals SCore}{p_end}
 {synopt:{cmd:e(wtype)}, {cmd:e(wexp)}}weight type and expression (if weighted){p_end}
 
 {synoptset 24 tabbed}{...}

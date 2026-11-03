@@ -13,10 +13,12 @@ keys lie between `date - 30` and `date`. Bounds must be numeric constants or `.`
 for an unbounded endpoint; observation-specific bound variables are unsupported.
 Without an explicit output name, `(mean) price` creates `price_mean`.
 
-Supported statistics include `count`, `mean`, `sum`, `min`, `max`, `sd`,
-`variance`, `median`, `iqr`, `first`, `last`, `firstnm`, `lastnm`, and the
-percentiles listed in [the help file](../../build/crangestat.sthlp).
-User-written Mata functions are unsupported. `excludeself` omits the current
+Supported statistics include `count`, `obs`, `missing`, `mean`, `sum`, `min`,
+`max`, `sd`, `variance`, `median`, `iqr`, `first`, `last`, `firstnm`, `lastnm`,
+and the percentiles listed in [the help file](../../build/crangestat.sthlp).
+Percentiles, `median` and `iqr` use Stata's `_pctile` definition. `if` and `in`
+restrict the observations that enter windows and receive results, as in
+`rangestat`. User-written Mata functions are unsupported. `excludeself` omits the current
 row from its window; `threads(#)` limits workers and `verbose` reports timings.
 
 ## Validation and failure behavior

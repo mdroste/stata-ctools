@@ -16,6 +16,19 @@ size_t cio_xlsx_cell_limit(void)
     uint64_t cells = memory / 2 / 26;
     return cells > SIZE_MAX ? SIZE_MAX : (size_t)cells;
 }
+/* One package part may inflate to at most half of physical memory, or to
+ * c(max_memory) when that is set lower (the ado passes it). */
+uint64_t cio_xlsx_part_limit(void)
+{
+    uint64_t memory = ctools_physical_memory_bytes();
+    uint64_t limit = memory ? memory / 2 : UINT64_C(8) << 30;
+    char text[40] = "";
+    cio_local_text("__cio_maxmemory", text, sizeof(text));
+    double cap = atof(text);
+    if (cap > 0 && cap < (double)limit)
+        limit = (uint64_t)cap;
+    return limit;
+}
 /* Every stored cell lives in the parser's column-major arrays. */
 int cio_xlsx_stored(XLSXContext *x, int row, int col)
 {
@@ -63,6 +76,7 @@ int cio_scan_xlsx(cio_dataset *dataset, const char *path)
     int rc = 0;
     char sheet[1024], range[100], first[8], all[8], allfmt[80], maxvar[40];
     x.max_cells = cio_xlsx_cell_limit();
+    x.max_part_bytes = cio_xlsx_part_limit();
     cio_local_text("__cio_maxvar", maxvar, sizeof(maxvar));
     cio_local_text("__cio_sheet", sheet, sizeof(sheet));
     cio_local_text("__cio_cellrange", range, sizeof(range));
@@ -116,26 +130,10 @@ int cio_scan_xlsx(cio_dataset *dataset, const char *path)
         r1 = x.cell_range.end_row < 0 ? x.max_row : x.cell_range.end_row;
     int c0 = x.cell_range.start_col < 0 ? 0 : x.cell_range.start_col,
         c1 = x.cell_range.end_col < 0 ? x.max_col : x.cell_range.end_col;
-    /* A used range starts at the first occupied column, not necessarily A. */
+    /* A used range starts at the first column holding a cell element (with
+       or without a value), not necessarily A. */
     if (x.cell_range.start_col < 0)
-    {
-        c0 = c1 + 1;
-        /* Rows beyond storage hold no cells. */
-        int stored = r1 < (int)x.cm_num_rows ? r1 : (int)x.cm_num_rows;
-        for (int c = 0; c <= c1; c++)
-            for (int r = r0; r <= stored; r++)
-            {
-                double value;
-                const char *text;
-                int type = cio_xlsx_raw(&x, r, c, &value, &text);
-                if (cio_xlsx_numeric(type) || *text)
-                {
-                    if (c < c0)
-                        c0 = c;
-                    break;
-                }
-            }
-    }
+        c0 = x.min_col == INT32_MAX ? c1 + 1 : x.min_col;
     if (r0 < 1 || r1 < r0 || c1 < c0)
         goto done;
     /* Fail before staging: too many variables (as native, r(900)), or more
@@ -187,6 +185,8 @@ int cio_scan_xlsx(cio_dataset *dataset, const char *path)
             {
                 snprintf(number, sizeof(number), "%.16g", value);
                 text = number;
+                c->label_numeric = type == XLSX_CELL_NUMBER;
+                c->label_number = value;
             }
             if (*text)
             {
@@ -211,7 +211,9 @@ int cio_scan_xlsx(cio_dataset *dataset, const char *path)
         cio_copy_text(c->format, sizeof(c->format), cio_excel_column_format(&numeric));
         if (x.allstring)
             c->is_string = 1;
-        c->format_numbers = c->is_string && *allfmt;
+        /* Numbers in a string column take allstring()'s format, else native's
+           %18.0g text: the ado formats them from the raw values. */
+        c->format_numbers = c->is_string && (*allfmt || numeric.count || numeric.booleans);
     }
     if (r1 >= start)
     {
@@ -275,8 +277,13 @@ int cio_scan_xlsx(cio_dataset *dataset, const char *path)
             }
         }
     for (int j = 0; j < dataset->nvar; j++)
+    {
+        /* Room for the %18.0g text that replaces each number */
+        if (dataset->cols[j].format_numbers && !*allfmt && dataset->cols[j].width < 18)
+            dataset->cols[j].width = 18;
         if (dataset->cols[j].is_string)
             cio_import_format(&dataset->cols[j], "xlsx");
+    }
 done:
     if (rc && *x.error_message)
         ctools_error("cimport", "%s", x.error_message);

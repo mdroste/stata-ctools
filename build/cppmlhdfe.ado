@@ -9,7 +9,21 @@ program define cppmlhdfe, eclass
         exit
     }
     * Accept the legacy bare verbose option as well as ppmlhdfe's verbose(#).
-    local 0 = ustrregexra(`"`0'"', "(?<=[ ,])verbose(?=[ ,]|$)", "verbose(1)")
+    * Only an option token is rewritten, never a variable named verbose in
+    * the varlist, the if condition or an option argument; e(cmdline) keeps
+    * the command as typed.
+    local cmdline_typed `"`0'"'
+    _parse comma __lhs __rhs : 0
+    if `"`__rhs'"' != "" {
+        gettoken __comma __rhs : __rhs, parse(",")
+        local __opts
+        while `"`__rhs'"' != "" {
+            gettoken __tok __rhs : __rhs, bind quotes
+            if `"`__tok'"' == "verbose" local __tok verbose(1)
+            local __opts `"`__opts' `__tok'"'
+        }
+        local 0 `"`__lhs', `__opts'"'
+    }
 
     * Check observation limit (Stata plugin API limitation)
     if _N > 2147483647 {
@@ -247,6 +261,7 @@ program define cppmlhdfe, eclass
             }
         }
         if "`categories'" == "" error 198
+        local absorb_model_vars `absorb_model_vars' `categories' `continuous'
         markout `touse' `categories' `continuous', strok
         tempvar fe_id
         quietly _ctools_group `categories' if `touse', generate(`fe_id')
@@ -340,6 +355,15 @@ program define cppmlhdfe, eclass
     local num_cluster_terms = 0
 
     if `"`vce'"' != "" {
+        * ppmlhdfe reads vce() with ms_parse_vce: an ols or un prefix and
+        * conventional mean unadjusted (which PPML reports as robust), an r
+        * prefix robust; iid stays rejected, as there
+        gettoken vce_word vce_rest : vce, parse(" ,")
+        if substr("`vce_word'", 1, 3) == "ols" | substr("`vce_word'", 1, 2) == "un" | "`vce_word'" == "conventional" {
+            local vce_word unadjusted
+        }
+        else if substr("`vce_word'", 1, 1) == "r" local vce_word robust
+        local vce `"`vce_word'`vce_rest'"'
         _ctools_hdfe_vce, spec(`"`vce'"') touse(`touse') cmd(cppmlhdfe)
         local vce_kind `r(kind)'
         if "`vce_kind'" == "cluster" {
@@ -444,6 +468,27 @@ program define cppmlhdfe, eclass
 
     local nvars : word count `varlist_expanded'
     local nfe : word count `absorb'
+
+    * Automatic outputs (d2's _ppmlhdfe_d, savefe's __hdfe#__) replace an
+    * existing variable of that name; refuse when the model itself uses it
+    local automatic_targets
+    if "`d2'" != "" local automatic_targets _ppmlhdfe_d
+    forvalues g=1/`nfe' {
+        if "`fe_target_`g''" != "" & `fe_automatic_`g'' local automatic_targets `automatic_targets' `fe_target_`g''
+    }
+    if "`automatic_targets'" != "" {
+        local model_vars `absorb_model_vars' `exposure' `offset'
+        fvrevar `depvar_orig' `indepvars', list
+        local model_vars `model_vars' `r(varlist)'
+        local exp_tokens = ustrregexra(`"`exp' `clustervar_orig'"', "[^A-Za-z0-9_]", " ")
+        local model_vars `model_vars' `exp_tokens'
+        local used_targets : list automatic_targets & model_vars
+        if "`used_targets'" != "" {
+            local used_target : word 1 of `used_targets'
+            di as error "cppmlhdfe: `used_target' is used in the model and would be replaced by an automatic output; rename it or name the output"
+            exit 198
+        }
+    }
 
     * Count observations
     qui count if `touse'
@@ -751,6 +796,9 @@ program define cppmlhdfe, eclass
             if strpos("`__bfv_name'", "o.") & !strpos("`__bfv_name'", "b.") local bfv buildfvinfo
         }
     }
+    * Posting and publication of the automatic outputs are one transaction:
+    * a Break cannot separate the new e() from the outputs it refers to
+    nobreak {
     ereturn post `b' `V', esample(`final_sample') depname(`depvar_orig') obs(`N_final') `bfv'
 
     * Store e() results
@@ -763,7 +811,8 @@ program define cppmlhdfe, eclass
     ereturn scalar r2_p = `r2_p'
     ereturn scalar chi2 = `F' * `df_m'
     ereturn local chi2type Wald
-    ereturn local title "HDFE PPML regression"
+    ereturn local title = cond(`has_absorb', "HDFE PPML regression", "PPML regression")
+    ereturn local marginsnotok "stdp Anscombe Cooksd Deviance Hat Likelihood Pearson Response Score Working ADJusted STAndardized STUdentized MODified"
     ereturn local separation "`separation'"
     ereturn local properties "b V"
     ereturn local marginsok default
@@ -803,12 +852,24 @@ program define cppmlhdfe, eclass
     ereturn local indepvars "`indepvars'"
     ereturn local predict "cppmlhdfe_p"
     ereturn local cmd "cppmlhdfe"
-    ereturn local cmdline "cppmlhdfe `0'"
+    ereturn local cmdline `"cppmlhdfe `cmdline_typed'"'
+
+    * Publication follows the last posted result and precedes the display
+    if "`publish_targets'" != "" {
+        capture noisily _cppmlhdfe_publish `publish_sources', names(`publish_targets')
+        local publish_rc = _rc
+        if `publish_rc' {
+            ereturn clear
+            exit `publish_rc'
+        }
+    }
+    }
 
     * Record ereturn posting time
     _ctools_lap __time_ereturn __ct_lap98 `__ct_lap98'
 
     * Display
+    if "$CTOOLS_cppmlhdfe_fault" == "display" error 1
     if `num_singletons' > 0 {
         di as text "(dropped " as result `num_singletons' as text " singleton observations)"
     }
@@ -855,18 +916,6 @@ program define cppmlhdfe, eclass
         di as text "{hline 55}"
         di as text "  Wall clock total:         " as result %8.4f `__time_total' " sec"
         di as text "{hline 55}"
-    }
-
-    * This is the last operation: publication cannot precede a later error.
-    if "`publish_targets'" != "" {
-        nobreak {
-            capture noisily _cppmlhdfe_publish `publish_sources', names(`publish_targets')
-            local publish_rc = _rc
-            if `publish_rc' {
-                ereturn clear
-                exit `publish_rc'
-            }
-        }
     }
 
 end

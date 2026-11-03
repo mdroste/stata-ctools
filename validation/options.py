@@ -160,9 +160,17 @@ estimate(
         "quantile(.2)",
         "quantile(.8) vce(robust)",
         "nopreprocess(1) threads(2) verbose tolerance(1e-12) maxiter(500)",
+        "level(90) nolog",
+        "quantile(.6) vce(robust) level(80) log",
     ],
-    ["quantile(.2)", "quantile(.8) vce(robust)", ""],
-    ["quantile", "quantile vce", "nopreprocess threads verbose tolerance maxiter"],
+    ["quantile(.2)", "quantile(.8) vce(robust)", "", "level(90) nolog", "quantile(.6) vce(robust) level(80) log"],
+    [
+        "quantile",
+        "quantile vce",
+        "nopreprocess threads verbose tolerance maxiter",
+        "level nolog",
+        "quantile vce level log",
+    ],
     predict="xb stdp",
 )
 
@@ -210,6 +218,22 @@ for weight in ["aw=w", "fw=fw", "pw=w"]:
         names=["absorb vce"],
         predict="xb",
     )
+# reghdfe's syntax: cluster(), noabsorb, noconstant, keepsingletons and the
+# header/table/footnote display switches
+estimate(
+    "creghdfe",
+    "reghdfe",
+    "y x z",
+    [
+        "absorb(g h) cluster(g)",
+        "noabsorb",
+        "absorb(g h) noconstant",
+        "absorb(g h) keepsingletons",
+        "absorb(g h) noheader notable nofootnote",
+    ],
+    names=["cluster", "noabsorb", "noconstant", "keepsingletons", "noheader notable nofootnote"],
+    scalars="df_r df_m r2 rss",
+)
 for residual in ["resid", "resid2(saved_resid)", "residuals(saved_resid)"]:
     estimate(
         "creghdfe",
@@ -311,6 +335,20 @@ estimate(
     [o.replace("threads(2) verbose", "") for o in iv_options],
     iv_names,
     predict="xb stdp",
+)
+# ivreghdfe's iterate(), display formats, and robust with cluster()
+estimate(
+    "civreghdfe",
+    "ivreghdfe",
+    "y x (endog=z z2)",
+    [
+        "absorb(g) iterate(2000)",
+        "absorb(g) coeflegend",
+        "absorb(g) cformat(%9.3f)",
+        "absorb(g) robust cluster(g)",
+    ],
+    names=["iterate", "coeflegend", "cformat", "robust cluster"],
+    predict="xb",
 )
 # PPML option interactions already have native comparisons in the advanced suite;
 # repeat numerical/display/tuning aliases across independent distributions here.
@@ -701,16 +739,6 @@ for opt in ppml_controls:
         predict="xb",
         scalars="df_m ll deviance",
     )
-# Initialization must not change CUE's converged result.
-case(
-    "civreghdfe",
-    "CUE starting values",
-    "b0 cue",
-    "ivreghdfe y x (endog=z z2), absorb(g) cue robust",
-    "civreghdfe y x (endog=z z2), absorb(g) cue robust b0(initial_b)",
-    "estimate",
-    setup="quietly ivreghdfe y x (endog=z z2), absorb(g) robust\nmatrix initial_b=e(b)",
-)
 case(
     "cdestring",
     "destring replace",

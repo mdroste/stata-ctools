@@ -111,10 +111,13 @@ static void block_insertion_sort_string(perm_idx_t * MERGE_RESTRICT order,
     }
 }
 
+/* lens: scratch for 2*len lengths, which keeps each row's length with it
+   through the passes (one strlen per row rather than two per row per pass) */
 static void block_radix_sort_string(perm_idx_t * MERGE_RESTRICT order,
                                     char * const * MERGE_RESTRICT strings,
                                     size_t start, size_t len,
                                     perm_idx_t * MERGE_RESTRICT temp,
+                                    size_t * MERGE_RESTRICT lens,
                                     size_t max_len)
 {
     size_t counts[257];
@@ -127,13 +130,16 @@ static void block_radix_sort_string(perm_idx_t * MERGE_RESTRICT order,
         return;
     }
 
+    size_t *lens_next = lens + len;
+    for (size_t i = 0; i < len; i++) lens[i] = strlen(strings[order[start + i]]);
+
     /* Stable LSD passes: the first character must have final precedence. */
     for (size_t char_pos = max_len; char_pos-- > 0;) {
         memset(counts, 0, sizeof(counts));
 
         for (size_t i = 0; i < len; i++) {
             const char *s = strings[order[start + i]];
-            size_t slen = strlen(s);
+            size_t slen = lens[i];
             int c = (char_pos < slen) ? (unsigned char)s[char_pos] + 1 : 0;
             counts[c]++;
         }
@@ -157,13 +163,16 @@ static void block_radix_sort_string(perm_idx_t * MERGE_RESTRICT order,
         /* Scatter */
         for (size_t i = 0; i < len; i++) {
             const char *s = strings[order[start + i]];
-            size_t slen = strlen(s);
+            size_t slen = lens[i];
             int c = (char_pos < slen) ? (unsigned char)s[char_pos] + 1 : 0;
-            temp[offsets[c]++] = order[start + i];
+            size_t dest = offsets[c]++;
+            temp[dest] = order[start + i];
+            lens_next[dest] = slen;
         }
 
         /* Copy back */
         memcpy(order + start, temp, len * sizeof(perm_idx_t));
+        memcpy(lens, lens_next, len * sizeof(size_t));
     }
 }
 
@@ -401,13 +410,12 @@ static stata_retcode parallel_merge_sort_numeric(perm_idx_t * MERGE_RESTRICT ord
     size_t block_size = (nobs + num_threads - 1) / num_threads;
 
     /* Allocate buffers */
-    perm_idx_t *temp = (perm_idx_t *)ctools_aligned_alloc(64, nobs * sizeof(perm_idx_t));
     perm_idx_t *merge_temp = (perm_idx_t *)ctools_aligned_alloc(64, nobs * sizeof(perm_idx_t));
     size_t *block_starts = (size_t *)malloc(num_threads * sizeof(size_t));
     size_t *block_lens = (size_t *)malloc(num_threads * sizeof(size_t));
     perm_idx_t **thread_temps = (perm_idx_t **)calloc(num_threads, sizeof(perm_idx_t *));
 
-    if (!temp || !merge_temp || !block_starts || !block_lens || !thread_temps) {
+    if (!merge_temp || !block_starts || !block_lens || !thread_temps) {
         rc = STATA_ERR_MEMORY;
         goto cleanup;
     }
@@ -512,7 +520,6 @@ static stata_retcode parallel_merge_sort_numeric(perm_idx_t * MERGE_RESTRICT ord
     }
 
 cleanup:
-    ctools_aligned_free(temp);
     ctools_aligned_free(merge_temp);
     free(block_starts);
     free(block_lens);
@@ -538,13 +545,13 @@ static stata_retcode parallel_merge_sort_string(perm_idx_t * MERGE_RESTRICT orde
     size_t block_size = (nobs + num_threads - 1) / num_threads;
 
     /* Allocate buffers */
-    perm_idx_t *temp = (perm_idx_t *)ctools_aligned_alloc(64, nobs * sizeof(perm_idx_t));
     perm_idx_t *merge_temp = (perm_idx_t *)ctools_aligned_alloc(64, nobs * sizeof(perm_idx_t));
     size_t *block_starts = (size_t *)malloc(num_threads * sizeof(size_t));
     size_t *block_lens = (size_t *)malloc(num_threads * sizeof(size_t));
     perm_idx_t **thread_temps = (perm_idx_t **)calloc(num_threads, sizeof(perm_idx_t *));
+    size_t *len_scratch = (size_t *)malloc(2 * nobs * sizeof(size_t));
 
-    if (!temp || !merge_temp || !block_starts || !block_lens || !thread_temps) {
+    if (!merge_temp || !block_starts || !block_lens || !thread_temps || !len_scratch) {
         rc = STATA_ERR_MEMORY;
         goto cleanup;
     }
@@ -571,12 +578,13 @@ static stata_retcode parallel_merge_sort_string(perm_idx_t * MERGE_RESTRICT orde
         }
     }
 
-    /* Phase 1: Parallel block sort */
+    /* Phase 1: Parallel block sort; each block's lengths in its own slice */
     #pragma omp parallel for schedule(dynamic, 1) num_threads(num_threads)
     for (int t = 0; t < num_threads; t++) {
         if (block_lens[t] > 0) {
             block_radix_sort_string(order, strings, block_starts[t],
-                                    block_lens[t], thread_temps[t], max_len);
+                                    block_lens[t], thread_temps[t],
+                                    len_scratch + 2 * block_starts[t], max_len);
         }
     }
 
@@ -640,8 +648,8 @@ static stata_retcode parallel_merge_sort_string(perm_idx_t * MERGE_RESTRICT orde
     }
 
 cleanup:
-    ctools_aligned_free(temp);
     ctools_aligned_free(merge_temp);
+    free(len_scratch);
     free(block_starts);
     free(block_lens);
     if (thread_temps) {
@@ -732,11 +740,15 @@ static stata_retcode merge_sort_by_string_var(stata_data *data, int var_idx)
 
     if (num_threads < 2) {
         perm_idx_t *temp = (perm_idx_t *)malloc(data->nobs * sizeof(perm_idx_t));
-        if (temp == NULL) {
+        size_t *lens = (size_t *)malloc(2 * data->nobs * sizeof(size_t));
+        if (temp == NULL || lens == NULL) {
+            free(temp);
+            free(lens);
             return STATA_ERR_MEMORY;
         }
-        block_radix_sort_string(data->sort_order, strings, 0, data->nobs, temp, max_len);
+        block_radix_sort_string(data->sort_order, strings, 0, data->nobs, temp, lens, max_len);
         free(temp);
+        free(lens);
         rc = STATA_OK;
     } else {
         rc = parallel_merge_sort_string(data->sort_order, strings, data->nobs,

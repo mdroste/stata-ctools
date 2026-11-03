@@ -122,6 +122,9 @@ ST_retcode densify_bin_ids(ST_int *bin_ids, ST_int N, const ByGroupResult *resul
  *   weights     - weights (NULL if unweighted)
  *   N           - number of observations
  *   compute_se  - whether to compute standard errors
+ *   max_bins    - bins the result matrix still holds; more distinct values
+ *                 return CBINSCATTER_ERR_CAPACITY before any per-bin buffer
+ *                 is allocated
  *   result      - output: ByGroupResult to populate
  *
  * Returns:
@@ -133,6 +136,7 @@ ST_retcode compute_bins_discrete(
     const ST_double *weights,
     ST_int N,
     ST_int compute_se,
+    ST_int max_bins,
     ByGroupResult *result,
     ST_int *bin_ids_out
 );

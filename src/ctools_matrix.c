@@ -305,8 +305,20 @@ ST_retcode ctools_vce_robust(const ctools_vce_data *d, ST_double dof_adj, ST_dou
     }
 
     /* meat[j,k] = sum_i (w_i * x_ij) * x_ik, each element accumulated over
-     * the observations in order. Column pairs are independent, so the rows
-     * of the upper triangle run in parallel, a few columns k per pass. */
+     * the observations in order with compensated (twice-working-precision)
+     * products and sums, as Mata's quadcross() accumulates reghdfe's meat:
+     * with nearly collinear regressors D*meat*D cancels most of the digits,
+     * and long double is no wider than double on some platforms. Column
+     * pairs are independent, so the rows of the upper triangle run in
+     * parallel, a few columns k per pass. */
+#define CTOOLS_MEAT_ADD(acc, comp, a, b) do { \
+        ST_double p_ = (a) * (b); \
+        ST_double pe_ = fma((a), (b), -p_); \
+        ST_double t_ = (acc) + p_; \
+        ST_double v_ = t_ - (acc); \
+        (comp) += ((acc) - (t_ - v_)) + (p_ - v_) + pe_; \
+        (acc) = t_; \
+    } while (0)
     #pragma omp parallel for schedule(dynamic) if(K > 1 && (size_t)N * (size_t)K > 100000)
     for (j = 0; j < K; j++) {
         const ST_double *xj = d->X_eff + (size_t)j * N;
@@ -314,29 +326,31 @@ ST_retcode ctools_vce_robust(const ctools_vce_data *d, ST_double dof_adj, ST_dou
         for (; kk + 3 < K; kk += 4) {
             const ST_double *x0 = d->X_eff + (size_t)kk * N;
             const ST_double *x1 = x0 + N, *x2 = x1 + N, *x3 = x2 + N;
-            long double a0 = 0.0L, a1 = 0.0L, a2 = 0.0L, a3 = 0.0L;
+            ST_double a0 = 0.0, a1 = 0.0, a2 = 0.0, a3 = 0.0;
+            ST_double c0 = 0.0, c1 = 0.0, c2 = 0.0, c3 = 0.0;
             for (ST_int ii = 0; ii < N; ii++) {
-                long double wxj = (long double)obs_w[ii] * (long double)xj[ii];
-                a0 += wxj * (long double)x0[ii];
-                a1 += wxj * (long double)x1[ii];
-                a2 += wxj * (long double)x2[ii];
-                a3 += wxj * (long double)x3[ii];
+                ST_double wxj = obs_w[ii] * xj[ii];
+                CTOOLS_MEAT_ADD(a0, c0, wxj, x0[ii]);
+                CTOOLS_MEAT_ADD(a1, c1, wxj, x1[ii]);
+                CTOOLS_MEAT_ADD(a2, c2, wxj, x2[ii]);
+                CTOOLS_MEAT_ADD(a3, c3, wxj, x3[ii]);
             }
-            meat[(size_t)j * K + kk] = a0;
-            meat[(size_t)j * K + kk + 1] = a1;
-            meat[(size_t)j * K + kk + 2] = a2;
-            meat[(size_t)j * K + kk + 3] = a3;
+            meat[(size_t)j * K + kk] = (long double)a0 + (long double)c0;
+            meat[(size_t)j * K + kk + 1] = (long double)a1 + (long double)c1;
+            meat[(size_t)j * K + kk + 2] = (long double)a2 + (long double)c2;
+            meat[(size_t)j * K + kk + 3] = (long double)a3 + (long double)c3;
         }
         for (; kk < K; kk++) {
             const ST_double *xk = d->X_eff + (size_t)kk * N;
-            long double acc = 0.0L;
+            ST_double acc = 0.0, comp = 0.0;
             for (ST_int ii = 0; ii < N; ii++) {
-                long double wxj = (long double)obs_w[ii] * (long double)xj[ii];
-                acc += wxj * (long double)xk[ii];
+                ST_double wxj = obs_w[ii] * xj[ii];
+                CTOOLS_MEAT_ADD(acc, comp, wxj, xk[ii]);
             }
-            meat[(size_t)j * K + kk] = acc;
+            meat[(size_t)j * K + kk] = (long double)acc + (long double)comp;
         }
     }
+#undef CTOOLS_MEAT_ADD
     free(obs_w);
     /* Mirror upper triangle to lower */
     for (j = 0; j < K; j++) {

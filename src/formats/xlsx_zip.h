@@ -31,6 +31,13 @@ xlsx_zip_archive *xlsx_zip_open_file(const char *filename);
  */
 void xlsx_zip_close(xlsx_zip_archive *archive);
 
+/* Refuse parts declaring more than limit bytes (0 = no limit), or a size
+ * their compressed data cannot inflate to; xlsx_zip_refused() then reports
+ * why the last extraction failed (XLSX_ZIP_SIZE_OK if not by size). */
+enum { XLSX_ZIP_SIZE_OK = 0, XLSX_ZIP_SIZE_FALSE, XLSX_ZIP_SIZE_MEMORY };
+void xlsx_zip_set_entry_limit(xlsx_zip_archive *archive, uint64_t limit);
+int xlsx_zip_refused(const xlsx_zip_archive *archive);
+
 /*
  * Find a file by name in the archive.
  * Returns file index, or (size_t)-1 if not found.

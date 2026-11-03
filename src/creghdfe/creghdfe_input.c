@@ -101,6 +101,10 @@ ST_retcode creghdfe_read_input(creghdfe_input *input)
         savefe_var_idx = (ST_int)val;
     }
 
+    /* reghdfe judges collinearity with the fixed effects by the tolerance()
+     * the user gave, so it is taken before the savefe override below. */
+    input->collinear_tol = (tolerance / 10.0 < 1e-6) ? tolerance / 10.0 : 1e-6;
+
     /* Individual FE estimates require a more precise projection than slopes. */
     if (savefe && tolerance > 1e-12)
         tolerance = 1e-12;

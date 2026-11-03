@@ -126,5 +126,6 @@ static inline void cbs_block_range(ST_int b, ST_int N, ST_int *i0, ST_int *i1)
 #define CBINSCATTER_ERR_SINGULAR    199   /* Singular matrix */
 #define CBINSCATTER_ERR_HDFE        459   /* HDFE solver failed */
 #define CBINSCATTER_ERR_INVALID     2003  /* Invalid parameter value */
+#define CBINSCATTER_ERR_CAPACITY    503   /* More bins than the result matrix holds */
 
 #endif /* CBINSCATTER_TYPES_H */

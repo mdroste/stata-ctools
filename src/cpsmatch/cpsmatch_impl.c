@@ -224,6 +224,15 @@ ST_retcode cpsmatch_main(const char *args)
     /* psmatch2 defines the arms by ==1 and ==0, not by truthiness.
      * Other numeric codes may be retained, but cannot become matches. */
     if (n_treated == 0) {
+        /* r(common_min)/r(common_max) are the control score range, as when
+         * there are treated rows (missing without controls) */
+        double control_min = SV_missval, control_max = SV_missval;
+        for (size_t i = 0; i < n_filtered; i++) {
+            if (SF_is_missing(treatment[i]) || SF_is_missing(pscore[i]) || treatment[i] != 0.0)
+                continue;
+            if (SF_is_missing(control_min) || pscore[i] < control_min) control_min = pscore[i];
+            if (SF_is_missing(control_max) || pscore[i] > control_max) control_max = pscore[i];
+        }
         if (opts.statistics) {
             cpsmatch_statistics statistics;
             double started = ctools_timer_seconds();
@@ -242,6 +251,8 @@ ST_retcode cpsmatch_main(const char *args)
         SF_scal_save("_cpsmatch_n_controls",(double)n_controls);
         SF_scal_save("_cpsmatch_n_matched",0);
         SF_scal_save("_cpsmatch_n_off_support",0);
+        SF_scal_save("_cpsmatch_common_min",control_min);
+        SF_scal_save("_cpsmatch_common_max",control_max);
         SF_scal_save("_cpsmatch_time_load",t_load);
         SF_scal_save("_cpsmatch_time_setup",0);
         SF_scal_save("_cpsmatch_time_sort",0);
@@ -583,7 +594,9 @@ ST_retcode cpsmatch_main(const char *args)
                 return 920;
             }
         } else if (opts.method == MATCH_RADIUS) {
-            double radius = (caliper > 0.0) ? caliper : CPSMATCH_DEFAULT_CALIPER;
+            /* psmatch2's radius is |dif| <= caliper: a negative caliper
+             * matches nothing, so only 0 (none given) takes the default */
+            double radius = (caliper != 0.0) ? caliper : CPSMATCH_DEFAULT_CALIPER;
             match_failed = cpsmatch_match_radius(sorted_controls, n_controls,
                 treated_pscore, treated_idx, n_treated, control_idx, obs_map,
                 radius, opts.common_support, common_min, common_max,

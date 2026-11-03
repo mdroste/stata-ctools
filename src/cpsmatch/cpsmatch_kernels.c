@@ -408,6 +408,10 @@ int cpsmatch_find_kernel_matches_fast(double pscore_treated,
                                       kernel_type_t kernel, double caliper, match_workspace *ws,
                                       match_result *result)
 {
+    /* psmatch2 weighs by normalden(dif/bw), which is even in bw; the other
+     * kernels need |dif| <= bw and so match nothing when bw <= 0 */
+    if (kernel == KERNEL_NORMAL)
+        bandwidth = fabs(bandwidth);
     if (n_controls == 0 || bandwidth <= 0.0)
     {
         result->n_matches = 0;

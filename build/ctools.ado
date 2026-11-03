@@ -16,22 +16,20 @@ program define ctools, rclass
         di as text ""
 
         capture noisily net install ctools, from("https://raw.githubusercontent.com/mdroste/stata-ctools/main/build") replace
+        local update_rc = _rc
 
-        if _rc == 0 {
+        if `update_rc' == 0 {
             di as text ""
             di as text "{bf:ctools has been updated successfully.}"
-            di as text "You may need to restart Stata for all changes to take effect."
-        }
-        else if _rc == 631 {
-            di as text ""
-            di as text "{bf:ctools is already up to date.}"
+            di as text "Restart Stata so the new plugin is loaded."
         }
         else {
+            * r(631) is net's "host not found": the update could not be checked.
             di as error ""
-            di as error "Update failed with error code `=_rc'."
+            di as error "Update failed with error code `update_rc'."
             di as error "Please check your internet connection and try again."
         }
-        exit
+        exit `update_rc'
     }
 
     local __ado_version "1.2.3"
@@ -72,10 +70,11 @@ program define ctools, rclass
             capture noisily plugin call ctools_plugin, "version"
             local plugin_rc = _rc
             if `plugin_rc' == 0 {
-                di as text "ctools ado `__ado_version'; plugin `ctools_plugin_version' (`ctools_plugin_revision')"
+                di as text "ctools ado `__ado_version'; plugin `ctools_plugin_version' (`ctools_plugin_revision'); protocol `ctools_plugin_protocol'"
                 return local version "`__ado_version'"
                 return local plugin_version "`ctools_plugin_version'"
                 return local plugin_revision "`ctools_plugin_revision'"
+                return local plugin_protocol "`ctools_plugin_protocol'"
             }
             else {
                 di as error "ctools plugin identity could not be read."
@@ -93,6 +92,14 @@ program define ctools, rclass
         if "`ctools_threads_session'" != "" & "`ctools_threads_session'" != "invalid" {
             local __source "session setting"
         }
+        * An invalid session global makes every command fail, so no thread
+        * count applies; r(threads_default) still reports the policy default.
+        local __effective_show "`ctools_threads_effective'"
+        if "`ctools_threads_session'" == "invalid" {
+            local ctools_threads_effective .
+            local __source "global CTOOLS_THREADS is invalid"
+            local __effective_show "none (commands fail)"
+        }
         foreach __item in session saved env omp omp_limit {
             local __show_`__item' "`ctools_threads_`__item''"
             if "`__show_`__item''" == "" local __show_`__item' "(not set)"
@@ -100,7 +107,7 @@ program define ctools, rclass
         local __openmp = cond("`ctools_threads_openmp'" == "1", "enabled", "not available")
         di as text ""
         di as text "{ul:Threads}"
-        di as text "  Commands without threads() use" _col(40) as result "`ctools_threads_effective'" as text "  (`__source')"
+        di as text "  Commands without threads() use" _col(40) as result "`__effective_show'" as text "  (`__source')"
         di as text "  CPUs detected / usable" _col(40) as result "`ctools_threads_detected' / `ctools_threads_available'"
         di as text "  Session (global CTOOLS_THREADS)" _col(40) as result "`__show_session'"
         di as text "  Saved setting" _col(40) as result "`__show_saved'"

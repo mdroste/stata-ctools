@@ -29,6 +29,9 @@ typedef struct
     size_t *lengths;
     double *numbers;
     char **strings;
+    /* A numeric header cell: native labels it with its %18.0g text. */
+    int label_numeric;
+    double label_number;
 } cio_column;
 typedef struct
 {
@@ -113,6 +116,7 @@ ssize_t cio_xport_view_read(void *buffer, size_t n, void *ctx);
 readstat_error_t cio_xport_view_update(long size, readstat_progress_handler progress, void *user,
                                        void *ctx);
 int cio_xport_select(const char *path, const char *member, readstat_parser_t *p, cio_xport_view *v);
+uint64_t cio_xlsx_part_limit(void);
 int cio_xlsx_stored(XLSXContext *x, int row, int col);
 int cio_xlsx_raw(XLSXContext *x, int row, int col, double *number, const char **text);
 uint8_t cio_xlsx_native_format(XLSXContext *x, int row, int col);

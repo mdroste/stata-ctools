@@ -113,6 +113,7 @@ def test_io_performance_native():
     CRC = harness("io_perf_crc.c")
     XML = harness("io_perf_xml.c")
     CSV = harness("io_perf_csv.c")
+    EXPORT = harness("io_perf_export.c")
     mac = platform.system() == "Darwin"
     vendor = ROOT / "src/vendor"
     with tempfile.TemporaryDirectory(prefix="ctools-io-performance-") as tmp:
@@ -182,6 +183,7 @@ def test_io_performance_native():
             ("crc", CRC, crc_sources),
             ("xml", XML, xml_sources),
             ("csv", CSV, csv_sources),
+            ("export", EXPORT, []),
         ]:
             cfile = directory / (name + ".c")
             cfile.write_text(source)
@@ -458,6 +460,8 @@ def test_xlsx_edit_native():
                 *flags,
                 str(source),
                 str(ROOT / "src/formats/xlsx_xml.c"),
+                str(ROOT / "src/ctools_types.c"),
+                str(ROOT / "src/ctools_hash.c"),
                 "-o",
                 str(binary),
             ],

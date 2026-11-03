@@ -98,17 +98,19 @@ program define _cio_import, rclass
         preserve
         local snap 1
     }
-    * Native statistical/DBF/SHP readers clear before parsing the file, even
-    * when parsing fails. Excel validates its container before replacing data.
-    if "`describe'"=="" & !inlist("`kind'","xls","xlsx") quietly clear
+    * The plugin is checked before the data are cleared.
     _ctools_load
     capture program ctools_plugin, plugin using("`__ctools_plugin'")
     if _rc != 0 & _rc != 110 exit 601
+    * Native statistical/DBF/SHP readers clear before parsing the file, even
+    * when parsing fails. Excel validates its container before replacing data.
+    if "`describe'"=="" & !inlist("`kind'","xls","xlsx") quietly clear
     local __cio_member "`member'"
     local __cio_sheet `"`sheet'"'
     local __cio_cellrange "`cellrange'"
     local __cio_firstrow = ("`firstrow'" != "")
     local __cio_maxvar = c(maxvar)
+    local __cio_maxmemory = c(max_memory)
     local __cio_allstring = ("`allstring'" != "")
     local __cio_allstringfmt `"`allstringfmt'"'
     local __cio_filename `"`using'"'
@@ -117,10 +119,12 @@ program define _cio_import, rclass
     local __cio_xpf ""
     local __cio_rawstorage 0
     if "`kind'" == "sasxport5" & "`novallabels'" == "" & "`describe'" == "" {
-        mata: st_local("xpfdir",pathgetparent(st_local("using")))
+        * The file's directory with its trailing separator ("" in the working
+        * directory), from pathbasename(), which Stata 14.1 has.
+        mata: st_local("xpfdir",substr(st_local("using"),1,strlen(st_local("using"))-strlen(pathbasename(st_local("using")))))
         foreach candidate in formats.xpf FORMATS.xpf {
-            capture confirm file `"`xpfdir'/`candidate'"'
-            if !_rc local __cio_xpf `"`xpfdir'/`candidate'"'
+            capture confirm file `"`xpfdir'`candidate'"'
+            if !_rc local __cio_xpf `"`xpfdir'`candidate'"'
         }
     }
     if "`describe'"!="" & inlist("`kind'","xls","xlsx") {
@@ -258,7 +262,7 @@ program define _cio_import, rclass
     }
     local loadcase "`case'"
     if inlist("`kind'","sas","spss") | (inlist("`kind'","xls","xlsx") & "`firstrow'"=="") local loadcase preserve
-    capture noisily _cio_import_load `kind' `nobs' `nvar' `nlabels', case(`loadcase') wanted(`"`wanted'"') allstringfmt(`"`allstringfmt'"') `novallabels' `allstring'
+    capture noisily _cio_import_load `kind' `nobs' `nvar' `nlabels', case(`loadcase') wanted(`"`wanted'"') allstringfmt(`"`allstringfmt'"') `novallabels' `allstring' filename(`"`using'"')
     local rc = _rc
     capture plugin call ctools_plugin, "cio clear"
     macro drop CTOOLS_CIO_*
@@ -299,7 +303,7 @@ program define _cio_import_load
     gettoken nobs 0 : 0, parse(" ,")
     gettoken nvar 0 : 0, parse(" ,")
     gettoken nlabels 0 : 0, parse(" ,")
-    syntax, CASE(string) [WANTED(string) NOVALLabels ALLSTRINGFMT(string) ALLString]
+    syntax, CASE(string) [WANTED(string) NOVALLabels ALLSTRINGFMT(string) ALLString FILEname(string)]
     * Plugin registrations belong to the invoking ado program.
     _ctools_load
     capture program ctools_plugin, plugin using("`__ctools_plugin'")
@@ -313,7 +317,7 @@ program define _cio_import_load
         * fallback can require moving an earlier header to its own column letter.
         forvalues j=1/`nvar' {
             plugin call ctools_plugin, "cio column `j'"
-            mata: st_local("__cio_candidate_`j'",_cio_excel_name(st_global("CTOOLS_CIO_name"),st_global("CTOOLS_CIO_excel_column")))
+            mata: st_local("__cio_candidate_`j'",_cio_excel_name(st_global("CTOOLS_CIO_name"),st_global("CTOOLS_CIO_excel_column"),st_local("case")))
             mata: st_local("__cio_fallback_`j'",st_global("CTOOLS_CIO_excel_column"))
         }
         mata: _cio_excel_names(`nvar')
@@ -327,8 +331,8 @@ program define _cio_import_load
         if "`case'" == "lower" & !inlist("`kind'","xls","xlsx") local vname = ustrlower("`vname'")
         if "`case'" == "upper" & !inlist("`kind'","xls","xlsx") local vname = ustrupper("`vname'")
         if inlist("`kind'","xls","xlsx") {
-            if "`case'" == "lower" local vname = strlower("`vname'")
-            if "`case'" == "upper" local vname = strupper("`vname'")
+            if "`case'" == "lower" local vname = ustrlower("`vname'")
+            if "`case'" == "upper" local vname = ustrupper("`vname'")
         }
         if !inlist("`kind'","xls","xlsx") {
             capture confirm new variable `vname'
@@ -339,13 +343,27 @@ program define _cio_import_load
         local sourcecol`j' "${CTOOLS_CIO_excel_column}"
         local sourcevar`j' "`vname'"
         local type ${CTOOLS_CIO_type}
+        if inlist("`kind'","xls","xlsx") & ("`vname'"=="_cons" | ustrregexm("`vname'","^str[0-9]+$")) {
+            di as error "`vname' invalid varname"
+            exit 198
+        }
         mata: (void) st_addvar(st_local("type"),st_local("vname"))
-        mata: st_varlabel(st_local("vname"),st_global("CTOOLS_CIO_label"))
+        mata: st_varlabel(st_local("vname"),st_global("CTOOLS_CIO_labelnumber")=="" ? st_global("CTOOLS_CIO_label") : strtrim(strofreal(strtoreal(st_global("CTOOLS_CIO_labelnumber")),"%18.0g")))
         mata: st_varformat(st_local("vname"),st_global("CTOOLS_CIO_format"))
         if ("`novallabels'" == "" | "`kind'"=="sasxport5") & inlist("`kind'","spss","sasxport5") {
             * Label-set names come from the file and stay in Mata. Native
             * SPSS labels use their dictionary ordinal, beginning at 0.
             mata: st_local("labelname",_cio_labelset_name(st_local("kind"),st_global("CTOOLS_CIO_labelset"),1))
+            * String variables take no value label: native SPSS notes it,
+            * native XPORT fails unless novallabels is given.
+            if "`labelname'" != "" & substr("`type'",1,3) == "str" {
+                if "`kind'" == "sasxport5" & "`novallabels'" == "" {
+                    mata: printf("{err}%s has string variable %s with format (value label) %s; value labels for string variables are not allowed in Stata\n", st_local("filename"), st_local("vname"), st_global("CTOOLS_CIO_labelset"))
+                    exit 610
+                }
+                if "`kind'" == "spss" di as text "note: may not attach value label to string variable: no label applied"
+                local labelname ""
+            }
             if "`labelname'" != "" mata: st_varvaluelabel(st_local("vname"),st_local("labelname"))
         }
     }
@@ -380,14 +398,18 @@ program define _cio_import_load
         }
     }
     if `nobs' & `nvar' plugin call ctools_plugin *, "cio load"
-    if `nobs' & `"`allstringfmt'"'!="" {
+    * Numbers in string columns: allstring()'s format, else native's %18.0g
+    * (for which the plugin reserved 18 characters).
+    local textfmt `"`allstringfmt'"'
+    if `"`textfmt'"' == "" local textfmt "%18.0g"
+    if `nobs' {
         foreach j of local textnumbers {
             tempvar rawnumber
             quietly gen double `rawnumber' = .
             plugin call ctools_plugin `rawnumber', "cio textnumbers `j'"
             local target `sourcevar`j''
-            quietly recast strL `target'
-            mata: _cio_format_text(st_local("target"),st_local("rawnumber"),st_local("allstringfmt"))
+            if `"`allstringfmt'"' != "" quietly recast strL `target'
+            mata: _cio_format_text(st_local("target"),st_local("rawnumber"),st_local("textfmt"),st_local("allstringfmt")=="")
             quietly drop `rawnumber'
             quietly compress `target'
             mata: st_varformat(st_local("target"),"%"+strofreal(st_vartype(st_local("target"))=="strL" ? 9 : max((9,max(strlen(st_sdata(.,st_local("target")))))))+"s")
@@ -477,49 +499,46 @@ string scalar _cio_excel_column(real scalar index) {
     }
     return(column)
 }
+/* Lowercase hex pairs to bytes, decoded as whole vectors. */
 string scalar _cio_hex_bytes(string scalar hex) {
-    real scalar i, n
-    real rowvector bytes
-    string scalar digits
-    digits="0123456789abcdef"; n=strlen(hex)/2; bytes=J(1,n,0)
-    for(i=1;i<=n;i++) bytes[i]=(strpos(digits,substr(hex,2*i-1,1))-1)*16+strpos(digits,substr(hex,2*i,1))-1
-    return(char(bytes))
+    real matrix digits
+    if (strlen(hex) < 2) return("")
+    digits = ascii(hex)
+    digits = colshape(digits :- 48 :- 39 :* (digits :> 57), 2)
+    return(char((digits[., 1] * 16 + digits[., 2])'))
 }
 end
 
 mata:
-void _cio_format_text(string scalar target, string scalar source, string scalar fmt) {
+void _cio_format_text(string scalar target, string scalar source, string scalar fmt, real scalar trim) {
     real colvector values, selected
     values=st_data(.,source)
     selected=selectindex(values:<.)
-    if (rows(selected)) st_sstore(selected,target,strofreal(values[selected],fmt))
+    if (length(selected)) st_sstore(selected,target,trim ? strtrim(strofreal(values[selected],fmt)) : strofreal(values[selected],fmt))
 }
 end
 
 mata:
-string scalar _cio_excel_name(string scalar source, string scalar fallback) {
-    string scalar name
-    name=ustrregexra(source,"[^\p{L}\p{N}_]","")
-    name=usubstr(name,1,32)
-    if (name=="" || ustrregexm(name,"^[0-9]")) return(fallback)
-    if (!st_isvarname(name)) return(fallback)
+/* Native cuts the header to 32 characters, keeps Unicode letters, decimal
+   digits and underscores, drops leading digits, and uses the column letter
+   when the result, in the requested case, is not a valid name. */
+string scalar _cio_excel_name(string scalar source, string scalar fallback, string scalar casing) {
+    string scalar name, cased
+    name=ustrregexra(usubstr(source,1,32),"[^\p{L}\p{Nd}_]","")
+    name=ustrregexrf(name,"^\p{Nd}+","")
+    cased=casing=="lower" ? ustrlower(name) : (casing=="upper" ? ustrupper(name) : name)
+    /* Native does not replace _cons or str#: creating them fails. */
+    if (cased=="_cons" || ustrregexm(cased,"^str[0-9]+$")) return(name)
+    if (name=="" || !st_isvarname(cased)) return(fallback)
     return(name)
 }
-/* Value-label name for a label set named in the file: labels# by first
-   appearance for SPSS (add=1 records new sets), the lowercased name for
+/* Value-label name for a label set named in the file: for SPSS the reader's
+   labels# (the set's dictionary ordinal, as native), the lowercased name for
    the other formats. "" when a variable has no label set (add=1). */
 string scalar _cio_labelset_name(string scalar kind, string scalar set, real scalar add) {
-    external string rowvector __ctools_cio_sets
-    real scalar pos
     if (add & set=="") return("")
     if (kind!="spss") return(ustrlower(ustrtoname(set)))
-    pos=selectindex(__ctools_cio_sets:==set)
-    if (cols(pos)==0) {
-        if (!add) return("labels-1")
-        __ctools_cio_sets=__ctools_cio_sets,set
-        pos=cols(__ctools_cio_sets)
-    }
-    return("labels"+strofreal(pos[1]-1))
+    return(set)
 }
 void _cio_excel_names(real scalar n) {
     string rowvector names, fallback

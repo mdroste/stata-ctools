@@ -211,6 +211,10 @@ int cpsmatch_parse_options(const char *args, cpsmatch_options *opts)
         }
     }
 
+    /* psmatch2 accepts descending only when matching without replacement */
+    if (opts->descending && opts->with_replace)
+        return -1;
+
     /* Optional wire flags. The stored _treated column (stats) precedes the
      * sample marker, which always remains the final plugin variable. */
     while (*p)

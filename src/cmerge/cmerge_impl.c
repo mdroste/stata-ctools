@@ -50,6 +50,7 @@
 #include "ctools_spi.h"
 #include "ctools_config.h"
 #include "ctools_rowstage.h"
+#include "ctools_parse.h"
 #include "cmerge_impl.h"
 
 /* Helper modules */
@@ -64,7 +65,49 @@
  * ============================================================================ */
 
 #define CMERGE_MAX_KEYVARS 32
-#define CMERGE_MAX_VARS 1024
+
+/* Per-variable index lists arrive through locals (the token names a local
+ * the ado set), because a list in the plugin argument exceeds Stata's
+ * plugin-call argument length on wide data. The buffers grow to the widest
+ * merge seen and are released by cmerge_cleanup_cache. */
+static int *g_cm_ku_indices = NULL;     /* load_using: keepusing positions */
+static size_t g_cm_ku_cap = 0;
+static int *g_cm_placeholders = NULL;   /* execute: keepusing destinations */
+static size_t g_cm_placeholders_cap = 0;
+static int *g_cm_shared = NULL;         /* execute: 1 if a destination is a master variable */
+static size_t g_cm_shared_cap = 0;
+
+static int *cmerge_grow(int **buf, size_t *cap, size_t n)
+{
+    if (n == 0) n = 1;
+    if (n > *cap || !*buf) {
+        int *grown = (int *)realloc(*buf, n * sizeof(int));
+        if (!grown) return NULL;
+        *buf = grown;
+        *cap = n;
+    }
+    return *buf;
+}
+
+/* Read n integers from local macro `name` (the ado's local, prefixed by "_").
+ * Fails on truncation, missing values or trailing tokens. */
+static int cmerge_macro_ints(const char *local, int *out, size_t n)
+{
+    char name[40];
+    if (snprintf(name, sizeof(name), "_%s", local) >= (int)sizeof(name)) return 0;
+    if (n > (size_t)INT_MAX / 16) return 0;
+    size_t size = n * 12 + 16;
+    char *buf = (char *)malloc(size);
+    if (!buf) return 0;
+    buf[0] = '\0';
+    int ok = SF_macro_use(name, buf, (int)size) == 0 && strlen(buf) < size - 1;
+    const char *p = buf;
+    ok = ok && ctools_parse_int_array(out, n, &p) == 0;
+    while (ok && (*p == ' ' || *p == '\t')) p++;
+    ok = ok && *p == '\0';
+    free(buf);
+    return ok;
+}
 
 /* Timer: use ctools_timer_ms() directly from ctools_timer.h */
 
@@ -171,7 +214,8 @@ static ST_retcode cmerge_load_using(const char *args)
     ST_retcode rc;
 
     /* Parse: "load_using <nkeys> <key_idx1>...<key_idxN> n_keepusing <count>
-              keepusing_indices <idx1>...<idxM> [verbose]" */
+              [keepusing_local <name>] [verbose]"; local <name> holds the
+              keepusing positions <idx1>...<idxM>. */
     char args_copy[4096];
     if (strlen(args) >= sizeof(args_copy)) return 198;
     strncpy(args_copy, args, sizeof(args_copy) - 1);
@@ -180,7 +224,8 @@ static ST_retcode cmerge_load_using(const char *args)
     int nkeys = 0;
     int key_indices[CMERGE_MAX_KEYVARS];
     int n_keepusing = 0;
-    int keepusing_indices[CMERGE_MAX_VARS];
+    int *keepusing_indices = NULL;
+    char keepusing_local[32] = {0};
     int verbose = 0;
     int sorted = 0;
     int sorted_hint = 0;   /* Stata sort marker: trusted only if the check passes */
@@ -215,17 +260,31 @@ static ST_retcode cmerge_load_using(const char *args)
                     SF_error("cmerge: invalid n_keepusing value\n");
                     return 198;
                 }
-                if (n_keepusing > CMERGE_MAX_VARS) {
-                    SF_error("cmerge: too many keepusing variables (max 1024)\n");
+                if (n_keepusing < 0 || n_keepusing > SF_nvars()) {
+                    SF_error("cmerge: invalid n_keepusing value\n");
                     return 198;
                 }
+                keepusing_indices = cmerge_grow(&g_cm_ku_indices, &g_cm_ku_cap,
+                                                (size_t)n_keepusing);
+                if (!keepusing_indices) {
+                    SF_error("cmerge: out of memory\n");
+                    return 920;
+                }
             }
+        }
+        else if (strcmp(token, "keepusing_local") == 0) {
+            token = strtok(NULL, " ");
+            if (!token || strlen(token) >= sizeof(keepusing_local)) {
+                SF_error("cmerge: invalid keepusing list\n");
+                return 198;
+            }
+            strcpy(keepusing_local, token);
         }
         else if (strcmp(token, "keepusing_indices") == 0) {
             in_keepusing_indices = 1;
             keepusing_idx = 0;
         }
-        else if (in_keepusing_indices && keepusing_idx < n_keepusing && keepusing_idx < CMERGE_MAX_VARS) {
+        else if (in_keepusing_indices && keepusing_indices && keepusing_idx < n_keepusing) {
             if (!ctools_safe_atoi(token, &keepusing_indices[keepusing_idx])) {
                 SF_error("cmerge: invalid keepusing index value\n");
                 return 198;
@@ -249,6 +308,15 @@ static ST_retcode cmerge_load_using(const char *args)
     }
 
     (void)verbose;  /* Timing output moved to ado file */
+    if (n_keepusing > 0 && keepusing_local[0] &&
+        !cmerge_macro_ints(keepusing_local, keepusing_indices, (size_t)n_keepusing)) {
+        SF_error("cmerge: invalid keepusing list\n");
+        return 198;
+    }
+    if (n_keepusing > 0 && !keepusing_local[0] && keepusing_idx != n_keepusing) {
+        SF_error("cmerge: invalid keepusing list\n");
+        return 198;
+    }
 
     /* Acquire lock before modifying global cache */
     cache_lock_acquire();
@@ -827,6 +895,59 @@ static ST_retcode cmerge_plan(const char *args)
                                      : sorted_row;
     }
 
+    /* merge's order: each master row's first output row, in key order, then
+     * every other row (using-only rows and the later 1:m or m:m pairings of a
+     * master row) in join order. A stable partition of the join; skipped when
+     * every row is a first master row. */
+    if (!preserve_order && !plan.merge_by_n && output_nobs > 0) {
+        uint8_t *seen = (uint8_t *)calloc(master_nobs ? master_nobs : 1, 1);
+        uint8_t *head = (uint8_t *)malloc(output_nobs);
+        if (!seen || !head) {
+            free(seen);
+            free(head);
+            rc = 920;
+            goto done;
+        }
+        size_t n_tail = 0;
+        for (size_t i = 0; i < output_nobs; i++) {
+            int32_t m = specs[i].master_sorted_row;
+            head[i] = m >= 0 && !seen[m];
+            if (head[i]) seen[m] = 1;
+            n_tail += !head[i];
+        }
+        free(seen);
+        /* Rows already in place: the tail is the trailing block */
+        size_t first_tail = output_nobs;
+        for (size_t i = 0; i < output_nobs; i++) {
+            if (!head[i]) { first_tail = i; break; }
+        }
+        if (n_tail > 0 && output_nobs - first_tail != n_tail) {
+            t_start = ctools_timer_ms();
+            cmerge_output_spec_t *new_specs =
+                ctools_safe_malloc2(output_nobs, sizeof(cmerge_output_spec_t));
+            int32_t *new_orig_rows = ctools_safe_malloc2(output_nobs, sizeof(int32_t));
+            if (!new_specs || !new_orig_rows) {
+                free(head);
+                free(new_specs);
+                free(new_orig_rows);
+                rc = 920;
+                goto done;
+            }
+            size_t h = 0, t = output_nobs - n_tail;
+            for (size_t i = 0; i < output_nobs; i++) {
+                size_t dest = head[i] ? h++ : t++;
+                new_specs[dest] = specs[i];
+                new_orig_rows[dest] = orig_rows[i];
+            }
+            free(specs);
+            free(orig_rows);
+            specs = new_specs;
+            orig_rows = new_orig_rows;
+            plan.t_reorder = ctools_timer_ms() - t_start;
+        }
+        free(head);
+    }
+
     /* preserve_order: master rows in their original order, using-only rows after. */
     if (preserve_order && output_nobs > 0) {
         t_start = ctools_timer_ms();
@@ -1019,6 +1140,8 @@ static ST_retcode cmerge_execute_failed(stata_retcode rc)
 /* Arguments: "<merge_type> <nkeys> <key_idx>... master_nobs <N> master_nvars <K>
  * n_keepusing <n> [keepusing_placeholders <idx>...] [merge_var_idx <idx>]
  * preserve_order <0|1> [update] [replace] [shared_flags <0|1>...] [fault_store]
+ * [placeholders_local <name>] [shared_local <name>]", where the two locals hold
+ * the placeholder and shared-flag lists in place of the inline lists
  * [sorted|sorted_hint] [merge_by_n] [verbose]".
  * The varlist lists every current variable; the original master variables come
  * first, in the order plan saw them. fault_store is a validation hook: the
@@ -1060,12 +1183,14 @@ static ST_retcode cmerge_execute(const char *args)
     size_t master_nobs = 0;
     size_t master_nvars = 0;
     int n_keepusing = 0;
-    static int keepusing_placeholder_indices[CMERGE_MAX_VARS];
+    int *keepusing_placeholder_indices = NULL;
     int merge_var_idx = 0;
     int update_mode = 0;
     int replace_mode = 0;
     int fault_store = 0;
-    static int shared_flags[CMERGE_MAX_VARS];
+    int *shared_flags = NULL;
+    char placeholders_local[32] = {0};
+    char shared_local[32] = {0};
 
     int arg_idx = 0;
     int in_keepusing_placeholders = 0;
@@ -1097,13 +1222,27 @@ static ST_retcode cmerge_execute(const char *args)
         else if (strcmp(token, "n_keepusing") == 0) {
             token = strtok(NULL, " ");
             bad = !token || !ctools_safe_atoi(token, &n_keepusing) || n_keepusing < 0 ||
-                  n_keepusing > CMERGE_MAX_VARS;
+                  n_keepusing > SF_nvars();
+            if (!bad) {
+                keepusing_placeholder_indices = cmerge_grow(
+                    &g_cm_placeholders, &g_cm_placeholders_cap, (size_t)n_keepusing);
+                shared_flags = cmerge_grow(&g_cm_shared, &g_cm_shared_cap, (size_t)n_keepusing);
+                bad = !keepusing_placeholder_indices || !shared_flags;
+                if (!bad) memset(shared_flags, 0, (size_t)n_keepusing * sizeof(int));
+            }
+        }
+        else if (strcmp(token, "placeholders_local") == 0 || strcmp(token, "shared_local") == 0) {
+            char *dest = token[0] == 'p' ? placeholders_local : shared_local;
+            token = strtok(NULL, " ");
+            bad = !token || strlen(token) >= sizeof(placeholders_local);
+            if (!bad) strcpy(dest, token);
         }
         else if (strcmp(token, "keepusing_placeholders") == 0) {
             in_keepusing_placeholders = 1;
             keepusing_idx = 0;
         }
-        else if (in_keepusing_placeholders && keepusing_idx < n_keepusing && keepusing_idx < CMERGE_MAX_VARS) {
+        else if (in_keepusing_placeholders && keepusing_placeholder_indices &&
+                 keepusing_idx < n_keepusing) {
             bad = !ctools_safe_atoi(token, &keepusing_placeholder_indices[keepusing_idx]);
             keepusing_idx++;
         }
@@ -1127,7 +1266,8 @@ static ST_retcode cmerge_execute(const char *args)
             fault_store = 1;
         }
         else if (strcmp(token, "shared_flags") == 0) {
-            for (int i = 0; i < n_keepusing && i < CMERGE_MAX_VARS && !bad; i++) {
+            bad = !shared_flags && n_keepusing > 0;
+            for (int i = 0; i < n_keepusing && !bad; i++) {
                 token = strtok(NULL, " ");
                 if (token) {
                     bad = !ctools_safe_atoi(token, &shared_flags[i]);
@@ -1139,6 +1279,17 @@ static ST_retcode cmerge_execute(const char *args)
         /* sorted, sorted_hint, merge_by_n and verbose were applied by plan */
         arg_idx++;
         token = strtok(NULL, " ");
+    }
+
+    if (!bad && n_keepusing > 0 && placeholders_local[0]) {
+        bad = !cmerge_macro_ints(placeholders_local, keepusing_placeholder_indices,
+                                 (size_t)n_keepusing);
+    }
+    if (!bad && n_keepusing > 0 && shared_local[0]) {
+        bad = !cmerge_macro_ints(shared_local, shared_flags, (size_t)n_keepusing);
+    }
+    if (!bad && n_keepusing > 0 && !placeholders_local[0] && keepusing_idx != n_keepusing) {
+        bad = 1;
     }
 
     /* The plan must describe this master. */
@@ -1580,4 +1731,9 @@ void cmerge_cleanup_cache(void)
     cache_lock_release();
     cmerge_plan_free();
     cmerge_undo_free();
+    free(g_cm_ku_indices);
+    free(g_cm_placeholders);
+    free(g_cm_shared);
+    g_cm_ku_indices = g_cm_placeholders = g_cm_shared = NULL;
+    g_cm_ku_cap = g_cm_placeholders_cap = g_cm_shared_cap = 0;
 }

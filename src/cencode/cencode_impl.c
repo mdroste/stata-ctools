@@ -387,7 +387,7 @@ static ST_retcode cencode_stream(int var_idx, int gen_idx, const char *labelfile
             SF_error("cencode: memory allocation failed\n");
         else if (rc == 459)
             SF_error("cencode: failed to read or write Stata data\n");
-        return rc == 134 ? 198 : rc;
+        return rc; /* 134: too many values, as encode */
     }
     SF_scal_save("_cencode_fallback", fallback ? 1.0 : 0.0);
     SF_scal_save("_cencode_n_unique", (double)n_unique);
@@ -624,7 +624,7 @@ ST_retcode cencode_main(const char *args)
         free(obs_codes);
         ctools_filtered_data_free(&filtered);
         ctools_str_hash_free(&ht);
-        return 198;
+        return 134; /* encode's "too many values" */
     }
 
     /* ========================================================================

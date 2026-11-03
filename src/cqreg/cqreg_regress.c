@@ -466,8 +466,14 @@ static ST_retcode estimate_siddiqui_sparsity(const ST_double *y,
         Qhat_hi += x_bar[k] * beta_hi[k];
     }
 
-    /* Siddiqui sparsity = (Q̂(τ+h|X̄) - Q̂(τ-h|X̄)) / (2h) */
-    ST_double sparsity = (Qhat_hi - Qhat_lo) / (2.0 * h);
+    /* Siddiqui sparsity = (Q̂(τ+h|X̄) - Q̂(τ-h|X̄)) / (2h). At the mean of
+     * the design the fitted quantile is nondecreasing in τ, so a difference
+     * below qreg's sqrt(c(epsdouble)) (in the scaled response units, as the
+     * fitted robust densities) is rounding: y has an atom at the quantile,
+     * where qreg's exact vertices give zero sparsity and a zero covariance. */
+    ST_double Qhat_diff = Qhat_hi - Qhat_lo;
+    if (!(Qhat_diff > sqrt(DBL_EPSILON))) Qhat_diff = 0.0;
+    ST_double sparsity = Qhat_diff / (2.0 * h);
 
     main_debug_log("Siddiqui: Qhat_lo=%.4f, Qhat_hi=%.4f, h=%.6f\n",
                    Qhat_lo, Qhat_hi, h);
@@ -971,8 +977,9 @@ ST_retcode cqreg_full_regression(const char *args)
         }
         free(col_means);
 
-        /* Detect numerical collinearity via Cholesky */
-        ST_int num_collinear = detect_collinearity(xtx, K_x, is_collinear, verbose);
+        /* Detect numerical collinearity via Cholesky on the correlation
+         * matrix, as _rmcoll: the screen must not depend on the units of x */
+        ST_int num_collinear = detect_collinearity_scaled(xtx, K_x, is_collinear, verbose);
         free(xtx);
 
         if (num_collinear < 0) {
@@ -1081,6 +1088,14 @@ ST_retcode cqreg_full_regression(const char *args)
     state->iterations = state->ipm->iterations;
     state->converged = ipm_result > 0 && state->ipm->converged;
 
+    /* The solver sets the residuals only after convergence */
+    if (!state->converged) {
+        state->time_ipm = ctools_timer_seconds() - ipm_start;
+        ctools_error("cqreg", "IPM solver stopped without convergence after %d iterations", state->iterations);
+        rc = 430;
+        goto cleanup;
+    }
+
     main_debug_log("Getting objective value...\n");
     /* Get objective value */
     state->sum_adev = cqreg_ipm_get_objective(state->ipm, quantile);
@@ -1097,14 +1112,6 @@ ST_retcode cqreg_full_regression(const char *args)
     double time_ipm_iterate = state->ipm->time_iterate;
     double time_ipm_crossover = state->ipm->time_crossover;
 
-
-
-
-    if (!state->converged) {
-        ctools_error("cqreg", "IPM solver stopped without convergence after %d iterations", state->iterations);
-        rc = 430;
-        goto cleanup;
-    }
 
     /* ========================================================================
      * Step 5: Estimate sparsity and compute VCE
@@ -1155,6 +1162,8 @@ ST_retcode cqreg_full_regression(const char *args)
                                              &state->bandwidth,
                                              precomputed_bw,
                                              &state->sparsity);
+        /* qreg reports no sparsity for the fitted robust and cluster VCEs */
+        if (rc == 0) state->sparsity = SV_missval;
     } else if (state->density_method == CQREG_DENSITY_FITTED) {
         /* Fitted method for IID: use Siddiqui difference quotient method.
          * This fits QR at τ±h and computes sparsity at mean(X).
@@ -1254,13 +1263,40 @@ ST_retcode cqreg_full_regression(const char *args)
     /* The constant is the last column: only it and the sample quantile move
      * with the location shift; deviations, densities and V do not. */
     state->beta[K - 1] += response_shift;
+    /* The covariance in the scaled response units, where the spread of y is
+     * near one, for the rank: Stata's invsym() treats tiny diagonal values
+     * as zero in absolute terms, so this applies qreg's rule to y at unit
+     * spread whatever its units. (Normalizing by the largest entry instead
+     * would zero the constant beside a regressor on a very small scale.) */
+    for (ST_int k = 0; k < K && rc == 0; k++) {
+        for (ST_int j = 0; j < K && rc == 0; j++) {
+            rc = ctools_mat_store("__cqreg_Vn", k + 1, j + 1, state->V[(size_t)k * K + j]);
+        }
+    }
+    if (rc) goto cleanup;
+
+    ST_double V_max_scaled = 0.0, V_max = 0.0;
     for (size_t j = 0; j < (size_t)K * K; j++) {
-        /* Undefined one-cluster covariance uses the existing NaN matrix
-         * convention: ereturn post rejects canonical Stata missing entries.
-         * Rescaling must leave that representation and missing sentinels alone. */
         ST_double value = state->V[j];
-        if (isfinite(value) && !SF_is_missing(value))
+        if (isfinite(value) && !SF_is_missing(value)) {
+            V_max_scaled = fmax(V_max_scaled, fabs(value));
             state->V[j] = scalbn(value, 2 * response_exponent);
+            V_max = fmax(V_max, fabs(state->V[j]));
+        } else {
+            V_max = INFINITY;
+        }
+    }
+    /* A nonzero covariance that underflows to zero or subnormal values, or
+     * overflows (Stata reads values from 2^1023 up as missing), in the units
+     * of y cannot be posted (and its rank cannot be
+     * assessed): refuse it rather than report a zero or infinite matrix.
+     * A covariance that is exactly zero (one cluster, an atom of y at the
+     * quantile) is posted as qreg posts it. */
+    if (V_max_scaled > 0.0 && !(V_max >= DBL_MIN && V_max <= DBL_MAX && !SF_is_missing(V_max))) {
+        ctools_error("cqreg", "Stata cannot post the covariance at this response scale; "
+                     "rescale the dependent variable");
+        rc = 498;
+        goto cleanup;
     }
     state->sum_adev = scalbn(state->sum_adev, response_exponent);
     state->sum_rdev = scalbn(state->sum_rdev, response_exponent);

@@ -86,7 +86,9 @@ Examples include {cmd:g#h}, {cmd:g#c.z}, {cmd:g##c.z}, and
 {cmd:g##c.(z t)}. Up to ten expanded FE terms are supported. Omitting
 {cmd:absorb()} estimates a model with a constant and no absorbed effects.
 Save individual effects with {cmd:absorb(firm_fe=firm year_fe=year)} or
-{cmd:absorb(firm year, savefe)}. The latter uses names {cmd:__hdfe1__}, etc.
+{cmd:absorb(firm year, savefe)}. The latter uses names {cmd:__hdfe1__}, etc.,
+replacing those variables if they exist; when the model itself uses such a
+variable, {cmd:cppmlhdfe} exits with error 198 and changes nothing.
 Slope coefficients use suffixes {cmd:Slope1}, {cmd:Slope2}, etc.
 Their contributions reconstruct the sum saved by {cmd:d(newvar)}; individual fixed-effect levels depend on normalization. Absorb suboptions also accept
 {cmd:generate}, {cmd:keepsingletons}, {cmd:tolerance()}, {cmd:iterate()},
@@ -112,7 +114,10 @@ count for its finite-sample multiplier. Negative eigenvalues of the full
 covariance are set to zero, matching {cmd:ppmlhdfe}. Every cluster dimension must
 retain at least two clusters. Computation grows with the number of nonempty
 cluster subsets (2^Q-1). {cmd:vce(unadjusted)} is accepted as an alias for
-{cmd:vce(robust)}; it does not select a model-based Poisson covariance.
+{cmd:vce(robust)}; it does not select a model-based Poisson covariance. As in
+{cmd:ppmlhdfe}, a type beginning with {cmd:ols} or {cmd:un}, or
+{cmd:conventional}, means {cmd:unadjusted}, and one beginning with {cmd:r}
+means {cmd:robust}; {cmd:vce(iid)} is an error.
 
 {pstd}
 Inference uses normal critical values and Wald chi-squared tests, as in
@@ -149,21 +154,30 @@ fitted-mean screening.
 
 {phang}
 {opt d(newvar)} saves the normalized sum of fixed effects for prediction.
-{opt d2} uses {cmd:_ppmlhdfe_d}, replacing that variable if it exists. {cmd:keepsingletons} disables singleton
+{opt d2} uses {cmd:_ppmlhdfe_d}, replacing that variable if it exists; when the
+model uses {cmd:_ppmlhdfe_d} (as a regressor, weight, offset, cluster or
+absorbed variable), {cmd:cppmlhdfe} exits with error 198 and changes nothing
+({cmd:ppmlhdfe} drops the variable first). {cmd:keepsingletons} disables singleton
 removal.
 
 {dlgtab:Advanced controls}
 
 {phang}
 {cmd:guess(simple)} (default), {cmd:guess(ols)}, and
-{cmd:guess(variable varname)} select initial fitted means.
+{cmd:guess(variable varname)} select initial fitted means. The variable must
+be nonmissing in the estimation sample.
 {cmd:standardize_data(1)} and {cmd:remove_collinear_variables(1)} control
 standardization and the preliminary collinearity check.
 
 {phang}
 {cmd:use_exact_solver(1)} selects weighted pivoted QR; default is 0.
-{cmd:use_exact_partial(1)} (default) projects the original working response and
-regressors each iteration; 0 reuses preceding residuals.
+{cmd:use_exact_partial(1)} (default) projects the working response and the
+original regressors each iteration. From the second iteration the projected
+response is the working response less the previous iteration's fitted effects
+(the same residual, with the projection tolerance applied to the difference);
+this keeps zero outcomes whose fitted means become tiny converging. While a
+positive outcome has its mean at the floor, the working response itself is
+projected. 0 reuses preceding residuals.
 {cmd:min_ok(1)} sets the required number of qualifying convergence checks.
 {cmd:use_heuristic_tol(1)}, {cmd:start_inner_tol(1e-4)}, and {cmd:itolerance()}
 control adaptive projection accuracy.
@@ -296,6 +310,8 @@ Weight expressions such as {cmd:[aw=2*w]} are evaluated into temporary doubles.
 
 {p2col 5 24 28 2: Macros}{p_end}
 {synopt:{cmd:e(cmd)}}{cmd:cppmlhdfe}{p_end}
+{synopt:{cmd:e(title)}}{cmd:HDFE PPML regression}, or {cmd:PPML regression} without absorbed effects{p_end}
+{synopt:{cmd:e(marginsnotok)}}predictions {cmd:margins} may not use, as {cmd:ppmlhdfe}{p_end}
 {synopt:{cmd:e(cmdline)}}command as typed{p_end}
 {synopt:{cmd:e(depvar)}}name of dependent variable{p_end}
 {synopt:{cmd:e(absorb)}}absorbed variables{p_end}
@@ -317,6 +333,12 @@ Weight expressions such as {cmd:[aw=2*w]} are evaluated into temporary doubles.
 {p2col 5 24 28 2: Functions}{p_end}
 {synopt:{cmd:e(sample)}}marks estimation sample{p_end}
 {p2colreset}{...}
+
+{pstd}
+{cmd:ppmlhdfe}'s {cmd:e(rss)} and {cmd:e(rmse)} (of its internal, standardized
+working regression), {cmd:e(ic2)}, {cmd:e(title2)}, {cmd:e(footnote)} and
+{cmd:e(estat_cmd)} are not stored, and {cmd:e(title)} is plain text without
+{cmd:ppmlhdfe}'s help link.
 
 
 {marker references}{...}

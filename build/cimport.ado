@@ -355,13 +355,14 @@ program define cimport, rclass
     local numtypes ${_cimport_numtypes}
     local strlens ${_cimport_strlens}
     local longtypes ${_cimport_longtypes}
+    local hasheader = 0${_cimport_hasheader}
     mata: st_local("returned_encoding",st_global("_cimport_encoding"))
     mata: st_local("returned_delimiters",subinstr(st_global("_cimport_delimiters"),char(9),char(92)+"t"))
 
     * Clean up global macros
     macro drop _cimport_nobs _cimport_nvar _cimport_varnames ///
                _cimport_vartypes _cimport_numtypes _cimport_strlens _cimport_longtypes ///
-               _cimport_encoding _cimport_delimiters
+               _cimport_encoding _cimport_delimiters _cimport_hasheader
 
     * Like import delimited, name the charset only when it was detected.
     if `"`__cimport_encoding_name'"' == "" di as text `"(encoding automatically selected: `macval(returned_encoding)')"'
@@ -372,6 +373,12 @@ program define cimport, rclass
         di as error "too many variables specified"
         capture plugin call ctools_plugin, "cimport clear"
         exit 103
+    }
+    if `nobs' > 2147483647 {
+        di as error "ctools does not support datasets exceeding 2^31 (2.147 billion) observations"
+        di as error "This is a limitation of Stata's plugin API"
+        capture plugin call ctools_plugin, "cimport clear"
+        exit 920
     }
     * A failed or interrupted import leaves the data in memory as they were.
     * The import replaces the whole dataset, so the old data are copied first:
@@ -455,20 +462,27 @@ program define cimport, rclass
         local vlen : word `i' of `strlens'
         local vlong : word `i' of `longtypes'
 
-        * Apply case transformation
+        * The plugin names ASCII headers. A header with other characters is
+        * named in Mata as native does: Unicode letters, decimal digits (not
+        * leading) and underscores, cut to 32 characters.
+        mata: st_local("vname", _cimport_name(st_local("vname"), st_global("_cimport_label_`i'")))
+        if "`vname'" == "" local vname "v`i'"
+        * Apply case transformation (after the cut, as native)
+        local vprefix "v"
         if "`case'" == "lower" {
-            local vname = lower("`vname'")
+            local vname = ustrlower("`vname'")
         }
         else if "`case'" == "upper" {
-            local vname = upper("`vname'")
+            local vname = ustrupper("`vname'")
+            local vprefix "V"
         }
 
         if `: list vname in seen_names' {
-            local vname "v`i'"
+            local vname "`vprefix'`i'"
             local suffix = 0
             while `: list vname in seen_names' {
                 local ++suffix
-                local vname "v`i'_`suffix'"
+                local vname "`vprefix'`i'_`suffix'"
             }
         }
 
@@ -493,11 +507,11 @@ program define cimport, rclass
             if `vtype' == 1 capture quietly gen `storage' `vname' = ""
             else capture quietly gen `storage' `vname' = .
             if _rc {
-                local vname "v`i'"
+                local vname "`vprefix'`i'"
                 local suffix = 0
                 while `: list vname in seen_names' {
                     local ++suffix
-                    local vname "v`i'_`suffix'"
+                    local vname "`vprefix'`i'_`suffix'"
                 }
                 if `vtype' == 1 quietly gen `storage' `vname' = ""
                 else quietly gen `storage' `vname' = .
@@ -513,7 +527,8 @@ program define cimport, rclass
         if `vtype' == 1 format `vname' %`=cond(`vlong',9,max(9,`vlen'))'s
         else {
             local storage : type `vname'
-            if inlist("`storage'", "byte", "int", "long") format `vname' %8.0g
+            if inlist("`storage'", "byte", "int") format `vname' %8.0g
+            else if "`storage'" == "long" format `vname' %12.0g
             else if "`storage'" == "double" format `vname' %10.0g
         }
         local i = `i' + 1
@@ -538,21 +553,16 @@ program define cimport, rclass
     * Get list of all variables we just created (in order)
     unab allvars : *
 
-    foreach column of local longcolumns {
-        forvalues row=1/`nobs' {
-            local offset 0
-            mata: __cimport_longtext=""
-            while 1 {
-                plugin call ctools_plugin, "cimport blob `column' `row' `offset'"
-                mata: __cimport_longtext=__cimport_longtext+_cimport_hex_bytes(st_global("_cimport_blobhex"))
-                local offset=${_cimport_blobnext}
-                if !`offset' continue, break
-            }
-            mata: st_sstore(`row',`column',__cimport_longtext)
+    * Each strL column arrives in one plugin call, through a file of
+    * length-prefixed values read in Mata.
+    if `nobs' & "`longcolumns'" != "" {
+        tempfile __cimport_blobpath
+        foreach column of local longcolumns {
+            plugin call ctools_plugin, "cimport blobfile `column'"
+            mata: _cimport_read_blobs(st_local("__cimport_blobpath"), `column', `nobs')
         }
-        mata: mata drop __cimport_longtext
+        capture erase `"`__cimport_blobpath'"'
     }
-    capture macro drop _cimport_blobhex _cimport_blobnext
 
     if !`nobs' plugin call ctools_plugin, "cimport clear"
     if `nobs' capture noisily plugin call ctools_plugin *, ///
@@ -567,6 +577,11 @@ program define cimport, rclass
     quietly _ctools_clock __ct_now
 
     local __ct_elapsed13 = `__ct_elapsed13' + (`__ct_now' - `__ct_start13')
+
+    * Native shows a numeric column in the format of the type it infers from
+    * the first 513 lines it reads, header included: integers there display
+    * as %8.0g, or %12.0g in long range, whatever the final storage.
+    if `nobs' mata: _cimport_sample_formats(513 - `hasheader')
 
     * Like native, explicit names rename imported variables 1..k as typed
     * (no case conversion; header labels are kept). Errors restore the data.
@@ -797,13 +812,42 @@ program define _cimport_delimiters, rclass
 end
 
 mata:
-string scalar _cimport_hex_bytes(string scalar hex) {
-    real scalar i, n
-    real rowvector bytes
-    string scalar digits
-    digits="0123456789abcdef"; n=strlen(hex)/2; bytes=J(1,n,0)
-    for(i=1;i<=n;i++) bytes[i]=(strpos(digits,substr(hex,2*i-1,1))-1)*16+strpos(digits,substr(hex,2*i,1))-1
-    return(char(bytes))
+/* cname is the plugin's name for an ASCII header. Other headers keep only
+   Unicode letters, decimal digits and underscores, drop leading digits and
+   are cut to 32 characters, as native import delimited names them. */
+string scalar _cimport_name(string scalar cname, string scalar header) {
+    string scalar name
+    if (ustrinvalidcnt(cname) == 0 & ustrlen(cname) == strlen(cname)) return(cname)
+    name = ustrregexrf(ustrregexra(header, "[^\p{L}\p{Nd}_]", ""), "^\p{Nd}+", "")
+    return(usubstr(name, 1, 32))
+}
+void _cimport_sample_formats(real scalar lines) {
+    real scalar j, n, lo, hi
+    real colvector x
+    n = min((st_nobs(), lines))
+    if (n < 1) return
+    for (j = 1; j <= st_nvar(); j++) {
+        if (!st_isnumvar(j)) continue
+        x = st_data((1, n), j)
+        x = select(x, x :< .)
+        if (!length(x)) continue
+        if (any(x :!= floor(x))) continue
+        lo = min(x)
+        hi = max(x)
+        if (lo >= -32767 & hi <= 32740) st_varformat(j, "%8.0g")
+        else if (lo >= -2147483647 & hi <= 2147483620) st_varformat(j, "%12.0g")
+    }
+}
+void _cimport_read_blobs(string scalar path, real scalar col, real scalar n) {
+    real scalar fh, i, length
+    real colvector io
+    fh = fopen(path, "r")
+    io = bufio()
+    for (i = 1; i <= n; i++) {
+        length = fbufget(io, fh, "%4bu")
+        st_sstore(i, col, length ? fread(fh, length) : "")
+    }
+    fclose(fh)
 }
 end
 

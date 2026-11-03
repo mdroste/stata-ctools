@@ -54,7 +54,9 @@
 
 ## Installation
 
-Requires Stata 14.1 or later. In Stata:
+Requires Stata 14.1 or later on macOS 11 or later (Apple Silicon or Intel), Windows 10 or
+later (x86-64), or x86-64 Linux with glibc 2.17 or later and `libgomp.so.1` from GCC 6 or
+later. See the [platform contract](docs/development/PLATFORMS.md). In Stata:
 
 ```stata
 net install ctools, from("https://raw.githubusercontent.com/mdroste/stata-ctools/main/build") replace
@@ -99,7 +101,7 @@ See the [documentation index](docs/README.md) for command guides, development an
 
 ## License
 
-Project code is [MIT-licensed](LICENSE). The distribution includes [third-party notices](docs/licenses/THIRD_PARTY_NOTICES).
+Project code is [MIT-licensed](LICENSE). The distribution includes [third-party notices](docs/licenses/THIRD_PARTY_NOTICES) for the libraries compiled into the plugins; after `net install`, `help ctools_licenses` shows both texts.
 
 
 ## Contributing

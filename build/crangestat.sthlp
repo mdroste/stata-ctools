@@ -19,29 +19,35 @@
 {p 8 17 2}
 {cmdab:crangestat}
 {it:stat_specification} [{it:stat_specification} ...]
+{ifin}
 {cmd:,}
-{opt int:erval(keyvar low high)}
+{opt i:nterval(keyvar low high)}
 [{it:options}]
 
 {pstd}
 where {it:stat_specification} is
 
 {p 8 17 2}
-{cmd:(}{it:statname}{cmd:)} [{it:newvar}{cmd:=}]{varname}
+{cmd:(}{it:statname}{cmd:)} {it:item} [{it:item} ...]
 
 {pstd}
-Without an explicit {it:newvar}, the result is named {it:varname_statname},
-matching {cmd:rangestat}; for example, {cmd:(mean) price} creates {cmd:price_mean}.
+and each {it:item} is {it:newvar}{cmd:=}{varname} or a {varlist}. Without an
+explicit {it:newvar}, each result is named {it:varname_statname}, matching
+{cmd:rangestat}; for example, {cmd:(mean) price mpg} creates {cmd:price_mean}
+and {cmd:mpg_mean}. A specification without {cmd:(}{it:statname}{cmd:)} means
+{cmd:(mean)}.
+An abbreviated {it:varname} names the result by the full variable name, so
+{cmd:(mean) pri} also creates {cmd:price_mean}.
 
 {synoptset 24 tabbed}{...}
 {synopthdr}
 {synoptline}
 {syntab:Required}
-{synopt:{opt int:erval(keyvar low high)}}key variable and interval bounds{p_end}
+{synopt:{opt i:nterval(keyvar low high)}}key variable and interval bounds{p_end}
 
 {syntab:Optional}
 {synopt:{opt by(varlist)}}compute statistics within groups{p_end}
-{synopt:{opt excludeself}}exclude current observation from calculations{p_end}
+{synopt:{opt excl:udeself}}exclude current observation from calculations{p_end}
 {synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
 {synopt:{opt v:erbose}}display timing breakdown{p_end}
 
@@ -85,7 +91,8 @@ This is particularly useful for:
 
 {phang}
 {opt interval(keyvar low high)} specifies the key variable and the interval
-bounds. The key variable must be numeric. Bounds must be numeric constants
+bounds, separated by spaces or commas, as in {cmd:rangestat}; anything after
+{it:high} is an error. The key variable must be numeric. Bounds must be numeric constants
 or {cmd:.}; variable bounds are not accepted. For each observation, other
 observations are included in the calculation if their key value falls within
 [current_key + low, current_key + high].
@@ -139,6 +146,8 @@ The following statistics are available:
 {p2col :{it:statname}}Description{p_end}
 {p2line}
 {p2col :{opt count}}number of non-missing observations in range{p_end}
+{p2col :{opt obs}}number of observations in range, including missing values{p_end}
+{p2col :{opt missing}}number of missing values in range{p_end}
 {p2col :{opt mean}}arithmetic mean{p_end}
 {p2col :{opt sum}}sum{p_end}
 {p2col :{opt min}}minimum{p_end}
@@ -163,14 +172,22 @@ The following statistics are available:
 {p2col :{opt kurtosis}}kurtosis (fourth standardized moment; normal distribution = 3){p_end}
 {p2line}
 
+{pstd}
+Percentiles, {opt median} and {opt iqr} follow Stata's default definition, as
+in {help pctile:_pctile}, {cmd:summarize, detail} and {cmd:collapse}: for the
+n nonmissing values of a window in order, x(1) <= ... <= x(n), and h = n*p/100,
+the pth percentile is (x(h) + x(h+1))/2 when h is an integer and x(ceil(h))
+otherwise. {opt iqr} is p75 - p25.
+
 
 {marker remarks}{...}
 {title:Remarks}
 
 {pstd}
-Each statistic specification accepts one numeric source variable. Repeat the
-parenthesized statistic for additional variables. Output names must be distinct
-new variable names. The command does not accept {cmd:if}, {cmd:in}, or weights.
+Output names must be distinct new variable names. {cmd:if} and {cmd:in} select
+the observations that enter windows and receive results, as in {cmd:rangestat};
+the others get missing values. With no observation selected, or no nonmissing
+key, the command exits with r(2000). Weights are not allowed.
 
 {pstd}
 Missing interval keys are excluded from all windows and receive missing
@@ -182,7 +199,9 @@ not other observations with the same key.
 {pstd}
 A window containing no observations produces missing results. In a nonempty
 window with no nonmissing source values after exclusions, {opt count} and
-{opt sum} return zero. Standard
+{opt sum} return zero. As in {cmd:rangestat}, {opt obs} counts the current
+observation even with {opt excludeself}, and {opt missing} then counts it as
+missing. Standard
 deviation and variance require two nonmissing values. Skewness and kurtosis
 use population moments and are missing when the variance is zero.
 

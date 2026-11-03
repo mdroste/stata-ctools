@@ -8,13 +8,13 @@
  * 2. Vectored I/O - pwritev() on POSIX, batched async WriteFile on Windows
  * 3. Windows async batching - WaitForMultipleObjects for concurrent writes
  * 4. Better madvise hints - MADV_SEQUENTIAL | MADV_WILLNEED, MADV_POPULATE_WRITE
- * 5. Optional direct I/O - FILE_FLAG_NO_BUFFERING on Windows for large files
+ * 5. Optional write-through - FILE_FLAG_WRITE_THROUGH on Windows
  * 6. Deferred fsync - Skip final sync with CEXPORT_IO_FLAG_NOFSYNC
  * 7. Zero-copy mmap access - cexport_io_get_mapped_ptr() for direct formatting
  *
  * Windows Notes:
  * - FILE_FLAG_OVERLAPPED enables async I/O and offset-based writes
- * - FILE_FLAG_NO_BUFFERING bypasses cache but requires aligned writes
+ * - FILE_FLAG_NO_BUFFERING is not used: it requires aligned writes
  * - SetFilePointerEx + SetEndOfFile pre-allocates without zeroing
  * - WaitForMultipleObjects batches completion waits for better throughput
  *
@@ -167,7 +167,7 @@ int cexport_io_open(cexport_io_file *file, const char *filename,
      * Build file flags:
      * - FILE_FLAG_OVERLAPPED: enables async I/O and offset-based writes
      * - FILE_FLAG_SEQUENTIAL_SCAN: hints cache manager for sequential access
-     * - FILE_FLAG_NO_BUFFERING: bypasses cache (optional, for large files)
+     * - FILE_FLAG_WRITE_THROUGH: writes reach the disk (option direct)
      */
     DWORD dwFlags = FILE_ATTRIBUTE_NORMAL;
 
@@ -179,11 +179,11 @@ int cexport_io_open(cexport_io_file *file, const char *filename,
 
     if (flags & CEXPORT_IO_FLAG_DIRECT) {
         /*
-         * Direct I/O bypasses the file system cache.
-         * Requires aligned writes (typically 4KB boundaries).
-         * Best for very large files where cache pollution is a concern.
+         * Write through the cache to disk. FILE_FLAG_NO_BUFFERING is not
+         * used: it requires sector-aligned buffers, offsets and lengths,
+         * and the header and row chunks have arbitrary lengths.
          */
-        dwFlags |= FILE_FLAG_NO_BUFFERING | FILE_FLAG_WRITE_THROUGH;
+        dwFlags |= FILE_FLAG_WRITE_THROUGH;
     }
 
     file->handle = ctools_create_file(
@@ -318,15 +318,15 @@ ssize_t cexport_io_write_at(cexport_io_file *file, const void *buf,
         return 0;
     }
 
-    /* Bounds check */
-    if (offset + len > file->file_size) {
-        snprintf(file->error_message, sizeof(file->error_message),
-                 "Write at offset %zu + len %zu exceeds file size %zu",
-                 offset, len, file->file_size);
-        return -1;
-    }
-
     if (file->backend == CEXPORT_IO_MMAP) {
+        /* The mapping cannot grow: bounds check before the direct copy.
+         * Positioned writes extend the file past the pre-size. */
+        if (offset + len > file->file_size) {
+            snprintf(file->error_message, sizeof(file->error_message),
+                     "Write at offset %zu + len %zu exceeds file size %zu",
+                     offset, len, file->file_size);
+            return -1;
+        }
         /* mmap backend: direct memory copy (zero syscall overhead) */
         memcpy(file->mapped_data + offset, buf, len);
         return (ssize_t)len;
@@ -604,15 +604,9 @@ int cexport_io_open(cexport_io_file *file, const char *filename,
     }
 
     /*
-     * Direct I/O (O_DIRECT) bypasses the page cache.
-     * Requires aligned buffers and offsets (typically 512 or 4096 bytes).
-     * Not commonly used for CSV export due to alignment requirements.
+     * CEXPORT_IO_FLAG_DIRECT is ignored here: O_DIRECT requires aligned
+     * buffers, offsets and lengths, and rows have arbitrary lengths.
      */
-#ifdef O_DIRECT
-    if (flags & CEXPORT_IO_FLAG_DIRECT) {
-        open_flags |= O_DIRECT;
-    }
-#endif
 
     file->fd = open(filename, open_flags, 0644);
     if (file->fd < 0) {
@@ -624,6 +618,33 @@ int cexport_io_open(cexport_io_file *file, const char *filename,
     return 0;
 }
 
+/*
+ * Pages of a shared mapping are written back outside any system call, so a
+ * full disk or quota surfaces as SIGBUS rather than an error. Reserve the
+ * blocks before mapping: an ordinary error here lets the caller write
+ * through pwrite instead. Returns 0, or an errno value.
+ */
+#ifdef CEXPORT_IO_TEST_RESERVE
+static int cexport_io_reserve(int fd, size_t size) { return CEXPORT_IO_TEST_RESERVE(fd, size); }
+#else
+static int cexport_io_reserve(int fd, size_t size)
+{
+#if defined(__APPLE__) && defined(F_PREALLOCATE)
+    fstore_t store = {F_ALLOCATECONTIG | F_ALLOCATEALL, F_PEOFPOSMODE, 0, (off_t)size, 0};
+    if (fcntl(fd, F_PREALLOCATE, &store) == -1) {
+        store.fst_flags = F_ALLOCATEALL;
+        if (fcntl(fd, F_PREALLOCATE, &store) == -1) return errno ? errno : EIO;
+    }
+    return 0;
+#elif defined(__linux__)
+    return posix_fallocate(fd, 0, (off_t)size);
+#else
+    (void)fd; (void)size;
+    return 0;
+#endif
+}
+#endif
+
 int cexport_io_presize(cexport_io_file *file, size_t size)
 {
     if (file == NULL || file->fd < 0) {
@@ -633,6 +654,15 @@ int cexport_io_presize(cexport_io_file *file, size_t size)
     if (size == 0) {
         file->file_size = 0;
         return 0;
+    }
+
+    if (file->backend == CEXPORT_IO_MMAP) {
+        int reserve = cexport_io_reserve(file->fd, size);
+        if (reserve) {
+            snprintf(file->error_message, sizeof(file->error_message),
+                     "cannot reserve %zu bytes for the mapped file: %s", size, strerror(reserve));
+            return CEXPORT_IO_UNRESERVED;
+        }
     }
 
     /*

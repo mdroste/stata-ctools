@@ -234,7 +234,11 @@ endif
 
 # Note: Static linking of libgomp.a doesn't work on Linux for shared libraries
 # because libgomp uses TLS relocations incompatible with PIC code.
-# Linux plugins require libgomp.so at runtime.
+# Linux plugins require libgomp.so at runtime. Distribution plugins are built in
+# manylinux2014 (linux-docker) against CentOS 7's glibc and libgomp.so.1, so they
+# need glibc 2.17 and GOMP_4.5 at most (`--checks dependencies linux` and
+# linux-docker-load check both).
+# -lm: the plugin names libm itself rather than relying on Stata's executable.
 
 # Optional OpenBLAS is for custom builds; distribution plugins do not use it.
 USE_OPENBLAS ?= no
@@ -252,25 +256,25 @@ LINUX_EXPORT_FLAGS = -Wl,--version-script=$(SRC_DIR)/ctools_plugin.map
 ifeq ($(LINUX_HAS_OMP),yes)
     ifeq ($(LINUX_HAS_OPENBLAS),yes)
         CFLAGS_LINUX = $(LINUX_BASE_FLAGS) -fopenmp -DHAVE_OPENBLAS
-        LDFLAGS_LINUX = -flto -Wl,--gc-sections -Wl,-S $(LINUX_EXPORT_FLAGS) -fopenmp -lopenblas -ldl
+        LDFLAGS_LINUX = -flto -Wl,--gc-sections -Wl,-S $(LINUX_EXPORT_FLAGS) -fopenmp -lopenblas -lm -ldl
     else
         CFLAGS_LINUX = $(LINUX_BASE_FLAGS) -fopenmp
-        LDFLAGS_LINUX = -flto -Wl,--gc-sections -Wl,-S $(LINUX_EXPORT_FLAGS) -fopenmp -ldl
+        LDFLAGS_LINUX = -flto -Wl,--gc-sections -Wl,-S $(LINUX_EXPORT_FLAGS) -fopenmp -lm -ldl
     endif
 else
     ifeq ($(LINUX_HAS_OPENBLAS),yes)
         CFLAGS_LINUX = $(LINUX_BASE_FLAGS) -DHAVE_OPENBLAS
-        LDFLAGS_LINUX = -flto -Wl,--gc-sections -Wl,-S $(LINUX_EXPORT_FLAGS) -lopenblas -ldl
+        LDFLAGS_LINUX = -flto -Wl,--gc-sections -Wl,-S $(LINUX_EXPORT_FLAGS) -lopenblas -lm -ldl
     else
         CFLAGS_LINUX = $(LINUX_BASE_FLAGS)
-        LDFLAGS_LINUX = -flto -Wl,--gc-sections -Wl,-S $(LINUX_EXPORT_FLAGS) -ldl
+        LDFLAGS_LINUX = -flto -Wl,--gc-sections -Wl,-S $(LINUX_EXPORT_FLAGS) -lm -ldl
     endif
 endif
 
 # ==============================================================================
 #                                  Targets
 # ==============================================================================
-.PHONY: all native macos-arm macos-intel windows linux clean help check rebuild linux-docker windows-docker
+.PHONY: all native macos-arm macos-intel windows linux clean help check rebuild linux-docker linux-docker-load windows-docker
 
 # Default: build for current platform
 ifeq ($(DETECTED_OS),macOS)
@@ -551,20 +555,26 @@ endif
 # Docker Cross-Compilation
 # ------------------------------------------------------------------------------
 DOCKER = docker
-DOCKER_LINUX_IMAGE = ctools-build-linux
+# The Linux distribution floor: manylinux2014 (CentOS 7, glibc 2.17).
+MANYLINUX_IMAGE ?= quay.io/pypa/manylinux2014_x86_64
+MANYLINUX_PYTHON = /opt/python/cp312-cp312/bin
 DOCKER_WINDOWS_IMAGE = ctools-build-windows
 
 linux-docker: $(BUILD_DIR)
 	@command -v $(DOCKER) >/dev/null 2>&1 || \
 		{ echo ""; echo "  ERROR: Docker is not installed."; echo "    Install: https://docs.docker.com/get-docker/"; echo ""; exit 1; }
 	@echo ""
-	@echo " Building Linux plugin via Docker"
-	@echo "    Preparing container..."
-	@printf 'FROM ubuntu:22.04\nRUN apt-get update -qq && apt-get install -y -qq gcc make libgomp-dev libopenblas-dev pkg-config > /dev/null 2>&1\n' | \
-		$(DOCKER) build --platform linux/amd64 -q -t $(DOCKER_LINUX_IMAGE) - > /dev/null
-	@echo "    Compiling (x86_64)..."
-	@$(DOCKER) run --rm --platform linux/amd64 -v "$$(pwd)":/src -w /src $(DOCKER_LINUX_IMAGE) make linux
+	@echo " Building Linux plugin in $(MANYLINUX_IMAGE) (glibc 2.17)"
+	@$(DOCKER) run --rm --platform linux/amd64 --user "$$(id -u):$$(id -g)" -e HOME=/tmp \
+		-v "$$(pwd)":/src -w /src $(MANYLINUX_IMAGE) \
+		sh -c 'PATH=$(MANYLINUX_PYTHON):$$PATH make linux BUILD_DIR="$(BUILD_DIR)" BUILD_REVISION="$(BUILD_REVISION)"'
 	@echo ""
+
+# Loads the plugin with every symbol bound against manylinux2014's glibc 2.17
+# and system libgomp.so.1, the oldest runtime the Linux plugin supports.
+linux-docker-load:
+	@$(DOCKER) run --rm --platform linux/amd64 -v "$$(pwd)":/src:ro -w /src $(MANYLINUX_IMAGE) \
+		$(MANYLINUX_PYTHON)/python3 -c 'import ctypes, os; ctypes.CDLL("$(PLUGIN_LINUX)", mode=os.RTLD_NOW); print("Loaded $(PLUGIN_LINUX) with glibc 2.17 and the system libgomp")'
 
 windows-docker: $(BUILD_DIR)
 	@command -v $(DOCKER) >/dev/null 2>&1 || \

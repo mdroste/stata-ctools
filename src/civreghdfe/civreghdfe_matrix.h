@@ -62,9 +62,11 @@ ST_int civreghdfe_matpowersym_neg_half(const ST_double *M, ST_int K, ST_double *
     QWW1 = Y'(I - X_exog(X_exog'X_exog)^-1 X_exog')Y = Y'M_{X_exog} Y
     lambda = min eigenvalue of QWW^(-1/2) * QWW1 * QWW^(-1/2)
 
+    QWW and QWW1 are equilibrated by diag(QWW)^(-1/2) first, so lambda does
+    not depend on the units of the data.
     Returns lambda; NaN when memory runs out (the caller reports r(920),
-    never 2SLS under the LIML label); 1.0 when a matrix is not positive
-    definite (equivalent to 2SLS).
+    never 2SLS under the LIML label); -1 when Z'Z, X_exog'X_exog or QWW is
+    not positive definite (the caller reports r(498)).
 */
 ST_double civreghdfe_compute_liml_lambda(
     const ST_double *y,

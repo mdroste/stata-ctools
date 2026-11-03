@@ -2312,6 +2312,60 @@ coverage_data, reference(encode text, gen(code)) ///
 coverage_data, reference(coverage_codec_replace text, command(encode)) ///
     candidate(cencode text, replace) name("encode zero observations with replace")
 
+* DAT-05: strL values the plugin cannot read go to encode
+clear
+set obs 4
+gen strL s = 3000 * "a" in 1
+replace s = "b" in 2/3
+replace s = "c" in 4
+capture cencode s, gen(n)
+local rc = _rc
+encode s, gen(n2)
+if !`rc' {
+    quietly count if n != n2
+    local nd = r(N)
+}
+else local nd = 1
+if !`rc' & `nd' == 0 & "`: value label n'" == "n" & "`: format n'" == "`: format n2'" ///
+    test_pass "DAT-05 strL value over 2,045 bytes"
+else test_fail "DAT-05 strL value over 2,045 bytes" "rc=`rc'"
+* DAT-03: the variable label is copied verbatim
+clear
+set obs 2
+gen s = "a" + string(_n)
+mata: st_varlabel("s", "Revenue in " + char(36) + "USD")
+cencode s, gen(n1)
+encode s, gen(n2)
+mata: st_local("same", strofreal(st_varlabel("n1") == st_varlabel("n2")))
+if `same' test_pass "DAT-03 variable label with a dollar sign"
+else test_fail "DAT-03 variable label with a dollar sign" "label differs from encode"
+* DATA-11: replace keeps the source's notes and characteristics
+clear
+set obs 3
+gen s = "a" + string(_n)
+note s: from source
+char s[g3] kept
+cencode s, replace
+if "`: char s[note1]'" == "from source" & "`: char s[g3]'" == "kept" test_pass "DATA-11 cencode replace keeps notes and chars"
+else test_fail "DATA-11 cencode replace keeps notes and chars" "lost"
+* DATA-12: encode's error codes
+clear
+set obs 3
+gen s = "a" + string(_n)
+capture encode s, gen(n1) noextend
+local rc_native = _rc
+capture cencode s, gen(n2) noextend
+if _rc == `rc_native' & `rc_native' == 198 test_pass "DATA-12 noextend without label()"
+else test_fail "DATA-12 noextend without label()" "encode r(`rc_native'), cencode r(`=_rc')"
+clear
+set obs 70000
+gen s = "v" + string(_n)
+capture encode s, gen(n1)
+local rc_native = _rc
+capture cencode s, gen(n2)
+if _rc == `rc_native' & `rc_native' == 134 test_pass "DATA-12 too many values"
+else test_fail "DATA-12 too many values" "encode r(`rc_native'), cencode r(`=_rc')"
+
 * SUMMARY
 * End of cencode validation
 noi print_summary "cencode"

@@ -157,9 +157,33 @@ int cio_variable_cb(int index, readstat_variable_t *v, const char *set, void *ct
     cio_import_format(c, d->kind);
     if (!strcmp(d->kind, "sasxport5"))
     {
-        cio_copy_text(c->labelset, sizeof(c->labelset), c->source_format);
-        if (c->date_kind || !strncmp(c->source_format, "BEST", 4))
-            c->labelset[0] = 0;
+        /* Native names a value label after the format name alone (ReadStat
+         * appends the width and decimals; SAS names never end in a digit),
+         * except for the SAS numeric and date formats it knows. */
+        static const char *const dates[] = {"DATE", "MMDDYY", "DDMMYY", "YYMMDD", "JULIAN", "MONYY",
+                                            "YEAR", "QTR", "WEEKDATE", "DOWNAME", "MONNAME", "JULDAY",
+                                            "WEEKDAY", "DAY", "MONTH", "NENGO"};
+        static const char *const plain[] = {"BEST", "COMMA", "COMMAX", "D", "DOLLAR", "DOLLARX", "E",
+                                            "FRACT", "HEX", "NEGPAREN", "NUMX", "OCTAL", "PERCENT",
+                                            "PVALUE", "ROMAN", "SSN", "WORDS", "WORDF", "YEN", "Z",
+                                            "BINARY", "HHMM", "MMSS", "TOD", "TIME", "DATETIME", "HOUR"};
+        char name[sizeof(c->source_format)];
+        cio_copy_text(name, sizeof(name), c->source_format);
+        size_t n = strlen(name);
+        while (n && ((name[n - 1] >= '0' && name[n - 1] <= '9') || name[n - 1] == '.'))
+            n--;
+        name[n] = 0;
+        for (size_t i = 0; i < n; i++)
+            if (name[i] >= 'a' && name[i] <= 'z')
+                name[i] = (char)(name[i] - 'a' + 'A');
+        int known_date = 0, known = 0;
+        for (size_t i = 0; i < sizeof(dates) / sizeof(*dates); i++)
+            known_date |= !strcmp(name, dates[i]);
+        for (size_t i = 0; i < sizeof(plain) / sizeof(*plain); i++)
+            known |= !strcmp(name, plain[i]);
+        if (!c->is_string)
+            c->date_kind = known_date ? 1 : 0;
+        cio_copy_text(c->labelset, sizeof(c->labelset), known || known_date ? "" : name);
         if (c->date_kind == 1)
             cio_copy_text(c->format, sizeof(c->format), "%d");
         else if (!c->is_string)
@@ -534,6 +558,10 @@ int cio_xport_names(int nvar, char (*names)[301], char (*sets)[301], int rename)
                 break;
             }
             base[8] = 0;
+            /* A SAS format name cannot end in a digit: native drops trailing
+             * digits from a value-label name (LAB1 is written as LAB). */
+            for (size_t n = strlen(base); field && n > 1 && isdigit((unsigned char)base[n - 1]);)
+                base[--n] = 0;
             cio_copy_text(out, 301, base);
             for (int suffix = 2;; suffix++)
             {
@@ -621,7 +649,9 @@ int cio_do_export(const char *kind, const char *selection)
     readstat_writer_set_file_label(w, label);
     char table[40];
     cio_local_text("__cio_table", table, sizeof(table));
-    if (*table)
+    /* Native names a version 5 member after the file and leaves a version 8
+     * member as ReadStat's default, DATASET. */
+    if (*table && strcmp(kind, "sasxport8"))
     {
         if (!strcmp(kind, "sasxport5"))
             table[8] = 0;
@@ -732,14 +762,21 @@ int cio_do_export(const char *kind, const char *selection)
                 {
                     /* Native export sizes from the width without its
                      * left-justification sign, and uses Stata's default
-                     * width 9 when the format states none, as %d does. */
+                     * width 9 when the format states none, as %d does. The
+                     * decimals follow a period or a decimal comma; comma
+                     * formats become COMMA and %e becomes E. */
                     int fw = 0, dec = 0;
-                    sscanf(format + (format[1] == '-' ? 2 : 1), "%d.%d", &fw, &dec);
+                    char sep = 0;
+                    sscanf(format + (format[1] == '-' ? 2 : 1), "%d%c%d", &fw, &sep, &dec);
+                    if (sep != '.' && sep != ',')
+                        dec = 0;
                     if (fw == 0)
                         fw = 9;
-                    if (fw < 8)
-                        fw = 8;
-                    snprintf(fmt, sizeof(fmt), "F%d.%d", fw + 3, dec);
+                    size_t n = strlen(format);
+                    const char *type = n > 1 && format[n - 1] == 'c' ? "COMMA"
+                                       : n && format[n - 1] == 'e'   ? "E"
+                                                                     : "F";
+                    snprintf(fmt, sizeof(fmt), "%s%d.%d", type, fw + 3, dec);
                 }
             }
             else

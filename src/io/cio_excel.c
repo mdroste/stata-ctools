@@ -73,6 +73,7 @@ int cio_excel_workbook(const char *kind)
     }
     XLSXContext first;
     xlsx_context_init(&first);
+    first.max_part_bytes = cio_xlsx_part_limit();
     if ((rc = xlsx_open_file(&first, path)))
     {
         xlsx_context_free(&first);
@@ -94,26 +95,15 @@ int cio_excel_workbook(const char *kind)
         XLSXContext sheet;
         xlsx_context_init(&sheet);
         sheet.max_cells = cio_xlsx_cell_limit();
+        sheet.max_part_bytes = first.max_part_bytes;
         if (!(rc = xlsx_open_file(&sheet, path)) && !(rc = xlsx_parse_workbook(&sheet)))
         {
             sheet.selected_sheet = j;
             if (!(rc = xlsx_parse_shared_strings(&sheet)) && !(rc = xlsx_parse_styles(&sheet)) &&
                 !(rc = xlsx_parse_worksheet(&sheet)))
             {
-                int c0 = sheet.max_col + 1;
-                for (int c = 0; c <= sheet.max_col; c++)
-                    for (int r = sheet.min_row; r <= sheet.max_row; r++)
-                    {
-                        double value;
-                        const char *text;
-                        int type = cio_xlsx_raw(&sheet, r, c, &value, &text);
-                        if (cio_xlsx_numeric(type) || *text)
-                        {
-                            if (c < c0)
-                                c0 = c;
-                            break;
-                        }
-                    }
+                /* The range starts at the first column with a cell element. */
+                int c0 = sheet.min_col == INT32_MAX ? sheet.max_col + 1 : sheet.min_col;
                 rc = cio_excel_sheet_info(j + 1, first.sheets[j].name, sheet.min_row, c0,
                                           sheet.max_row, sheet.max_col);
             }

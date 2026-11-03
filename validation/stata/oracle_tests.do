@@ -352,7 +352,9 @@ assert $COVERAGE_NET_PROBED==1
 foreach rc in 0 631 198 {
     global COVERAGE_NET_CALLED 0
     global COVERAGE_NET_RC `rc'
-    coverage_ctools, update
+    * A failed update exits with net's return code
+    capture coverage_ctools, update
+    assert _rc==`rc'
     assert $COVERAGE_NET_CALLED==1
     test_pass "ctools update dispatch mocked status `rc'"
 }

@@ -278,6 +278,10 @@ program define _cmerge_impl, rclass
 
     * Parse merge type and key variables
     gettoken merge_type 0 : 0, parse(" ")
+    * merge's spellings with n for m
+    if "`merge_type'" == "1:n" local merge_type "1:m"
+    else if "`merge_type'" == "n:1" local merge_type "m:1"
+    else if inlist("`merge_type'", "n:n", "n:m", "m:n") local merge_type "m:m"
 
     * Validate merge type
     local merge_code = -1
@@ -326,7 +330,7 @@ program define _cmerge_impl, rclass
             FORCE ///
             NOREPort ///
             Verbose ///
-            NOLabel ///
+            noLabels ///
             NONotes ///
             UPDATE ///
             REPLACE ///
@@ -337,6 +341,7 @@ program define _cmerge_impl, rclass
             ]
 
         * No key variables for _n merge
+        local nolabel = cond("`labels'" != "", "nolabel", "")
         local keyvars ""
         local nkeys = 0
     }
@@ -352,7 +357,7 @@ program define _cmerge_impl, rclass
             FORCE ///
             NOREPort ///
             Verbose ///
-            NOLabel ///
+            noLabels ///
             NONotes ///
             UPDATE ///
             REPLACE ///
@@ -363,6 +368,7 @@ program define _cmerge_impl, rclass
             ]
 
         * Validate key variables exist in master
+        local nolabel = cond("`labels'" != "", "nolabel", "")
         local keyvars `varlist'
         local nkeys : word count `keyvars'
 
@@ -604,7 +610,7 @@ program define _cmerge_impl, rclass
     * Check key variables exist in using (skip for _n merge)
     if !`merge_by_n' {
         foreach var of local keyvars {
-            capture confirm variable `var'
+            capture confirm variable `var', exact
             if _rc {
                 di as error "cmerge: key variable `var' not found in using dataset"
                 if `__use_frames' {
@@ -731,6 +737,18 @@ program define _cmerge_impl, rclass
         if `master_pos' {
             local mt : word `master_pos' of `master_storage_types'
             local ut : type `var'
+            * Like merge, refuse a frame alias in the master: the plugin's
+            * stores into it would have no effect
+            if c(stata_version) >= 18 & `__use_frames' {
+                frame `__master_frame': mata: st_local("__cm_alias", strofreal(st_isalias(st_local("var"))))
+                if `__cm_alias' {
+                    di as error "variable `var' is alias in master data but `ut' in using data"
+                    di as error "    You could use command frunalias to recast `var' in the master data."
+                    frame change `__master_frame'
+                    frame drop `__using_frame'
+                    exit 106
+                }
+            }
             local mstr = substr("`mt'",1,3) == "str"
             local ustr = substr("`ut'",1,3) == "str"
             if `mstr' != `ustr' {
@@ -845,6 +863,8 @@ program define _cmerge_impl, rclass
         * variables (and their metadata) as a template instead
         tempfile using_saved
         if `using_nobs' > 0 {
+            * Like merge, put the using observations in key order
+            if !`merge_by_n' & "`sorted'" == "" & !`using_sorted' sort `keyvars', stable
             qui save `using_saved', replace
         }
         else {
@@ -854,7 +874,13 @@ program define _cmerge_impl, rclass
                 local ++i
                 if !`: word `i' of `shared_var_flags'' local new_vars `new_vars' `v'
             }
-            _cmerge_template `"`using_saved'"' "`new_vars'" ""
+            * A placeholder keeps the using _dta metadata when no variable is new
+            local __meta_var ""
+            if "`new_vars'" == "" {
+                tempvar __meta_var
+                local new_vars `__meta_var'
+            }
+            _cmerge_template `"`using_saved'"' "`new_vars'" "`__meta_var'"
         }
 
         if `__use_frames' {
@@ -892,8 +918,7 @@ program define _cmerge_impl, rclass
             if `master_nobs' > 0 & "`keep'" != "" {
                 local __rows_lost = !`: list posof "1" in keep_codes'
             }
-            if `master_nobs' > 1 & `merge_code' == 0 & !`merge_by_n' & ///
-                !`preserve_order' & !`master_sorted' {
+            if `master_nobs' > 1 & !`merge_by_n' & !`preserve_order' & !`master_sorted' {
                 local __rows_lost = 1
             }
             if `__rows_lost' & c(stata_version) >= 16 {
@@ -957,6 +982,7 @@ program define _cmerge_impl, rclass
             local merge_using = 0
             local merge_matched = 0
         }
+        if "`__meta_var'" != "" drop `__meta_var'
 
         * Handle assert() option for empty datasets (a failure keeps the result)
         if "`assert'" != "" {
@@ -974,19 +1000,27 @@ program define _cmerge_impl, rclass
             if !`: list empty_result in keep_codes' quietly keep if 0
         }
 
-        * Like merge, a 1:1 result without using-only rows is sorted by keys
-        if `merge_code' == 0 & !`merge_by_n' & !`preserve_order' & _N > 0 {
+        * Like merge, which sorts the master on the keys, a result without
+        * using-only rows is in key order
+        if !`merge_by_n' & !`preserve_order' & _N > 0 {
             local kept_using = `merge_using'
             if "`keep'" != "" & !`: list posof "2" in keep_codes' local kept_using = 0
-            if `kept_using' == 0 sort `keyvars'
+            if `kept_using' == 0 sort `keyvars', stable
         }
 
         * Display merge table for empty datasets
         if "`noreport'" == "" {
-            _cmerge_table "`update'" `merge_master' `merge_using' `merge_matched' 0 0 "`generate'"
+            * Counts of the categories kept by keep(), as on the main path
+            forvalues c = 1/3 {
+                local kept`c' = ("`keep'" == "" | `: list c in keep_codes')
+            }
+            _cmerge_table "`update'" `=`merge_master'*`kept1'' `=`merge_using'*`kept2'' ///
+                `=`merge_matched'*`kept3'' 0 0 "`generate'"
         }
         * Validation hook: fail as Break would once the result is in place
         if "$CTOOLS_cmerge_fault" == "post" exit 1
+        * merge marks the data changed even when nothing changed
+        mata: st_updata(1)
 
         * Return results for empty datasets
         return scalar N = _N
@@ -1021,8 +1055,11 @@ program define _cmerge_impl, rclass
     * Build plugin command for load_using
     local plugin_args "load_using `nkeys' `using_key_indices'"
     local plugin_args "`plugin_args' n_keepusing `keepusing_count'"
+    * Per-variable lists go through locals: in the argument they would
+    * exceed Stata's plugin-call argument length on wide data
     if `keepusing_count' > 0 {
-        local plugin_args "`plugin_args' keepusing_indices `using_keepusing_indices'"
+        local __cm_ku_idx `using_keepusing_indices'
+        local plugin_args "`plugin_args' keepusing_local __cm_ku_idx"
     }
     if "`verbose'" != "" {
         local plugin_args "`plugin_args' verbose"
@@ -1145,12 +1182,29 @@ program define _cmerge_impl, rclass
     tempfile __using_labels
     local __new_labels ""
     if "`nolabel'" == "" {
-        quietly label dir
+        * keepusing() loaded only the labels attached to the kept variables;
+        * merge copies the using file's whole label set
+        local __label_frame ""
+        if "`keepusing'" != "" & `__use_frames' {
+            tempname __label_frame
+            frame create `__label_frame'
+            capture frame `__label_frame': quietly use in 1 using `"`using'"', clear
+            if _rc {
+                frame drop `__label_frame'
+                local __label_frame ""
+            }
+        }
+        if "`__label_frame'" != "" frame `__label_frame': quietly label dir
+        else quietly label dir
         local __using_label_names `r(names)'
         local __new_labels : list __using_label_names - __master_labels
         if "`__new_labels'" != "" {
-            quietly label save `__new_labels' using `"`__using_labels'"', replace
+            if "`__label_frame'" != "" {
+                frame `__label_frame': quietly label save `__new_labels' using `"`__using_labels'"', replace
+            }
+            else quietly label save `__new_labels' using `"`__using_labels'"', replace
         }
+        if "`__label_frame'" != "" frame drop `__label_frame'
     }
     local __shared_i = 0
     local __shared_vars ""
@@ -1183,6 +1237,12 @@ program define _cmerge_impl, rclass
     if `n_new_vars' > 0 {
         _cmerge_template `"`empty_vars_template'"' "`new_var_names'" ///
             "`generate' `temp_merge_var'"
+    }
+    else {
+        * Without new variables, append a placeholder anyway: like merge, the
+        * master then gains the using _dta notes and characteristics
+        tempvar __meta_var
+        _cmerge_template `"`empty_vars_template'"' "`__meta_var'" "`__meta_var'"
     }
 
     if `__do_timing' {
@@ -1257,9 +1317,8 @@ program define _cmerge_impl, rclass
     if "`__new_labels'" != "" {
         quietly do `"`__using_labels'"'
     }
-    if `n_new_vars' > 0 {
-        qui append using `empty_vars_template', `nolabel' `nonotes'
-    }
+    qui append using `empty_vars_template', `nolabel' `nonotes'
+    if `n_new_vars' == 0 drop `__meta_var'
     forvalues i = 1/`__n_shared' {
         local v `__sv_`i''
         if "`update'" != "" & "`nolabel'" == "" & "`__sv_lbl_`i''" != "" & ///
@@ -1317,7 +1376,8 @@ program define _cmerge_impl, rclass
     local plugin_args "`plugin_args' master_nvars `current_nvars'"
     local plugin_args "`plugin_args' n_keepusing `keepusing_count'"
     if `keepusing_count' > 0 {
-        local plugin_args "`plugin_args' keepusing_placeholders `keepusing_placeholder_indices'"
+        local __cm_ph_idx `keepusing_placeholder_indices'
+        local plugin_args "`plugin_args' placeholders_local __cm_ph_idx"
     }
     if `need_merge_var' {
         local plugin_args "`plugin_args' merge_var_idx `merge_var_idx'"
@@ -1340,7 +1400,8 @@ program define _cmerge_impl, rclass
         local plugin_args "`plugin_args' replace"
     }
     if `keepusing_count' > 0 {
-        local plugin_args "`plugin_args' shared_flags `shared_var_flags'"
+        local __cm_shared `shared_var_flags'
+        local plugin_args "`plugin_args' shared_local __cm_shared"
     }
     if `merge_by_n' {
         local plugin_args "`plugin_args' merge_by_n"
@@ -1376,7 +1437,9 @@ program define _cmerge_impl, rclass
         di as error "cmerge: C plugin merge failed (error `plugin_rc')"
         exit `plugin_rc'
     }
-    * Validation hook: a Break pressed during the plugin is acted on here
+    * Validation hook: an interruption after the plugin has returned. Stata
+    * discards a Break pressed during a plugin call that returns 0, so a Break
+    * can stop cmerge only between commands, as here.
     if "$CTOOLS_cmerge_fault" == "post" exit 1
 
     * Get merge results from scalars (with update, matched rows split into
@@ -1574,6 +1637,10 @@ program define _cmerge_impl, rclass
         local __ct_elapsed97 = 0
         local __ct_elapsed98 = 0
     }
+
+    * merge marks the data changed even when nothing changed; plugin stores
+    * do not
+    mata: st_updata(1)
 
     * Return results
     if `__do_timing' {

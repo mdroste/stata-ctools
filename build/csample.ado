@@ -1,6 +1,6 @@
 *! version 1.2.3 20261030 github.com/mdroste/stata-ctools
 
-program define csample
+program define csample, byable(onecall)
     version 14.1
 
     * Check observation limit (Stata plugin API limitation)
@@ -14,7 +14,15 @@ program define csample
     if "`__ct_elapsed90'" == "" local __ct_elapsed90 = 0
     quietly _ctools_clock __ct_start90
 
-    syntax [anything(name=percent)] [if] [in], [Count(integer 0) BY(varlist) Verbose THReads(integer 0)]
+    syntax [anything(name=percent)] [if] [in], [Count(numlist integer max=1 >=0) BY(varlist) Verbose THReads(integer 0)]
+    * by varlist: is by(varlist), as in sample
+    if _by() {
+        if "`by'" != "" {
+            di as error "by varlist: and by() option may not be combined"
+            exit 190
+        }
+        local by `_byvars'
+    }
 
     local __do_timing = ("`verbose'" != "")
 
@@ -37,7 +45,7 @@ program define csample
         local pct_value = `percent'
     }
 
-    if `count' > 0 {
+    if "`count'" != "" {
         local use_count = 1
     }
 
@@ -116,6 +124,10 @@ program define csample
     local opts ""
     if `use_percent' == 1 {
         local opts "percent=`pct_value'"
+    }
+    else if `count' == 0 {
+        * Keeping no observation per group is a zero percent sample
+        local opts "percent=0"
     }
     else {
         local count_s = strtrim(string(`count', "%20.0f"))

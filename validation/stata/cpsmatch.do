@@ -877,7 +877,7 @@ capture drop _pscore _weight _treated _support _nn _id _n1 _n2 _n3 _pdif _y ref_
 * caliper() ignored.
 capture program drop _cpsm_parity
 program define _cpsm_parity
-    syntax varlist(numeric), testname(string) [OUTcome(varname) OPTions(string)]
+    syntax varlist(numeric fv), testname(string) [OUTcome(varname) OPTions(string)]
     gettoken treat covars : varlist
     tempvar obs ref_w ref_s ref_nn ref_m byid
     quietly gen long `obs' = _n
@@ -1029,6 +1029,56 @@ gen y = rnormal() + ps*5 + t
 _cpsm_parity t, outcome(y) options(pscore(ps) kernel caliper(.02)) testname("kernel ignores caliper")
 _cpsm_parity t, outcome(y) options(pscore(ps) kernel kerneltype(normal)) testname("normal kernel: dense")
 _cpsm_parity t, outcome(y) options(pscore(ps) kernel kerneltype(normal) caliper(.02)) testname("normal kernel ignores caliper")
+
+* psmatch2's option checks and domains: errors, caliper sign, method precedence
+clear
+set seed 31
+quietly set obs 200
+gen x = rnormal()
+gen t = runiform() < invlogit(x)
+gen y = 1 + t + x + rnormal()
+gen ps = invlogit(x)
+gen dx = floor(3*runiform())
+replace x = . in 1/20
+_cpsm_parity t x, outcome(y) options(pscore(ps)) testname("pscore() with covariates rejected")
+_cpsm_parity t, outcome(y) options(pscore(ps) descending) testname("descending without noreplacement rejected")
+_cpsm_parity t, outcome(y) options(pscore(ps) descending ties) testname("descending ties without noreplacement rejected")
+foreach o in "" "noreplacement" "radius" "ties" "neighbor(2)" {
+    _cpsm_parity t, outcome(y) options(pscore(ps) caliper(-.1) `o') testname("negative caliper: `o'")
+}
+foreach k in normal epan uniform {
+    _cpsm_parity t, outcome(y) options(pscore(ps) kernel kerneltype(`k') bwidth(-.06)) testname("negative bwidth: `k'")
+}
+_cpsm_parity t, outcome(y) options(pscore(ps) kernel radius caliper(.1)) testname("kernel radius is radius")
+_cpsm_parity t, outcome(y) options(pscore(ps) radius kernel kerneltype(normal) caliper(.1)) testname("radius kernel kerneltype(normal) is radius")
+* Factor-variable covariates and psmatch2's per-outcome returns
+_cpsm_parity t i.dx, outcome(y) testname("factor-variable covariates")
+_cpsm_parity t i.dx c.ps#c.ps, outcome(y) options(logit) testname("factor-variable interactions, logit")
+capture drop _*
+capture quietly cpsmatch t, pscore(ps) outcome(y)
+if _rc == 0 & r(att_y) == r(att) & r(seatt_y) == r(seatt) & !missing(r(att_y)) test_pass "r(att_y) and r(seatt_y)"
+else test_fail "r(att_y) and r(seatt_y)" "rc=`=_rc' att_y=`=r(att_y)' att=`=r(att)' seatt_y=`=r(seatt_y)'"
+* No treated observations (treatment coded 0/2), in a fresh scalar state
+clear
+set seed 32
+quietly set obs 50
+gen p = runiform()
+gen t = 2*(_n > 25)
+gen y = rnormal()
+_cpsm_parity t, outcome(y) options(pscore(p)) testname("no treated observations")
+capture drop _*
+scalar drop _all
+capture quietly cpsmatch t, pscore(p) outcome(y)
+local rc = _rc
+local nt = r(n_treated)
+local cmin = r(common_min)
+local cmax = r(common_max)
+* r(common_min) and r(common_max) are the control score range
+quietly summarize p if t == 0
+local pmin = r(min)
+local pmax = r(max)
+if `rc' == 0 & `nt' == 0 & "`cmin'" == "`pmin'" & "`cmax'" == "`pmax'" test_pass "no treated observations: fresh session"
+else test_fail "no treated observations: fresh session" "rc=`rc' common_min=`cmin' (`pmin') common_max=`cmax' (`pmax')"
 
 * SUMMARY
 noi print_summary "cpsmatch"

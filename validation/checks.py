@@ -74,6 +74,22 @@ def release_workflow_contract():
     for platform in ("linux", "mac_arm", "mac_x86", "windows"):
         assert f"name: ctools_{platform}" in source
     assert "needs.sign-windows.result == 'success'" in source
+    # A release uploads only under a tag that names config/release.json's version.
+    from scripts.sync_release import release_tag_error
+
+    version = json.loads((ROOT / "config/release.json").read_text())["version"]
+    assert release_tag_error("v" + version) is None
+    for tag in (version, "v0.0.0", f"v{version}-rc1", f"V{version}", ""):
+        assert release_tag_error(tag), tag
+    release_block = source.split("\n  release:\n")[-1]
+    tag_step = release_block.index('sync_release.py --check --tag "$RELEASE_TAG"')
+    assert tag_step < release_block.index("archive_package.py")
+    assert "RELEASE_TAG: ${{ github.event.release.tag_name }}" in release_block
+    # The Linux plugin is compiled and load-tested on the manylinux2014 floor.
+    linux_block = source.split("\n  build-linux:\n")[1].split("\n  build-macos-arm:\n")[0]
+    assert "make linux-docker BUILD_REVISION=" in linux_block
+    assert "make linux-docker-load" in linux_block
+    assert "run: make linux BUILD_REVISION" not in linux_block
     with patch.dict(os.environ, {"CTOOLS_STATA_EXECUTABLE": "/test path/Stata"}):
         assert stata_command("driver.do")[0] == "/test path/Stata"
         assert stata_command("driver.do")[-1] == str(Path("driver.do").resolve())
@@ -227,7 +243,7 @@ def package_packages():
 
 
 def package_inventory():
-    public = {p.stem for p in (ROOT / "build").glob("*.sthlp")} - {"ctools"}
+    public = {p.stem for p in (ROOT / "build").glob("*.sthlp")} - {"ctools", "ctools_licenses"}
     registered = {p.stem for p in (ROOT / "validation/stata").glob("c*.do")} - {"contracts"}
     available, _ = stata.cases()
     assert public <= available.keys()
@@ -239,6 +255,93 @@ def package_inventory():
             assert (ROOT / "build" / (name + suffix)).is_file(), name
             assert f"f {name}{suffix}" in manifest, name
     print(f"PASS {len(public)} public-command help/source/package/test inventory")
+
+
+# Mata and Stata functions added after Stata 14.1, the package minimum.
+package_STATA16 = (
+    "pathresolve", "pathgetparent", "issamefile", "isascii", "expm1", "ln1p", "ln1m",
+    "ustrsplit", "st_frame",
+)
+package_OBS_LIMIT = "2147483647"
+
+
+def package_stata_contract():
+    """Ado code stays within Stata 14.1, guards the plugin's observation limit,
+    and carries the same ado/plugin protocol as the plugin source."""
+    newer = re.compile(r"\b(?:" + "|".join(package_STATA16) + r")\w*\s*\(")
+    assert newer.search('mata: st_local("d", pathgetparent(st_local("using")))')
+    assert newer.search("mata: st_framecurrent()") and not newer.search("pathbasename(p)")
+    errors = []
+    for path in sorted((ROOT / "build").glob("*.ado")):
+        for number, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
+            code = line.split("//")[0]
+            if not code.lstrip().startswith("*") and newer.search(code):
+                errors.append(f"{path.name}:{number}: needs Stata 16: {code.strip()}")
+    # Every public command stops at Stata's plugin limit of 2^31-1 observations;
+    # cimport checks the row count it scanned.
+    public = {p.stem for p in (ROOT / "build").glob("*.sthlp")} - {"ctools", "ctools_licenses"}
+    for name in sorted(public):
+        source = (ROOT / "build" / f"{name}.ado").read_text()
+        guard = "`nobs' > " if name == "cimport" else "_N > "
+        if guard + package_OBS_LIMIT not in source:
+            errors.append(f"{name}.ado: no {guard}{package_OBS_LIMIT} observation guard")
+    release = json.loads((ROOT / "config/release.json").read_text())
+    protocol = str(release["protocol"])
+    stamped = {
+        "src/ctools_version.h": re.findall(
+            r'#define CTOOLS_PROTOCOL "(\d+)"', (ROOT / "src/ctools_version.h").read_text()
+        ),
+        "build/_ctools_load.ado": re.findall(
+            r'local __ado_protocol "(\d+)"', (ROOT / "build/_ctools_load.ado").read_text()
+        ),
+    }
+    for name, values in stamped.items():
+        if values != [protocol]:
+            errors.append(f"{name}: protocol {values}, config/release.json has {protocol}")
+    plugin = (ROOT / "src/ctools_plugin.c").read_text()
+    if 'SF_macro_save("_ctools_plugin_protocol", CTOOLS_PROTOCOL)' not in plugin:
+        errors.append("src/ctools_plugin.c: the version call does not report CTOOLS_PROTOCOL")
+    loader = (ROOT / "build/_ctools_load.ado").read_text()
+    if '"`ctools_plugin_protocol\'" != "`__ado_protocol\'"' not in loader:
+        errors.append("build/_ctools_load.ado: the plugin protocol is not compared")
+    assert not errors, "\n".join(errors)
+    print(f"PASS Stata 14.1 functions, {len(public)} observation guards, protocol {protocol}")
+
+
+def package_licenses():
+    """Every bundled library's license is in the notices, and net install
+    installs both texts as ctools_licenses.sthlp."""
+
+    def norm(text):
+        return " ".join(text.split())
+
+    notices = norm((ROOT / "docs/licenses/THIRD_PARTY_NOTICES").read_text())
+    vendor = sorted(
+        p for p in (ROOT / "src/vendor").glob("*/*") if p.name in ("LICENSE", "COPYING")
+    )
+    assert vendor
+    missing = [str(p.relative_to(ROOT)) for p in vendor if norm(p.read_text()) not in notices]
+    assert not missing, f"THIRD_PARTY_NOTICES lacks {missing}"
+    installed = norm((ROOT / "build/ctools_licenses.sthlp").read_text())
+    for name in ("LICENSE", "docs/licenses/THIRD_PARTY_NOTICES"):
+        assert norm((ROOT / name).read_text()) in installed, name
+    assert "{asis} " + notices[:200] in installed
+    manifest = (ROOT / "build/ctools.pkg").read_text().splitlines()
+    assert "f ctools_licenses.sthlp" in manifest
+    print(f"PASS {len(vendor)} vendor licenses in the notices and the installed help file")
+
+
+def package_description():
+    """The package description lists every public command."""
+    listed = set()
+    for line in (ROOT / "build/ctools.pkg").read_text().splitlines():
+        match = re.match(r"d   (\S+)\s+- ", line)
+        if match:
+            listed.update(match[1].split("/"))
+    public = {p.stem for p in (ROOT / "build").glob("*.sthlp")} - {"ctools", "ctools_licenses"}
+    missing = sorted(public - listed)
+    assert not missing, f"ctools.pkg description omits {missing}"
+    print(f"PASS package description lists {len(public)} commands")
 
 
 docs_BENCHMARKS = ("docs/benchmarks/hdfe_datasets_", "docs/benchmarks/readme_profile/")
@@ -331,6 +434,9 @@ def run(out):
         ("release.cleanup", "validation.checks", "release_cleanup"),
         ("package.staging", "validation.checks", "package_packages"),
         ("package.inventory", "validation.checks", "package_inventory"),
+        ("package.stata", "validation.checks", "package_stata_contract"),
+        ("package.description", "validation.checks", "package_description"),
+        ("package.licenses", "validation.checks", "package_licenses"),
         ("runner", "validation.check_runner", "test_runner"),
         ("options", "validation.check_runner", "options_main"),
         ("benchmark.evidence", "validation.check_runner", "test_performance"),

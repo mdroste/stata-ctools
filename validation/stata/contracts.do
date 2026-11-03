@@ -35,6 +35,16 @@ csample 100
 assert _N == 3 & result == 17
 test_pass "successful command after malformed calls"
 program drop p1_contracts_plugin
+* A failed group numbering (here too many labels) leaves no output variable.
+clear
+quietly set obs 70000
+gen long key = _n
+capture _ctools_group key, generate(grp) label
+local rc = _rc
+capture confirm variable grp
+local kept = !_rc
+if `rc' == 134 & !`kept' test_pass "failed _ctools_group drops its output"
+else test_fail "failed _ctools_group" "rc=`rc' output kept=`kept'"
 print_summary "contracts"
 global CTOOLS_COMPONENT_COMPLETE "contracts"
     global CTOOLS_CASE_COMPLETE "contracts"
@@ -48,7 +58,11 @@ if `"`plugin_dir'"' == "" local plugin_dir : environment CTOOLS_TEST_PLUGIN_DIR
 if `"`plugin_dir'"' == "" local plugin_dir "build"
 clear all
 set more off
-adopath ++ "`plugin_dir'"
+* The repository's ado files, then the candidate plugin directory, as in
+* validate_setup.do; a plugin-only directory must not fall back to an
+* installed copy of the ado files.
+adopath ++ "build"
+if `"`plugin_dir'"' != "build" adopath ++ "`plugin_dir'"
 * Duplicates that do not match the opposite side; empty-side bypasses.
 foreach side in master using {
     foreach empty in 0 1 {
@@ -691,6 +705,19 @@ else {
     if "`orig_saved'" != "" quietly ctools, threads(`orig_saved') permanently
 }
 
+* An invalid session global leaves no thread count in force.
+foreach bad in abc 0 -4 {
+    global CTOOLS_THREADS `bad'
+    quietly ctools, environment_check
+    if missing(r(threads)) & inrange(r(threads_default), 1, r(threads_limit)) & "`r(threads_session)'" == "invalid" {
+        test_pass "invalid session global `bad' reports no thread count"
+    }
+    else test_fail "invalid session global `bad'" "threads=`r(threads)' default=`r(threads_default)'"
+}
+quietly ctools, threads(default)
+if !missing(r(threads)) & r(threads) == r(threads_default) test_pass "threads(default) restores the thread count"
+else test_fail "threads(default) after invalid" "threads=`r(threads)'"
+
 global CTOOLS_THREADS `orig_session'
 print_summary "threads"
 global CTOOLS_COMPONENT_COMPLETE "threads"
@@ -760,6 +787,130 @@ capture plugin call transport_io text, "write" "8" "identity" "0"
 assert _rc == 5
 display "TRANSPORT_STRL_COMPLETE"
     global CTOOLS_CASE_COMPLETE "transport_strl"
+    exit
+}
+
+if "`__case'" == "loader" {
+/* Ado/plugin handshake and load failures. A copy of _ctools_load that expects
+   another protocol, or that reads no protocol, stands in for a plugin from
+   another release; a file that is not a plugin stands in for a damaged one. */
+do validation/support/validate_setup.do
+findfile _ctools_load.ado
+local loader `"`r(fn)'"'
+tempfile scratch
+local root "`scratch'_loader"
+foreach sub in "" /mismatch /none /damaged {
+    capture mkdir "`root'`sub'"
+}
+filefilter `"`loader'"' "`root'/mismatch/_ctools_load.ado", from("__ado_protocol \Q") to("__ado_protocol \Q0")
+local mocked = r(occurrences) == 1
+filefilter `"`loader'"' "`root'/none/_ctools_load.ado", from("ctools_plugin, \Qversion\Q") to("ctools_plugin, \Qclock\Q")
+local mocked = `mocked' & r(occurrences) == 1
+if `mocked' test_pass "loader mocks built from the installed _ctools_load"
+else test_fail "loader mocks" "the protocol stamp or the identity call was not found"
+
+_ctools_load
+local plugin "`__ctools_plugin'"
+local protocol "`__ctools_plugin_protocol'"
+quietly ctools, version
+if "`protocol'" != "" & "`r(plugin_protocol)'" == "`protocol'" test_pass "plugin reports its protocol"
+else test_fail "plugin protocol" "loader=`protocol' ctools=`r(plugin_protocol)'"
+
+clear
+set obs 5
+gen double x = 6 - _n
+gen str4 s = "v" + string(_n)
+tempfile original
+quietly save "`original'"
+quietly export delimited using "`root'/in.csv", replace
+if c(stata_version) >= 16 quietly export sasxport5 * using "`root'/in.xpt", replace vallabfile(none)
+
+foreach mock in mismatch none {
+    adopath ++ "`root'/`mock'"
+    capture program drop _ctools_load
+    capture csort x
+    local rc_sort = _rc
+    capture cf _all using "`original'"
+    local same_sort = !_rc
+    capture erase "`root'/out.csv"
+    capture cexport delimited using "`root'/out.csv", delimiter(";") replace
+    local rc_export = _rc
+    capture confirm file "`root'/out.csv"
+    local wrote = !_rc
+    capture cimport delimited using "`root'/in.csv", clear
+    local rc_import = _rc
+    capture cf _all using "`original'"
+    local same_import = !_rc
+    local rc_xpt = 9
+    local same_xpt = 1
+    if c(stata_version) >= 16 {
+        capture cimport sasxport5 using "`root'/in.xpt", clear
+        local rc_xpt = _rc
+        capture cf _all using "`original'"
+        local same_xpt = !_rc
+    }
+    adopath - "`root'/`mock'"
+    capture program drop _ctools_load
+    use "`original'", clear
+    if `rc_sort' == 9 & `same_sort' test_pass "`mock' protocol: csort stops before changing data"
+    else test_fail "`mock' protocol: csort" "rc=`rc_sort' unchanged=`same_sort'"
+    if `rc_export' == 9 & !`wrote' test_pass "`mock' protocol: cexport stops before writing"
+    else test_fail "`mock' protocol: cexport" "rc=`rc_export' wrote=`wrote'"
+    if `rc_import' == 9 & `same_import' test_pass "`mock' protocol: cimport keeps the data"
+    else test_fail "`mock' protocol: cimport" "rc=`rc_import' unchanged=`same_import'"
+    if `rc_xpt' == 9 & `same_xpt' test_pass "`mock' protocol: cimport sasxport5 keeps the data"
+    else test_fail "`mock' protocol: cimport sasxport5" "rc=`rc_xpt' unchanged=`same_xpt'"
+}
+
+* A damaged plugin exits with the loader's own return code, not r(601).
+tempname fh
+file open `fh' using "`root'/damaged/`plugin'", write replace
+file write `fh' "not a plugin"
+file close `fh'
+capture program loader_damaged_plugin, plugin using("`root'/damaged/`plugin'")
+local expected = _rc
+adopath ++ "`root'/damaged"
+capture program drop _ctools_load
+capture _ctools_load
+local rc_damaged = _rc
+adopath - "`root'/damaged"
+capture program drop _ctools_load
+if `expected' & `rc_damaged' == `expected' test_pass "damaged plugin returns the loader's code (`expected')"
+else test_fail "damaged plugin" "loader rc=`expected' _ctools_load rc=`rc_damaged'"
+
+csort x
+if x[1] == 1 & x[5] == 5 test_pass "commands run after the mocks are removed"
+else test_fail "commands after mocks" "csort did not sort"
+
+* ctools, update from a host that cannot be reached fails with net's code.
+capture mkdir "`root'/update"
+findfile ctools.ado
+filefilter `"`r(fn)'"' "`root'/update/ctools.ado", from("raw.githubusercontent.com/mdroste/stata-ctools/main/build") to("ctools-update.invalid/build")
+local mocked = r(occurrences) == 1
+adopath ++ "`root'/update"
+capture program drop ctools
+findfile ctools.ado
+local mocked = `mocked' & `"`r(fn)'"' == "`root'/update/ctools.ado"
+local rc_update = 0
+if `mocked' {
+    local timeouts "`c(timeout1)' `c(timeout2)'"
+    set timeout1 5
+    set timeout2 5
+    capture ctools, update
+    local rc_update = _rc
+    set timeout1 `: word 1 of `timeouts''
+    set timeout2 `: word 2 of `timeouts''
+}
+adopath - "`root'/update"
+capture program drop ctools
+if `mocked' & `rc_update' != 0 test_pass "ctools, update reports an unreachable host (r(`rc_update'))"
+else test_fail "ctools, update offline" "mocked=`mocked' rc=`rc_update'"
+foreach file in mismatch/_ctools_load.ado none/_ctools_load.ado damaged/`plugin' update/ctools.ado in.csv in.xpt out.csv {
+    capture erase "`root'/`file'"
+}
+print_summary "loader"
+global CTOOLS_COMPONENT_COMPLETE "loader"
+    global CTOOLS_CASE_COMPLETE "loader"
     exit
 }
 

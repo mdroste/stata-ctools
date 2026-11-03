@@ -322,8 +322,11 @@ int cio_export_dbf(const char *selection)
                 }
             }
     }
-    if (record > 4000)
+    /* The ado applies native's 4000-byte c(width) limit; the record itself
+     * is bounded only by its 16-bit header field. */
+    if (record > 65535)
     {
+        ctools_error("cexport", "dBase record of %zu bytes exceeds 65535", record);
         rc = 902;
         goto done;
     }

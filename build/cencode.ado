@@ -35,6 +35,10 @@ program define _cencode_impl, rclass
     }
 
     syntax varlist [if] [in], [Generate(string) replace Label(name) NOExtend Verbose THReads(integer 0)]
+    if "`noextend'" != "" & "`label'" == "" {
+        di as error "noextend option not allowed without label() option"
+        exit 198
+    }
     * The if is evaluated now, as encode does, before any helper replaces
     * the r() or e() results it may name.
     if `"`if'"' != "" {
@@ -184,6 +188,11 @@ program define _cencode_impl, rclass
             if `__ce_ok' local __labelmap "labelmap=`__ce_len' `noextend'"
             else local __native = 1
         }
+        * The plugin reads strL text up to 2,045 bytes and no binary values;
+        * encode itself takes the others
+        if !`__native' & "`: type `srcvar''" == "strL" {
+            mata: st_local("__native", strofreal(_cencode_strl_unsupported(st_local("srcvar"))))
+        }
         if `__native' {
             _cencode_native `srcvar' `destvar' `this_label' `"`if' `in'"' `noextend'
             return scalar N_unique = r(N_unique)
@@ -282,8 +291,8 @@ program define _cencode_impl, rclass
             mata: st_vlmodify(st_local("this_label"), J(0,1,.), J(0,1,""))
             label values `destvar' `this_label'
         }
-        local source_label : variable label `srcvar'
-        label variable `destvar' `"`source_label'"'
+        * Copied through Mata, so text such as $USD is not expanded
+        mata: st_varlabel(st_local("destvar"), st_varlabel(st_local("srcvar")))
 
         * Store rclass results for this variable
         return scalar N_unique = `n_unique'
@@ -400,6 +409,8 @@ program define _cencode_commit
             local ++i
             local destvar : word `i' of `staged'
             if `do_replace' {
+                * replace keeps the source's notes and characteristics
+                char rename `srcvar' `destvar'
                 drop `srcvar'
                 mata: st_varrename("`destvar'", "`srcvar'")
             }
@@ -412,6 +423,17 @@ program define _cencode_commit
 end
 
 mata:
+/* 1 if a strL variable holds a value the plugin cannot read: longer than
+   2,045 bytes, or binary */
+real scalar _cencode_strl_unsupported(string scalar var)
+{
+    string colvector text
+
+    text = st_sdata(., var)
+    if (!rows(text)) return(0)
+    return(any(strlen(text) :> 2045) | any(strpos(text, char(0))))
+}
+
 struct _cencode_vl {
     real scalar exists
     real colvector values

@@ -84,7 +84,8 @@ below the 1st percentile are winsorized.
 
 {phang}
 {opt q(#)} specifies the upper percentile cutoff. The default is 99, meaning values
-above the 99th percentile are winsorized.
+above the 99th percentile are winsorized. As in {cmd:winsor2}, it may equal, but not
+be less than, the lower cutoff.
 
 {dlgtab:Treatment options}
 

@@ -9,15 +9,25 @@ program define chdfe, eclass
         ereturn local version "`r(version)'"
         exit
     }
+    * Check observation limit (Stata plugin API limitation)
+    if _N > 2147483647 {
+        di as error "ctools does not support datasets exceeding 2^31 (2.147 billion) observations"
+        di as error "This is a limitation of Stata's plugin API"
+        exit 920
+    }
     * hdfe accepts verbose(#); a bare verbose also requests ctools timing.
-    local 0 : subinstr local 0 "verbose(" "verbosity(", all
-    local 0 : subinstr local 0 "v(" "verbosity(", all
+    * verbose(#) arrives among the other options and is parsed on its own,
+    * so no text of the command line is rewritten.
     syntax varlist(numeric fv ts) [if] [in] [aw fw pw], Absorb(string) ///
         [GENerate(name) SAMPLE(name) CLEAR KEEPIDs KEEPVars(varlist) ///
-         CLUSTERVars(string) Verbose VERBOSITY(integer 0) TIMEit ///
+         CLUSTERVars(string) Verbose VERBOSITY(integer -1) TIMEit ///
          TOLerance(real 1e-8) MAXITerations(real 10000) POOLsize(integer 10) ///
          ACCELeration(string) TRANSform(string) DOFadjustments(string) ///
-         GROUPVar(name) KEEPSINgletons THReads(integer 0)]
+         GROUPVar(name) KEEPSINgletons THReads(integer 0) *]
+    * verbosity(#) is the same setting
+    local __verbosity = `verbosity'
+    _chdfe_verbosity, `options'
+    if `__verbosity' >= 0 local verbosity = `__verbosity'
     if ("`generate'" != "") + ("`clear'" != "") != 1 {
         di as error "specify exactly one of generate() and clear"
         exit 198
@@ -315,4 +325,12 @@ program define chdfe, eclass
     ereturn local extended_absvars `extended'
     ereturn local dofmethod `methods'
     ereturn local cmd chdfe
+end
+
+* verbose(#), the only option left after chdfe's own: the caller's local
+* verbosity (0 without it); anything else is an error
+program define _chdfe_verbosity
+    version 14.1
+    syntax [, Verbose(integer 0)]
+    c_local verbosity `verbose'
 end

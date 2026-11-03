@@ -122,6 +122,49 @@ mata: st_local("text", invtokens(strofreal(1..(c("maxvar") + 10)), ",") + "<LF>"
 mata: _p = st_local("root") + "/`file'.csv"; _t = subinstr(subinstr(subinstr(strtrim(st_local("text")), "<CR>", char(13)), "<LF>", char(10)), "<TAB>", char(9)); if (fileexists(_p)) unlink(_p); _f = fopen(_p, "w"); fwrite(_f, _t); fclose(_f)
 cio_import_test using "`root'/cr_wide.csv", kind(delimited) name("CSV colrange on a file wider than maxvar") opts(colrange(1:10) varnames(nonames))
 mata: mata drop _p _t _f
+* Quotes as native reads them: only a quote at a field's first byte opens it
+* and is dropped (with a closing quote in its last byte); "" is one quote
+* inside quotes only; without binding a run of quotes is one; under
+* bindquotes(strict) a CRLF inside quotes keeps only the CR.
+foreach opt in "" "bindquotes(nobind)" "stripquotes(yes)" "stripquotes(no)" {
+    cio_import_test using "`root'/quote_forms.csv", kind(delimited) name("CSV quote forms `opt'") opts(stringcols(2) `opt')
+}
+foreach opt in "" "bindquotes(strict)" "bindquotes(nobind)" {
+    cio_import_test using "`root'/quote_numbers_padded.csv", kind(delimited) name("CSV space-padded quoted numbers `opt'") opts(`opt')
+    cio_import_test using "`root'/quote_runs.csv", kind(delimited) name("CSV doubled and run quotes `opt'") opts(`opt')
+}
+foreach opt in "bindquotes(strict)" "bindquotes(strict) stripquotes(yes)" "bindquotes(strict) stripquotes(no)" {
+    cio_import_test using "`root'/quote_crlf.csv", kind(delimited) name("CSV CRLF inside quotes `opt'") opts(`opt')
+}
+* NaN and Infinity (exact case, signed or not) are missing values, and d/D
+* exponents read as e; nan, NA and malformed exponents stay text.
+cio_import_test using "`root'/number_tokens.csv", kind(delimited) name("CSV NaN, Infinity and d exponents")
+cio_import_test using "`root'/number_strings.csv", kind(delimited) name("CSV nan, NA and malformed exponents stay text")
+* numericcols() wins over stringcols(), including _all.
+foreach opt in "stringcols(2 3) numericcols(3)" "stringcols(_all) numericcols(2)" "numericcols(_all) stringcols(2)" "stringcols(2) numericcols(_all)" {
+    cio_import_test using "`root'/force.csv", kind(delimited) name("CSV overlapping overrides `opt'") opts(`opt')
+}
+* rowrange(): variables come from the first row (unless nonames), the
+* selected rows and the row that seeds an explicit header's inference.
+foreach file in a b c d {
+    foreach opt in "rowrange(3:4)" "rowrange(2:2)" "rowrange(4)" "rowrange(3:4) varnames(1)" "rowrange(2:3) varnames(nonames)" "rowrange(1:2) varnames(nonames)" "rowrange(:2)" "rowrange(10:12)" "rowrange(2:3)" "rowrange(3:3) varnames(nonames)" {
+        cio_import_test using "`root'/ragged_`file'.csv", kind(delimited) name("CSV ragged rows under `opt' (`file')") opts(`opt')
+    }
+}
+cio_import_test using "`root'/long_ids.csv", kind(delimited) name("CSV long variables display as %12.0g")
+* Display formats follow the type native infers from its first 513 lines.
+foreach tag in long int double float {
+    foreach row in 100 512 513 5000 {
+        cio_import_test using "`root'/sample_`tag'_`row'.csv", kind(delimited) name("CSV format from the first 513 lines, `tag' outlier at row `row'")
+    }
+}
+* Header names: Unicode letters, decimal digits and underscores, no leading
+* digits, 32 characters, then the case (a case-changed name over 32
+* characters falls back to v#/V#).
+foreach case in preserve lower upper {
+    cio_import_test using "`root'/unicode_headers.csv", kind(delimited) name("CSV Unicode header names `case'") opts(case(`case') encoding(utf8))
+}
+cio_import_test using "`root'/wide_names.csv", kind(delimited) name("CSV 2,000 columns with 32-character names")
 di "CSV_OPTIONS_PASSED=$IO_FORMATS_PASSED FAILED=$IO_FORMATS_FAILED"
 if $IO_FORMATS_FAILED exit 9
     global CTOOLS_CASE_COMPLETE "io_delimited_options"
@@ -520,6 +563,281 @@ capture noisily cexport excel c using "`root'/chart_sheet_first.xls", sheet("Cha
 local cr=_rc
 quietly checksum "`root'/chart_sheet_first.xls"
 cio_record "xls modify of a chart sheet fails and keeps the file" `=cond(`cr'==601 & r(checksum)==`before',0,9)'
+* Header names as native: Unicode letters, decimal digits and underscores of
+* the first 32 characters, leading digits dropped, validity judged in the
+* requested case (so _cons and str10 stand under upper).
+clear
+quietly set obs 2
+local headers `"1st_name|2019_revenue|3M|9 lives|12|٣x|a|1a|Ünïcödé_ñame|école|Straße|ǅb|µm|x²y|a€b|mad½z|ßßßßßßßßßßßßßßßß|1234567890bcdefghijklmnopqrstuvwxyzABC|€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€xyz"'
+mata: _h = tokens(st_local("headers"), "|"); _h = select(_h, _h :!= "|")
+mata: for (_j = 1; _j <= cols(_h); _j++) (void) st_addvar("double", "v" + strofreal(_j))
+mata: for (_j = 1; _j <= cols(_h); _j++) st_varlabel(_j, _h[_j])
+mata: mata drop _h _j
+foreach v of varlist _all {
+    quietly replace `v' = _n
+}
+foreach ext in xls xlsx {
+    export excel using "`root'/unicode_headers.`ext'", firstrow(varlabels) replace
+    foreach case in preserve lower upper {
+        cio_import_test using "`root'/unicode_headers.`ext'", kind(excel) name("`ext' Unicode and digit header names `case'") opts(firstrow case(`case'))
+    }
+}
+* Native creates _cons and str# headers as named (an error, r(198)), but they
+* stand as _CONS and STR10 under case(upper).
+foreach header in _cons str10 {
+    foreach ext in xls xlsx {
+        clear
+        quietly set obs 2
+        gen double v1 = _n
+        gen double v2 = _n
+        label var v1 "`header'"
+        label var v2 "other"
+        quietly export excel using "`root'/reserved_header.`ext'", firstrow(varlabels) replace
+        cio_import_test using "`root'/reserved_header.`ext'", kind(excel) name("`ext' header `header' under case(upper)") opts(firstrow case(upper))
+        foreach case in preserve lower {
+            capture noisily import excel using "`root'/reserved_header.`ext'", firstrow case(`case') clear
+            local nr=_rc
+            clear
+            quietly set obs 1
+            gen byte sentinel=7
+            capture noisily cimport excel using "`root'/reserved_header.`ext'", firstrow case(`case') clear
+            local cr=_rc
+            capture assert c(k)==1 & sentinel==7
+            cio_record "`ext' header `header' fails as native under case(`case')" `=cond(`nr'==198 & `cr'==198 & !_rc,0,9)'
+        }
+    }
+}
+* Long sheet names, entity-heavy names, more than 256 sheets, and cells without
+* a value at the edges of the used range (excel_import_fixtures).
+local cjk "東日本営業本部売上実績四半期報告書第三版改訂済み最終"
+mata: st_local("amp", invtokens(tokens("A B C D E F G H I J K L M N O P"), "&"))
+foreach s in `"`cjk'"' `"`amp'"' "Plain" {
+    cio_import_test using "`root'/sheet_names.xlsx", kind(excel) name("xlsx sheet() with a long or entity-heavy name") opts(sheet(`"`s'"') firstrow)
+}
+cio_workbook_test using "`root'/sheet_names.xlsx", name("xlsx describe long and entity-heavy sheet names")
+foreach s in Sheet1 Sheet256 Sheet257 Sheet300 {
+    cio_import_test using "`root'/many_sheets.xlsx", kind(excel) name("xlsx sheet(`s') of 300 sheets") opts(sheet(`s'))
+}
+cio_workbook_test using "`root'/many_sheets.xlsx", name("xlsx describe 300 sheets")
+foreach f in styled rowcells emptyv emptystr emptyis formula error errall leadcol {
+    foreach opt in "" "firstrow" "allstring" {
+        cio_import_test using "`root'/gap_`f'.xlsx", kind(excel) name("xlsx used range with valueless cells `f' `opt'") opts(`opt')
+    }
+    cio_workbook_test using "`root'/gap_`f'.xlsx", name("xlsx describe used range with valueless cells `f'")
+}
+* Malformed and reversed cellrange() corners fail with r(198), keeping the data.
+foreach ext in xls xlsx {
+    foreach range in "A1:C" "A1:D2000000" "1:10" "D10:A1" "A0:C5" "XFE1:XFF3" "A1:C5x" "B2:A3" {
+        capture noisily import excel using "`root'/late_column.`ext'", clear cellrange(`range')
+        local nr=_rc
+        clear
+        quietly set obs 1
+        gen byte sentinel=7
+        capture noisily cimport excel using "`root'/late_column.`ext'", clear cellrange(`range')
+        local cr=_rc
+        capture assert c(k)==1 & sentinel==7
+        cio_record "`ext' malformed cellrange(`range') fails and keeps the data" `=cond(`nr'==198 & `cr'==198 & !_rc,0,9)'
+    }
+}
+* ZIP part sizes are checked before anything is allocated: a declared size
+* its deflate data cannot reach fails as native (r(603)), and a part beyond
+* c(max_memory) fails with r(909). Neither replaces the data in memory.
+capture noisily import excel using "`root'/zip_declared.xlsx", clear
+local nr=_rc
+clear
+quietly set obs 1
+gen byte sentinel=7
+capture noisily cimport excel using "`root'/zip_declared.xlsx", clear
+local cr=_rc
+capture assert c(k)==1 & sentinel==7
+cio_record "xlsx part declaring a false size fails as native" `=cond(`nr'==603 & `cr'==603 & !_rc,0,9)'
+clear
+quietly set max_memory 100m
+quietly set obs 1
+gen byte sentinel=7
+capture noisily cimport excel using "`root'/zip_150mb.xlsx", clear
+local cr=_rc
+capture assert c(k)==1 & sentinel==7
+local kept=!_rc
+clear
+quietly set max_memory .
+capture noisily cimport excel using "`root'/zip_150mb.xlsx", clear
+cio_record "xlsx part beyond max_memory fails with r(909)" `=cond(`cr'==909 & `kept' & !_rc & _N==3,0,9)'
+* A chart embedded in an XLS worksheet keeps its cached values to itself.
+foreach sheet in Data Other {
+    cio_import_test using "`root'/chart_in_sheet.xls", kind(excel) name("xls worksheet with an embedded chart `sheet'") opts(sheet(`sheet'))
+}
+cio_workbook_test using "`root'/chart_in_sheet.xls", name("xls describe a worksheet with an embedded chart")
+* Numbers in string columns read as native's %18.0g text; numeric header
+* cells label their variables with that text.
+foreach ext in xls xlsx {
+    foreach opt in "" "allstring" "firstrow" "firstrow allstring" {
+        cio_import_test using "`root'/string_numbers.`ext'", kind(excel) name("`ext' numbers in a string column `opt'") opts(`opt')
+    }
+}
+* Value text: a non-number reads as 0 and a number prefix as that number;
+* a formula text result decodes _xHHHH_ escapes.
+foreach opt in "" "allstring" {
+    cio_import_test using "`root'/value_text.xlsx", kind(excel) name("xlsx cell value text `opt'") opts(`opt')
+}
+cio_import_test using "`root'/numeric_headers.xlsx", kind(excel) name("xlsx numeric header labels") opts(firstrow)
+/* cexport excel options compared with export excel: rc and every worksheet
+   (name, range and contents) of the resulting workbook. */
+capture program drop _g4b_book
+program define _g4b_book
+    args file
+    mata: _g4b_state = J(1, 0, "")
+    capture quietly import excel using "`file'", describe
+    if _rc exit
+    local n = r(N_worksheet)
+    forvalues j = 1/`n' {
+        local s`j' `"`r(worksheet_`j')'"'
+        mata: _g4b_state = _g4b_state, st_global("r(worksheet_`j')"), st_global("r(range_`j')")
+    }
+    forvalues j = 1/`n' {
+        capture quietly import excel using "`file'", sheet(`"`s`j''"') allstring clear
+        if !_rc & _N {
+            mata: _g4b_state = _g4b_state, invtokens(vec(st_sdata(., .))')
+        }
+    }
+end
+capture program drop _g4b_excel
+program define _g4b_excel
+    syntax, root(string) name(string) [opts(string asis) setup(string asis) ext(string) vars(string) sel(string asis)]
+    if "`ext'" == "" local ext xlsx
+    * cio_record displays the name in double quotes
+    mata: st_local("name", subinstr(st_local("name"), char(34), char(39)))
+    tempfile data
+    quietly save `data'
+    foreach side in native result {
+        local cmd = cond("`side'" == "native", "export", "cexport")
+        local f "`root'/g4b_`side'.`ext'"
+        capture erase "`f'"
+        if `"`setup'"' != "" {
+            quietly export excel using "`f'", sheet("a") replace
+            quietly export excel using "`f'", sheet("Sheet1")
+            quietly keep in 1/2
+            quietly replace price = -1
+        }
+        capture noisily `cmd' excel `vars' using "`f'" `sel', `opts'
+        local rc_`side' = _rc
+        _g4b_book "`f'"
+        mata: _g4b_`side' = _g4b_state
+        use `data', clear
+    }
+    mata: st_local("same", strofreal(_g4b_native == _g4b_result))
+    cio_record "`name' (native rc=`rc_native', C rc=`rc_result')" `=cond(`rc_native' == `rc_result' & `same', 0, 9)'
+end
+sysuse auto, clear
+quietly keep in 1/3
+keep make price
+foreach o in `"sheet("a", modify) sheetreplace"' `"sheet("a", replace) sheetmodify"' `"sheet("a", modify replace)"' `"sheet("a", replace modify)"' `"sheet("a", rep mod)"' `"sheet("a", modify modify)"' "sheetmodify" "sheetreplace" "sheetmodify sheetreplace" "sheetreplace replace" {
+    _g4b_excel, root("`root'") name(`"excel `o'"') opts(`o') setup(yes)
+}
+foreach o in `"sheet(`"a" b"')"' `"sheet(`""a""')"' `"sheet(a b)"' `"sheet("a" b)"' `"sheet("a b")"' `"sheet(a, bogus)"' {
+    _g4b_excel, root("`root'") name(`"excel `o'"') opts(`o')
+}
+/* A value-labeled variable with a 32-character name */
+clear
+quietly set obs 3
+gen byte respondent_employment_status_cat = _n
+label define g4b_emp 1 "employed" 2 "unemployed"
+label values respondent_employment_status_cat g4b_emp
+_g4b_excel, root("`root'") name("excel labeled 32-character name") opts(replace firstrow(variables))
+/* Zero observations: r(2000); an empty selection: r(198) */
+sysuse auto, clear
+foreach ext in xlsx xls {
+    _g4b_excel, root("`root'") name("`ext' empty selection") vars(price) sel(if price < 0) opts(replace) ext(`ext')
+    preserve
+    quietly drop in 1/l
+    _g4b_excel, root("`root'") name("`ext' zero observations") vars(price) opts(replace) ext(`ext')
+    _g4b_excel, root("`root'") name("`ext' zero observations firstrow") vars(price) opts(replace firstrow(variables)) ext(`ext')
+    restore
+}
+/* An existing file that is not a workbook, without replace or with modify */
+foreach ext in xlsx xls {
+    foreach o in "" `"sheet("x", modify)"' {
+        local what = cond(`"`o'"' == "", "", "with sheet(x, modify)")
+        foreach side in native result {
+            local cmd = cond("`side'" == "native", "export", "cexport")
+            capture erase "`root'/notbook_`side'.`ext'"
+            file open fh using "`root'/notbook_`side'.`ext'", write text replace
+            file write fh "not a workbook" _n
+            file close fh
+            capture noisily `cmd' excel price using "`root'/notbook_`side'.`ext'", `o'
+            local rc_`side' = _rc
+        }
+        cio_record "`ext' existing non-workbook `what' (native rc=`rc_native', C rc=`rc_result')" `=cond(`rc_native' == `rc_result', 0, 9)'
+    }
+}
+/* More than 256 columns to .xls */
+clear
+quietly set obs 2
+forvalues i = 1/257 {
+    quietly gen byte v`i' = `i'
+}
+_g4b_excel, root("`root'") name("xls 257 columns") opts(replace) ext(xls)
+/* keepcellfmt: numbers keep the cell's format, dates get a date format */
+foreach ext in xlsx xls {
+    foreach side in native result {
+        local cmd = cond("`side'" == "native", "export", "cexport")
+        clear
+        quietly set obs 5
+        forvalues j = 1/4 {
+            quietly gen double c`j' = _n * `j' + 0.5
+        }
+        quietly export excel using "`root'/keep_`side'.`ext'", replace
+        clear
+        quietly set obs 3
+        gen double n = _n + 0.25
+        gen d = td(01mar2021) + _n
+        format d %td
+        gen double t = clock("01jan2021 01:02:03", "DMYhms") + _n
+        format t %tc
+        capture noisily `cmd' excel using "`root'/keep_`side'.`ext'", sheet("Sheet1", modify) cell(B2) keepcellfmt
+        local rc_`side' = _rc
+        quietly import excel using "`root'/keep_`side'.`ext'", clear
+        mata: _g4b_`side' = J(1, 0, "")
+        foreach v of varlist _all {
+            mata: _g4b_`side' = _g4b_`side', st_varformat("`v'"), invtokens(strofreal(st_data(., "`v'"), "%21x")')
+        }
+    }
+    mata: st_local("same", strofreal(_g4b_native == _g4b_result))
+    cio_record "`ext' keepcellfmt with dates (native rc=`rc_native', C rc=`rc_result')" `=cond(`rc_native' == `rc_result' & `same', 0, 9)'
+}
+/* %tb converts through its business calendar; %tg is written as its number.
+   (Native writes %tb as empty text and %tg as a datetime.) */
+file open fh using "`root'/g4bcal.stbcal", write text replace
+file write fh "version 14" _n "purpose " _char(34) "Mon-Fri 2018" _char(34) _n "dateformat dmy" _n ///
+    "range 01jan2018 31dec2018" _n "centerdate 01jan2018" _n "omit dayofweek (Sa Su)" _n
+file close fh
+adopath ++ "`root'"
+foreach ext in xlsx xls {
+    clear
+    quietly set obs 3
+    gen double day = mdy(1, 1, 2018) + 7 * (_n - 1)
+    gen double bd = bofd("g4bcal", day)
+    format bd %tbg4bcal
+    gen double bd2 = bd
+    format bd2 %tbg4bcal:CCYY-NN-DD
+    gen double g = _n + 0.5
+    format g %tg
+    capture noisily cexport excel bd bd2 g using "`root'/tb.`ext'", replace firstrow(variables)
+    local rc = _rc
+    if !`rc' {
+        tempfile orig
+        quietly save `orig'
+        quietly import excel using "`root'/tb.`ext'", firstrow clear
+        quietly merge 1:1 _n using `orig', keepusing(day) nogenerate
+        local fbd : format bd
+        local fg : format g
+        quietly count if bd != day | bd2 != day | g != _n + 0.5
+        local rc = cond(r(N) == 0 & substr("`fbd'", 1, 3) == "%td" & substr("`fg'", 1, 3) != "%td" & substr("`fg'", 1, 3) != "%tc", 0, 9)
+    }
+    cio_record "`ext' %tb through its calendar, %tg as a number" `rc'
+}
+adopath - "`root'"
+capture mata: mata drop _g4b_state _g4b_native _g4b_result
 di "IO_OPTIONS_PASSED=$IO_FORMATS_PASSED FAILED=$IO_FORMATS_FAILED"
 if $IO_FORMATS_FAILED exit 9
     global CTOOLS_CASE_COMPLETE "io_excel_options"
@@ -914,10 +1232,7 @@ _fio_case, native(import excel using "temp/io_allformats/inj_text.xlsx", describ
     name("file text: XLSX sheet name in describe") rmacros(worksheet_1 range_1)
 _fio_case, native(import excel using "temp/io_allformats/inj_text.xlsx", firstrow clear) ///
     ctools(cimport excel using "temp/io_allformats/inj_text.xlsx", firstrow clear) ///
-    name("file text: XLSX header cells") nonames
-* Names are left out above: native import excel derives the first header's
-* name as xstringfilewritefio_m1txt, cimport as xstringfilewritefio_m1txtxy
-* (a separate naming difference for headers holding compound quotes).
+    name("file text: XLSX header cells")
 clear
 quietly set obs 2
 gen double a = _n
@@ -935,6 +1250,237 @@ _fio_case, native(_fio_export export "temp/io_allformats/native/inj_header.xlsx"
     name("file text: variable labels as exported headers")
 mata: mata drop _fio_q _fio_b _fio_a _fio_p
 capture mata: mata drop _fio_r_native _fio_r_ctools _fio_m_native _fio_m_ctools
+
+* SPSS: a string variable's value labels are skipped (native notes it), and
+* label sets are named labels# by their dictionary ordinal, not by use.
+cio_import_test using "temp/io_allformats/strlab.sav", kind(spss) name("SPSS string variable with value labels")
+cio_import_test using "temp/io_allformats/order.sav", kind(spss) name("SPSS label set names follow the dictionary")
+* XPORT 5: value labels are named after the format name alone, never after
+* the SAS formats native knows; a string variable with a format fails like
+* native unless novallabels is given.
+foreach f in fmtnum fmtuser fmtnames {
+    foreach opt in "" "novallabels" {
+        cio_import_test using "temp/io_allformats/`f'.xpt", kind(sasxport5) name("XPORT5 format names as value labels `f' `opt'") opts(`opt')
+    }
+}
+cio_import_test using "temp/io_allformats/fmtchar.xpt", kind(sasxport5) name("XPORT5 string format with novallabels") opts(novallabels)
+capture noisily import sasxport5 "temp/io_allformats/fmtchar.xpt", clear
+local nr=_rc
+capture noisily cimport sasxport5 "temp/io_allformats/fmtchar.xpt", clear
+cio_record "XPORT5 string format without novallabels fails as native" `=cond(`nr'==610 & _rc==610,0,9)'
+capture mkdir "temp/io_allformats/xpf"
+copy "temp/io_allformats/fmtuser.xpt" "temp/io_allformats/xpf/fmtuser.xpt", replace
+clear
+quietly set obs 2
+gen yesno = _n-1
+gen foo = _n
+label define yesno 0 "No" 1 "Yes"
+label define foo 1 "one" 2 "two"
+label values yesno yesno
+label values foo foo
+export sasxport5 "temp/io_allformats/xpf/labels.xpt", replace vallabfile(xpf)
+cio_import_test using "temp/io_allformats/xpf/fmtuser.xpt", kind(sasxport5) name("XPORT5 YESNO5. takes the YESNO labels of formats.xpf")
+* dBase numeric fields holding non-integers import as double, as native,
+* even when float holds each value exactly.
+clear
+quietly set obs 3
+gen float quarter = _n/4
+gen double half = _n + .5
+gen float tenth = 1.1*_n
+export dbase using "temp/io_allformats/native/exactfloat.dbf", replace
+cio_import_test using "temp/io_allformats/native/exactfloat.dbf", kind(dbase) name("dBase exact-float non-integers are double")
+
+/* XPORT 5 value-label names that are not SAS format names as written: two
+   characters, trailing digits (native writes LAB1 as LAB). */
+foreach nm in yn dt _x x_ gl ab1 ab12 lab1 a2 x9y9 {
+    clear
+    quietly set obs 2
+    gen x = _n
+    label define `nm' 1 "one" 2 "two"
+    label values x `nm'
+    cio_export_test, kind(sasxport5) ext(xpt) name("XPORT5 value label named `nm'")
+}
+/* File names that are not SAS names: native names a version 5 member after
+   the file (to its first period, eight bytes, as written) and a version 8
+   member DATASET. */
+capture mkdir "temp/io_allformats/names"
+capture mkdir "temp/io_allformats/names/native"
+capture mkdir "temp/io_allformats/names/result"
+clear
+quietly set obs 2
+gen x = _n
+foreach b in "a-b" "1a" "a.b" "x y" "results-2020" "_N_" "a+b" "abcdefghijk" {
+    foreach pair in "sasxport5 xpt" "sasxport8 v8xpt" {
+        gettoken kind ext : pair
+        local ext = strtrim("`ext'")
+        local clause = cond("`kind'"=="sasxport5", "", "using")
+        capture noisily export `kind' x using "temp/io_allformats/names/native/`b'.`ext'", replace
+        local nr = _rc
+        capture noisily cexport `kind' x using "temp/io_allformats/names/result/`b'.`ext'", replace
+        local cr = _rc
+        local rc = cond(`nr' == `cr', 0, 9)
+        if !`rc' & !`nr' {
+            preserve
+            quietly import `kind' `clause' "temp/io_allformats/names/native/`b'.`ext'", clear
+            tempfile nimp
+            quietly save `nimp'
+            quietly import `kind' `clause' "temp/io_allformats/names/result/`b'.`ext'", clear
+            capture cf _all using `nimp', all
+            if _rc local rc = 9
+            restore
+            if "`kind'" == "sasxport5" {
+                quietly import sasxport5 "temp/io_allformats/names/native/`b'.`ext'", describe
+                local nm `"`r(members)'"'
+                quietly import sasxport5 "temp/io_allformats/names/result/`b'.`ext'", describe
+                if `"`r(members)'"' != `"`nm'"' local rc = 9
+            }
+        }
+        cio_record "`kind' file name `b' (native rc=`nr', C rc=`cr')" `rc'
+    }
+}
+/* A write-protected destination is not replaced: native's code per writer,
+   and the file is unchanged. Native SPSS and XPORT 8 delete their own file
+   before failing; cexport keeps it. */
+local ro = cond(c(os) == "Windows", "attrib +r", "chmod 444")
+local rw = cond(c(os) == "Windows", "attrib -r", "chmod 644")
+sysuse auto, clear
+foreach pair in "delimited csv" "excel xlsx" "excel xls" "spss sav" "sasxport5 xpt" "sasxport8 v8xpt" "dbase dbf" {
+    gettoken kind ext : pair
+    local ext = strtrim("`ext'")
+    foreach side in native result {
+        local cmd = cond("`side'" == "native", "export", "cexport")
+        local f "temp/io_allformats/`side'/readonly.`ext'"
+        capture shell `rw' "`f'"
+        quietly `cmd' `kind' make price using "`f'", replace
+        shell `ro' "`f'"
+        quietly checksum "`f'"
+        local before = r(checksum)
+        capture noisily `cmd' `kind' make using "`f'", replace
+        local rc_`side' = _rc
+        capture checksum "`f'"
+        local same_`side' = !_rc & r(checksum) == `before'
+        capture shell `rw' "`f'"
+    }
+    cio_record "`kind' `ext' read-only destination (native rc=`rc_native', C rc=`rc_result')" `=cond(`rc_native' == `rc_result' & `rc_native' & `same_result', 0, 9)'
+}
+import shp using "temp/io_allformats/shape1.shp", clear
+foreach side in native result {
+    local cmd = cond("`side'" == "native", "export", "cexport")
+    local f "temp/io_allformats/`side'/readonly.shp"
+    capture shell `rw' "`f'"
+    quietly `cmd' shp using "`f'", replace
+    shell `ro' "`f'"
+    quietly checksum "`f'"
+    local before = r(checksum)
+    capture noisily `cmd' shp using "`f'", replace
+    local rc_`side' = _rc
+    capture checksum "`f'"
+    local same_`side' = !_rc & r(checksum) == `before'
+    capture shell `rw' "`f'"
+}
+cio_record "shp read-only destination (native rc=`rc_native', C rc=`rc_result')" `=cond(`rc_native' == `rc_result' & `rc_native' & `same_result', 0, 9)'
+/* replace onto a symbolic link replaces the link with a regular file and
+   leaves the target; sheet(..., modify) writes through the link. */
+if c(os) != "Windows" {
+    foreach pair in "delimited csv" "excel xlsx" "excel xls" {
+        sysuse auto, clear
+        gettoken kind ext : pair
+        local ext = strtrim("`ext'")
+        foreach side in native result {
+            local cmd = cond("`side'" == "native", "export", "cexport")
+            local d "temp/io_allformats/`side'"
+            capture erase "`d'/link.`ext'"
+            quietly `cmd' `kind' make using "`d'/target.`ext'", replace
+            quietly checksum "`d'/target.`ext'"
+            local target_`side' = r(checksum)
+            shell ln -s target.`ext' "`d'/link.`ext'"
+            capture noisily `cmd' `kind' price using "`d'/link.`ext'", replace
+            local rc_`side' = _rc
+            quietly checksum "`d'/target.`ext'"
+            local kept_`side' = r(checksum) == `target_`side''
+        }
+        local rc = cond(`rc_native' == `rc_result' & `kept_native' & `kept_result', 0, 9)
+        if !`rc' {
+            if "`kind'" == "delimited" {
+                quietly import delimited using "temp/io_allformats/native/link.`ext'", clear
+                tempfile nimp
+                quietly save `nimp'
+                quietly import delimited using "temp/io_allformats/result/link.`ext'", clear
+            }
+            else {
+                quietly import excel using "temp/io_allformats/native/link.`ext'", clear
+                tempfile nimp
+                quietly save `nimp'
+                quietly import excel using "temp/io_allformats/result/link.`ext'", clear
+            }
+            capture cf _all using `nimp', all
+            if _rc local rc = 9
+        }
+        cio_record "`kind' `ext' replace onto a symbolic link (native rc=`rc_native', C rc=`rc_result')" `rc'
+        if "`kind'" == "excel" {
+            sysuse auto, clear
+            foreach side in native result {
+                local cmd = cond("`side'" == "native", "export", "cexport")
+                local d "temp/io_allformats/`side'"
+                capture erase "`d'/mlink.`ext'"
+                quietly `cmd' `kind' make using "`d'/mtarget.`ext'", replace
+                shell ln -s mtarget.`ext' "`d'/mlink.`ext'"
+                capture noisily `cmd' `kind' price using "`d'/mlink.`ext'", sheet("Sheet1", modify) cell(C3)
+                local rc_`side' = _rc
+            }
+            local rc = cond(`rc_native' == `rc_result', 0, 9)
+            if !`rc' {
+                quietly import excel using "temp/io_allformats/native/mtarget.`ext'", clear
+                tempfile nimp
+                quietly save `nimp'
+                quietly import excel using "temp/io_allformats/result/mtarget.`ext'", clear
+                capture cf _all using `nimp', all
+                if _rc local rc = 9
+                quietly import excel using "temp/io_allformats/result/mlink.`ext'", clear
+                capture cf _all using `nimp', all
+                if _rc local rc = 9
+            }
+            cio_record "`ext' sheet modify through a symbolic link (native rc=`rc_native', C rc=`rc_result')" `rc'
+        }
+    }
+}
+/* dBase: the record of 200 doubles is 4001 bytes; native limits c(width)
+   (1600 here) to 4000, and limits names, strings and variable counts. */
+clear
+quietly set obs 3
+forvalues i = 1/200 {
+    quietly gen double v`i' = _n + `i'
+}
+cio_export_test, kind(dbase) ext(dbf) name("dBase 200 doubles (record 4001 bytes)")
+foreach limit in width count {
+    clear
+    quietly set obs 2
+    if "`limit'" == "width" {
+        forvalues i = 1/16 {
+            quietly gen str254 s`i' = "x"
+        }
+    }
+    else {
+        forvalues i = 1/256 {
+            quietly gen byte v`i' = 1
+        }
+    }
+    capture noisily export dbase using "temp/io_allformats/native/limit.dbf", replace
+    local nr = _rc
+    capture noisily cexport dbase using "temp/io_allformats/result/limit.dbf", replace
+    cio_record "dBase `limit' limit (native rc=`nr', C rc=`=_rc')" `=cond(`nr' == _rc & `nr', 0, 9)'
+}
+/* SPSS display formats: width plus three, COMMA for comma formats, E for %e,
+   decimals after a period or a decimal comma. */
+clear
+quietly set obs 2
+local i 0
+foreach f in %1.0f %5.1f %9.2f %12.2fc %12.0gc %10.3e %8.2gc %-9.2f %09.2f %9,2f %9,2fc %10.4g %20.0fc %7.0g %8.0g {
+    local ++i
+    quietly gen double v`i' = 1234.5678 * _n
+    format v`i' `f'
+}
+cio_export_test, kind(spss) ext(sav) name("SPSS numeric display formats")
 
 di "IO_FORMATS_PASSED=$IO_FORMATS_PASSED FAILED=$IO_FORMATS_FAILED"
 if $IO_FORMATS_FAILED exit 9

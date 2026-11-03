@@ -422,8 +422,8 @@ ST_retcode cwinsor_main(const char *args)
         ctools_error(CWINSOR_MODULE, "percentiles must be between 0 and 100");
         return 198;
     }
-    if (config.lower_pctl >= config.upper_pctl) {
-        ctools_error(CWINSOR_MODULE, "lower percentile must be less than upper");
+    if (config.lower_pctl > config.upper_pctl) {
+        ctools_error(CWINSOR_MODULE, "lower percentile must not exceed upper");
         return 198;
     }
 
@@ -457,13 +457,26 @@ ST_retcode cwinsor_main(const char *args)
     }
 
 
-    /* Parse plugin-local store indices. */
+    /* Parse plugin-local store indices: storebase=K gives the consecutive
+     * positions K+1..K+nvars without a per-variable list, which would exceed
+     * Stata's plugin argument length on wide data. */
     store_indices = (int *)malloc(nvars * sizeof(int));
     if (!store_indices) {
         ctools_error_alloc(CWINSOR_MODULE);
         return 920;
     }
-    if (ctools_parse_int_array(store_indices, nvars, &p) != 0) {
+    int store_base = 0;
+    ctools_parse_status base_status = ctools_parse_int_option(args, "storebase", &store_base);
+    if (base_status == CTOOLS_PARSE_OK) {
+        if (store_base < 0 || (size_t)store_base > (size_t)SF_nvars() - nvars) {
+            free(store_indices);
+            ctools_error(CWINSOR_MODULE, "invalid store base");
+            return 198;
+        }
+        for (size_t v = 0; v < nvars; v++)
+            store_indices[v] = store_base + (int)v + 1;
+    } else if (base_status == CTOOLS_PARSE_INVALID ||
+               ctools_parse_int_array(store_indices, nvars, &p) != 0) {
         free(store_indices);
         ctools_error(CWINSOR_MODULE, "failed to parse store indices");
         return 198;

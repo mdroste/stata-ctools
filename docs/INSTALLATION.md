@@ -2,7 +2,7 @@
 
 ## Compatibility and Requirements
 
-ctools is compatible with Stata 14.1+ (plugin interface version 3.0). The [platform contract](development/PLATFORMS.md) specifies CPU/OS baselines and runtime dependencies, including Linux libgomp.
+ctools is compatible with Stata 14.1+ (plugin interface version 3.0). The [platform contract](development/PLATFORMS.md) specifies CPU/OS baselines and runtime dependencies. In short: macOS 11 or later on Apple Silicon or Intel; Windows 10 or later on x86-64; x86-64 Linux with glibc 2.17 or later and `libgomp.so.1` from GCC 6 or later (the system `libgomp` on RHEL/CentOS 7; package `libgomp1` on Debian and Ubuntu).
 
 **Note:** ctools does not support datasets exceeding 2^31−1 (2,147,483,647) observations. This is a [known limitation](https://github.com/mcaceresb/stata-gtools/issues/43) of Stata's plugin API for C and can only be addressed with an internal Stata update. ctools will gracefully exit with an error if your dataset exceeds this limit.
 
@@ -54,6 +54,47 @@ and Developer ID signed, notarized Mac plugins. Mac plugins use Apple's online
 notarization tickets; first use may require internet access. See
 [macOS signing](development/MACOS_SIGNING.md) for verification and setup details.
 
+
+## Troubleshooting
+
+### The plugin does not match the installed ado files
+
+Every ctools command first checks that the plugin speaks the same protocol as the
+ado files. A plugin from another release stops the command, before any data or
+file changes, with an error that names both and asks you to reinstall:
+
+```stata
+net install ctools, from("https://raw.githubusercontent.com/mdroste/stata-ctools/main/build") replace
+```
+
+Then restart Stata: a plugin stays loaded until Stata exits, so a reinstall in a
+running session does not replace it. After a manual installation, copy every file
+from one release ZIP. Old plugins report no protocol.
+
+### The plugin cannot be loaded
+
+The error lists the plugin ctools selected, Stata's `c(os)` and `c(machine_type)`,
+the path `findfile` found (or that the file is missing), and then the message from
+Stata's plugin loader; the command exits with the loader's return code.
+
+- **File not found:** reinstall ctools. A manual installation must include all four
+  `ctools_*.plugin` files in the same directory as the ado files.
+- **Linux:** the plugin needs x86-64, glibc 2.17 or later (`ldd --version`) and
+  `libgomp.so.1` with the `GOMP_4.5` interface (GCC 6 or later's runtime; the system
+  `libgomp` on RHEL/CentOS 7; `sudo apt-get install libgomp1` on Debian and Ubuntu).
+  Messages such as ``version `GLIBC_2.xx' not found`` or `libgomp.so.1: cannot open
+  shared object file` name the missing piece; `ldd -r` on the plugin path from the
+  error lists every unresolved library and symbol.
+- **macOS:** release plugins are signed with a Developer ID and notarized, and the
+  first load may need internet access to check the notarization ticket. A plugin
+  built locally, or one Gatekeeper has quarantined, can fail with a code-signature
+  or "not valid mach-o file" message. `codesign --verify --verbose` on the plugin
+  path checks the signature; reinstall from the release rather than overriding
+  Gatekeeper for a file of unknown origin.
+- **Windows:** the release plugin carries an Authenticode signature (see the file's
+  Properties, Digital Signatures). SmartScreen does not screen plugins that Stata
+  loads, but endpoint-security software can block a DLL; ask your administrator to
+  allow the signed plugin.
 
 ## Building from Source Files
 

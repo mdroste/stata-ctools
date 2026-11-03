@@ -531,6 +531,8 @@ def test_p2_native():
         )
         run_test(directory, "xlsx_store_failures", SPI + harness("p2_native_5.c"))
         run_test(directory, "matrix_store_failures", SPI + harness("p2_native_6.c"))
+        alloc = (ROOT / "validation/native/alloc.h").read_text()
+        run_test(directory, "discrete_capacity", SPI + alloc + "\n" + harness("p2_native_7.c"))
 
 
 def test_refactor_boundaries_native():

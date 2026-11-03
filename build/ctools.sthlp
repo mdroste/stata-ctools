@@ -43,9 +43,12 @@ The {opt verbose} option is accepted but does not change the output.
 {title:Options}
 
 {phang}
-{opt version} displays the ado and plugin versions and the plugin revision.
-It stores them in {cmd:r(version)}, {cmd:r(plugin_version)}, and
-{cmd:r(plugin_revision)}.
+{opt version} displays the ado and plugin versions, the plugin revision and
+the plugin protocol. It stores them in {cmd:r(version)},
+{cmd:r(plugin_version)}, {cmd:r(plugin_revision)}, and
+{cmd:r(plugin_protocol)}. Every ctools command first checks that the plugin's
+protocol matches the one the ado files need; a plugin from another release
+stops with an error that asks you to reinstall ctools and restart Stata.
 
 {phang}
 {opt environment_check} loads the ctools C plugin and reports whether it was
@@ -69,7 +72,10 @@ shown by {cmd:ctools, environment_check}.
 
 {phang}
 {opt update} downloads and installs the latest version of ctools from GitHub.
-You may need to restart Stata after updating for all changes to take effect.
+Restart Stata after updating, because a loaded plugin is replaced only when
+Stata restarts. If GitHub cannot be reached or the installation fails,
+{cmd:ctools, update} reports the failure and exits with {cmd:net install}'s
+return code.
 
 
 {marker threads}{...}
@@ -101,6 +107,10 @@ a higher value with any of the methods above.
 (most threads any setting can request here), {cmd:r(cpus_detected)},
 {cmd:r(cpus_available)}, and the locals {cmd:r(threads_source)},
 {cmd:r(threads_session)}, {cmd:r(threads_saved)}, and {cmd:r(threads_file)}.
+When global {cmd:CTOOLS_THREADS} is invalid, commands fail until it is
+cleared, so {cmd:r(threads)} is missing and {cmd:r(threads_session)} is
+{cmd:invalid}; {cmd:r(threads_default)} reports the count that applies once
+it is cleared.
 
 {marker commands}{...}
 {title:Available Commands}
@@ -192,5 +202,9 @@ Online: {help cimport}, {help cexport}, {help csort}, {help cmerge}, {help cenco
 {help cdecode}, {help cdestring}, {help csample}, {help cbsample}, {help cwinsor},
 {help crangestat}, {help creghdfe}, {help civreghdfe}, {help cqreg}, {help cpsmatch},
 {help cbinscatter}, {help cppmlhdfe}, {help cinterpolate}, {help csplit},
-{help crangejoin}
+{help crangejoin}, {help cdistinct}, {help chdfe}
+{p_end}
+
+{psee}
+Licenses: {help ctools_licenses} (ctools and the libraries in its plugins)
 {p_end}

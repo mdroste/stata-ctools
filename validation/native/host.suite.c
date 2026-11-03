@@ -147,6 +147,28 @@ int main(void) {
  lifecycle();parsing();ownership();
  int rank=41;assert(ctools_cholesky(NULL,0)==STATA_OK);
  assert(ctools_invsym(NULL,0,NULL,&rank)==STATA_OK&&rank==0);
+ /* ctools_invert_from_cholesky reads L completely before it writes inv, so
+  * L == inv (the in-place call several estimators make) gives the
+  * out-of-place result bit for bit */
+ for(int n=1;n<=17;n+=(n==1?2:14)){
+  double *A=malloc((size_t)n*n*sizeof*A),*L=malloc((size_t)n*n*sizeof*L),*out=malloc((size_t)n*n*sizeof*out);
+  assert(A&&L&&out);
+  for(int i=0;i<n;i++)for(int j=0;j<n;j++)A[i*n+j]=(i==j?n+1.0:0.0)+1.0/(1.0+i+j);
+  memcpy(L,A,(size_t)n*n*sizeof*L);
+  assert(ctools_cholesky(L,n)==STATA_OK);
+  assert(ctools_invert_from_cholesky(L,n,out)==STATA_OK);
+  assert(ctools_invert_from_cholesky(L,n,L)==STATA_OK);
+  assert(!memcmp(L,out,(size_t)n*n*sizeof*L));
+  free(A);free(L);free(out);
+ }
+ /* invsym in the given order (Mata's invsym(A, 1..K)) zeroes the later of
+  * two nearly collinear columns; pivoting on the largest diagonal zeroes the
+  * one with the smaller diagonal */
+ {
+  double A[]={1,1-1e-12,1-1e-12,1+1e-10},inv[4];
+  assert(ctools_invsym_ordered(A,2,inv,&rank)==STATA_OK&&rank==1&&inv[0]==1&&inv[3]==0);
+  assert(ctools_invsym(A,2,inv,&rank)==STATA_OK&&rank==1&&inv[0]==0&&inv[3]!=0);
+ }
  double bad[]={1,2,2,1}, b[]={1,1}, x[]={41,42};
  assert(ctools_solve_cholesky(NULL,b,2,x)==STATA_ERR_INVALID_INPUT);
  assert(ctools_solve_cholesky(bad,b,2,x)==STATA_ERR_SINGULAR);
@@ -705,6 +727,38 @@ int main(void) {
     BinscatterResults results = {.num_by_groups = 1, .groups = &group};
     BinscatterConfig config = {0};
     assert(store_results(&results, &config) == 503);
+    return 0;
+}
+#endif
+
+#if defined(CTOOLS_CASE_p2_native_7)
+/* discrete refuses more distinct values than the result matrix holds before
+ * the per-bin accumulators are allocated: only the O(N) argsort is. */
+#include "cbinscatter/cbinscatter_bins.c"
+static ST_boolean missing(ST_double z) { return z >= mock.missval; }
+int main(void) {
+    setup(); mock.ismissing = missing;
+    enum { N = 100000 };
+    ST_double *x = (ST_double *)malloc(N * sizeof(ST_double));
+    ST_double *y = (ST_double *)malloc(N * sizeof(ST_double));
+    assert(x && y);
+    for (ST_int i = 0; i < N; i++) { x[i] = (ST_double)((i * 7919) % N); y[i] = i % 3; }
+    ByGroupResult group;
+    memset(&group, 0, sizeof(group));
+    size_t before = live_bytes;
+    peak_bytes = live_bytes;
+    assert(compute_bins_discrete(y, x, NULL, N, 0, 500, &group, NULL) == CBINSCATTER_ERR_CAPACITY);
+    assert(peak_bytes - before <= (size_t)N * sizeof(ST_int));
+    assert(live_bytes == before && group.bins == NULL && group.num_bins == 0);
+    /* Within capacity, including exactly at it, the bins are computed */
+    for (ST_int i = 0; i < N; i++) x[i] = i % 5;
+    assert(compute_bins_discrete(y, x, NULL, N, 0, 4, &group, NULL) == CBINSCATTER_ERR_CAPACITY);
+    assert(compute_bins_discrete(y, x, NULL, N, 0, 5, &group, NULL) == CBINSCATTER_OK);
+    assert(group.num_bins == 5 && group.bins[0].n_obs == N / 5 && group.bins[4].x_mean == 4);
+    free(group.bins);
+    free(x);
+    free(y);
+    assert(alive == 0);
     return 0;
 }
 #endif

@@ -67,7 +67,8 @@ created. The number of names must match the number of variables in {it:varlist}.
 encoded numeric versions instead of creating new variables. This is a ctools-specific
 extension not available in Stata's built-in {cmd:encode}. When {opt replace}
 is specified, each original string variable is dropped and replaced with the
-new numeric variable using the same name.
+new numeric variable using the same name, which keeps the source's notes and
+characteristics.
 
 {pstd}
 You must specify either {opt generate()} or {opt replace}, but not both.

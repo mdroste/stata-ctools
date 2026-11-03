@@ -540,8 +540,10 @@ program p2_io
     assert _rc != 0
     assert text == "long string" & id == _n
     mata: st_sstore(., "text", J(3,1,invtokens(J(1,3000,"x"),"")))
-    capture cencode text, gen(encoded)
-    assert _rc != 0
+    * Text over 2,045 bytes is handed to encode, which encodes it
+    cencode text, gen(encoded)
+    encode text, gen(expected)
+    assert encoded == expected & "`: value label encoded'" == "encoded"
     assert strlen(text) == 3000 & id == _n
 end
 
@@ -779,7 +781,8 @@ replace cl=1
 quietly cqreg y x, vce(cluster cl)
 matrix actual=e(V)
 scalar undefined_v=actual[1,1]
-assert missing(undefined_v)
+* qreg posts a zero covariance with rank 0 for one cluster
+assert undefined_v==0 & e(rank)==0 & e(df_r)==e(N)
 
 * A03/A04: invalid metadata/indexes and record-boundary SHP truncation.
 foreach bad in truncated_sst truncated_styles truncated_book truncated_rels invalid_index {
@@ -1759,7 +1762,7 @@ capture noisily {
     capture crangestat (mean) mpg=mpg, interval(weight -100 100)
     assert _rc == 110
     capture crangestat (mean) out=mpg (sum) out=price, interval(weight -100 100)
-    assert _rc == 198
+    assert _rc == 110
     quietly datasignature
     assert "`before'" == "`r(datasignature)'"
     capture confirm variable out
@@ -1893,27 +1896,27 @@ if _rc test_fail "A14 PPML joint tests select retained regressors" "r(`=_rc')"
 else test_pass "A14 PPML joint tests select retained regressors"
 
 capture noisily {
+    * The second variable fails after the first was encoded: it has more
+    * distinct values than a value label holds (encode's r(134)). A strL value
+    * over 2,045 bytes no longer fails: cencode hands it to encode.
     clear
-    set obs 1
+    set obs 70000
     gen str1 a = "x"
-    gen strL b = "z"
-    forvalues i=1/12 {
-        quietly replace b=b+b
-    }
+    gen str8 b = "v" + string(_n)
     quietly datasignature
     local before "`r(datasignature)'"
     capture cencode a b, replace
-    assert _rc != 0
+    assert _rc == 134
     quietly datasignature
     assert "`before'" == "`r(datasignature)'"
     label define first 1 "old"
     capture cencode a b, gen(first second)
-    assert _rc != 0
+    assert _rc == 134
     local old : label first 1
     local added : label first 2, strict
     assert "`old'" == "old" & "`added'" == ""
     gen byte target=9
-    drop in 1
+    quietly drop in 1/l
     capture cencode a, gen(target)
     assert _rc == 110
     local vt : type target

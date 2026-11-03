@@ -2,6 +2,7 @@
 
 program define cdestring
     version 14.1
+    local cmdargs `"`0'"'
 
     * Check observation limit (Stata plugin API limitation)
     if _N > 2147483647 {
@@ -21,7 +22,10 @@ program define cdestring
         mark `iftouse' `if' `in'
         local if "if `iftouse'"
     }
-    if !inrange(`threads', 0, 256) exit 198
+    if !inrange(`threads', 0, 256) {
+        di as error "threads() must be between 0 and 256"
+        exit 198
+    }
 
     * =========================================================================
     * UPFRONT VALIDATION
@@ -151,38 +155,6 @@ program define cdestring
         local dest_varlist "`dest_varlist' `tmp`i''"
     }
 
-    * Get all variable names and build indices for plugin call
-    * Pass ALL variables to plugin so indices match dataset positions
-    unab allvars : *
-    local allvars : list allvars - iftouse
-
-    * Build list of source variable indices (position in allvars)
-    local src_indices ""
-    foreach v of local varlist {
-        local idx = 1
-        foreach av of local allvars {
-            if "`av'" == "`v'" {
-                local src_indices "`src_indices' `idx'"
-                continue, break
-            }
-            local ++idx
-        }
-    }
-
-    * Build list of destination variable indices (position in allvars)
-    local dst_indices ""
-    foreach v of local dest_varlist {
-        local idx = 1
-        foreach av of local allvars {
-            if "`av'" == "`v'" {
-                local dst_indices "`dst_indices' `idx'"
-                continue, break
-            }
-            local ++idx
-        }
-    }
-
-
     * Build option strings for C plugin
     local threads_code ""
     if `threads' > 0 {
@@ -234,18 +206,10 @@ program define cdestring
         quietly _ctools_clock __ct_start92
     }
 
-    * Build the full command string
-    * Format: src1 dst1 src2 dst2 ... nvars=N [options]
-    local cmd_indices ""
-    local i = 1
-    foreach src_idx of local src_indices {
-        local dst_idx : word `i' of `dst_indices'
-        local cmd_indices "`cmd_indices' `src_idx' `dst_idx'"
-        local ++i
-    }
-
-    * Set string width metadata for flat buffer optimization
-    _ctools_strw `allvars'
+    * The plugin varlist holds the sources, then the destinations (seqpairs):
+    * an index list in the argument exceeds Stata's plugin-call argument
+    * length on wide data
+    _ctools_strw `varlist' `dest_varlist'
 
     * Stata answers an if one observation at a time. Without one the plugin
     * skips the check; the if marked after syntax is passed last, as a
@@ -258,12 +222,11 @@ program define cdestring
         local select_code "touse"
     }
 
-    * Call the C plugin with ALL variables (so indices match dataset positions).
     * ignore= goes last so its characters cannot be read as option keywords.
     * The plugin sets local cdestring_failed (nonnumeric count per variable).
     local cdestring_failed ""
-    capture noisily plugin call ctools_plugin `allvars' `marker' `ifcond' `in', ///
-        "cdestring `threads_code' `cmd_indices' nvars=`nvars' `force_code' `percent_code' `dpcomma_code' `float_code' `verbose_code' `select_code' `ignore_code'"
+    capture noisily plugin call ctools_plugin `varlist' `dest_varlist' `marker' `ifcond' `in', ///
+        "cdestring `threads_code' seqpairs nvars=`nvars' `force_code' `percent_code' `dpcomma_code' `float_code' `verbose_code' `select_code' `ignore_code'"
 
     local plugin_rc = _rc
     if `plugin_rc' exit `plugin_rc'
@@ -283,6 +246,10 @@ program define cdestring
     * ignore() characters) is left untouched unless force is specified: no
     * generate, no replace (the plugin did not store it). Others proceed.
     local genrep = cond("`replace'" != "", "replace", "generate")
+    * destring records the ignore() characters it removed in char destring
+    local ignore_chars `"`ignore'"'
+    if "`percent'" != "" & !ustrpos(`"`ignore_chars'"', "%") local ignore_chars `"`ignore_chars'%"'
+    local n_ignore = ustrlen(`"`ignore_chars'"')
     local publish
     local final_names
     local backups
@@ -304,10 +271,35 @@ program define cdestring
         else {
             local vlabel : variable label `v'
             label variable `dv' `"`vlabel'"'
-            local characteristics : char `v'[]
-            foreach ch of local characteristics {
-                local value : char `v'[`ch']
-                char `dv'[`ch'] `"`value'"'
+            local removed ""
+            local nremoved = 0
+            local seen_chars ""
+            forvalues m = 1/`n_ignore' {
+                local t = usubstr(`"`ignore_chars'"', `m', 1)
+                if strpos(`"`seen_chars'"', `"`t'"') continue
+                local seen_chars `"`seen_chars'`t'"'
+                if "`iftouse'" != "" quietly count if ustrpos(`v', `"`t'"') & `iftouse' `in'
+                else quietly count if ustrpos(`v', `"`t'"') `in'
+                if r(N) {
+                    if `"`t'"' == " " local removed `"`removed' space"'
+                    else local removed `"`removed' `t'"'
+                    local ++nremoved
+                }
+            }
+            local removed_text = plural(`nremoved', "Character") + " removed " + ///
+                plural(`nremoved', "was", "were") + `":`removed'"'
+            char `dv'[destring] `"`removed_text'"'
+            char `dv'[destring_cmd] `"cdestring `cmdargs'"'
+            char `v'[destring]
+            char `v'[destring_cmd]
+            * destring copies the characteristics for generate() (through
+            * macros) and moves them with char rename for replace (below)
+            if "`replace'" == "" {
+                local characteristics : char `v'[]
+                foreach ch of local characteristics {
+                    local value : char `v'[`ch']
+                    char `dv'[`ch'] `"`value'"'
+                }
             }
             * Compress to the optimal storage type (mimics destring)
             quietly compress `dv'
@@ -322,6 +314,7 @@ program define cdestring
             else {
                 local final : word `i' of `generate'
                 local final_names `final_names' `final'
+                local converted_sources `converted_sources' `v'
                 di as text "`v' -> `final': " as text "string to " as result "`vtype'"
             }
         }
@@ -340,8 +333,22 @@ program define cdestring
                 exit `publish_rc'
             }
             if "`replace'" != "" {
+                foreach backup of local backups {
+                    gettoken final final_names : final_names
+                    char rename `backup' `final'
+                }
                 drop `backups'
                 order `original_order'
+            }
+            else {
+                * destring places each generate() output right after its source
+                local target_order ""
+                foreach v of local original_order {
+                    local target_order `target_order' `v'
+                    local pos : list posof "`v'" in converted_sources
+                    if `pos' local target_order `target_order' `: word `pos' of `final_names''
+                }
+                order `target_order'
             }
         }
     }

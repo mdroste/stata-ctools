@@ -37,7 +37,6 @@
 
 #define CDESTRING_STR_BUF_SIZE  2048
 #define CDESTRING_MAX_IGNORE    256
-#define CDESTRING_MAX_VARS      1000
 #define CDESTRING_MAX_FLOAT     0x1.fffffep+126  /* maxfloat(); larger is missing in a float */
 
 /* ============================================================================
@@ -205,14 +204,18 @@ static int convert_value(const char *src, const cdestring_options *opts,
  */
 static ST_retcode save_failed_counts(const int *failed, int nvars)
 {
-    char buf[CDESTRING_MAX_VARS * 12 + 1];
+    size_t size = (size_t)nvars * 12 + 1;
+    char *buf = (char *)malloc(size);
+    if (!buf) return 920;
     size_t used = 0;
     buf[0] = '\0';
     for (int v = 0; v < nvars; v++) {
-        used += (size_t)snprintf(buf + used, sizeof(buf) - used, "%s%d",
+        used += (size_t)snprintf(buf + used, size - used, "%s%d",
                                  v ? " " : "", failed[v]);
     }
-    return SF_macro_save("_cdestring_failed", buf);
+    ST_retcode rc = SF_macro_save("_cdestring_failed", buf);
+    free(buf);
+    return rc;
 }
 
 /*
@@ -264,7 +267,7 @@ static int parse_options(const char *args, cdestring_options *opts)
     if (ctools_parse_int_option(args, "nvars", &opts->nvars) != CTOOLS_PARSE_OK) {
         return -1;
     }
-    if (opts->nvars <= 0 || opts->nvars > CDESTRING_MAX_VARS) {
+    if (opts->nvars <= 0 || opts->nvars > SF_nvars()) {
         return -1;
     }
 
@@ -277,19 +280,39 @@ static int parse_options(const char *args, cdestring_options *opts)
         return -2;
     }
 
-    /* Parse variable index pairs from start of args (stack-allocated) */
-    const char *cursor = args;
-    int indices[CDESTRING_MAX_VARS * 2];
-
-    if (ctools_parse_int_array(indices, (size_t)(opts->nvars * 2), &cursor) != 0) {
-        free(opts->src_indices);
-        free(opts->dst_indices);
-        return -1;
-    }
-
-    for (int i = 0; i < opts->nvars; i++) {
-        opts->src_indices[i] = indices[i * 2];
-        opts->dst_indices[i] = indices[i * 2 + 1];
+    if (ctools_parse_bool_option(args, "seqpairs")) {
+        /* The plugin varlist holds the sources, then the destinations: no
+         * index list, which on wide data exceeds Stata's plugin argument
+         * length. */
+        if (2 * (size_t)opts->nvars > (size_t)SF_nvars()) {
+            free(opts->src_indices);
+            free(opts->dst_indices);
+            return -1;
+        }
+        for (int i = 0; i < opts->nvars; i++) {
+            opts->src_indices[i] = i + 1;
+            opts->dst_indices[i] = opts->nvars + i + 1;
+        }
+    } else {
+        /* Variable index pairs from the start of args */
+        const char *cursor = args;
+        int *indices = malloc((size_t)opts->nvars * 2 * sizeof(int));
+        if (!indices) {
+            free(opts->src_indices);
+            free(opts->dst_indices);
+            return -2;
+        }
+        if (ctools_parse_int_array(indices, (size_t)(opts->nvars * 2), &cursor) != 0) {
+            free(indices);
+            free(opts->src_indices);
+            free(opts->dst_indices);
+            return -1;
+        }
+        for (int i = 0; i < opts->nvars; i++) {
+            opts->src_indices[i] = indices[i * 2];
+            opts->dst_indices[i] = indices[i * 2 + 1];
+        }
+        free(indices);
     }
 
     /* Parse ignore= with escape sequence handling */
@@ -350,13 +373,16 @@ ST_retcode cdestring_main(const char *args)
     int nvars = opts.nvars;
     const double missval = SV_missval;
 
-    /* Per-variable counters (stack-allocated, nvars <= CDESTRING_MAX_VARS = 1000) */
-    int var_converted[CDESTRING_MAX_VARS];
-    int var_failed[CDESTRING_MAX_VARS];
-    int var_percent[CDESTRING_MAX_VARS];
-    memset(var_converted, 0, nvars * sizeof(int));
-    memset(var_failed, 0, nvars * sizeof(int));
-    memset(var_percent, 0, nvars * sizeof(int));
+    /* Per-variable counters: converted, failed and percent, nvars each */
+    int *var_counts = (int *)calloc((size_t)nvars * 3, sizeof(int));
+    if (!var_counts) {
+        free_options(&opts);
+        SF_error("cdestring: memory allocation failed\n");
+        return 920;
+    }
+    int *var_converted = var_counts;
+    int *var_failed = var_counts + nvars;
+    int *var_percent = var_counts + 2 * (size_t)nvars;
 
     /* ====================================================================
      * Phase 1: Bulk load source string variables with if/in filtering
@@ -370,6 +396,7 @@ ST_retcode cdestring_main(const char *args)
     if (load_rc != STATA_OK) {
         ctools_filtered_data_free(&filtered);
         free_options(&opts);
+        free(var_counts);
         SF_error("cdestring: failed to load string data\n");
         return ctools_stata_rc(load_rc);
     }
@@ -382,7 +409,9 @@ ST_retcode cdestring_main(const char *args)
         free_options(&opts);
         SF_scal_save("_cdestring_n_converted", 0);
         SF_scal_save("_cdestring_n_failed", 0);
-        return save_failed_counts(var_failed, nvars);
+        ST_retcode empty_rc = save_failed_counts(var_failed, nvars);
+        free(var_counts);
+        return empty_rc;
     }
 
     t_load = ctools_timer_seconds();
@@ -394,11 +423,13 @@ ST_retcode cdestring_main(const char *args)
 
     /* Allocate result arrays: single contiguous block for all variables */
     double *results_block = ctools_safe_malloc3((size_t)nvars, nobs, sizeof(double));
-    double *results_ptrs[CDESTRING_MAX_VARS];
-    double **results = results_ptrs;
-    if (!results_block) {
+    double **results = (double **)malloc((size_t)nvars * sizeof(double *));
+    if (!results_block || !results) {
+        free(results_block);
+        free(results);
         ctools_filtered_data_free(&filtered);
         free_options(&opts);
+        free(var_counts);
         SF_error("cdestring: memory allocation failed\n");
         return 920;
     }
@@ -410,18 +441,23 @@ ST_retcode cdestring_main(const char *args)
     /* Transposed loop: single OMP region with outer loop over observations,
      * inner loop over variables. This gives one fork/join barrier instead of
      * nvars barriers, and keeps per-observation data cache-hot across variables. */
+    int tl_alloc_failed = 0;
     #pragma omp parallel
     {
         /* Thread-local per-variable counters */
-        int tl_converted[CDESTRING_MAX_VARS];
-        int tl_failed[CDESTRING_MAX_VARS];
-        int tl_percent[CDESTRING_MAX_VARS];
-        memset(tl_converted, 0, nvars * sizeof(int));
-        memset(tl_failed, 0, nvars * sizeof(int));
-        memset(tl_percent, 0, nvars * sizeof(int));
+        int *tl_counts = (int *)calloc((size_t)nvars * 3, sizeof(int));
+        int tl_ok = tl_counts != NULL;
+        int *tl_converted = tl_counts;
+        int *tl_failed = tl_ok ? tl_counts + nvars : NULL;
+        int *tl_percent = tl_ok ? tl_counts + 2 * (size_t)nvars : NULL;
+        if (!tl_ok) {
+            #pragma omp atomic write
+            tl_alloc_failed = 1;
+        }
 
         #pragma omp for schedule(static)
         for (size_t i = 0; i < nobs; i++) {
+            if (!tl_ok) continue;
             for (int v = 0; v < nvars; v++) {
                 const char *src = filtered.data.vars[v].data.str[i];
                 if (src == NULL) src = "";
@@ -436,14 +472,26 @@ ST_retcode cdestring_main(const char *args)
         }
 
         /* Aggregate thread-local counters */
-        #pragma omp critical
-        {
-            for (int v = 0; v < nvars; v++) {
-                var_converted[v] += tl_converted[v];
-                var_failed[v] += tl_failed[v];
-                var_percent[v] += tl_percent[v];
+        if (tl_ok) {
+            #pragma omp critical
+            {
+                for (int v = 0; v < nvars; v++) {
+                    var_converted[v] += tl_converted[v];
+                    var_failed[v] += tl_failed[v];
+                    var_percent[v] += tl_percent[v];
+                }
             }
         }
+        free(tl_counts);
+    }
+    if (tl_alloc_failed) {
+        ctools_filtered_data_free(&filtered);
+        free(results_block);
+        free(results);
+        free(var_counts);
+        free_options(&opts);
+        SF_error("cdestring: memory allocation failed\n");
+        return 920;
     }
 
     /* percent: like native, divide the whole variable by 100 when any value
@@ -469,6 +517,8 @@ ST_retcode cdestring_main(const char *args)
     if (mac_rc) {
         ctools_filtered_data_free(&filtered);
         free(results_block);
+        free(results);
+        free(var_counts);
         free_options(&opts);
         return mac_rc;
     }
@@ -503,9 +553,9 @@ ST_retcode cdestring_main(const char *args)
         total_failed += var_failed[v];
     }
 
-    /* Free contiguous results block (results pointer array is stack-allocated) */
     free(results_block);
-    /* var_converted and var_failed are stack-allocated */
+    free(results);
+    free(var_counts);
     if (store_rc) { free_options(&opts); return ctools_stata_rc(store_rc); }
 
     t_total = t_store - t_start;

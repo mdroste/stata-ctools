@@ -12,7 +12,7 @@ program define cbinscatter, eclass
 
     syntax varlist(min=2 max=2 fv) [aw fw pw iw] [if] [in], ///
         [NQuantiles(integer 20)] ///
-        [Controls(varlist fv)] ///
+        [Controls(varlist fv ts)] ///
         [Absorb(varlist)] ///
         [BY(varname)] ///
         [LINEtype(string)] ///
@@ -25,9 +25,9 @@ program define cbinscatter, eclass
         [METHod(string)] ///
         [THReads(integer 0)] ///
         /* Graph options */ ///
-        [TITLE(string)] ///
-        [YTItle(string)] ///
-        [XTItle(string)] ///
+        [TITLE(string asis)] ///
+        [YTItle(string asis)] ///
+        [XTItle(string asis)] ///
         [LEGEND(string asis)] ///
         [COLors(string)] ///
         [MSYMbols(string)] ///
@@ -131,6 +131,20 @@ program define cbinscatter, eclass
         exit 198
     }
 
+    * binscatter options that cbinscatter does not implement are refused,
+    * never ignored; the rest are twoway options. Without a graph they are
+    * checked against twoway, so a typo is an error as it is with the graph.
+    _cbinscatter_options, `options'
+    local options `"`s(options)'"'
+    if "`nograph'" != "" {
+        local check_gropts `"`options'"'
+        if `"`title'"' != "" local check_gropts `"`check_gropts' title(`title')"'
+        if `"`ytitle'"' != "" local check_gropts `"`check_gropts' ytitle(`ytitle')"'
+        if `"`xtitle'"' != "" local check_gropts `"`check_gropts' xtitle(`xtitle')"'
+        if `"`legend'"' != "" local check_gropts `"`check_gropts' legend(`legend')"'
+        _cbinscatter_check_gropts, `check_gropts'
+    }
+
     * =========================================================================
     * END UPFRONT VALIDATION - now proceed with data processing
     * =========================================================================
@@ -162,8 +176,9 @@ program define cbinscatter, eclass
 
     * Stata counts the sample and drops incomplete observations only where
     * the ado needs them before the plugin runs (by-groups, discrete bins,
-    * the verbose header); otherwise the plugin does both while it loads
-    local stata_sample = ("`by'" != "" | "`discrete'" != "" | "`verbose'" != "")
+    * the verbose header, the reportreg regressions); otherwise the plugin
+    * does both while it loads
+    local stata_sample = ("`by'" != "" | "`discrete'" != "" | "`verbose'" != "" | "`reportreg'" != "")
     if `stata_sample' {
         qui count if `touse'
         local nobs = r(N)
@@ -273,12 +288,22 @@ program define cbinscatter, eclass
     }
 
     * Create matrices for C plugin to fill
-    local max_bins = `nquantiles'
+    local bin_rows = `nquantiles' * `num_by_groups'
     if "`discrete'" != "" {
-        * For discrete, could have many more bins - use a reasonable max
-        local max_bins = min(`nobs', 500)
+        * One bin per (group, value): counted exactly for a raw x, bounded by
+        * the sample for a residualized x and trimmed after the plugin. Both
+        * are capped at the largest matrix; the plugin reports more bins.
+        if `method_num' == 0 & `num_controls' + `num_absorb' > 0 {
+            local bin_rows = `nobs'
+        }
+        else {
+            tempvar bin_group
+            quietly _ctools_group `by' `xvar' if `touse', generate(`bin_group')
+            local bin_rows = r(N_groups)
+        }
+        local bin_rows = max(1, min(`bin_rows', c(max_matdim)))
     }
-    matrix __cbinscatter_bins = J(`max_bins' * `num_by_groups', 5, .)
+    matrix __cbinscatter_bins = J(`bin_rows', 5, .)
     if `linetype_num' > 0 {
         matrix __cbinscatter_coefs = J(`num_by_groups', 4, .)
         matrix __cbinscatter_fit_stats = J(`num_by_groups', 2, .)
@@ -325,6 +350,12 @@ program define cbinscatter, eclass
         exit `plugin_rc'
     }
     if !`stata_sample' local nobs = __cbinscatter_N_touse
+    if "`discrete'" != "" {
+        local bins_used = __cbinscatter_bins_used
+        if `bins_used' >= 1 & `bins_used' < rowsof(__cbinscatter_bins) {
+            matrix __cbinscatter_bins = __cbinscatter_bins[1..`bins_used', 1...]
+        }
+    }
 
     _ctools_lap elapsed __ct_lap99 `__ct_lap99'
 
@@ -335,60 +366,19 @@ program define cbinscatter, eclass
 
     * reportreg prints the underlying fit regressions, as binscatter does.
     * Compute these only on request; plotted estimates remain the plugin's.
+    * They use the plugin's sample (marked out above). summarize takes
+    * pweights as the aweights they equal for a mean, and areg, which has no
+    * iweights, is replaced by regress on dummies. A failure leaves no
+    * scratch results behind.
     if "`reportreg'" != "" {
-        local ry `depvar'
-        local rx `xvar'
-        local wt
-        if "`weight'" != "" local wt [`weight'=`weight_var']
-        * areg retains singleton FE groups, matching binscatter's residualization.
-        * Encode labels for string/negative FE values; additional FEs are dummies.
-        local report_absorb
-        local report_fe
-        foreach fe of local absorb {
-            tempvar report_group
-            quietly _ctools_group `fe' if `touse', generate(`report_group')
-            if "`report_absorb'" == "" local report_absorb `report_group'
-            else local report_fe `report_fe' i.`report_group'
-        }
-        if `method_num' == 0 & "`controls'`absorb'" != "" {
-            foreach role in ry rx {
-                tempvar resid
-                if "`absorb'" == "" {
-                    quietly regress ``role'' `controls' `wt' if `touse'
-                    quietly predict double `resid' if `touse', residuals
-                }
-                else {
-                    quietly areg ``role'' `controls' `report_fe' `wt' if `touse', absorb(`report_absorb')
-                    quietly predict double `resid' if `touse', residuals
-                }
-                quietly summarize ``role'' `wt' if `touse', meanonly
-                quietly replace `resid' = `resid' + r(mean) if `touse'
-                local `role' `resid'
-            }
-        }
-        local fitvars `rx'
-        if `linetype_num' >= 2 {
-            tempvar quadratic
-            quietly gen double `quadratic' = `rx'^2 if `touse'
-            local fitvars `quadratic' `fitvars'
-        }
-        if `linetype_num' == 3 {
-            tempvar cubic
-            quietly gen double `cubic' = `rx'^3 if `touse'
-            local fitvars `cubic' `fitvars'
-        }
-        forvalues g=1/`actual_num_groups' {
-            local group_if
-            if "`by'" != "" local group_if & `by' == `g'
-            di as text "Fit regression: `depvar' on `xvar' (group `g')"
-            if `method_num' == 1 & "`absorb'" != "" {
-                areg `ry' `fitvars' `controls' `report_fe' `wt' if `touse' `group_if', absorb(`report_absorb')
-            }
-            else {
-                local fitcontrols
-                if `method_num' == 1 local fitcontrols `controls'
-                regress `ry' `fitvars' `fitcontrols' `wt' if `touse' `group_if'
-            }
+        capture noisily _cbinscatter_reportreg, depvar(`depvar') xvar(`xvar') ///
+            touse(`touse') weight(`weight') weightvar(`weight_var') ///
+            controls(`controls') absorb(`absorb') by(`by') method(`method_num') ///
+            linetype(`linetype_num') groups(`actual_num_groups')
+        if _rc {
+            local report_rc = _rc
+            _ctools_cleanup cbinscatter
+            exit `report_rc'
         }
     }
 
@@ -623,28 +613,18 @@ program define cbinscatter, eclass
                 }
             }
 
-            * Build legend option
-            if `"`legend'"' == "" {
-                local legend_opt `"legend(`legend_labels' order(`legend_order'))"'
-            }
-            else {
-                local legend_opt `"legend(`legend')"'
-            }
+            * Default legend; legend() options given are merged after it
+            local legend_opt `"legend(`legend_labels' order(`legend_order'))"'
         }
 
-        * Set default titles if not specified (like binscatter)
-        if `"`ytitle'"' == "" {
-            local ytitle "`depvar'"
-        }
-        if `"`xtitle'"' == "" {
-            local xtitle "`xvar'"
-        }
-
-        * Build title option only if specified
-        local title_opt ""
-        if `"`title'"' != "" {
-            local title_opt `"title(`"`title'"')"'
-        }
+        * As binscatter does, the defaults come first and the title and
+        * legend options given follow them as typed, so suboptions, several
+        * lines and empty titles reach twoway unchanged
+        local user_gropts
+        if `"`title'"' != "" local user_gropts `"`user_gropts' title(`title')"'
+        if `"`ytitle'"' != "" local user_gropts `"`user_gropts' ytitle(`ytitle')"'
+        if `"`xtitle'"' != "" local user_gropts `"`user_gropts' xtitle(`xtitle')"'
+        if `"`legend'"' != "" local user_gropts `"`user_gropts' legend(`legend')"'
 
         * Execute graph (matching binscatter format)
         * Use temporary frame to avoid twoway overhead on large datasets
@@ -664,10 +644,10 @@ program define cbinscatter, eclass
 
             capture noisily twoway `scatters' `fits', ///
                 graphregion(fcolor(white)) ///
-                ytitle(`"`ytitle'"') ///
-                xtitle(`"`xtitle'"') ///
+                ytitle(`depvar') ///
+                xtitle(`xvar') ///
                 `legend_opt' ///
-                `title_opt' ///
+                `user_gropts' ///
                 `options'
 
             local _graph_rc = _rc
@@ -689,10 +669,10 @@ program define cbinscatter, eclass
 
             capture noisily twoway `scatters' `fits', ///
                 graphregion(fcolor(white)) ///
-                ytitle(`"`ytitle'"') ///
-                xtitle(`"`xtitle'"') ///
+                ytitle(`depvar') ///
+                xtitle(`xvar') ///
                 `legend_opt' ///
-                `title_opt' ///
+                `user_gropts' ///
                 `options'
 
             local _graph_rc = _rc
@@ -716,6 +696,9 @@ program define cbinscatter, eclass
         ereturn matrix coefs = __cbinscatter_coefs
         ereturn matrix fit_stats = __cbinscatter_fit_stats
     }
+    if "`reportreg'" != "" {
+        ereturn matrix reportreg_b = __cbinscatter_reportreg_b
+    }
     ereturn local depvar "`depvar'"
     ereturn local xvar "`xvar'"
     if "`controls'" != "" {
@@ -732,6 +715,135 @@ program define cbinscatter, eclass
     ereturn local cmdline "cbinscatter `0'"
 
     _ctools_cleanup cbinscatter
+end
+
+* reportreg: the fit regressions binscatter prints, on cbinscatter's sample.
+* Leaves their coefficients, one row per group, in __cbinscatter_reportreg_b.
+program define _cbinscatter_reportreg
+    version 14.1
+    syntax, depvar(varname) xvar(varname) touse(varname) method(integer) ///
+        linetype(integer) groups(integer) [weight(string) weightvar(string) ///
+        controls(string) absorb(string) by(string)]
+    local ry `depvar'
+    local rx `xvar'
+    local wt
+    local wt_mean
+    if "`weight'" != "" {
+        local wt [`weight'=`weightvar']
+        local wt_mean `wt'
+        if "`weight'" == "pweight" local wt_mean [aweight=`weightvar']
+    }
+    * areg retains singleton FE groups, matching binscatter's residualization.
+    * Encode labels for string/negative FE values; additional FEs are dummies,
+    * and all of them are with iweights, which areg does not take.
+    local report_absorb
+    local report_fe
+    foreach fe of local absorb {
+        tempvar report_group
+        quietly _ctools_group `fe' if `touse', generate(`report_group')
+        if "`report_absorb'" == "" & "`weight'" != "iweight" local report_absorb `report_group'
+        else local report_fe `report_fe' i.`report_group'
+    }
+    if `method' == 0 & "`controls'`absorb'" != "" {
+        foreach role in ry rx {
+            tempvar resid
+            if "`report_absorb'" == "" {
+                quietly regress ``role'' `controls' `report_fe' `wt' if `touse'
+                quietly predict double `resid' if `touse', residuals
+            }
+            else {
+                quietly areg ``role'' `controls' `report_fe' `wt' if `touse', absorb(`report_absorb')
+                quietly predict double `resid' if `touse', residuals
+            }
+            quietly summarize ``role'' `wt_mean' if `touse', meanonly
+            quietly replace `resid' = `resid' + r(mean) if `touse'
+            local `role' `resid'
+        }
+    }
+    local fitvars `rx'
+    if `linetype' >= 2 {
+        tempvar quadratic
+        quietly gen double `quadratic' = `rx'^2 if `touse'
+        local fitvars `quadratic' `fitvars'
+    }
+    if `linetype' == 3 {
+        tempvar cubic
+        quietly gen double `cubic' = `rx'^3 if `touse'
+        local fitvars `cubic' `fitvars'
+    }
+    tempname coefs
+    forvalues g=1/`groups' {
+        local group_if
+        if "`by'" != "" local group_if & `by' == `g'
+        di as text "Fit regression: `depvar' on `xvar' (group `g')"
+        if `method' == 1 & "`report_absorb'" != "" {
+            areg `ry' `fitvars' `controls' `report_fe' `wt' if `touse' `group_if', absorb(`report_absorb')
+        }
+        else {
+            local fitcontrols
+            if `method' == 1 local fitcontrols `controls' `report_fe'
+            regress `ry' `fitvars' `fitcontrols' `wt' if `touse' `group_if'
+        }
+        matrix `coefs' = nullmat(`coefs') \ e(b)
+    }
+    * Name the x terms x, x^2 and x^3 rather than their temporary variables
+    local names : colfullnames `coefs'
+    if "`rx'" != "`xvar'" local names : subinstr local names "`rx'" "`xvar'", all
+    if `linetype' >= 2 local names : subinstr local names "`quadratic'" "`xvar'^2", all
+    if `linetype' == 3 local names : subinstr local names "`cubic'" "`xvar'^3", all
+    matrix colnames `coefs' = `names'
+    matrix __cbinscatter_reportreg_b = `coefs'
+end
+
+* Refuse binscatter options that cbinscatter does not implement and return
+* the remaining (twoway) options in s(options). replace and nofastxtile do
+* not change cbinscatter's results (savedata() always replaces; quantiles
+* are always exact) and are accepted.
+program define _cbinscatter_options, sclass
+    version 14.1
+    syntax [, MEDians noAddmean RD(string asis) XQ(string asis) ///
+        MColors(string asis) LColors(string asis) savegraph(string asis) ///
+        REPLACE nofastxtile randvar(string asis) randcut(string asis) ///
+        randn(string asis) *]
+    local unsupported
+    foreach name in medians addmean rd xq mcolors lcolors savegraph randvar randcut randn {
+        if `"``name''"' != "" {
+            local shown = cond("`name'" == "addmean", "noaddmean", "`name'")
+            if !inlist("`name'", "medians", "addmean") local shown "`shown'()"
+            local unsupported `unsupported' `shown'
+        }
+    }
+    if "`unsupported'" != "" {
+        di as error "cbinscatter: binscatter option(s) not supported: `unsupported'"
+        exit 198
+    }
+    sreturn local options `"`options'"'
+end
+
+* Check twoway options without drawing a graph: a temporary graph of one
+* point in an empty frame (Stata 16 or later), dropped at once. name() and
+* saving() are left out, so nothing is stored or written.
+program define _cbinscatter_check_gropts
+    version 14.1
+    syntax [, NAME(string asis) SAVing(string asis) *]
+    if `"`options'"' == "" exit
+    tempname check
+    if c(stata_version) >= 16 {
+        tempname frame
+        frame create `frame'
+        capture noisily frame `frame': twoway scatteri 0 0, nodraw `options' name(`check')
+        local rc = _rc
+        frame drop `frame'
+    }
+    else {
+        capture noisily twoway scatteri 0 0, nodraw `options' name(`check')
+        local rc = _rc
+    }
+    capture graph drop `check'
+    if `rc' {
+        di as error "cbinscatter: invalid graph option(s)"
+        exit `rc'
+    }
 end
 
 * Replace the current dataset with the bins in matrix __cbinscatter_bins and

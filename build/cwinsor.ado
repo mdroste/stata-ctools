@@ -90,8 +90,9 @@ program define _cwinsor_impl
         di as error "cwinsor: upper percentile must be between 0 and 100"
         exit 198
     }
-    if `p' >= `q' {
-        di as error "cwinsor: lower percentile (`p') must be less than upper (`q')"
+    * Equal percentiles are allowed, as in winsor2
+    if `p' > `q' {
+        di as error "cwinsor: lower percentile (`p') must not exceed upper (`q')"
         exit 198
     }
 
@@ -115,6 +116,20 @@ program define _cwinsor_impl
     }
 
     local nvars : word count `varlist'
+
+    * The plugin's stores into a frame alias variable have no effect; refuse
+    * them as replace and winsor2 do
+    local inplace = "`suffix'`prefix'" == ""
+    if `inplace' & c(stata_version) >= 18 {
+        foreach v of local varlist {
+            mata: st_local("__cw_alias", strofreal(st_isalias(st_local("v"))))
+            if `__cw_alias' {
+                di as error "cannot change values of alias variables"
+                di as error "    You tried to change values in alias variable `v'."
+                exit 109
+            }
+        }
+    }
 
     * Mark sample
     marksample touse, novarlist
@@ -147,7 +162,6 @@ program define _cwinsor_impl
     * Floating-point outputs can be written directly from the plugin's double
     * working columns. Native recast otherwise copies and scans each column
     * again, then moves it back through the entire dataset.
-    local inplace = "`suffix'`prefix'" == ""
     local direct_outputs = !`inplace' & "`trim'" == ""
     local overlap : list varlist & by
     if "`overlap'" != "" local direct_outputs = 0
@@ -198,12 +212,10 @@ program define _cwinsor_impl
 
     * Checked SPI stores use positions in the plugin varlist, just like reads.
     * Only target variables need store indices; by-variables are read-only.
-    local store_indices ""
-    local __pos = cond(`direct_outputs', `nvars' + `nby', 0)
-    foreach v of local target_varlist {
-        local ++__pos
-        local store_indices "`store_indices' `__pos'"
-    }
+    * The targets are consecutive, so the plugin receives only the position
+    * before the first one (a per-variable list overflows the plugin argument
+    * on wide data).
+    local store_indices = "storebase=" + string(cond(`direct_outputs', `nvars' + `nby', 0))
 
     * Build options
     local opts "p=`p' q=`q'"
@@ -328,6 +340,8 @@ program define _cwinsor_impl
     }
     * Validation hook: fail after the targets were written and relabeled
     if "$CTOOLS_cwinsor_fault" == "post" error 1
+    * Plugin stores do not mark the data changed; replace and winsor2 do
+    if `inplace' mata: st_updata(1)
 
     * Finish timing
     quietly _ctools_clock __ct_now

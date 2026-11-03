@@ -442,6 +442,31 @@ if `rc' == 0 & _N == 3 test_pass "count(1) by(g) with . and .a groups"
 else test_fail "count(1) by(g) with . and .a groups" "rc=`rc', kept `=_N' obs (expected 3)"
 
 * End of csample validation
+* DATA-07: the by prefix and count(0), as sample
+clear
+set obs 100
+gen g = mod(_n, 4)
+sort g
+set seed 9
+preserve
+by g: sample 10
+local n_native = _N
+restore, preserve
+by g: csample 10
+if _N == `n_native' test_pass "DATA-07 by: prefix"
+else test_fail "DATA-07 by: prefix" "N=`=_N' vs `n_native'"
+restore, preserve
+sample 0, count
+local n_native = _N
+restore, preserve
+capture csample, count(0)
+if !_rc & _N == `n_native' test_pass "DATA-07 count(0)"
+else test_fail "DATA-07 count(0)" "rc=`=_rc' N=`=_N' vs `n_native'"
+restore
+capture by g: csample 10, by(g)
+if _rc == 190 test_pass "DATA-07 by: with by() refused (r(190))"
+else test_fail "DATA-07 by: with by() refused" "r(`=_rc')"
+
 noi print_summary "csample"
 }
 

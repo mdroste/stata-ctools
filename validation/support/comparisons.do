@@ -546,6 +546,10 @@ program define benchmark_qreg
             local has_failure = 1
             local all_diffs "`all_diffs' e(`scalar'):missing_in_cqreg"
         }
+        else if missing(`val1') & !missing(`val2') {
+            local has_failure = 1
+            local all_diffs "`all_diffs' e(`scalar'):missing_in_qreg"
+        }
     }
 
     * Compare coefficients e(b) using significant figures
@@ -2264,41 +2268,55 @@ program define benchmark_rangestat
 end
 
 /*******************************************************************************
- * benchmark_range_pctile - Known quantiles of consecutive integer windows
+ * benchmark_range_pctile - Window percentiles against Stata's _pctile
  *
- * rangestat does not implement these statistics. crangestat uses linearly
- * interpolated percentiles (rank 1 + (n-1)*p), whereas Stata's default _pctile
- * uses a different definition. For the fixtures x=key=1,...,N, interpolation
- * gives lo + (hi-lo)*p; IQR is half the window's range. Check all rows, including
- * truncated edge windows, against that closed-form result.
+ * rangestat does not implement these statistics. crangestat follows Stata's
+ * default percentile rule (_pctile, summarize, detail, collapse, egen pctile),
+ * so the reference runs _pctile on each row's window: the rows whose key lies
+ * in [key + low, key + high] (a bound of . is unbounded), within by() groups,
+ * with a nonmissing key, and without the row itself under excludeself. IQR is
+ * p75 - p25. Rows with a missing key, or windows without a nonmissing source
+ * value, have a missing reference.
  ******************************************************************************/
 capture program drop benchmark_range_pctile
 program define benchmark_range_pctile
-    syntax anything(name=spec), INTerval(string) testname(string)
+    syntax anything(name=spec), INTerval(string) testname(string) [BY(varlist) EXCLUDEself]
     gettoken stat source : spec
     confirm numeric variable `source'
     tokenize `interval'
     local key `1'
-    local lower = real("`2'")
-    local upper = real("`3'")
+    local lower `2'
+    local upper `3'
     confirm numeric variable `key'
-    assert !missing(`lower', `upper') & `lower' <= 0 & `upper' >= 0
-    assert `lower' == floor(`lower') & `upper' == floor(`upper')
-    * This oracle only applies to these known, equally spaced fixtures.
-    assert `key' == _n & `source' == _n
-    if "`stat'" != "iqr" {
+    if "`stat'" == "iqr" local plist 25 75
+    else if "`stat'" == "median" local plist 50
+    else {
         assert inlist("`stat'", "p1", "p5", "p10", "p25", "p75", "p90", "p95", "p99")
-        local percentile = real(substr("`stat'", 2, .)) / 100
+        local plist = substr("`stat'", 2, .)
     }
 
     preserve
-    tempvar reference lo hi
-    quietly gen double `lo' = max(1, `key' + `lower')
-    quietly gen double `hi' = min(_N, `key' + `upper')
-    if "`stat'" == "iqr" quietly gen double `reference' = (`hi' - `lo') / 2
-    else quietly gen double `reference' = `lo' + (`hi' - `lo') * `percentile'
+    tempvar reference row ingroup
+    quietly gen double `reference' = .
+    quietly gen long `row' = _n
+    forvalues i = 1/`=_N' {
+        if missing(`key'[`i']) continue
+        local cond !missing(`key')
+        if "`lower'" != "." local cond `cond' & `key' >= `key'[`i'] + (`lower')
+        if "`upper'" != "." local cond `cond' & `key' <= `key'[`i'] + (`upper')
+        foreach b of local by {
+            local cond `cond' & `b' == `b'[`i']
+        }
+        if "`excludeself'" != "" local cond `cond' & `row' != `i'
+        quietly count if `cond' & !missing(`source')
+        if r(N) == 0 continue
+        quietly _pctile `source' if `cond', percentiles(`plist')
+        if "`stat'" == "iqr" quietly replace `reference' = r(r2) - r(r1) in `i'
+        else quietly replace `reference' = r(r1) in `i'
+    }
     capture drop __brp_ctools
-    capture quietly crangestat (`stat') __brp_ctools=`source', interval(`interval')
+    capture quietly crangestat (`stat') __brp_ctools=`source', interval(`interval') ///
+        `=cond("`by'" != "", "by(`by')", "")' `excludeself'
     local rc = _rc
     if `rc' {
         restore

@@ -1509,6 +1509,33 @@ local f : e(functions)
 if "`f'" == "" & x[1] == 1 test_pass "csort without estimation results"
 else test_fail "csort without estimation results" "functions=[`f']"
 
+* RELEASE-05: wide data, where per-variable lists exceeded the plugin argument.
+* Compared in Mata: cf would hold both datasets, twice c(maxvar)'s default.
+capture noisily {
+    clear
+    set obs 50
+    set seed 7
+    gen double id = runiform()
+    forvalues j = 1/2600 {
+        gen byte v`j' = mod(_n * `j', 7)
+    }
+    gen str5 s = string(_n)
+    tempfile g3_wide
+    save `g3_wide'
+    foreach keys in "id" "v1-v1200 id" {
+        use `g3_wide', clear
+        sort `keys'
+        mata: g3_num = st_data(., "id v1-v2600"); g3_str = st_sdata(., "s")
+        use `g3_wide', clear
+        csort `keys'
+        mata: st_local("g3_same", strofreal(g3_num == st_data(., "id v1-v2600") & g3_str == st_sdata(., "s")))
+        mata: mata drop g3_num g3_str
+        assert `g3_same'
+    }
+}
+if _rc test_fail "RELEASE-05 csort on 2,602 variables and 1,201 keys" "r(`=_rc')"
+else test_pass "RELEASE-05 csort on 2,602 variables and 1,201 keys"
+
 * End of csort validation
 noi print_summary "csort"
 }

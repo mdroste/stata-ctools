@@ -15,12 +15,15 @@ program define cbsample
     quietly _ctools_clock __ct_start90
 
     * Parse syntax to match bsample exactly:
-    * bsample [n] [if] [in], [strata(varlist) cluster(varlist) weight(varname)]
+    * bsample [exp] [if] [in], [strata(varlist) cluster(varlist) weight(varname)]
     syntax [anything(name=n)] [if] [in], [STRata(varlist) CLuster(varlist) Weight(varname) Verbose THReads(integer 0)]
     local __wgtvar `weight'
     local weight
     _ctools_cleanup cbsample
-    if !inrange(`threads', 0, 256) exit 198
+    if !inrange(`threads', 0, 256) {
+        di as error "threads() must be between 0 and 256"
+        exit 198
+    }
 
     local __do_timing = ("`verbose'" != "")
 
@@ -40,21 +43,7 @@ program define cbsample
         exit
     }
 
-    * Parse n (positional argument, defaults to _N)
-    if "`n'" == "" {
-        local n = 0
-    }
-    else {
-        capture confirm integer number `n'
-        if _rc != 0 {
-            di as error "cbsample: n must be a positive integer"
-            exit 198
-        }
-        if `n' < 1 {
-            di as error "cbsample: n must be a positive integer"
-            exit 198
-        }
-    }
+    local n_exp `"`n'"'
 
     * Validate weight variable exists if specified (matches bsample behavior)
     if "`__wgtvar'" != "" {
@@ -71,6 +60,10 @@ program define cbsample
     quietly count if `touse'
     local nobs_sample = r(N)
     _return restore `__rhold'
+    * The resample size is an expression, evaluated as bsample does: on the
+    * sample, within each stratum under strata() (so _N counts the stratum)
+    if `"`n_exp'"' == "" | `nobs_sample' == 0 local n = 0
+    else _cbsample_size n : `"`n_exp'"' `touse' "`strata'"
     if `nobs_sample' == 0 {
         if "`strata'" == "" {
             di as error "cbsample: no observations in sampling sample"
@@ -242,4 +235,62 @@ program define cbsample
         di as text "  Threads:      " as result %8.0f _cbsample_threads
         di as text "{hline 60}"
     }
+end
+
+* The resample size bsample takes from [exp]: constant (within each stratum
+* under strata()), an integer, and greater than zero. Stata evaluates _N in
+* the sample (strata: in the stratum). Sizes that differ across strata are
+* not supported.
+program define _cbsample_size
+    args macname colon exp touse strata
+    capture confirm number `exp'
+    if !_rc {
+        local values `exp'
+        local constant 1
+    }
+    else if "`strata'" == "" {
+        tempvar nsamp
+        quietly generate double `nsamp' = (`exp') if `touse'
+        mata: __cb_v = st_data(., st_local("nsamp"), st_local("touse")); ///
+            st_local("constant", strofreal(all(__cb_v :== __cb_v[1]))); ///
+            st_local("values", strofreal(__cb_v[1], "%21.0g"))
+        mata: mata drop __cb_v
+    }
+    else {
+        preserve
+        quietly keep if `touse'
+        tempvar nsamp first
+        quietly bysort `strata': generate double `nsamp' = (`exp')
+        quietly by `strata': generate byte `first' = _n == 1
+        quietly by `strata': replace `first' = . if `nsamp' != `nsamp'[1]
+        quietly count if missing(`first')
+        local constant = r(N) == 0
+        mata: __cb_v = uniqrows(st_data(., st_local("nsamp"), st_local("first"))); ///
+            st_local("values", invtokens(strofreal(__cb_v', "%21.0g")))
+        mata: mata drop __cb_v
+        restore
+        if !`constant' {
+            di as error "expression: `exp': is not constant within strata"
+            exit 198
+        }
+    }
+    if !`constant' {
+        di as error "expression: `exp': is not constant"
+        exit 198
+    }
+    if `: word count `values'' > 1 {
+        di as error "cbsample: resample sizes that differ across strata are not supported; use bsample"
+        exit 198
+    }
+    local value = real("`values'")
+    if !(abs(`value' - int(`value')) < 1e-7) {
+        di as error "expression: `exp': is not an integer"
+        exit 198
+    }
+    if !(`value' > 0) {
+        di as error "resample size must be greater than zero"
+        exit 498
+    }
+    local value = round(`value')
+    c_local `macname' `value'
 end

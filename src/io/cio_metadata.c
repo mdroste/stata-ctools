@@ -13,7 +13,8 @@ const char *cio_storage(cio_dataset *dataset, cio_column *c, char *out, size_t l
         return "double";
     if (!strcmp(dataset->kind, "sasxport5"))
         return "double";
-    int integral = 1, exactfloat = 1;
+    /* As native, non-integers are double, even when float holds them. */
+    int integral = 1;
     double low = 0, high = 0;
     for (size_t i = 0; i < dataset->nobs; i++)
     {
@@ -22,8 +23,6 @@ const char *cio_storage(cio_dataset *dataset, cio_column *c, char *out, size_t l
             continue;
         if (floor(x) != x)
             integral = 0;
-        if ((double)(float)x != x)
-            exactfloat = 0;
         if (x < low)
             low = x;
         if (x > high)
@@ -35,7 +34,7 @@ const char *cio_storage(cio_dataset *dataset, cio_column *c, char *out, size_t l
         return "int";
     if (integral && low >= -2147483647.0 && high <= 2147483620.0)
         return "long";
-    return !strcmp(dataset->kind, "dbase") && exactfloat ? "float" : "double";
+    return "double";
 }
 
 int cio_column_info(cio_dataset *dataset, int index)
@@ -56,6 +55,11 @@ int cio_column_info(cio_dataset *dataset, int index)
     if ((rc = cio_save("__cio_type", (char *)cio_storage(dataset, c, s, sizeof(s)))))
         return rc;
     if ((rc = cio_save("__cio_label", c->label)))
+        return rc;
+    char number[40] = "";
+    if (c->label_numeric)
+        snprintf(number, sizeof(number), "%.17g", c->label_number);
+    if ((rc = cio_save("__cio_labelnumber", number)))
         return rc;
     if ((rc = cio_save("__cio_format", c->format)))
         return rc;

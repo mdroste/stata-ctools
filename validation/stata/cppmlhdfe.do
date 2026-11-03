@@ -1149,6 +1149,159 @@ foreach design in "unrelated 7" "unrelated 30" "fitted 8" {
     assert_scalar_equal `=e(deviance)' `wide_devref' $DEFAULT_SIGFIGS "normal offset `design': e(deviance)"
 }
 
+* Low-mobility worker-firm panels: six periods, a few percent of moves.
+* Some zero outcomes head to a large negative eta without being separated;
+* the IRLS must still converge (it stalled in a deviance cycle when each
+* iteration re-projected the whole working response), and saved individual
+* effects must be recovered.
+capture program drop ppml_mobility_panel
+program define ppml_mobility_panel
+    args seed workers firms moves
+    clear
+    set seed `seed'
+    quietly set obs `workers'
+    gen w = _n
+    quietly expand 6
+    bysort w: gen t = _n
+    gen long f = 1 + mod(w, `firms')
+    bysort w (t): gen byte mv = runiform() < `moves'
+    bysort w (t): replace f = cond(mv, 1 + floor(runiform()*`firms'), f[_n-1]) if _n > 1
+    bysort w (t): gen wa = rnormal() if _n == 1
+    bysort w (t): replace wa = wa[_n-1] if _n > 1
+    gen x = rnormal()
+    gen y = rpoisson(exp(1 + .3*x + .2*wa + mod(f,7)/7))
+end
+* The zero outcomes heading to a large negative eta are separated in the
+* limit: there the fit equals the fit without them. ppmlhdfe stops short in
+* that direction (its _cons differs from the limit by 6e-8 to 1.2e-7 and its
+* e(ll) by 4e-8 to 7e-8, at tolerance 1e-8 and 1e-12 alike), so the
+* reference is ppmlhdfe at a tight tolerance on the sample without those
+* rows: a y = 0 row whose fitted mean is below 1e-2, where every other fitted
+* mean is at least 100 times larger. cppmlhdfe keeps the rows and must reach
+* that limit (and e(N) of the full sample): its coefficients at the default
+* tolerance and at tolerance(1e-12), with e(ll) and e(r2_p).
+foreach design in "2 1000 100 .01" "3 2000 200 .01" "77 400 40 .02" {
+    quietly ppml_mobility_panel `design'
+    capture cppmlhdfe y x, absorb(w f)
+    if _rc {
+        test_fail "low-mobility panel `design'" "rc=`=_rc'"
+        continue
+    }
+    matrix mobility_default_b = e(b)
+    capture cppmlhdfe y x, absorb(w f) tolerance(1e-12)
+    if _rc {
+        test_fail "low-mobility panel `design', tolerance(1e-12)" "rc=`=_rc'"
+        continue
+    }
+    matrix mobility_b = e(b)
+    matrix mobility_V = e(V)
+    local mobility_N = e(N)
+    local mobility_ll = e(ll)
+    local mobility_r2_p = e(r2_p)
+    quietly ppmlhdfe y x, absorb(w f) d(mobility_d) tolerance(1e-12)
+    local mobility_ref_N = e(N)
+    local mobility_ll_0 = e(ll_0)
+    quietly predict double mobility_mu, mu
+    quietly summarize mobility_mu if mobility_mu >= 1e-2, meanonly
+    local mobility_gap = r(min)
+    quietly count if mobility_mu < 1e-2 & y != 0
+    local mobility_positive = r(N)
+    quietly count if mobility_mu < 1e-2
+    local mobility_limit = r(N)
+    quietly summarize mobility_mu if mobility_mu < 1e-2, meanonly
+    if `mobility_limit' == 0 | `mobility_positive' | r(max) * 100 > `mobility_gap' {
+        test_fail "low-mobility panel `design'" "reference limit rows not identified"
+        drop mobility_d mobility_mu
+        continue
+    }
+    quietly ppmlhdfe y x if mobility_mu >= 1e-2, absorb(w f) tolerance(1e-12)
+    matrix mobility_ref_b = e(b)
+    matrix mobility_ref_V = e(V)
+    assert_matrix_equal mobility_default_b mobility_ref_b $DEFAULT_SIGFIGS "low-mobility panel `design': e(b) at the default tolerance"
+    assert_matrix_equal mobility_b mobility_ref_b $DEFAULT_SIGFIGS "low-mobility panel `design': e(b)"
+    * The covariance depends on the fitted means to first order: the IRLS
+    * stops with the separated rows' means near 1e-6 (ppmlhdfe near 1e-4),
+    * which moves e(V) by up to 2e-7 relative from the limit. With
+    * separation(mu), ppmlhdfe's method for such rows, they are dropped once
+    * their means fall below mu_tol(), giving the limit's sample.
+    capture cppmlhdfe y x, absorb(w f) tolerance(1e-12) separation(fe simplex relu mu)
+    if _rc test_fail "low-mobility panel `design', separation(mu)" "rc=`=_rc'"
+    else {
+        matrix mobility_mu_V = e(V)
+        matrix mobility_mu_b = e(b)
+        assert_matrix_equal mobility_mu_b mobility_ref_b $DEFAULT_SIGFIGS "low-mobility panel `design', separation(mu): e(b)"
+        assert_matrix_equal mobility_mu_V mobility_ref_V $DEFAULT_SIGFIGS "low-mobility panel `design', separation(mu): e(V)"
+        if e(N) == `mobility_ref_N' - `mobility_limit' test_pass "low-mobility panel `design', separation(mu): e(N)"
+        else test_fail "low-mobility panel `design', separation(mu): e(N)" "`=e(N)'"
+    }
+    assert_scalar_equal `mobility_ll' `=e(ll)' $DEFAULT_SIGFIGS "low-mobility panel `design': e(ll)"
+    assert_scalar_equal `mobility_r2_p' `=1 - e(ll)/`mobility_ll_0'' $DEFAULT_SIGFIGS "low-mobility panel `design': e(r2_p)"
+    if `mobility_N' == `mobility_ref_N' test_pass "low-mobility panel `design': e(N)"
+    else test_fail "low-mobility panel `design': e(N)" "`mobility_N' vs `mobility_ref_N'"
+    drop mobility_d mobility_mu
+}
+* Saved individual effects on such a panel: recovered (they stopped with
+* r(430)), and they reconstruct the saved sum d(). The effects are
+* identified through the IRLS weights (the fitted means), so the check is the
+* weighted norm of fe1 + fe2 - d() relative to that of d(), at a tight
+* tolerance. (Per row, the sum in the rows heading to the separated limit is
+* only as accurate as the IRLS projection there.) ppmlhdfe's own saved
+* effects differ from its own d() by up to 3e-5 relative per row even at
+* tolerance(1e-12), so they are not the reference.
+foreach design in "1 1000 100 .02" "2 1000 100 .01" {
+    quietly ppml_mobility_panel `design'
+    capture cppmlhdfe y x, absorb(fe1=w fe2=f)
+    if _rc test_fail "saved effects, low-mobility panel `design'" "rc=`=_rc'"
+    else test_pass "saved effects, low-mobility panel `design'"
+    capture drop fe1 fe2
+    capture cppmlhdfe y x, absorb(fe1=w fe2=f) d(saved_sum) tolerance(1e-12)
+    if _rc {
+        test_fail "saved effects reconstruct d(), panel `design'" "rc=`=_rc'"
+        continue
+    }
+    quietly predict double saved_mu, mu
+    quietly generate double saved_error = saved_mu * (fe1 + fe2 - saved_sum)^2 if e(sample)
+    quietly generate double saved_norm = saved_mu * saved_sum^2 if e(sample)
+    quietly summarize saved_error, meanonly
+    local saved_error = r(sum)
+    quietly summarize saved_norm, meanonly
+    local saved_sf = -log10(sqrt(`saved_error' / r(sum)))
+    if `saved_sf' >= $DEFAULT_SIGFIGS test_pass "saved effects reconstruct d(), panel `design'"
+    else test_fail "saved effects reconstruct d(), panel `design'" "weighted sigfigs=`saved_sf'"
+}
+
+* Automatic outputs must not replace a variable the model uses
+clear
+set seed 2411
+set obs 200
+generate double x = rnormal()
+generate g = ceil(_n/10)
+generate double y = rpoisson(exp(.4 + .3*x + .02*g))
+generate double _ppmlhdfe_d = rnormal()
+generate double __hdfe1__ = g
+generate double automatic_copy = _ppmlhdfe_d
+foreach model in "y x _ppmlhdfe_d, absorb(g) d2" "y x [pw=exp(_ppmlhdfe_d)], absorb(g) d2" ///
+    "y x, absorb(g) vce(cluster _ppmlhdfe_d) d2" "y x, absorb(__hdfe1__, savefe)" {
+    capture cppmlhdfe `model'
+    local automatic_rc = _rc
+    capture assert _ppmlhdfe_d == automatic_copy & __hdfe1__ == g
+    if `automatic_rc' == 198 & !_rc test_pass "automatic output used in the model: `model'"
+    else test_fail "automatic output used in the model: `model'" "rc=`automatic_rc'"
+}
+drop _ppmlhdfe_d __hdfe1__ automatic_copy
+
+* e(title) and e(marginsnotok) as ppmlhdfe posts them
+foreach model in "absorb(g)" "noabsorb" {
+    quietly ppmlhdfe y x, `model'
+    local ref_title "`e(title)'"
+    local ref_marginsnotok "`e(marginsnotok)'"
+    quietly cppmlhdfe y x, `model'
+    if "`model'" == "absorb(g)" local ref_title "HDFE PPML regression"
+    if "`e(title)'" == "`ref_title'" & "`e(marginsnotok)'" == "`ref_marginsnotok'" ///
+        test_pass "e(title) and e(marginsnotok): `model'"
+    else test_fail "e(title) and e(marginsnotok): `model'" "[`e(title)'] [`e(marginsnotok)']"
+}
+
 } // end quietly
 
 * Summary
@@ -1523,6 +1676,53 @@ capture noisily {
 }
 if _rc test_fail "native invalid options and scratch cleanup" "r(`=_rc')"
 else test_pass "native invalid options and scratch cleanup"
+
+* vce() as ppmlhdfe's ms_parse_vce reads it: ols, un and r prefixes and
+* conventional; iid is rejected by both
+clear
+set seed 9122
+set obs 600
+gen g=runiformint(1,10)
+gen h=runiformint(1,6)
+gen double x=rnormal()
+gen double z=rnormal()
+gen double y=rpoisson(exp(.3*x-.2*z+.05*g))
+foreach v in ols conventional un unadj rob r {
+    ppml_native_compare y x z, absorb(g h) vce(`v') name("vce(`v')")
+}
+test_error_match, stata_cmd(ppmlhdfe y x z, absorb(g h) vce(iid)) ///
+    ctools_cmd(cppmlhdfe y x z, absorb(g h) vce(iid)) testname("vce(iid) rejected")
+* A variable named verbose is data, never the legacy bare verbose option
+gen double verbose=rnormal()
+ppml_native_compare y verbose x, absorb(g h) name("regressor named verbose")
+ppml_native_compare y x if verbose > 0, absorb(g h) name("if condition on verbose")
+replace verbose=runiformint(1,4)
+ppml_native_compare y x z, absorb(g verbose h) name("absorb() term named verbose")
+drop verbose
+capture quietly cppmlhdfe y x z, absorb(g h) verbose
+local rc=_rc
+if `rc'==0 & `"`e(cmdline)'"'=="cppmlhdfe y x z, absorb(g h) verbose" test_pass "bare verbose option; e(cmdline) as typed"
+else test_fail "bare verbose option; e(cmdline) as typed" `"rc=`rc' cmdline=`e(cmdline)'"'
+* guess(variable): a missing value in the estimation sample is reported
+gen double m=1+y
+replace m=. in 5
+capture cppmlhdfe y x z, absorb(g h) guess(variable m)
+local rc=_rc
+local scratch : all scalars "__cppmlhdfe_*"
+if `rc'==198 & "`scratch'"=="" test_pass "guess() variable with a missing value rejected"
+else test_fail "guess() variable with a missing value rejected" "rc=`rc' scratch=`scratch'"
+quietly cppmlhdfe y x z if _n!=5, absorb(g h) guess(simple) tol(1e-12)
+matrix guess_ref=e(b)
+matrix guess_V=e(V)
+capture quietly cppmlhdfe y x z if _n!=5, absorb(g h) guess(variable m) tol(1e-12)
+local rc=_rc
+if `rc'==0 {
+    matrix guess_got=e(b)
+    ppml_min_sigfigs guess_got guess_ref b guess_ref guess_V
+    if r(min_sigfigs)>=$DEFAULT_SIGFIGS test_pass "guess() variable missing only outside the sample"
+    else test_fail "guess() variable missing only outside the sample" "sigfigs=`r(min_sigfigs)'"
+}
+else test_fail "guess() variable missing only outside the sample" "rc=`rc'"
     global CTOOLS_CASE_COMPLETE "cppmlhdfe_compatibility_cases"
     exit
 }
@@ -1972,6 +2172,21 @@ quietly predict double fitted, mu
 assert fitted > 0 & !missing(fitted) if e(sample)
 quietly cppmlhdfe y x, absorb(g, savefe) d2
 test_pass "successful reruns replace automatic PPML outputs"
+* An interruption after posting (a Break during the display, simulated by
+* the display fault) leaves the new e() with the new automatic outputs
+quietly cppmlhdfe y x, absorb(g, savefe) d2
+generate double first_d = _ppmlhdfe_d
+global CTOOLS_cppmlhdfe_fault display
+capture cppmlhdfe y x if _n > 20, absorb(g, savefe) d2
+local display_rc = _rc
+macro drop CTOOLS_cppmlhdfe_fault
+quietly count if _ppmlhdfe_d != first_d & !missing(_ppmlhdfe_d)
+local display_changed = r(N)
+quietly count if !missing(_ppmlhdfe_d)
+if `display_rc' == 1 & e(N) == 180 & `display_changed' == 180 & r(N) == 180 ///
+    test_pass "interrupted display: new e() with the new automatic outputs"
+else test_fail "interrupted display: new e() with the new automatic outputs" ///
+    "rc=`display_rc' N=`=e(N)' changed=`display_changed'"
 print_summary "cppmlhdfe output publication"
 global CTOOLS_COMPONENT_COMPLETE "cppmlhdfe_publication"
 global CTOOLS_CASE_COMPLETE "cppmlhdfe_publication"

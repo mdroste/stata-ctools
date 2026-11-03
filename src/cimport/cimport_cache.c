@@ -249,7 +249,7 @@ CImportCachedBlock *cimport_cache_pack(CImportCacheBuilder *b, CImportCacheBudge
                     CImportFieldRef field = {b->file_start + (fields[r] >> 32),
                                              (uint32_t)fields[r]};
                     char *text = (char *)data + r * p->length;
-                    if (!quote || !(field.length & CIMPORT_FIELD_QUOTED_FLAG))
+                    if (!(field.length & CIMPORT_FIELD_QUOTED_FLAG))
                     {
                         const char *src = file_data + field.offset;
                         size_t length = CIMPORT_FIELD_LENGTH(field);

@@ -545,6 +545,92 @@ capture cf _all using `rb_copy', all
 if `rc' == 198 & !_rc test_pass "[rollback] snapshot and fast together refused"
 else test_fail "[rollback] snapshot and fast together refused" "rc=`rc', data changed=`=_rc!=0'"
 
+* RELEASE-05: 2,000 variables in one call
+capture noisily {
+    clear
+    set seed 11
+    set obs 200
+    forvalues j = 1/2000 {
+        gen double x`j' = rnormal()
+    }
+    tempfile g3_w
+    preserve
+    foreach v of varlist x1 x2 x1999 x2000 {
+        winsor2 `v', cuts(5 95) replace
+    }
+    save `g3_w'
+    restore
+    cwinsor x*, cuts(5 95)
+    cf x1 x2 x1999 x2000 using `g3_w'
+}
+if _rc test_fail "RELEASE-05 cwinsor on 2,000 variables" "r(`=_rc')"
+else test_pass "RELEASE-05 cwinsor on 2,000 variables"
+* DATA-03: an in-place cwinsor marks the data changed, as winsor2 does
+clear
+set obs 40
+gen double x = _n^2
+tempfile g3_saved
+save `g3_saved'
+foreach call in "x, cuts(5 95)" "x, cuts(5 95) replace" "x, cuts(5 95) replace trim" "x if x > 4, cuts(5 95)" {
+    use `g3_saved', clear
+    cwinsor `call'
+    local changed = c(changed)
+    capture use `g3_saved'
+    if `changed' == 1 & _rc == 4 test_pass "DATA-03 cwinsor marks the data changed: `call'"
+    else test_fail "DATA-03 cwinsor marks the data changed: `call'" "c(changed)=`changed', use r(`=_rc')"
+}
+* DATA-04: in-place writes to a frame alias are refused (r(109)), as replace does
+if c(stata_version) >= 18 {
+    capture frame drop g3_alias
+    frame create g3_alias
+    frame g3_alias {
+        set obs 40
+        gen id = _n
+        gen v = _n * 10
+    }
+    clear
+    set obs 40
+    gen id = _n
+    gen double x = _n
+    frlink 1:1 id, frame(g3_alias)
+    fralias add w = v, from(g3_alias)
+    quietly datasignature
+    local before `r(datasignature)'
+    capture replace w = w in 1
+    local rc_native = _rc
+    foreach call in "w, cuts(10 90)" "w, cuts(10 90) replace" "x w, cuts(10 90) trim" "w if id > 5, cuts(10 90)" {
+        capture cwinsor `call'
+        local rc_ctools = _rc
+        quietly datasignature
+        if `rc_ctools' == 109 & `rc_native' == 109 & "`r(datasignature)'" == "`before'" ///
+            test_pass "DATA-04 alias target refused: `call'"
+        else test_fail "DATA-04 alias target refused: `call'" "replace r(`rc_native'), cwinsor r(`rc_ctools')"
+    }
+    clear
+    frame drop g3_alias
+}
+* DATA-14: equal percentiles, as winsor2 allows
+clear
+set obs 11
+gen double x = _n^2
+gen int k = _n
+foreach v in x k {
+    foreach mode in replace "replace trim" "suffix(_c)" {
+        preserve
+        local wmode = cond("`mode'" == "suffix(_c)", "suffix(_c)", "`mode'")
+        winsor2 `v', cuts(50 50) `wmode'
+        tempfile g3_ref
+        save `g3_ref'
+        restore, preserve
+        capture cwinsor `v', cuts(50 50) `mode'
+        local rc = _rc
+        if !`rc' capture cf _all using `g3_ref'
+        if `rc' | _rc test_fail "DATA-14 cuts(50 50) `v' `mode'" "rc=`rc'"
+        else test_pass "DATA-14 cuts(50 50) `v' `mode'"
+        restore
+    }
+}
+
 } /* end quietly */
 
 print_summary "cwinsor"

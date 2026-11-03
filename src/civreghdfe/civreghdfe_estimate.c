@@ -882,6 +882,12 @@ ST_retcode ivest_compute_2sls(
             SF_error("civreghdfe: Memory allocation failed for the LIML eigenvalue\n");
             return 920;
         }
+        if (lambda < 0.0 && K_iv != K_total) {
+            /* a singular cross-product matrix: no LIML root, never 2SLS
+               under the LIML label */
+            SF_error("civreghdfe: the LIML eigenvalue cannot be computed (singular cross-product matrix)\n");
+            return 498;
+        }
 
         /* For exactly identified models, lambda should be 1 */
         if (K_iv == K_total) {
@@ -1806,7 +1812,7 @@ ST_retcode ivest_compute_2sls(
     est_rc = civreghdfe_compute_underid_test(
         X_endog, Z,
         weights, weight_type, N, N_eff, K_exog, K_endog, K_iv, df_a_full + n_absorbed_iv_all,
-        &rk_om, rk_cluster, s_nclust,
+        dofminus, &rk_om, rk_cluster, s_nclust,
         &underid_stat, &underid_df, &cd_f, &kp_f
     );
     if (est_rc) {
@@ -1851,8 +1857,8 @@ ST_retcode ivest_compute_2sls(
     ST_int endog_df = K_endog;
 
     est_rc = civreghdfe_compute_dwh_test(
-        y, X_exog, X_endog, Z, temp1,
-        N, K_exog, K_endog, K_iv, df_a_full,
+        y, X_exog, X_endog, Z, temp1, weights, weight_type,
+        N, N_eff, K_exog, K_endog, K_iv, df_a_full,
         &endog_chi2, &endog_f, &endog_df
     );
     if (est_rc) {

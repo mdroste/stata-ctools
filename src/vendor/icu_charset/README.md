@@ -10,8 +10,8 @@ The implementation follows ICU's
 [Java source files](https://github.com/unicode-org/icu/tree/release-67-1/icu4j/main/classes/core/src/com/ibm/icu/text):
 `CharsetDetector.java`, `CharsetRecog_UTF8.java`, `CharsetRecog_Unicode.java`,
 `CharsetRecog_2022.java`, `CharsetRecog_mbcs.java` and `CharsetRecog_sbcs.java`.
-The Unicode license is included in `LICENSE` and the distribution's
-`ctools-codecs-LICENSE.txt`.
+The Unicode license is included in `LICENSE` and in the distribution's
+`THIRD_PARTY_NOTICES` and `ctools_licenses.sthlp`.
 
 The C implementation uses ICU's 8,000-byte input sample, zero padding for UTF-16
 detection, confidence calculations, detector order and rules for ties. It omits

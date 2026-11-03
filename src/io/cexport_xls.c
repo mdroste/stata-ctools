@@ -278,7 +278,9 @@ ST_retcode cexport_xls_main(const char *args) {
     if ((rc = cexport_read_local("sheet", &sheet)))
         goto done;
     if (k < 1 || k > 256) {
-        rc = 103;
+        /* A BIFF8 sheet holds 256 columns; native export gives r(198). */
+        ctools_error("cexport", "too many or no variables specified");
+        rc = 198;
         goto done;
     }
     if ((rc = cexport_read_local("missing", &missing)))
@@ -486,6 +488,14 @@ ST_retcode cexport_xls_main(const char *args) {
         if (source) {
             existing = 1;
             fclose(source);
+            /* An edit writes through a symbolic link onto its target. */
+            char *target = ctools_output_target(filename);
+            if (!target) {
+                rc = 920;
+                goto done;
+            }
+            free(filename);
+            filename = target;
         }
     }
     if (existing) {

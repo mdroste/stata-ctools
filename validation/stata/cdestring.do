@@ -1763,6 +1763,65 @@ cdestring s, gen(actual) ignore("`slash't€`tab'y")
 assert actual == expected & actual == 12
 test_pass "ignore distinguishes literal backslashes, tabs, and Unicode"
 
+* RELEASE-05 / DAT-04: 1,200 string variables in one call
+capture noisily {
+    clear
+    set obs 20
+    forvalues j = 1/1200 {
+        gen str5 s`j' = string(_n * `j')
+    }
+    tempfile g3_ref
+    preserve
+    destring s*, replace
+    save `g3_ref'
+    restore
+    cdestring s*, replace
+    cf _all using `g3_ref'
+}
+if _rc test_fail "RELEASE-05 cdestring on 1,200 string variables" "r(`=_rc')"
+else test_pass "RELEASE-05 cdestring on 1,200 string variables"
+* DAT-02: positions as destring leaves them; DAT-03/DAT-08: characteristics
+clear
+input str5 id str5 a str5 b str5 c
+"1" "$1" "2" "x"
+"2" "$3" "4" "y"
+end
+mata: st_global("a[note1]", "from " + char(36) + "BLS table 3"); st_global("a[note0]", "1")
+char a[keep] one
+tempfile g3_src
+save `g3_src'
+foreach mode in "replace" "generate(an bn cn)" {
+    use `g3_src', clear
+    destring a b c, `mode' ignore("$")
+    quietly ds
+    local native_order `r(varlist)'
+    foreach v in a b {
+        local out = cond("`mode'" == "replace", "`v'", "`v'n")
+        mata: st_local("n_note", st_global("`out'[note1]")); st_local("n_rem", st_global("`out'[destring]"))
+        mata: st_local("n_src", st_global("`v'[destring]"))
+        local n_note_`v' `"`macval(n_note)'"'
+        local n_rem_`v' `"`n_rem'"'
+        local n_src_`v' `"`n_src'"'
+    }
+    use `g3_src', clear
+    cdestring a b c, `mode' ignore("$")
+    quietly ds
+    if "`r(varlist)'" == "`native_order'" test_pass "DAT-02 variable order: `mode'"
+    else test_fail "DAT-02 variable order: `mode'" "cdestring `r(varlist)' vs destring `native_order'"
+    foreach v in a b {
+        local out = cond("`mode'" == "replace", "`v'", "`v'n")
+        mata: st_local("c_note", st_global("`out'[note1]")); st_local("c_rem", st_global("`out'[destring]"))
+        mata: st_local("c_cmd", st_global("`out'[destring_cmd]")); st_local("c_src", st_global("`v'[destring]"))
+        if `"`macval(c_note)'"' == `"`macval(n_note_`v')'"' test_pass "DAT-03 note text `v': `mode'"
+        else test_fail "DAT-03 note text `v': `mode'" "differs from destring"
+        if `"`c_rem'"' == `"`n_rem_`v''"' & `"`c_cmd'"' != "" & `"`c_src'"' == `"`n_src_`v''"' ///
+            test_pass "DAT-08 destring characteristics `v': `mode'"
+        else test_fail "DAT-08 destring characteristics `v': `mode'" `"[`c_rem'] vs [`n_rem_`v''], cmd [`c_cmd']"'
+    }
+    if "`: char a[keep]'" == "one" | "`: char an[keep]'" == "one" test_pass "DAT-03 characteristic kept: `mode'"
+    else test_fail "DAT-03 characteristic kept: `mode'" "char keep lost"
+}
+
 * SUMMARY
 * End of cdestring validation
 noi print_summary "cdestring"

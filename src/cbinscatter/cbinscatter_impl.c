@@ -541,6 +541,7 @@ static ST_retcode store_results(
             row++;
         }
     }
+    { ST_retcode rc = SF_scal_save("__cbinscatter_bins_used", (ST_double)(row - 1)); if (rc) return rc; }
 
     /* Store fit coefficients if line fitting was done */
     if (config->linetype > 0) {
@@ -902,10 +903,25 @@ static ST_retcode do_compute_bins(void) {
                               config.has_absorb));
     double t_group_fit = 0.0;
 
-    /* Like binscatter (classic method), an x with no more distinct values
-     * than nquantiles is binned as with option discrete, also under by() and
-     * weights: each group's own values become its bins */
-    if (config.method == 0 && !config.discrete) {
+    /* binscatter's option discrete accepts at most (sample size)/2 distinct
+     * values of the (residualized) x. Like binscatter (classic method), an x
+     * with no more distinct values than nquantiles is binned as with option
+     * discrete, also under by() and weights: each group's own values become
+     * its bins */
+    if (config.discrete) {
+        int few = x_has_few_values(x, N_valid, N_valid / 2);
+        if (few < 0) {
+            rc = CBINSCATTER_ERR_MEMORY;
+            goto cleanup;
+        }
+        if (!few) {
+            SF_error("discrete specified, but number of unique values is > (sample size/2)\n");
+            SF_scal_save("__cbinscatter_reported", 1.0);
+            rc = 134;
+            goto cleanup;
+        }
+    }
+    else if (config.method == 0) {
         int few = x_has_few_values(x, N_valid, config.nquantiles);
         if (few < 0) {
             rc = CBINSCATTER_ERR_MEMORY;
@@ -923,8 +939,9 @@ static ST_retcode do_compute_bins(void) {
     }
 
     /* store_results writes every group's bins into __cbinscatter_bins, which
-     * the ado sized (500 rows per group for discrete). Bins that cannot be
-     * stored fail here, before the binsreg adjustment does N x bins work. */
+     * the ado sized (for discrete, from the number of distinct values, up to
+     * c(max_matdim)). Bins that cannot be stored fail here, before the
+     * binsreg adjustment does N x bins work. */
     const ST_int bin_capacity = SF_row("__cbinscatter_bins");
     ST_int bins_used = 0;
 
@@ -1002,21 +1019,22 @@ static ST_retcode do_compute_bins(void) {
         /* Compute bins (bin assignments and X means) */
         if (config.discrete) {
             rc = compute_bins_discrete(y_group, x_group, w_group, n_group,
-                                       config.compute_se, group, bin_ids);
+                                       config.compute_se, bin_capacity - bins_used,
+                                       group, bin_ids);
         } else {
             rc = compute_bins_single_group(y_group, x_group, w_group, n_group,
                                            &config, pooled_cutpoints, pooled_nq,
                                            group, bin_ids);
         }
 
-        if (rc == CBINSCATTER_OK) {
-            if (group->num_bins > bin_capacity - bins_used) {
-                SF_error("cbinscatter: x has too many distinct values for option discrete "
-                         "(at most 500 per group)\n");
-                rc = 503; /* as the store of a row past the matrix would fail */
-            } else {
-                bins_used += group->num_bins;
-            }
+        if (rc == CBINSCATTER_ERR_CAPACITY ||
+            (rc == CBINSCATTER_OK && group->num_bins > bin_capacity - bins_used)) {
+            SF_error("cbinscatter: option discrete needs more bins than a Stata matrix "
+                     "holds (c(max_matdim))\n");
+            SF_scal_save("__cbinscatter_reported", 1.0);
+            rc = CBINSCATTER_ERR_CAPACITY; /* as the store of a row past the matrix would fail */
+        } else if (rc == CBINSCATTER_OK) {
+            bins_used += group->num_bins;
         }
 
         /* Binsreg method: regression-adjust the Y-means of the bins assigned

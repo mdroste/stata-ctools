@@ -112,7 +112,13 @@ static int output_metadata(ctools_output *out)
     int exists = lstat(out->destination, &st) == 0;
     if (!exists && errno != ENOENT) return -1;
     if (exists && !out->replace) { errno = EEXIST; return -1; }
-    if (exists && !S_ISREG(st.st_mode)) { errno = EINVAL; return -1; }
+    /* As native export does, replace turns a symbolic link into a regular
+     * file with creation defaults and leaves its target untouched. */
+    if (exists && S_ISLNK(st.st_mode)) exists = 0;
+    else if (exists && !S_ISREG(st.st_mode)) { errno = EINVAL; return -1; }
+    /* A write-protected file is not replaced, although the directory allows
+     * the rename; native export refuses it too. */
+    if (exists && access(out->destination, W_OK)) return -2;
     int fd = open(out->temporary, O_WRONLY);
     if (fd < 0) return -1;
     int rc = 0;
@@ -185,10 +191,27 @@ static int output_move(const char *from, const char *to, bool replace)
 #endif
 }
 
+/* A read-only destination is reported as r(608), which each command maps to
+ * the code its native counterpart gives. */
+#ifdef _WIN32
+static int output_readonly(const ctools_output *out)
+{
+    if (!out->replace) return 0;
+    wchar_t *wide = ctools_wpath(out->destination);
+    DWORD attributes = wide ? GetFileAttributesW(wide) : INVALID_FILE_ATTRIBUTES;
+    free(wide);
+    return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_READONLY) &&
+           !(attributes & FILE_ATTRIBUTE_DIRECTORY);
+}
+#endif
+
 ST_retcode ctools_output_commit(ctools_output *out)
 {
 #ifndef _WIN32
-    if (output_metadata(out)) return errno == EEXIST ? 602 : 603;
+    int metadata = output_metadata(out);
+    if (metadata) return metadata == -2 ? 608 : errno == EEXIST ? 602 : 603;
+#else
+    if (output_readonly(out)) return 608;
 #endif
     if (output_move(out->temporary, out->destination, out->replace))
         return errno == EEXIST ? 602 : 603;
@@ -247,8 +270,10 @@ ST_retcode ctools_output_commit_group(ctools_output **outputs, size_t count)
             if (same) { rc = same < 0 ? 603 : 198; goto rollback; }
         }
 #ifndef _WIN32
-        if (output_metadata(out)) { rc = errno == EEXIST ? 602 : 603; goto rollback; }
+        int metadata = output_metadata(out);
+        if (metadata) { rc = metadata == -2 ? 608 : errno == EEXIST ? 602 : 603; goto rollback; }
 #else
+        if (output_readonly(out)) { rc = 608; goto rollback; }
         wchar_t *wide = ctools_wpath(out->destination);
         if (!wide) { rc = 603; goto rollback; }
         DWORD attributes = GetFileAttributesW(wide), error = GetLastError();
@@ -297,6 +322,20 @@ done:
     if (backup) for (size_t i = 0; i < count; i++) ctools_output_cleanup(&backup[i]);
     free(backup); free(saved); free(published);
     return rc;
+}
+
+/* Editing an existing file writes through a symbolic link, as native
+ * modify does: stage and publish next to the link's target. */
+char *ctools_output_target(const char *filename)
+{
+#ifndef _WIN32
+    struct stat st;
+    if (!lstat(filename, &st) && S_ISLNK(st.st_mode)) {
+        char *target = realpath(filename, NULL);
+        if (target) return target;
+    }
+#endif
+    return strdup(filename);
 }
 
 void ctools_output_cleanup(ctools_output *out)

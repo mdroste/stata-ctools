@@ -125,16 +125,20 @@ program define cexport, rclass
     local original_names ""
     * Preformatted string columns, which the writer never quotes
     local formatted_vars ""
+    local ndec 0
     if "`nolabel'" == "" {
         * Default: export value labels
         foreach var of local varlist {
             * Check if variable has a value label attached
             local vallbl : value label `var'
             if "`vallbl'" != "" {
-                * Has value label - decode to temporary string variable
-                tempvar decoded_`var'
-                qui decode `var', gen(`decoded_`var'')
-                qui recast str2045 `decoded_`var''
+                * Has value label - decode to temporary string variable. The
+                * tempvar is named by a counter, so any variable name fits; the
+                * replace statements below widen the decoded str# as needed.
+                local ++ndec
+                tempvar dec`ndec'
+                local dname `dec`ndec''
+                qui decode `var', gen(`dname')
                 local labfmt : format `var'
                 if !(substr("`labfmt'",1,2) == "%t" | substr("`labfmt'",1,3) == "%-t") local labfmt "%18.0g"
                 * Under quote, native export quotes only the label text; a value
@@ -143,12 +147,12 @@ program define cexport, rclass
                 * cells here and mark the column preformatted so the writer
                 * leaves the numeric fallbacks bare.
                 if "`quote'" != "" {
-                    qui replace `decoded_`var'' = char(34) + subinstr(`decoded_`var'', char(34), char(34)+char(34), .) + char(34) if `decoded_`var''!=""
-                    local formatted_vars `formatted_vars' `decoded_`var''
+                    qui replace `dname' = char(34) + subinstr(`dname', char(34), char(34)+char(34), .) + char(34) if `dname'!=""
+                    local formatted_vars `formatted_vars' `dname'
                 }
-                qui replace `decoded_`var'' = strtrim(string(`var',"`labfmt'")) if `decoded_`var''=="" & `var' != .
-                local export_varlist `export_varlist' `decoded_`var''
-                local decoded_vars `decoded_vars' `decoded_`var''
+                qui replace `dname' = strtrim(string(`var',"`labfmt'")) if `dname'=="" & `var' != .
+                local export_varlist `export_varlist' `dname'
+                local decoded_vars `decoded_vars' `dname'
                 local original_names `original_names' `var'
             }
             else {
@@ -321,6 +325,11 @@ program define cexport, rclass
 
     * Clean up global macros
 
+    * The plugin reports a write-protected destination as r(608)
+    if `export_rc' == 608 {
+        di as error `"file `using' is read-only; cannot be modified or erased"'
+        exit 603
+    }
     if `export_rc' {
         di as error "Error exporting data (rc=`export_rc')"
         exit `export_rc'
@@ -439,16 +448,19 @@ program define cexport_excel, rclass
     _cexport_excel_sheet `macval(sheet)'
     local sheet `"`r(sheet)'"'
     local sheet_action `r(action)'
-    if "`sheetmodify'" != "" {
-        if "`sheet_action'" == "sheetreplace" exit 198
-        local sheet_action "sheetmodify"
+    * As export excel does: the separate sheetmodify and sheetreplace options
+    * exclude each other and take precedence over the sheet() suboption.
+    local sheet_option `"sheet(..., `=substr("`sheet_action'", 6, .)')"'
+    if "`sheetmodify'" != "" & "`sheetreplace'" != "" {
+        di as error "invalid syntax; option sheetmodify may not be combined with option sheetreplace"
+        exit 198
     }
-    if "`sheetreplace'" != "" {
-        if "`sheet_action'" == "sheetmodify" exit 198
-        local sheet_action "sheetreplace"
+    if "`sheetmodify'`sheetreplace'" != "" {
+        local sheet_action "`sheetmodify'`sheetreplace'"
+        local sheet_option "`sheet_action'"
     }
     if "`sheet_action'" != "" & "`replace'" != "" {
-        di as error "sheet modification or replacement cannot be combined with replace"
+        di as error "invalid syntax; option `sheet_option' may not be combined with option replace"
         exit 198
     }
 
@@ -536,19 +548,22 @@ program define cexport_excel, rclass
     * Handle value labels
     local export_varlist ""
     local decoded_vars ""
+    local ndec 0
     if "`nolabel'" == "" {
         foreach var of local varlist {
             local vallbl : value label `var'
             if "`vallbl'" != "" {
-                tempvar decoded_`var'
-                qui decode `var', gen(`decoded_`var'')
-                qui recast str2045 `decoded_`var''
+                * A counter names the tempvar, so any variable name fits
+                local ++ndec
+                tempvar dec`ndec'
+                local dname `dec`ndec''
+                qui decode `var', gen(`dname')
                 * Unlabeled values, extended missing values included (.b), are
                 * written as numbers as native export excel does; only system
                 * missing is left empty
-                qui replace `decoded_`var'' = string(`var',"%18.0g") if `decoded_`var''=="" & `var' != .
-                local export_varlist `export_varlist' `decoded_`var''
-                local decoded_vars `decoded_vars' `decoded_`var''
+                qui replace `dname' = string(`var',"%18.0g") if `dname'=="" & `var' != .
+                local export_varlist `export_varlist' `dname'
+                local decoded_vars `decoded_vars' `dname'
             }
             else {
                 local export_varlist `export_varlist' `var'
@@ -614,16 +629,24 @@ program define cexport_excel, rclass
             if substr("`fmt'", 1, 2) == "%t" | substr("`fmt'", 1, 3) == "%-t" {
                 local is_date_fmt = 1
             }
+            * Determine date type: strip % and optional -
+            local fmtsub = substr("`fmt'", 2, .)
+            if substr("`fmtsub'", 1, 1) == "-" local fmtsub = substr("`fmtsub'", 2, .)
+            local datetype = substr("`fmtsub'", 2, 1)
+            * A generic %tg value has no calendar unit: write the raw number
+            if `is_date_fmt' & !inlist("`datetype'", "d", "m", "q", "w", "h", "y", "b", "c", "C") local is_date_fmt = 0
 
             if `is_date_fmt' {
                 local has_date_cols = 1
-                * Determine date type: strip % and optional -
-                local fmtsub = substr("`fmt'", 2, .)
-                if substr("`fmtsub'", 1, 1) == "-" local fmtsub = substr("`fmtsub'", 2, .)
-                local datetype = substr("`fmtsub'", 2, 1)
 
                 tempvar xldate_`export_idx'
-                if "`datetype'" == "d" {
+                if "`datetype'" == "b" {
+                    * Business dates count calendar days: %tb<cal>[:display]
+                    local bcal = substr("`fmtsub'", 3, .)
+                    if strpos("`bcal'", ":") local bcal = substr("`bcal'", 1, strpos("`bcal'", ":") - 1)
+                    qui gen double `xldate_`export_idx'' = dofb(`origvar', "`bcal'") + 21916 if !missing(`origvar')
+                }
+                else if "`datetype'" == "d" {
                     qui gen double `xldate_`export_idx'' = `origvar' + 21916 if !missing(`origvar')
                 }
                 else if "`datetype'" == "m" {
@@ -674,6 +697,17 @@ program define cexport_excel, rclass
 
     if `nvars' == 0 {
         di as error "cexport excel: no variables to export"
+        exit 198
+    }
+    * As export excel does: an empty dataset is r(2000), an empty selection
+    * r(198)
+    if _N == 0 {
+        di as error "no observations"
+        exit 2000
+    }
+    if `nobs' == 0 {
+        if "`excel_engine'" == "cexport_xls" di as error "too many or no observations specified"
+        else di as error "observations must be between 1 and 1048576"
         exit 198
     }
 
@@ -730,7 +764,10 @@ program define cexport_excel, rclass
         local is_date = 0
         if substr("`fmt'", 1, 2) == "%t" | substr("`fmt'", 1, 3) == "%-t" {
             local is_date = 1
-            if strpos("`fmt'", "tc") | strpos("`fmt'", "tC") local is_date = 2
+            * The unit follows %t or %-t; %tg is written as its raw number
+            local unit = substr(subinstr("`fmt'", "%-t", "%t", 1), 3, 1)
+            if inlist("`unit'", "c", "C") local is_date = 2
+            if !inlist("`unit'", "d", "m", "q", "w", "h", "y", "b", "c", "C") local is_date = 0
             capture confirm numeric variable `var'
             if _rc local is_date = 0
         }
@@ -778,6 +815,11 @@ program define cexport_excel, rclass
 
     * Clean up
 
+    * The plugin reports a write-protected destination as r(608)
+    if `export_rc' == 608 {
+        di as error `"file `using' could not be saved"'
+        exit 603
+    }
     if `export_rc' {
         di as error "Error exporting XLSX data (rc=`export_rc')"
         exit `export_rc'
@@ -809,17 +851,28 @@ program define cexport_excel, rclass
 end
 
 * Parse the nested native sheet(name, modify|replace) syntax independently.
+* As export excel does: one name, quoted or not, then modify or replace
+* spelled in full; when both are given the first applies.
 program define _cexport_excel_sheet, rclass
     version 14.1
-    syntax [anything(name=sheet)] [, MODify REPlace]
-    if "`modify'" != "" & "`replace'" != "" exit 198
-    local sheet = strtrim(`"`macval(sheet)'"')
-    if substr(`"`macval(sheet)'"',1,1) == char(34) {
-        gettoken sheet rest : sheet
-        if strtrim(`"`rest'"') != "" exit 198
+    gettoken sheet rest : 0, parse(" ,") quotes
+    if `"`macval(sheet)'"' == "," {
+        local rest `", `macval(rest)'"'
+        local sheet ""
+    }
+    else gettoken sheet : sheet
+    gettoken comma rest : rest, parse(" ,")
+    local action ""
+    local bad = !inlist(`"`comma'"', "", ",") | (`"`comma'"' == "" & `"`macval(rest)'"' != "")
+    while !`bad' & `"`macval(rest)'"' != "" {
+        gettoken word rest : rest, quotes
+        if !inlist(`"`macval(word)'"', "modify", "replace") local bad 1
+        else if "`action'" == "" local action "sheet`word'"
+    }
+    if `bad' {
+        di as error "invalid argument in option sheet()"
+        exit 198
     }
     return local sheet `"`macval(sheet)'"'
-    if "`modify'" != "" return local action "sheetmodify"
-    else if "`replace'" != "" return local action "sheetreplace"
-    else return local action ""
+    return local action "`action'"
 end

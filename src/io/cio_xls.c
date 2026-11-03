@@ -309,7 +309,9 @@ int cio_scan_xls(cio_dataset *dataset, const char *path)
         cio_copy_text(c->format, sizeof(c->format), cio_excel_column_format(&numeric));
         if (!strcmp(allstring, "1"))
             c->is_string = 1;
-        c->format_numbers = c->is_string && *allfmt;
+        /* Numbers in a string column take allstring()'s format, else native's
+           %18.0g text: the ado formats them from the raw values. */
+        c->format_numbers = c->is_string && (*allfmt || numeric.count || numeric.booleans);
     }
     if (r1 >= start)
     {
@@ -373,8 +375,13 @@ int cio_scan_xls(cio_dataset *dataset, const char *path)
             }
         }
     for (int j = 0; j < dataset->nvar; j++)
+    {
+        /* Room for the %18.0g text that replaces each number */
+        if (dataset->cols[j].format_numbers && !*allfmt && dataset->cols[j].width < 18)
+            dataset->cols[j].width = 18;
         if (dataset->cols[j].is_string)
             cio_import_format(&dataset->cols[j], "xls");
+    }
 done:
     xls_set_formula_hander(NULL);
     cio_xls_results_reset();

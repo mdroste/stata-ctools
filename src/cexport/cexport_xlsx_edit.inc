@@ -227,7 +227,10 @@ static void xedit_write_cell(StringBuffer *sb, const xedit_node *fresh,
   char *style = xedit_attr(fresh, "s");
   unsigned index = style ? (unsigned)strtoul(style, NULL, 10) : 0;
   free(style);
-  if (keep && old) {
+  /* Fresh cells carry a style only for dates; keepcellfmt keeps the old
+   * style of every other cell, but a date keeps its date style, as native
+   * export does. */
+  if (keep && old && !index) {
     style = xedit_attr(old, "s");
     index = style ? (unsigned)strtoul(style, NULL, 10) : 0;
     free(style);
@@ -521,15 +524,27 @@ static ST_retcode xlsx_edit_file(XLSXExportContext *ctx,
   char *newbook = NULL, *newrels = NULL, *newtypes = NULL, *newstyles = NULL;
   char shared_path[MAX_PATH_LEN] = "xl/sharedStrings.xml";
   char target[MAX_PATH_LEN] = {0}, chain[MAX_PATH_LEN] = {0}, rid[256] = {0};
-  if (!mz_zip_reader_init_file(&in, ctx->input_filename, 0))
+  /* A file that is not a workbook: native export reports that the file
+   * exists (r(602)), or under modify or replace that it cannot be loaded. */
+  ST_retcode unreadable = ctx->sheet_action ? 603 : 602;
+  snprintf(ctx->error_message, sizeof(ctx->error_message),
+           ctx->sheet_action ? "file %.400s could not be loaded\n"
+                             : "file %.400s already exists\n",
+           ctx->input_filename);
+  if (!mz_zip_reader_init_file(&in, ctx->input_filename, 0)) {
+    rc = unreadable;
     goto done;
+  }
   book = xedit_zip_text(&in, "xl/workbook.xml");
   rels = xedit_zip_text(&in, "xl/_rels/workbook.xml.rels");
   types = xedit_zip_text(&in, "[Content_Types].xml");
   styles = xedit_zip_text(&in, "xl/styles.xml");
   int had_styles = styles != NULL;
-  if (!book || !rels || !types)
+  if (!book || !rels || !types) {
+    rc = unreadable;
     goto done;
+  }
+  ctx->error_message[0] = 0;
   if (!styles)
     styles = strdup(STYLES_XML);
   if (!styles) {
@@ -546,8 +561,10 @@ static ST_retcode xlsx_edit_file(XLSXExportContext *ctx,
     char *name = xedit_attr(&node, "name"), *id = xedit_attr(&node, "sheetId");
     if (id && strtoul(id, NULL, 10) > maxid)
       maxid = (unsigned)strtoul(id, NULL, 10);
-    if (name && ((!ctx->sheet_specified && first) ||
-                 !strcasecmp(name, ctx->sheet_name))) {
+    /* Without sheet(), native export edits the first sheet, whatever its
+     * name; a later sheet named Sheet1 is not a second match. */
+    if (name && (ctx->sheet_specified ? !strcasecmp(name, ctx->sheet_name)
+                                      : first)) {
       char *r = xedit_attr(&node, "r:id");
       if (!r) {
         free(name);

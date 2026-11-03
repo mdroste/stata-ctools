@@ -47,53 +47,111 @@
 
 /* Rank-revealing weighted QR, with a second orthogonalization pass. */
 
+/* Value of factor g's column at row i: 1, or the slope (centered within the
+ * level when an intercept on the same levels is absorbed), as projected. */
+static double ppml_fe_column(const FE_Factor *f, int i)
+{
+    if (!f->slope) return 1;
+    return f->slope[i] - (f->slope_center ? f->slope_center[f->levels[i] - 1] : 0);
+}
+
 /* Recover raw per-level intercept/slope coefficients from the saved sum.
- * All factors participate even when only some outputs were requested. */
+ * All factors participate even when only some outputs were requested.
+ * The coefficients are the IRLS-weighted least-squares fit of the saved sum
+ * on the absorbed effects, solved by conjugate gradients on the normal
+ * equations (CGLS) from zero; plain alternating projections needed very many
+ * sweeps on poorly connected two-way designs (workers and firms with little
+ * mobility) and stopped with r(430). CGLS converges to the minimum-norm
+ * coefficients, one normalization of the effects that are not separately
+ * identified. Stops, as reghdfe's store_alphas, when the weighted mean of
+ * |update| / (|remaining| + scale) is at most the projection tolerance; scale
+ * is the weighted root mean square of the sum, in place of reghdfe's 1, so
+ * that the rule does not depend on the units of the effects. (A bound on the
+ * remaining sum itself cannot be met: rows whose IRLS weight is tiny are
+ * barely fitted, and there the sum is only as accurate as the IRLS
+ * projection.) Fails with 430 after iterate() iterations. */
 static int ppml_save_effects(HDFE_State *S,double *d,const perm_idx_t *obs_map)
 {
     int targets[10],any=0,rc=0;
-    double *alpha[10]={0};
+    double *alpha[10]={0},*direction[10]={0},*gradient[10]={0},*fitted=NULL;
     for(int g=0;g<S->G;g++) {
         char key[32];snprintf(key,sizeof(key),"save_fe_%d",g+1);
         targets[g]=(int)ppml_option(key,0);any|=targets[g]>0;
     }
     if(!any)return 0;
+    fitted=malloc((size_t)S->N*sizeof(double));
+    if(!fitted){rc=920;goto done;}
     for(int g=0;g<S->G;g++) {
-        alpha[g]=calloc((size_t)S->factors[g].num_levels,sizeof(double));
-        if(!alpha[g]){rc=920;goto done;}
+        size_t n=(size_t)S->factors[g].num_levels;
+        alpha[g]=calloc(n,sizeof(double));
+        direction[g]=calloc(n,sizeof(double));
+        gradient[g]=calloc(n,sizeof(double));
+        if(!alpha[g]||!direction[g]||!gradient[g]){rc=920;goto done;}
     }
-    double scale=1;
-    for(int i=0;i<S->N;i++)scale=fmax(scale,fabs(d[i]));
-    int iteration;
-    for(iteration=0;iteration<S->maxiter;iteration++) {
+    double scale=0,sum_w=0;
+    for(int i=0;i<S->N;i++){scale+=S->weights[i]*d[i]*d[i];sum_w+=S->weights[i];}
+    scale=sum_w>0?sqrt(scale/sum_w):0;
+    if(!(scale>0))scale=1;
+    /* d is the remaining sum; gradient = D'W d, direction = gradient */
+    double gamma=0;
+    for(int g=0;g<S->G;g++) {
+        FE_Factor *f=&S->factors[g];
+        for(int i=0;i<S->N;i++)gradient[g][f->levels[i]-1]+=ppml_fe_column(f,i)*S->weights[i]*d[i];
+        for(int l=0;l<f->num_levels;l++){direction[g][l]=gradient[g][l];gamma+=gradient[g][l]*gradient[g][l];}
+    }
+    int iteration,converged=!(gamma>0);
+    for(iteration=0;iteration<S->maxiter && !converged;iteration++) {
+        double delta=0;
+        for(int i=0;i<S->N;i++) {
+            double q=0;
+            for(int g=0;g<S->G;g++){FE_Factor *f=&S->factors[g];q+=ppml_fe_column(f,i)*direction[g][f->levels[i]-1];}
+            fitted[i]=q;
+            delta+=S->weights[i]*q*q;
+        }
+        if(!(delta>0)||!isfinite(delta)){converged=1;break;}
+        double t=gamma/delta,change=0;
+        for(int i=0;i<S->N;i++) {
+            double step=t*fitted[i];
+            d[i]-=step;
+            change+=S->weights[i]*fabs(step)/(fabs(d[i])+scale);
+        }
+        for(int g=0;g<S->G;g++)for(int l=0;l<S->factors[g].num_levels;l++)alpha[g][l]+=t*direction[g][l];
+        if(change<=S->tolerance*sum_w){converged=1;break;}
+        double gamma_new=0;
         for(int g=0;g<S->G;g++) {
-            FE_Factor *f=&S->factors[g];int joint=ppml_joint_slope(S,g);
-            ppml_project(S,d,g);
-            double *a=S->thread_fe_means[g];
-            for(int l=0;l<f->num_levels;l++)alpha[g][l]+=a[l];
-            if(joint) {
-                FE_Factor *h=&S->factors[g+1];double *b=S->thread_fe_means[g+1];
-                for(int l=0;l<f->num_levels;l++){alpha[g][l]-=h->slope_center[l]*b[l];alpha[g+1][l]+=b[l];}
-                g++;
-            }
-            else if(f->slope_center)for(int h=0;h<S->G;h++) {
-                FE_Factor *intercept=&S->factors[h];
-                if(!intercept->slope && intercept->num_levels==f->num_levels &&
-                    !memcmp(intercept->levels,f->levels,(size_t)S->N*sizeof(int))) {
-                    for(int l=0;l<f->num_levels;l++)alpha[h][l]-=f->slope_center[l]*a[l];
-                    break;
-                }
+            FE_Factor *f=&S->factors[g];
+            memset(gradient[g],0,(size_t)f->num_levels*sizeof(double));
+            for(int i=0;i<S->N;i++)gradient[g][f->levels[i]-1]+=ppml_fe_column(f,i)*S->weights[i]*d[i];
+            for(int l=0;l<f->num_levels;l++)gamma_new+=gradient[g][l]*gradient[g][l];
+        }
+        double beta=gamma_new/gamma;
+        for(int g=0;g<S->G;g++)for(int l=0;l<S->factors[g].num_levels;l++)direction[g][l]=gradient[g][l]+beta*direction[g][l];
+        gamma=gamma_new;
+        if(!(gamma>0))converged=1;
+    }
+    if(!converged) {
+        SF_error("cppmlhdfe: the individual fixed effects did not converge; try a larger iterate()\n");
+        rc=430;goto done;
+    }
+    /* Raw coefficients: a centered slope moves its level's intercept */
+    for(int g=0;g<S->G;g++) {
+        FE_Factor *f=&S->factors[g];
+        if(!f->slope || !f->slope_center)continue;
+        for(int h=0;h<S->G;h++) {
+            FE_Factor *intercept=&S->factors[h];
+            if(!intercept->slope && intercept->num_levels==f->num_levels &&
+                !memcmp(intercept->levels,f->levels,(size_t)S->N*sizeof(int))) {
+                for(int l=0;l<f->num_levels;l++)alpha[h][l]-=f->slope_center[l]*alpha[g][l];
+                break;
             }
         }
-        double error=0;for(int i=0;i<S->N;i++)error=fmax(error,fabs(d[i]));
-        if(error<=fmax(S->tolerance,1e-10)*scale)break;
     }
-    if(iteration==S->maxiter){rc=430;goto done;}
     for(int g=0;g<S->G && !rc;g++)if(targets[g]) {
         for(int i=0;i<S->N && !rc;i++)rc=SF_vstore(targets[g],(int)obs_map[i],alpha[g][S->factors[g].levels[i]-1]);
     }
 done:
-    for(int g=0;g<S->G;g++)free(alpha[g]);
+    for(int g=0;g<S->G;g++){free(alpha[g]);free(direction[g]);free(gradient[g]);}
+    free(fitted);
     return rc;
 }
 
@@ -740,7 +798,10 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
             double average=0,sd=0;
             for(i=0;i<N;i++) {
                 output_rc=SF_vdata(options->guess_idx,(int)obs_map[i],&mu[i]);
-                if(output_rc || !isfinite(mu[i]) || mu[i]>=SV_missval){output_rc=198;goto ppml_cleanup;}
+                if(output_rc || !isfinite(mu[i]) || mu[i]>=SV_missval){
+                    if(!output_rc) SF_error("cppmlhdfe: guess() variable cannot have missing values\n");
+                    output_rc=198;goto ppml_cleanup;
+                }
                 average+=mu[i]/N;
             }
             if(options->standardize) {
@@ -871,12 +932,33 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
         deviance_old = deviance;
 
         /* (a) Compute working depvar: z = eta + (y - mu)/mu
-         * Save in z_orig for FE reconstruction; copy into aug_copy for CG. */
+         * Save in z_orig for FE reconstruction; copy into aug_copy for CG.
+         * Exact partialling projects z less the previous iteration's fitted
+         * effects, z_orig - aug_copy, which lie in the span of the fixed
+         * effects: the residual is the same, but the projection's relative
+         * tolerance then applies to that difference instead of to z. Started
+         * from z itself, the error left in rows whose fitted mean has become
+         * tiny (zero outcomes heading to a large negative eta that separation
+         * screening does not remove) is not controlled by the weighted norm;
+         * their eta was thrown back by several units near convergence, so the
+         * deviance jumped up again every few iterations without end on
+         * low-mobility two-way panels. A positive outcome whose mean is at
+         * the floor has a working value near y/floor, and the difference
+         * would lose those digits (with wide offsets the coefficients then
+         * drift); such iterations project z itself. */
+        int warm_start = 0;
+        if (irls_iter && options->exact_partial) {
+            int floored_positive = 0;
+            #pragma omp parallel for schedule(static) reduction(| : floored_positive) if (N > 100000)
+            for (i = 0; i < N; i++) floored_positive |= y[i] > 0 && mu[i] <= PPML_MU_FLOOR;
+            warm_start = !floored_positive;
+        }
         #pragma omp parallel for schedule(static) if (N > 100000)
         for (i = 0; i < N; i++) {
             ST_double z = eta[i] + (y[i] - mu[i]) / mu[i];
+            if (warm_start) aug_copy[i] = z - (z_orig[i] - aug_copy[i]);
+            else aug_copy[i] = options->exact_partial || !irls_iter ? z : aug_copy[i]+z-previous_working[i];
             z_orig[i] = z;
-            aug_copy[i] = options->exact_partial || !irls_iter ? z : aug_copy[i]+z-previous_working[i];
             previous_working[i]=z;
         }
 

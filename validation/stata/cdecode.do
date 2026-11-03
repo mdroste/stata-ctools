@@ -2272,6 +2272,25 @@ set obs 10
 gen x = _n
 test_error_match, stata_cmd(decode x, generate(test)) ctools_cmd(cdecode x, generate(test)) testname("numeric var without labels")
 
+* DATA-12: decode's maxlength() range; DATA-11: replace keeps notes and chars
+clear
+set obs 3
+gen s = "a" + string(_n)
+encode s, gen(n)
+foreach m in 0 32001 -1 {
+    capture decode n, gen(d1) maxlength(`m')
+    local rc_native = _rc
+    capture cdecode n, gen(d2) maxlength(`m')
+    if _rc == `rc_native' & `rc_native' == 198 test_pass "DATA-12 maxlength(`m')"
+    else test_fail "DATA-12 maxlength(`m')" "decode r(`rc_native'), cdecode r(`=_rc')"
+    capture drop d1 d2
+}
+note n: from source
+char n[g3] kept
+cdecode n, replace
+if "`: char n[note1]'" == "from source" & "`: char n[g3]'" == "kept" test_pass "DATA-11 cdecode replace keeps notes and chars"
+else test_fail "DATA-11 cdecode replace keeps notes and chars" "lost"
+
 * SUMMARY
 * End of cdecode validation
 noi print_summary "cdecode"

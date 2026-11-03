@@ -3,7 +3,8 @@
 * _ctools_ebv <b> <V>, names() vmatrix() [base() stub() kkeep() bmatrix()
 *     collinear() cons() kept() colnames()]
 *
-* names() lists every term of the model in e(b) order and base() flags the
+* names() lists every term of the model in e(b) order (none for a model with
+* only the constant) and base() flags the
 * base/omitted placeholders among them (_ctools_fvsplit's r(base); default:
 * none). The other terms are the plugin's columns, in order. Two layouts of
 * the plugin's results are understood:
@@ -26,8 +27,8 @@
 * created when there are none) and colnames() a caller local for the names.
 program define _ctools_ebv
     version 14.1
-    syntax namelist(min=2 max=2), NAMES(string) Vmatrix(name) ///
-        [BASE(string) STUB(string) KKeep(integer -1) Bmatrix(name) ///
+    syntax namelist(min=2 max=2), Vmatrix(name) ///
+        [NAMES(string) BASE(string) STUB(string) KKeep(integer -1) Bmatrix(name) ///
          COLLinear(string) CONS(name) KEPT(name) COLNames(name)]
     gettoken b V : namelist
     if ("`stub'" == "") == ("`bmatrix'" == "") | ("`stub'" != "" & `kkeep' < 0) {
@@ -43,7 +44,26 @@ end
 
 capture mata: mata drop _ctools_ebv_build()
 capture mata: mata drop _ctools_ebv_scalar()
+capture mata: mata drop _ctools_ebv_omit()
 mata:
+/* The omitted form of a term: o.x, and for an interaction the o operator on
+ * every part (co.x#co.x, 1o.g#co.x), which is how Stata names it; an o.
+ * prefix on an interaction is not recognized as omitted. */
+string scalar _ctools_ebv_omit(string scalar name)
+{
+    string rowvector parts
+    real scalar i, dot
+
+    if (!strpos(name, "#")) return("o." + name)
+    parts = tokens(subinstr(name, "#", " "))
+    for (i = 1; i <= cols(parts); i++) {
+        dot = strpos(parts[i], ".")
+        if (dot) parts[i] = substr(parts[i], 1, dot - 1) + "o" + substr(parts[i], dot, .)
+        else parts[i] = "o." + parts[i]
+    }
+    return(invtokens(parts, "#"))
+}
+
 real scalar _ctools_ebv_scalar(string scalar name)
 {
     real matrix value
@@ -124,7 +144,7 @@ void _ctools_ebv_build(string scalar bname, string scalar Vname)
     st_matrix(Vname, V)
 
     for (i = 1; i <= Ks; i++) {
-        if (coll[i]) names[sent[i]] = "o." + names[sent[i]]
+        if (coll[i]) names[sent[i]] = _ctools_ebv_omit(names[sent[i]])
     }
     if (hascons) names = names, "_cons"
     st_local("outnames", invtokens(names))

@@ -31,7 +31,6 @@
 {synopt:{opt a:bsorb(varlist)}}categorical variables to absorb as fixed effects{p_end}
 
 {syntab:Estimators}
-{synopt:{opt b0(matname)}}initial values matrix for CUE estimation{p_end}
 {synopt:{opt liml}}use limited-information maximum likelihood (LIML){p_end}
 {synopt:{opt fuller(#)}}use Fuller's modified LIML with parameter {it:#}{p_end}
 {synopt:{opt kclass(#)}}use k-class estimator with {it:k} = {it:#}{p_end}
@@ -41,7 +40,7 @@
 {syntab:VCE/SE}
 {synopt:{opt vce(vcetype)}}variance-covariance estimation: {opt un:adjusted}, {opt r:obust}, {opt cl:uster} {it:clustvar} [{it:clustvar2}]{p_end}
 {synopt:{opt r:obust}}heteroskedasticity-robust SEs (alias for vce(robust)){p_end}
-{synopt:{opt cl:uster(varlist)}}cluster-robust SEs (alias for vce(cluster varlist)){p_end}
+{synopt:{opt cl:uster(varlist)}}cluster-robust SEs (alias for vce(cluster varlist)); may be combined with {opt robust}{p_end}
 {synopt:{opt small}}use small-sample adjustments (df corrections){p_end}
 {synopt:{opt dofminus(#)}}subtract {it:#} from residual degrees of freedom{p_end}
 {synopt:{opt sdofminus(#)}}additional DOF adjustment for small-sample VCE correction{p_end}
@@ -55,7 +54,8 @@
 
 {syntab:Estimation Settings}
 {synopt:{opt tol:erance(#)}}convergence tolerance for CG solver (default: 1e-8){p_end}
-{synopt:{opt max:iter(#)}}maximum CG iterations (default: 500){p_end}
+{synopt:{opt max:iter(#)}}maximum CG iterations (default: 16000){p_end}
+{synopt:{opt iterate(#)}}synonym for {opt maxiter()}, as in {cmd:ivreghdfe}{p_end}
 {synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
 {synopt:{opt noc:onstant}}suppress constant term (absorbed with FE){p_end}
 
@@ -80,6 +80,8 @@
 {synopt:{opt noomit:ted}}do not display omitted reference categories{p_end}
 {synopt:{opt omit:ted}}display omitted reference categories{p_end}
 {synopt:{opt vsquish}}suppress blank space in output{p_end}
+{synopt:{opt coefl:egend}}display the coefficient legend instead of the table{p_end}
+{synopt:{opt cformat(%fmt)}}format of coefficients, standard errors and confidence limits{p_end}
 {synopt:{opt noemptycells}}do not display empty cells for interactions{p_end}
 {synopt:{opt baselev:els}}display base levels of factor variables{p_end}
 {synopt:{opt allbaselev:els}}display all base levels{p_end}
@@ -105,7 +107,7 @@
 {p2colreset}{...}
 {p 4 6 2}
 {opt aweight}s, {opt fweight}s, and {opt pweight}s are allowed;
-see {help weight}.
+see {help weight}. {cmd:by} is allowed; see {help prefix}.
 
 
 {marker description}{...}
@@ -123,7 +125,22 @@ are specified in parentheses with an equals sign. Fixed effects are optional. Th
 alternative estimators can be selected via options. Without the parenthesized
 instrument specification, the command estimates OLS. Exogenous regressors may
 appear before or after the parentheses. Factor-variable and time-series
-operators are allowed in regressor and instrument lists.
+operators are allowed in regressor and instrument lists, and time-series
+operators on the dependent variable. As in {cmd:ivreg2}, a term listed twice is
+used once, and a term listed both as exogenous and as endogenous is exogenous.
+
+{pstd}
+Differences from {cmd:ivreghdfe}: a regressor or instrument absorbed by the
+fixed effects (partialled sum of squares at most min(1e-6, {opt tolerance()}/10)
+times its sum of squares before partialling, the {cmd:reghdfe} rule) is omitted,
+where {cmd:ivreghdfe} keeps the rounding noise that remains of it; when an
+endogenous and an exogenous regressor are exactly collinear, the endogenous one
+is omitted ({cmd:ivreg2} omits the exogenous one); an endogenous variable listed
+among the instruments is an error ({cmd:ivreg2} reclassifies it); {cmd:e(df_m)} is
+the number of estimated slopes ({cmd:ivreg2} adds {opt sdofminus()} and the
+partialled-out regressors). {cmd:ivreghdfe}'s {opt dofadjustments()},
+{opt keepsingletons}, {opt nocollin} and {opt sfirst}, a non-integer {opt bw()},
+{cmd:predict, d} and {cmd:dresiduals}, and {cmd:estat ic} are not available.
 
 
 {marker options}{...}
@@ -152,8 +169,17 @@ computed from a generalized eigenvalue problem. The LIML k value (lambda) is sto
 k value.
 
 {phang}
-{opt kclass(#)} requests the k-class estimator with {it:k} = {it:#}. Special cases:
-k=0 is OLS, k=1 is 2SLS, k=lambda is LIML.
+{opt kclass(#)} requests the k-class estimator with {it:k} = {it:#}, which must
+not be negative. {cmd:kclass(1)} is 2SLS and k=lambda is LIML; {cmd:kclass(0)}
+(the default) requests no k-class estimator.
+
+{phang}
+As {cmd:ivreg2} parses them, {opt liml}, {opt fuller()} and {opt kclass()} cannot be
+combined with {opt gmm2s} or {opt cue}, {opt liml} (or {opt fuller()}) cannot be
+combined with {opt kclass()}, {opt gmm2s} cannot be combined with {opt cue}, and
+the {opt fuller()} parameter cannot be negative: each is an error (r(198)).
+{cmd:ivreg2} and {cmd:ivreghdfe} skip some of these checks and run one of the
+estimators.
 
 {phang}
 {opt gmm2s} requests two-step efficient GMM estimation. This uses an optimal weighting
@@ -163,9 +189,8 @@ matrix computed from first-step residuals.
 {opt cue} requests continuously-updated GMM (CUE) estimation. CUE recomputes the moment covariance at each candidate coefficient vector.
 
 {phang}
-{opt b0(matname)} specifies a matrix of initial coefficient values for iterative
-estimators like CUE. The matrix must be conformable with the coefficient vector.
-If not specified, 2SLS estimates are used as starting values.
+{cmd:ivreg2}'s {opt b0()} option (the CUE objective at a given coefficient
+vector) is not supported and is an error.
 
 {dlgtab:VCE/SE}
 
@@ -260,7 +285,9 @@ kernel whatever {opt kernel()} is, and with {opt kiefer} they are the iid
 solver used in HDFE absorption. Default is 1e-8.
 
 {phang}
-{opt maxiter(#)} specifies the maximum number of CG iterations. Default is 500. Both {opt maxiter()} and {opt tolerance()} must be positive.
+{opt maxiter(#)} specifies the maximum number of CG iterations. Default is 16000, as
+in {cmd:reghdfe} and {cmd:ivreghdfe}; {opt iterate(#)} is a synonym. Both
+{opt maxiter()} and {opt tolerance()} must be positive.
 A projection that exhausts its iteration limit returns error 430.
 
 {phang}
@@ -318,7 +345,8 @@ method, sample size, R-squared, and other summary statistics.
 {phang}
 {opt nofooter} suppresses the output footer, which includes the diagnostic
 tests (underidentification test, weak identification test, Sargan/Hansen test,
-Stock-Yogo critical values, and instruments list).
+Stock-Yogo critical values, and instruments list) and the reduced form shown by
+{opt rf}. The statistics are still stored in {cmd:e()}.
 
 {phang}
 {opt nooutput} suppresses the coefficient table. The estimation is still
@@ -396,6 +424,8 @@ Variables specified in {opt partial()} must be included in the model as exogenou
 regressors. The partialling is performed after fixed effect absorption, on the
 demeaned data, and uses the estimation weights. A partial() variable that is
 collinear with earlier ones or absorbed by the fixed effects is dropped with a note.
+Without {opt absorb()}, the constant is partialled out as well and counted in
+{cmd:e(partial_ct)}, as in {cmd:ivreg2}; {cmd:e(b)} then has no {cmd:_cons}.
 
 {dlgtab:Save Results}
 
@@ -542,7 +572,7 @@ coefficients, as with {cmd:ivreghdfe}.
 {synopt:{cmd:e(level)}}confidence level{p_end}
 
 {p2col 5 20 24 2: First-stage scalars}{p_end}
-{synopt:{cmd:e(F_first1)}}first-stage F-stat for 1st endogenous var{p_end}
+{synopt:{cmd:e(F_first1)}}first-stage F-stat for 1st endogenous var (missing for an endogenous variable dropped as collinear){p_end}
 {synopt:{cmd:e(F_first2)}}first-stage F-stat for 2nd endogenous var{p_end}
 {synopt:{cmd:e(...)}}(additional F_first{it:k} for each endogenous var){p_end}
 {synopt:{cmd:e(partial_r2_1)}}partial R² for 1st endogenous var (if ffirst){p_end}
@@ -558,8 +588,13 @@ coefficients, as with {cmd:ivreghdfe}.
 {synopt:{cmd:e(sargan)}}Sargan or Hansen J statistic (overidentification; missing if S is rank deficient){p_end}
 {synopt:{cmd:e(sargan_df)}}degrees of freedom for overidentification test{p_end}
 {synopt:{cmd:e(sargan_p)}}p-value for overidentification test{p_end}
-{synopt:{cmd:e(endog_chi2)}}endogeneity test chi-squared statistic{p_end}
-{synopt:{cmd:e(endog_f)}}endogeneity test F-statistic{p_end}
+{synopt:{cmd:e(j)}, {cmd:e(jdf)}, {cmd:e(jp)}}the same, under {cmd:ivreg2}'s names{p_end}
+{synopt:{cmd:e(cdf)}}the Cragg-Donald F, under {cmd:ivreg2}'s name{p_end}
+{synopt:{cmd:e(Fp)}}p-value of {cmd:e(F)}{p_end}
+{synopt:{cmd:e(r2c)}}centered R-squared (as {cmd:e(r2)}){p_end}
+{synopt:{cmd:e(endog_ct)}, {cmd:e(exexog_ct)}, {cmd:e(inexog_ct)}}numbers of endogenous regressors, excluded instruments and included exogenous regressors{p_end}
+{synopt:{cmd:e(endog_chi2)}}regression-based Wu-Hausman endogeneity test under iid errors: the Wald statistic of the first-stage residuals added to the (weighted) model, {cmd:e(endog_df)} times {cmd:e(endog_f)}{p_end}
+{synopt:{cmd:e(endog_f)}}its F form, the F of {cmd:regress} {it:y X v}{cmd:; test} {it:v} for the first-stage residuals {it:v}{p_end}
 {synopt:{cmd:e(endog_df)}}degrees of freedom for endogeneity test{p_end}
 {synopt:{cmd:e(endog_p)}}p-value for endogeneity test{p_end}
 
@@ -587,6 +622,7 @@ coefficients, as with {cmd:ivreghdfe}.
 {synopt:{cmd:e(endogvars)}}endogenous variables{p_end}
 {synopt:{cmd:e(exogvars)}}exogenous variables{p_end}
 {synopt:{cmd:e(instruments)}}excluded instruments{p_end}
+{synopt:{cmd:e(instd)}, {cmd:e(inexog)}, {cmd:e(exexog)}, {cmd:e(insts)}}instrumented, included exogenous, excluded and all instruments (expanded terms), as {cmd:ivreg2} names them{p_end}
 {synopt:{cmd:e(absorb)}}absorbed fixed effects{p_end}
 {synopt:{cmd:e(title)}}estimation method title{p_end}
 {synopt:{cmd:e(model)}}estimator: 2sls, liml, fuller, kclass, gmm2s, or cue{p_end}

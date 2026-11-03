@@ -407,3 +407,59 @@ def test_sort_keys_native():
                 ),
             )
             print(f"PASS sort_keys openmp={omp}", flush=True)
+
+
+def test_sort_engine_work_native():
+    """Merge-engine strlen work, IPS4o progress on equal keys, parallel scratch."""
+    source_root = Path(os.environ.get("CTOOLS_TEST_SOURCE", ROOT / "src"))
+    with tempfile.TemporaryDirectory(prefix="ctools-sort-work-") as temporary:
+        directory = Path(temporary)
+        for engine in ("merge", "ips4o", "sample"):
+            source = directory / f"{engine}.c"
+            source.write_text(harness(f"sort_work_{engine}"))
+            for omp in (False, True):
+                binary = directory / f"{engine}-{'omp' if omp else 'serial'}"
+                flags = [
+                    "-std=c11",
+                    "-O1",
+                    "-g",
+                    "-fno-fast-math",
+                    "-fno-omit-frame-pointer",
+                    "-pthread",
+                    "-I",
+                    str(source_root),
+                ]
+                sanitizers = os.environ.get("CTOOLS_SANITIZERS", "undefined")
+                if sanitizers:
+                    flags += ["-fsanitize=" + sanitizers]
+                if platform.system() == "Darwin":
+                    flags += ["-DSYSTEM=APPLEMAC", "-D_DARWIN_C_SOURCE"]
+                    if omp:
+                        prefix = str(openmp_prefix())
+                        flags += [
+                            "-Xpreprocessor",
+                            "-fopenmp",
+                            "-I",
+                            prefix + "/include",
+                            prefix + "/lib/libomp.a",
+                        ]
+                else:
+                    flags += ["-DSYSTEM=STUNIX", "-D_GNU_SOURCE"]
+                    if omp:
+                        flags += ["-fopenmp"]
+                compiler = shlex.split(os.environ.get("CC", "clang"))
+                libraries = [] if platform.system() == "Darwin" else ["-lm"]
+                compile_native(
+                    [*compiler, *flags, str(source), *libraries, "-o", str(binary)], check=True
+                )
+                subprocess.run(
+                    [str(binary)],
+                    check=True,
+                    timeout=300,
+                    env=dict(
+                        os.environ,
+                        ASAN_OPTIONS="detect_leaks=0:abort_on_error=1",
+                        UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1",
+                    ),
+                )
+                print(f"PASS sort engine work {engine} openmp={omp}", flush=True)

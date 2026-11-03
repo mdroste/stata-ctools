@@ -49,6 +49,106 @@ static void poly_to_x_basis(const ST_double *a, ST_int p, ST_double center,
     }
 }
 
+/* binscatter fits qfit as regress y x^2 x, whose collinearity check keeps
+ * the constant and then each power, highest first, that is independent of
+ * those kept. When x takes no more distinct values than the order, a lower
+ * power is the redundant one (the centered powers would drop the highest),
+ * and the kept terms interpolate the weighted mean of y at each value.
+ * Returns 1 after fitting so, 0 when x has more distinct values. */
+static int fit_few_values(const ST_double *y, const ST_double *x, const ST_double *weights,
+                          ST_int N, ST_int order, ST_double *coefs, ST_double *r2)
+{
+    ST_double vals[4], sw[4] = {0.0}, swy[4] = {0.0}, mean[4];
+    ST_double col[4][4], basis[4][4], system[4][5];
+    ST_int power[4], kept[4], d = 0, nkept = 0;
+    if (order < 2 || order > 3) return 0;
+    for (ST_int i = 0; i < N; i++) {
+        ST_int k = 0;
+        while (k < d && vals[k] != x[i]) k++;
+        if (k == d) {
+            if (d == order) return 0;
+            vals[d++] = x[i];
+        }
+        ST_double w = weights ? weights[i] : 1.0;
+        sw[k] += w;
+        swy[k] += w * y[i];
+    }
+    if (d < 2) return 0;
+    ST_double scale = 0.0, total_w = 0.0, total_wy = 0.0;
+    for (ST_int k = 0; k < d; k++) {
+        if (!(sw[k] > 0.0)) return 0;
+        mean[k] = swy[k] / sw[k];
+        total_w += sw[k];
+        total_wy += swy[k];
+        scale = fmax(scale, fabs(vals[k]));
+    }
+    /* Columns in regress's order, 1, x^order, ..., x, at the d values (x
+     * scaled by max |x|); Gram-Schmidt keeps each independent one */
+    power[0] = 0;
+    for (ST_int c = 1; c <= order; c++) power[c] = order - c + 1;
+    for (ST_int c = 0; c <= order && nkept < d; c++) {
+        ST_double norm0 = 0.0, norm = 0.0;
+        for (ST_int k = 0; k < d; k++) {
+            col[c][k] = pow(vals[k] / scale, (double)power[c]);
+            basis[nkept][k] = col[c][k];
+            norm0 += col[c][k] * col[c][k];
+        }
+        for (ST_int b = 0; b < nkept; b++) {
+            ST_double dot = 0.0;
+            for (ST_int k = 0; k < d; k++) dot += basis[b][k] * col[c][k];
+            for (ST_int k = 0; k < d; k++) basis[nkept][k] -= dot * basis[b][k];
+        }
+        for (ST_int k = 0; k < d; k++) norm += basis[nkept][k] * basis[nkept][k];
+        if (!(norm0 > 0.0) || norm <= 1e-20 * norm0) continue;
+        for (ST_int k = 0; k < d; k++) basis[nkept][k] /= sqrt(norm);
+        kept[nkept++] = c;
+    }
+    if (nkept != d) return 0;
+    /* Interpolate: sum_j beta_j col[kept_j] = mean at each value */
+    for (ST_int k = 0; k < d; k++) {
+        for (ST_int j = 0; j < d; j++) system[k][j] = col[kept[j]][k];
+        system[k][d] = mean[k];
+    }
+    for (ST_int j = 0; j < d; j++) {
+        ST_int pivot = j;
+        for (ST_int k = j + 1; k < d; k++)
+            if (fabs(system[k][j]) > fabs(system[pivot][j])) pivot = k;
+        if (pivot != j)
+            for (ST_int t = 0; t <= d; t++) {
+                ST_double z = system[j][t];
+                system[j][t] = system[pivot][t];
+                system[pivot][t] = z;
+            }
+        if (system[j][j] == 0.0) return 0;
+        for (ST_int k = j + 1; k < d; k++) {
+            ST_double f = system[k][j] / system[j][j];
+            for (ST_int t = j; t <= d; t++) system[k][t] -= f * system[j][t];
+        }
+    }
+    for (ST_int j = order; j >= 0; j--) coefs[j] = 0.0;
+    for (ST_int j = d - 1; j >= 0; j--) {
+        ST_double z = system[j][d];
+        for (ST_int t = j + 1; t < d; t++) z -= system[j][t] * system[t][d];
+        system[j][d] = z / system[j][j];
+        coefs[power[kept[j]]] = system[j][d] / pow(scale, (double)power[kept[j]]);
+    }
+    ST_double ybar = total_wy / total_w, tss = 0.0, rss = 0.0;
+    for (ST_int i = 0; i < N; i++) {
+        ST_int k = 0;
+        while (vals[k] != x[i]) k++;
+        ST_double w = weights ? weights[i] : 1.0;
+        tss += w * (y[i] - ybar) * (y[i] - ybar);
+        rss += w * (y[i] - mean[k]) * (y[i] - mean[k]);
+    }
+    *r2 = 0.0;
+    if (tss > 0.0) {
+        *r2 = 1.0 - rss / tss;
+        if (*r2 < 0.0) *r2 = 0.0;
+        if (*r2 > 1.0) *r2 = 1.0;
+    }
+    return 1;
+}
+
 static ST_retcode fit_polynomial_joint(
     const ST_double *y,
     const ST_double *x,
@@ -77,6 +177,8 @@ static ST_retcode fit_polynomial_joint(
     if (!controls) K = 0;
     for (j = 0; j <= order; j++) coefs[j] = 0.0;
     *r2 = 0.0;
+    if (K == 0 && G == 0 && fit_few_values(y, x, weights, N, order, coefs, r2))
+        return CBINSCATTER_OK;
 
     const ST_int num_blocks = cbs_num_blocks(N);
     ST_double *blk_sums = NULL;

@@ -343,7 +343,7 @@ ST_double civreghdfe_compute_liml_lambda(
     memcpy(ZtZ_L, ZtZ, (size_t)K_iv * K_iv * sizeof(ST_double));
     if (ctools_cholesky(ZtZ_L, K_iv) != 0) {
         free(Y); free(ZtZ); free(ZtZ_inv); free(ZtZ_L);
-        return 1.0;
+        return -1.0;
     }
     ST_int inverse_rc = ctools_invert_from_cholesky(ZtZ_L, K_iv, ZtZ_inv);
     free(ZtZ_L);
@@ -434,7 +434,7 @@ ST_double civreghdfe_compute_liml_lambda(
             free(Y); free(ZtZ); free(ZtZ_inv); free(ZtY); free(YtY);
             free(ZtZ_inv_ZtY); free(QWW); free(ZtY_t_ZtZ_inv_ZtY); free(QWW1);
             free(Z2tZ2); free(Z2tZ2_inv); free(Z2tZ2_L);
-            return 1.0;
+            return -1.0;
         }
         ST_int inverse2_rc = ctools_invert_from_cholesky(Z2tZ2_L, K_exog, Z2tZ2_inv);
         free(Z2tZ2_L);
@@ -482,6 +482,35 @@ ST_double civreghdfe_compute_liml_lambda(
         memcpy(QWW1, YtY, (size_t)K_Y * K_Y * sizeof(ST_double));
     }
 
+    /* lambda, the smallest root of |QWW1 - lambda QWW| = 0, does not depend
+     * on the units of y and X_endog: QWW and QWW1 are equilibrated by
+     * D = diag(QWW)^(-1/2) first, so the absolute Jacobi tolerances act on
+     * unit-scale matrices (the cross products scale with the data). A QWW
+     * that is not positive definite has no LIML root (returned as -1). */
+    for (i = 0; i < K_Y; i++) {
+        if (!(QWW[i * K_Y + i] > 0.0)) {
+            free(Y); free(ZtZ); free(ZtZ_inv); free(ZtY); free(YtY);
+            free(ZtZ_inv_ZtY); free(QWW); free(ZtY_t_ZtZ_inv_ZtY); free(QWW1);
+            return -1.0;
+        }
+    }
+    {
+        ST_double *dscale = (ST_double *)malloc((size_t)K_Y * sizeof(ST_double));
+        if (!dscale) {
+            free(Y); free(ZtZ); free(ZtZ_inv); free(ZtY); free(YtY);
+            free(ZtZ_inv_ZtY); free(QWW); free(ZtY_t_ZtZ_inv_ZtY); free(QWW1);
+            return NAN;
+        }
+        for (i = 0; i < K_Y; i++) dscale[i] = 1.0 / sqrt(QWW[i * K_Y + i]);
+        for (j = 0; j < K_Y; j++) {
+            for (i = 0; i < K_Y; i++) {
+                QWW[j * K_Y + i] *= dscale[i] * dscale[j];
+                QWW1[j * K_Y + i] *= dscale[i] * dscale[j];
+            }
+        }
+        free(dscale);
+    }
+
     /* Compute lambda = min eigenvalue of QWW^(-1/2) * QWW1 * QWW^(-1/2) */
     ST_double *QWW_inv_sqrt = (ST_double *)calloc((size_t)K_Y * K_Y, sizeof(ST_double));
     ST_double *temp1 = (ST_double *)calloc((size_t)K_Y * K_Y, sizeof(ST_double));
@@ -498,7 +527,7 @@ ST_double civreghdfe_compute_liml_lambda(
         free(Y); free(ZtZ); free(ZtZ_inv); free(ZtY); free(YtY);
         free(ZtZ_inv_ZtY); free(QWW); free(ZtY_t_ZtZ_inv_ZtY);
         free(QWW1); free(QWW_inv_sqrt); free(temp1); free(M_for_eigen);
-        return pow_rc == -2 ? NAN : 1.0;
+        return pow_rc == -2 ? NAN : -1.0;
     }
 
     ctools_matmul_ab(QWW_inv_sqrt, QWW1, K_Y, K_Y, K_Y, temp1);

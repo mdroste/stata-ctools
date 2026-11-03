@@ -14,7 +14,7 @@
  *   - Vectored I/O (pwritev/writev) for batched writes
  *   - Windows async batching with WaitForMultipleObjects
  *   - Pre-fault mmap pages (MADV_POPULATE_WRITE on Linux 5.14+)
- *   - Optional direct I/O (FILE_FLAG_NO_BUFFERING on Windows)
+ *   - Optional write-through (FILE_FLAG_WRITE_THROUGH on Windows)
  *   - Deferred fsync for non-critical exports
  *
  * All writes are in binary mode with explicit line endings controlled
@@ -112,6 +112,9 @@ int cexport_io_open(cexport_io_file *file, const char *filename,
  * @param size  Total size to pre-allocate
  * @return      0 on success, -1 on error
  */
+/* Returned by cexport_io_presize when the mmap backend cannot reserve disk
+ * blocks; nothing is mapped and the pwrite backend can be used instead. */
+#define CEXPORT_IO_UNRESERVED (-2)
 int cexport_io_presize(cexport_io_file *file, size_t size);
 
 /*

@@ -2360,6 +2360,61 @@ local same = ("`sum'" == "`r(checksum)' `r(filelen)'")
 if `same' test_pass "datafmt bytes: auto (price %8.0gc)"
 else test_fail "datafmt bytes: auto (price %8.0gc)" "file differs from export delimited"
 
+* Value labels: any variable name, and no str2045 copies of the decoded text
+print_section "value labels: long names and memory"
+clear
+set obs 3
+gen byte respondent_employment_status_cat = _n
+label define cx_emp 1 "employed" 2 "un, employed"
+label values respondent_employment_status_cat cx_emp
+gen byte abcdefghijklmnopqrstuvwxyzabcdef = 3 - _n
+label values abcdefghijklmnopqrstuvwxyzabcdef cx_emp
+foreach o in "" "quote" {
+    export delimited using "`cx_native'", `o' replace
+    capture noisily cexport delimited using "`cx_ctools'", `o' replace
+    local rc = _rc
+    local same = 0
+    if !`rc' {
+        checksum "`cx_native'"
+        local sum = "`r(checksum)' `r(filelen)'"
+        checksum "`cx_ctools'"
+        local same = ("`sum'" == "`r(checksum)' `r(filelen)'")
+    }
+    if `same' test_pass `"labeled 32-character names bytes: `o'"'
+    else test_fail `"labeled 32-character names bytes: `o'"' "rc=`rc' or file differs from export delimited"
+}
+* 200,000 observations of two labeled bytes fit in 64 MB as for export
+* delimited and export excel; decoded copies of str2045 would need 800 MB.
+clear
+capture noisily {
+    set max_memory 64m
+    set obs 200000
+    gen byte a = mod(_n, 3)
+    gen byte b = mod(_n, 2)
+    label define cx_ab 0 "zero" 1 "one" 2 "two"
+    label values a cx_ab
+    label values b cx_ab
+    export delimited using "`cx_native'", replace
+    capture noisily cexport delimited using "`cx_ctools'", replace
+    local rc = _rc
+    local same = 0
+    if !`rc' {
+        checksum "`cx_native'"
+        local sum = "`r(checksum)' `r(filelen)'"
+        checksum "`cx_ctools'"
+        local same = ("`sum'" == "`r(checksum)' `r(filelen)'")
+    }
+    if `same' test_pass "labeled export within max_memory: delimited"
+    else test_fail "labeled export within max_memory: delimited" "rc=`rc' or file differs from export delimited"
+    keep in 1/50000
+    capture noisily cexport excel using "temp/cx_memory.xlsx", replace
+    if !_rc test_pass "labeled export within max_memory: excel"
+    else test_fail "labeled export within max_memory: excel" "rc=`=_rc'"
+}
+if _rc test_fail "labeled export within max_memory" "setup rc=`=_rc'"
+clear
+set max_memory .
+
 * Cleanup and summary
 
 local files : dir "temp" files "*.csv"

@@ -3,6 +3,14 @@
 program define cqreg, eclass
     version 14.1
 
+    if replay() {
+        if "`e(cmd)'" != "cqreg" error 301
+        syntax [, Level(cilevel) *]
+        _get_diopts diopts, `options'
+        _cqreg_display, level(`level') `diopts'
+        exit
+    }
+
     * Start wall clock timer (must be before any work for accurate rmsg match)
     quietly _ctools_clock __ct_lap99
 
@@ -19,8 +27,12 @@ program define cqreg, eclass
     * Capture full command line before parsing
     local cmdline "cqreg `0'"
 
-    syntax varlist(min=2 numeric fv) [if] [in], [Quantile(real 0.5) Absorb(varlist) ///
-        VCE(string) DENmethod(string) BWmethod(string) Verbose TOLerance(real 1e-12) MAXiter(integer 200) NOPReprocess(integer 0) THReads(integer 0)]
+    syntax varlist(min=1 numeric fv) [if] [in], [Quantile(real 0.5) Absorb(varlist) ///
+        VCE(string) DENmethod(string) BWmethod(string) Verbose TOLerance(real 1e-12) MAXiter(integer 200) NOPReprocess(integer 0) THReads(integer 0) ///
+        Level(cilevel) NOLOg LOg *]
+    * qreg's display options; nolog and log are accepted (cqreg prints no
+    * iteration log)
+    _get_diopts diopts, `options'
 
     * Least-squares partialling is not valid for the quantile-loss objective.
     if "`absorb'" != "" {
@@ -216,7 +228,9 @@ program define cqreg, eclass
 
     * Pre-compute bandwidth in Stata for exact precision match with qreg.
     * Using Stata's invnormal()/normalden() avoids C approximation errors.
-    local __bw_alpha = 0.05
+    * As qreg, the Hall-Sheather and Chamberlain bandwidths use the
+    * confidence level: alpha = 1 - level/100
+    local __bw_alpha = 1 - `level'/100
     local __invtau = invnormal(`quantile')
     local __phi_invtau = normalden(`__invtau')
     local __invtau2 = (`__invtau')^2
@@ -278,6 +292,8 @@ program define cqreg, eclass
 
     * Create matrix to store VCE (plugin will fill __cqreg_V)
     matrix __cqreg_V = J(`K_x' + 1, `K_x' + 1, 0)
+    * and the same covariance in the plugin's scaled response units (rank)
+    matrix __cqreg_Vn = J(`K_x' + 1, `K_x' + 1, 0)
 
     * Call the C plugin with full_regression subcommand
     capture noisily plugin call ctools_plugin `plugin_varlist', ///
@@ -311,18 +327,28 @@ program define cqreg, eclass
     * e(b) and e(V) in qreg's layout: every term in order, with zeros for
     * omitted regressors (o. prefix) and for factor-variable base levels
     tempname b V
-    _ctools_ebv `b' `V', names(`coef_names_all') base(`coef_is_base') ///
-        stub(__cqreg) kkeep(`K_keep') vmatrix(__cqreg_V) cons(__cqreg_cons)
+    if `"`coef_names_all'"' == "" {
+        * constant-only model
+        matrix `b' = (__cqreg_cons)
+        matrix `V' = __cqreg_V
+        matrix colnames `b' = _cons
+        matrix colnames `V' = _cons
+        matrix rownames `V' = _cons
+    }
+    else {
+        _ctools_ebv `b' `V', names(`coef_names_all') base(`coef_is_base') ///
+            stub(__cqreg) kkeep(`K_keep') vmatrix(__cqreg_V) cons(__cqreg_cons)
+    }
     local K_full = colsof(`b')
 
-    * Assess covariance rank in normalized units. At extreme scales Stata's
-    * ereturn post can discard even a valid covariance; do not report a
-    * successful fit with a zero matrix substituted by that host check.
+    * Assess covariance rank in the plugin's scaled response units (the
+    * spread of y near one), so it does not depend on the units of y. At
+    * extreme scales Stata's ereturn post can discard even a valid
+    * covariance; do not report a successful fit with a zero matrix
+    * substituted by that host check.
     tempname rank_V rank_scale rank_inverse posted_scale
-    matrix `rank_V' = `V'
-    mata: st_numscalar("`rank_scale'", max(abs(st_matrix("`rank_V'"))))
-    if !missing(`rank_scale') & `rank_scale' > 0 ///
-        matrix `rank_V' = `rank_V' / `rank_scale'
+    matrix `rank_V' = __cqreg_Vn
+    mata: st_numscalar("`rank_scale'", max(abs(st_matrix("`V'"))))
     ereturn post `b' `V', esample(`touse') depname(`depvar') obs(`N_final')
     mata: st_numscalar("`posted_scale'", max(abs(st_matrix("e(V)"))))
     if !missing(`rank_scale') & `rank_scale' > 0 & `posted_scale' == 0 {
@@ -345,7 +371,6 @@ program define cqreg, eclass
     * df_r as qreg: N - e(rank), so directions the VCE zeroes (no density)
     * do not count
     local df_r = `N_final' - e(rank)
-    if `df_r' < 1 local df_r = 1
     ereturn scalar sparsity = `sparsity'
     ereturn scalar bwidth = `bandwidth'
     if `denmethod_num' == 2 {
@@ -375,6 +400,7 @@ program define cqreg, eclass
     ereturn local properties "b V"
     ereturn local marginsnotok "stdp stddp residuals"
     ereturn local vce = cond(`vcetype'==0, "iid", cond(`vcetype'==1, "robust", "cluster"))
+    if `vcetype' != 0 ereturn local vcetype "Robust"
     ereturn local denmethod "`denmethod_name'"
     if `denmethod_num' == 2 {
         ereturn local kernel "`kernel_name'"
@@ -386,26 +412,7 @@ program define cqreg, eclass
     }
 
     * Display results (matching qreg format exactly)
-    di as text ""
-
-    * Title line - match qreg exactly
-    if `quantile' == 0.5 {
-        di as text "Median regression" _col(52) "Number of obs =" _col(68) as result %10.0fc `N_final'
-    }
-    else {
-        di as text "`quantile' Quantile regression" _col(52) "Number of obs =" _col(68) as result %10.0fc `N_final'
-    }
-
-    * Raw sum of deviations line - match qreg format
-    di as text "  Raw sum of deviations " as result %-8.6g `sum_rdev' as text " (about " as result %-9.7g `q_v' as text ")"
-
-    * Min sum of deviations line
-    di as text "  Min sum of deviations " as result %-8.6g `sum_adev' _col(52) as text "Pseudo R2     =" _col(68) as result %10.4f `r2_p'
-
-    di as text ""
-
-    * Display coefficient table
-    ereturn display
+    _cqreg_display, level(`level') `diopts'
 
     * Stop wall clock timer (after all work, before display)
     _ctools_lap elapsed __ct_lap99 `__ct_lap99'
@@ -486,6 +493,31 @@ program define cqreg, eclass
     }
 
     _ctools_cleanup cqreg
+end
+
+* Header and coefficient table of the posted results (also on replay)
+program define _cqreg_display
+    syntax [, Level(cilevel) *]
+    di as text ""
+
+    * Title line - match qreg exactly
+    if e(q) == 0.5 {
+        di as text "Median regression" _col(52) "Number of obs =" _col(68) as result %10.0fc e(N)
+    }
+    else {
+        di as text "`=e(q)' Quantile regression" _col(52) "Number of obs =" _col(68) as result %10.0fc e(N)
+    }
+
+    * Raw sum of deviations line - match qreg format
+    di as text "  Raw sum of deviations " as result %-8.6g e(sum_rdev) as text " (about " as result %-9.7g e(q_v) as text ")"
+
+    * Min sum of deviations line
+    di as text "  Min sum of deviations " as result %-8.6g e(sum_adev) _col(52) as text "Pseudo R2     =" _col(68) as result %10.4f e(r2_p)
+
+    di as text ""
+
+    * Display coefficient table
+    ereturn display, level(`level') `options'
 end
 
 * Kernel of denmethod(kernel(name)), with the names and abbreviations of

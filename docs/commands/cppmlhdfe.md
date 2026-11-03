@@ -60,8 +60,18 @@ lose digits; `cppmlhdfe` keeps them, so the two can differ there.
 | Projection transform | `transform(symmetric_kaczmarz)`, `kaczmarz`, or `cimmino` |
 | Column pools and LSMR | `poolsize(0)` (all columns), `btol(1e-8)`, `conlim(1e8)` |
 
-`use_exact_partial(0)` reuses the preceding partialled working response and
-regressors. `use_exact_solver(1)` uses weighted pivoted QR. `min_ok()` requires
+`use_exact_partial(1)` (the default) projects the working response and the
+original regressors each iteration. From the second iteration the projected
+response is the working response less the previous iteration's fitted effects:
+the residual is the same, but the projection tolerance applies to that
+difference. Projecting the whole working response left an uncontrolled error in
+rows whose fitted mean had become tiny (zero outcomes heading to a large negative
+eta that the separation checks do not remove, as on low-mobility worker-firm
+panels); their eta was thrown back, the deviance rose again every few
+iterations, and the fit stopped with error 430. While a positive outcome has
+its mean at the floor, whose working value is near y/floor, the working
+response itself is projected. `use_exact_partial(0)` reuses the preceding
+partialled working response and regressors. `use_exact_solver(1)` uses weighted pivoted QR. `min_ok()` requires
 repeated qualifying convergence checks. Strict ReLU returns error 9010 when
 its iteration limit is reached without a certificate. `tagsep(name)` switches
 to a diagnostic-only ReLU run, overrides the requested separation methods, and
@@ -74,7 +84,15 @@ Individual effects can be saved with `absorb(firm_fe=firm year_fe=year)` or
 `absorb(firm year, savefe)`. The latter creates `__hdfe1__`, `__hdfe2__`, etc.
 For `trend_fe=firm##c.trend`, the slope is saved as `trend_feSlope1`; multiple
 slopes use successive numbers. Their contributions reconstruct the saved
-sum of effects. Individual coefficients are not uniquely identified and can
+sum of effects. They are the IRLS-weighted least-squares fit of the saved sum on
+the absorbed effects, solved by conjugate gradients from zero (minimum-norm
+coefficients); `iterate()` bounds the iterations, and the stopping rule is
+reghdfe's for saved effects, with the weighted root mean square of the sum in
+place of its unit scale. A variable that the model uses (regressor, weight,
+offset, exposure, cluster or absorbed variable) cannot be the target of an
+automatic name (`_ppmlhdfe_d` for `d2`, `__hdfe1__` etc. for `savefe`):
+the command exits with error 198 and changes nothing, where `ppmlhdfe` drops
+the variable first. Individual coefficients are not uniquely identified and can
 use a different normalization from the reference. Absorb suboptions also accept
 `generate`, `keepsingletons`, `tolerance`, `iterate`, `dofadjustments`,
 `acceleration`, `transform`, and `poolsize`.
@@ -91,6 +109,13 @@ system to avoid cancellation when regressor means are large.
 Inference uses normal critical values and a Wald chi-squared test. Residual
 degrees of freedom are stored as `e(df)`. The command also reports absorbed-DF
 components, nesting, singleton/separation counts, and `e(dof_table)`.
+`e(title)` is `HDFE PPML regression`, or `PPML regression` without absorbed
+effects (plain text, without `ppmlhdfe`'s help link), and `e(marginsnotok)` is
+`ppmlhdfe`'s list. Not stored: `ppmlhdfe`'s `e(rss)` and `e(rmse)` (of its
+internal, standardized working regression), `e(ic2)`, `e(title2)`,
+`e(footnote)` and `e(estat_cmd)`. With a constant outcome, the omitted
+regressors keep their names in `e(b)` where `ppmlhdfe` prefixes them with `o.`;
+`e(V)` and the output agree.
 
 `d(name)` saves the sum of fixed effects; bare `d` uses `_ppmlhdfe_d`.
 `predict` supports `xb`, `mu` (default), `eta`/`xbd`, `d`, `stdp`, `response`,

@@ -572,6 +572,28 @@ foreach command in "if 0" "if 1" "1" ", strata(sn)" ", cluster(id)" {
     test_pass "zero-row explicit syntax parity: `command'"
 }
 
+* DATA-06: the resample size is an expression; DAT-06: singleton clusters
+clear
+set obs 60
+gen id = _n
+gen s = mod(_n, 3)
+gen cl = floor(_n / 4)
+replace cl = 999 if s == 2
+gen one = 1
+foreach call in "_N/2" "round(0.1*_N)" "5*4" "0" "2.5" "70" "_N/2, strata(s)" ///
+    ", cluster(cl) strata(s)" ", cluster(one)" "3, cluster(one)" {
+    preserve
+    capture bsample `call'
+    local rc_native = _rc
+    local n_native = _N
+    restore, preserve
+    capture cbsample `call'
+    local rc_ctools = _rc
+    if `rc_native' == `rc_ctools' & _N == `n_native' test_pass "DATA-06/DAT-06 cbsample `call' (r(`rc_native'), N=`n_native')"
+    else test_fail "DATA-06/DAT-06 cbsample `call'" "bsample r(`rc_native') N=`n_native', cbsample r(`rc_ctools') N=`=_N'"
+    restore
+}
+
 * End of cbsample validation
 noi print_summary "cbsample"
 }

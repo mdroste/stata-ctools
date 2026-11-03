@@ -88,6 +88,8 @@ program define _ctools_group, rclass
             local rc = _rc
         }
         if "`marked'" != "" capture drop `marked'
+        * Every failure, Break included, drops the unfilled output variable.
+        if `rc' & "`generate'" != "" capture drop `generate'
         if `rc' == 1 exit 1
         if `rc' == 134 {
             di as error "too many values for {bf:label define}"
@@ -96,9 +98,6 @@ program define _ctools_group, rclass
         if !`rc' {
             local n_groups = scalar(_ctools_group_n)
             local group_reps `"`ctools_group_reps'"'
-        }
-        else if "`generate'" != "" {
-            drop `generate'
         }
         capture scalar drop _ctools_group_n
     }

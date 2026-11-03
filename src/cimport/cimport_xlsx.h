@@ -20,8 +20,8 @@
  * Constants
  * ============================================================================ */
 
-#define XLSX_MAX_SHEETS         256
-#define XLSX_MAX_SHEET_NAME     64
+/* 31 UTF-16 units of a sheet name take at most 124 bytes of UTF-8. */
+#define XLSX_MAX_SHEET_NAME     128
 #define XLSX_MAX_SHARED_STRINGS (1024 * 1024)  /* 1M strings max */
 #define XLSX_MAX_COLUMNS        16384          /* Excel max columns */
 #define XLSX_MAX_ROWS           1048576        /* Excel max rows */
@@ -90,7 +90,8 @@ typedef struct XLSXContext {
     char styles_path[XLSX_MAX_PART_PATH];
 
     /* Sheet metadata */
-    XLSXSheetInfo sheets[XLSX_MAX_SHEETS];
+    XLSXSheetInfo *sheets;    /* grows with the workbook; no sheet cap */
+    int sheets_capacity;
     int num_sheets;
     int selected_sheet;       /* 0-based index of sheet to import */
 
@@ -120,6 +121,8 @@ typedef struct XLSXContext {
     int max_col;              /* Maximum column index seen (0-based) */
     int min_row;              /* Minimum row number (1-based) */
     int max_row;              /* Maximum row number (1-based) */
+    int min_col;              /* First column with a cell element, valued or
+                                 not (0-based); INT32_MAX if none */
     /* Extent of the whole worksheet, including cells outside cellrange():
      * the data area that native checks cellrange() against. */
     int area_max_col;         /* last column with a value (0-based), -1 if none */
@@ -127,6 +130,9 @@ typedef struct XLSXContext {
     /* Most cells the dense storage may hold (0 = no limit); set by callers
      * so an impossible shape fails with r(909) before memory is touched. */
     size_t max_cells;
+    /* Most bytes one package part may inflate to (0 = no limit); a part
+     * declaring more fails with r(909) before it is allocated. */
+    uint64_t max_part_bytes;
 
     /* Column-major cell storage, grown to fit every cell with a value */
     double **cm_numeric;      /* cm_numeric[col][row] — values or (double)ss_index */

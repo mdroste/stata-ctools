@@ -90,6 +90,33 @@ test_pass "empty selected sample"
 capture csplit s, gen(none) force
 assert _rc==198
 test_pass "destring options require destring"
+* DAT-07: parse("") is the default space parsing, as in split
+clear
+input str20 name
+"a b c"
+"d  e"
+end
+split name, parse("") generate(ref)
+local k = r(k_new)
+capture csplit name, parse("") generate(got)
+if _rc test_fail "DAT-07 empty parse()" "r(`=_rc')"
+else {
+    assert r(k_new) == `k'
+    forvalues j = 1/`k' {
+        assert_strvar_equal got`j' ref`j' "DAT-07 empty parse() field `j'"
+    }
+}
+* DATA-10: destring_cmd names the final variables
+clear
+input str20 s
+"1,2,3"
+"4,5,6"
+end
+split s, parse(",") destring generate(r)
+csplit s, parse(",") destring generate(c)
+mata: st_local("same", strofreal(subinstr(st_global("r1[destring_cmd]"), "r1 r2 r3", "c1 c2 c3") == st_global("c1[destring_cmd]")))
+if `same' test_pass "DATA-10 destring_cmd characteristic"
+else test_fail "DATA-10 destring_cmd characteristic" "differs from split"
 }
 print_summary "csplit"
 global CTOOLS_COMPONENT_COMPLETE "csplit"

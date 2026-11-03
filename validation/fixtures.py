@@ -467,6 +467,21 @@ def xls_sheet_fixtures(directory: Path):
         fat += [0xFFFFFFFE, 0xFFFFFFFD] + [0xFFFFFFFF] * (128 - n - 2)
         return bytes(header) + stream.ljust(size, b"\0") + ole_directory + struct.pack("<128I", *fat)
 
+    def label(row, col, text):
+        return record(0x204, struct.pack("<HHHHB", row, col, 0, len(text), 0) + text.encode("latin-1"))
+
+    numbers = [0.1, 0.30000000000000004, 1234567890123456789, 1e21, 1e-7, 123456.789, 1.5e300, 100, 1000000,
+               0.000001, -0.5, 99999999999, 1.0, 3.14159265358979, 2147483648, 0.009999999776482582, -1.5e-300]
+    cells = label(0, 0, "s") + b"".join(number(r, 0, v) for r, v in enumerate(numbers, 1)) + label(len(numbers) + 1, 0, "text")
+    mixed = (
+        bof(0x10)
+        + record(0x200, struct.pack("<IIHHH", 0, len(numbers) + 2, 0, 1, 0))
+        + cells
+        + window2()
+        + record(0x0A)
+    )
+    (directory / "string_numbers.xls").write_bytes(workbook([("Sheet1", 0, mixed)]))
+
     data = [(r, c, 10 * r + c + 1) for r in range(4) for c in range(2)]
     other = [(r, 0, 100 + r) for r in range(3)]
     (directory / "chart_in_sheet.xls").write_bytes(
@@ -764,3 +779,144 @@ def regression_fixtures(folder):
     )
     (folder / "good.shp").write_bytes(header + records)
     (folder / "truncated.shp").write_bytes(header + records[:28])
+
+
+def excel_import_fixtures(directory):
+    """Workbooks for import parity: sheet names longer than 63 bytes or holding
+    many entities, more than 256 sheets, cells without a value (styled blanks,
+    error values, empty values, formulas without a result) at the edges of the
+    used range, and numeric or date-styled header cells."""
+    directory = Path(directory)
+    rns = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    pns = "http://schemas.openxmlformats.org/package/2006/relationships"
+    styles = (
+        f'<styleSheet xmlns="{NS}"><numFmts count="1"><numFmt numFmtId="165" formatCode="hh:mm:ss"/></numFmts>'
+        '<cellXfs count="4"><xf numFmtId="0"/><xf numFmtId="2"/><xf numFmtId="14"/><xf numFmtId="22"/></cellXfs></styleSheet>'
+    )
+
+    def book(name, sheets):
+        types = "".join(
+            f'<Override PartName="/xl/worksheets/sheet{i}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+            for i in range(1, len(sheets) + 1)
+        )
+        parts = {
+            "[Content_Types].xml": '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+            '<Default Extension="xml" ContentType="application/xml"/>'
+            '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+            + types + "</Types>",
+            "_rels/.rels": f'<Relationships xmlns="{pns}"><Relationship Id="rId1" Type="{rns}/officeDocument" Target="xl/workbook.xml"/></Relationships>',
+            "xl/workbook.xml": f'<workbook xmlns="{NS}" xmlns:r="{rns}"><sheets>'
+            + "".join(
+                f'<sheet name="{escape(title, {chr(34): "&quot;"})}" sheetId="{i}" r:id="rId{i}"/>'
+                for i, (title, _) in enumerate(sheets, 1)
+            )
+            + "</sheets></workbook>",
+            "xl/_rels/workbook.xml.rels": f'<Relationships xmlns="{pns}">'
+            + "".join(
+                f'<Relationship Id="rId{i}" Type="{rns}/worksheet" Target="worksheets/sheet{i}.xml"/>'
+                for i in range(1, len(sheets) + 1)
+            )
+            + f'<Relationship Id="rId{len(sheets) + 1}" Type="{rns}/styles" Target="styles.xml"/></Relationships>',
+            "xl/styles.xml": styles,
+        }
+        for i, (_, rows) in enumerate(sheets, 1):
+            parts[f"xl/worksheets/sheet{i}.xml"] = f'<worksheet xmlns="{NS}"><sheetData>{rows}</sheetData></worksheet>'
+        with ZipFile(directory / name, "w", ZIP_DEFLATED) as archive:
+            for key, value in parts.items():
+                archive.writestr(key, value)
+
+    def row(number, cells):
+        return f'<row r="{number}">{cells}</row>'
+
+    def value(ref, number):
+        return f'<c r="{ref}"><v>{number}</v></c>'
+
+    def text(ref, string):
+        return f'<c r="{ref}" t="inlineStr"><is><t>{escape(string)}</t></is></c>'
+
+    data = row(1, text("A1", "x") + text("B1", "y")) + row(2, value("A2", 1) + value("B2", 2)) + row(3, value("A3", 3) + value("B3", 4))
+    cjk = "東日本営業本部売上実績四半期報告書第三版改訂済み最終"
+    amp = "&".join("ABCDEFGHIJKLMNOP")
+    book("sheet_names.xlsx", [(cjk, data), (amp, data.replace(">1<", ">5<")), ("Plain", data)])
+    book("many_sheets.xlsx", [(f"Sheet{i}", row(1, value("A1", i))) for i in range(1, 301)])
+    for name, extra in [
+        ("styled", row(10, '<c r="D10" s="1"/>')),
+        ("rowcells", row(50, '<c r="A50" s="1"/><c r="H50" s="1"/>')),
+        ("emptyv", row(10, '<c r="D10"><v></v></c>')),
+        ("emptystr", row(10, '<c r="D10" t="str"><v></v></c>')),
+        ("emptyis", row(10, '<c r="D10" t="inlineStr"><is><t></t></is></c>')),
+        ("formula", row(4, '<c r="A4"><f>1+1</f><v>2</v></c><c r="E4"><f>1+1</f></c>')),
+        ("error", row(4, '<c r="F4" t="e"><v>#N/A</v></c>')),
+    ]:
+        book(f"gap_{name}.xlsx", [("Sheet1", data + extra)])
+    book("gap_errall.xlsx", [("Sheet1", row(1, '<c r="A1" t="e"><v>#N/A</v></c>') + row(2, '<c r="A2" t="e"><v>#REF!</v></c>'))])
+    book("gap_leadcol.xlsx", [("Sheet1", row(1, '<c r="A1" s="1"/>' + text("C1", "x")) + row(2, value("C2", 1)))])
+    # A worksheet whose declared size (4 GB) its 1 KB of deflate data cannot
+    # reach, and an honest 150 MB worksheet (padding) for a low max_memory.
+    book("zip_declared.xlsx", [("Sheet1", data)])
+    raw = bytearray((directory / "zip_declared.xlsx").read_bytes())
+    with ZipFile(directory / "zip_declared.xlsx") as archive:
+        info = archive.getinfo("xl/worksheets/sheet1.xml")
+    struct.pack_into("<I", raw, info.header_offset + 22, 4_000_000_000)
+    central = raw.find(b"PK\x01\x02")
+    while central >= 0:
+        name_len = struct.unpack_from("<H", raw, central + 28)[0]
+        if raw[central + 46:central + 46 + name_len] == b"xl/worksheets/sheet1.xml":
+            struct.pack_into("<I", raw, central + 24, 4_000_000_000)
+        central = raw.find(b"PK\x01\x02", central + 4)
+    (directory / "zip_declared.xlsx").write_bytes(bytes(raw))
+    book("zip_150mb.xlsx", [("Sheet1", data + " " * (150 << 20))])
+    # Numbers in a string column, value text that is not a plain number, a
+    # formula text result with an _xHHHH_ escape, and numeric header cells.
+    numbers = ["0.1", "0.30000000000000004", "1234567890123456789", "1e21", "1e-7", "123456.789", "1.5e300",
+               "100", "1000000", "0.000001", "-0.5", "99999999999", "1.0", "3.14159265358979", "2147483648",
+               "0.009999999776482582", "-1.5e-300"]
+    book("string_numbers.xlsx", [("Sheet1", row(1, text("A1", "s") + text("B1", "t"))
+                                  + "".join(row(i, value(f"A{i}", n) + text(f"B{i}", "x")) for i, n in enumerate(numbers, 2))
+                                  + row(len(numbers) + 2, text(f"A{len(numbers) + 2}", "text")))])
+    book("value_text.xlsx", [("Sheet1", row(1, '<c r="A1"><v>abc</v></c><c r="B1"><v>1,5</v></c><c r="C1"><v> 2 </v></c>'
+                                          '<c r="D1" t="str"><v>q&lt;r_x000D_</v></c>') + row(2, value("A2", 4) + value("B2", 5) + value("C2", 6) + text("D2", "s")))])
+    book("numeric_headers.xlsx", [("Sheet1", row(1, value("A1", 0.25) + value("B1", 43831.5) + value("C1", "1e-7") + text("D1", "name"))
+                                   + row(2, value("A2", 1) + value("B2", 2) + value("C2", 3) + value("D2", 4)))])
+
+
+def delimited_parity_fixtures(directory):
+    """CSV inputs for native parity of quoting, number tokens, header names,
+    column overrides, ragged rows under rowrange() and wide headers."""
+    directory = Path(directory)
+
+    def write(name, text, newline="\n"):
+        (directory / name).write_bytes(text.replace("\n", newline).encode("utf-8"))
+
+    quoted = ['x""y', '""', '"', ' ""', '"a""b"', '"a"b"c"', 'a"b', '"a', 'a"', '""x', '"x""', 'x""', '"x"""',
+              '"""x"', ' "x""y"', ' x""y', '"x" ', '"x"  ', '  "x"', '"x""y" ', 'x"y"z', '"a"b"', '"a"b',
+              'a""""', '""""', '"a""b', 'x"y""z', '"x"y""z"', '""""x', '"""', '"""""', 'x"""', '"x" "y"',
+              '"a" ', '"a"""b"', ' "a""', '"a""" ', 'q""""""w', ' "a,b" ', '\t"x"']
+    write("quote_forms.csv", "a,b\n" + "".join(f"{i},{q}\n" for i, q in enumerate(quoted)))
+    write("quote_numbers_padded.csv", 'a,b\n1, "5"\n2,"6" \n3,7\n')
+    write("quote_crlf.csv", 'a,b\n1,"x\r\ny"\n2,"p"\n', "\r\n")
+    write("quote_runs.csv", 'a,b\n1,"he said ""hi"""\n2,x""""y\n3,""""\n')
+    tokens = ["NaN", "-NaN", "+NaN", " NaN", "Infinity", "-Infinity", "1d3", "1D3", "1.5d+2", "2.5D-1", "1.d2",
+              ".5d1", "-1d3", "1d03", "1d400", "1d-400", "1e400"]
+    write("number_tokens.csv", "a,b\n" + "".join(f"{i},{t}\n" for i, t in enumerate(tokens)))
+    write("number_strings.csv", "a,b,c,d\n1,nan,NA,1dd3\n2,3,4,5\n")
+    write("force.csv", "a,b,c\n1,x,3\n4,5,y\n")
+    write("ragged_a.csv", "a,b\n1,2,3,4\n5,6,7\n8,9\n")
+    write("ragged_b.csv", "1,2,3,4\n5,6\n7,8\n")
+    write("ragged_c.csv", "a,b,c,d\n1,2\n3\n")
+    write("ragged_d.csv", "a,b\n1,2\n3,4,5,6\n7,8,9\n")
+    write("long_ids.csv", "a,b\n1,32741\n2,2147483620\n")
+    headers = ["id", "численность_населения", "Umsatz in €", "Temperatur °C", "Children’s count",
+               "日本語の列名テスト一二三四五六七八九十", "Ünïcödé_ñame_with_more_than_32_chars_total", "Ärzte", "École",
+               "ЧИСЛО", "ünï", "Straße", "1abc", "_x", "a b", "a-b", "x€y", "٣x", "a١", "ªb", "µm", "x²y", "ǅb",
+               "ß" * 16, "ß" * 17, "ﬁ" * 20, "ä" * 40, "a b c d e f g h i j k l m n o p q r s t u v w",
+               "1234567890bcdefghijklmnopqrstuvwxyzABCDEFG", "€" * 35 + "xyz"]
+    write("unicode_headers.csv", ",".join(headers) + "\n" + ",".join(str(i) for i in range(len(headers))) + "\n")
+    # One outlier among 20,000 ones, inside or beyond native's first 513 lines.
+    for tag, outlier in [("long", 1000000000), ("int", 40000), ("double", 1e300), ("float", 1.5)]:
+        for row in (100, 512, 513, 5000):
+            write(f"sample_{tag}_{row}.csv", "id,value\n" + "".join(
+                f"{i},{outlier if i == row else 1}\n" for i in range(1, 20002)))
+    wide = [f"c{i:05d}" + "x" * 26 for i in range(2000)]
+    write("wide_names.csv", ",".join(wide) + "\n" + ",".join(str(i) for i in range(2000)) + "\n")

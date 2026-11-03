@@ -8,6 +8,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <ctype.h>
+#include <stdatomic.h>
 #include "cimport_parse.h"
 #include "../ctools_types.h"
 #include "stplugin.h"
@@ -285,6 +286,11 @@ const char *cimport_find_next_row(const char *ptr, const char *end, char quote, 
  * Field Parsing
  * ============================================================================ */
 
+static atomic_int cimport_overflow_flag;
+
+void cimport_fields_overflow_reset(void) { atomic_store(&cimport_overflow_flag, 0); }
+bool cimport_fields_overflowed(void) { return atomic_load(&cimport_overflow_flag) != 0; }
+
 int cimport_parse_row_fast(const char *start, const char *end, char delim, char quote,
                            CImportFieldRef *fields, int max_fields, const char *file_base,
                            CImportBindQuotesMode bindquotes,
@@ -357,6 +363,9 @@ int cimport_parse_row_fast(const char *start, const char *end, char delim, char 
         }
     }
 
+    /* The loop stops at max_fields only after a delimiter: fields remain. */
+    if (field_count >= max_fields) atomic_store(&cimport_overflow_flag, 1);
+
     /* Trailing field: reached end of buffer or max_fields */
     if (field_start < end && field_count < max_fields) {
         const char *field_end = end;
@@ -413,75 +422,42 @@ int cimport_extract_field_fast(const char *file_base, CImportFieldRef *field,
     if(strip_all || quote=='\2') {
         for(int i=0;i<src_len && out_len<max_len-1;i++) {
             if(strip_all && src[i]=='"')continue;
+            if(src[i]=='\n' && i>0 && src[i-1]=='\r')continue; /* CRLF in quotes: CR */
             CIMPORT_PUT(src[i]);
-            if(quote=='\2' && src[i]=='"' && i+1<src_len && src[i+1]=='"')i++;
+            /* Without binding, native reads a run of quotes as one. */
+            while(quote=='\2' && src[i]=='"' && i+1<src_len && src[i+1]=='"')i++;
         }
         if (!count_only) output[out_len]=0;
         return out_len;
     }
 
-    /* Check for quotes - need to look past leading whitespace to find them */
-    const char *trimmed_src = src;
-    int trimmed_len = src_len;
-    while (trimmed_len > 0 && (*trimmed_src == ' ' || *trimmed_src == '\t')) {
-        trimmed_src++;
-        trimmed_len--;
+    /* Native reads the field with a quote state: a quote at the first byte
+     * opens it and is dropped, and a field opened that way also drops a
+     * quote in its last byte. Inside quotes "" is one quote and a lone quote
+     * closes them; outside, a quote opens them. Other quotes are kept, so
+     * ` "a""b"` reads ` "a"b"` and x""""y reads x"""y. A CRLF inside quotes
+     * (bindquotes(strict)) keeps only the CR, as in native. */
+    if (!quote) {
+        for (int i = 0; i < src_len && out_len < max_len - 1; i++)
+            if (!(src[i] == '\n' && i > 0 && src[i - 1] == '\r')) CIMPORT_PUT(src[i]);
+        if (!count_only) output[out_len] = '\0';
+        return out_len;
     }
-    while (trimmed_len > 0 && (trimmed_src[trimmed_len-1] == ' ' || trimmed_src[trimmed_len-1] == '\t')) {
-        trimmed_len--;
-    }
-
-    bool starts_with_quote = (trimmed_len >= 1 && trimmed_src[0] == quote);
-    bool ends_with_quote = (trimmed_len >= 1 && trimmed_src[trimmed_len-1] == quote);
-    bool is_quoted = (trimmed_len >= 2 && starts_with_quote && ends_with_quote);
-
-    /* Special case: field is just a single quote - treat as empty (matches Stata) */
-    if (trimmed_len == 1 && trimmed_src[0] == quote) {
-        if (!count_only) output[0] = '\0';
-        return 0;
-    }
-
-    if (is_quoted) {
-        /* Properly quoted field - strip quotes and handle escaped quotes */
-        trimmed_src++;
-        trimmed_len -= 2;
-
-        for (int i = 0; i < trimmed_len && out_len < max_len - 1; i++) {
-            if (trimmed_src[i] == quote && i + 1 < trimmed_len && trimmed_src[i + 1] == quote) {
-                CIMPORT_PUT(quote);
-                i++;
-            } else {
-                CIMPORT_PUT(trimmed_src[i]);
-            }
+    bool lead = src_len > 0 && src[0] == quote;
+    bool in_quotes = lead;
+    for (int i = lead ? 1 : 0; i < src_len && out_len < max_len - 1; i++) {
+        char c = src[i];
+        if (c != quote) {
+            if (!(c == '\n' && in_quotes && i > 0 && src[i - 1] == '\r')) CIMPORT_PUT(c);
+            continue;
         }
-    } else if (starts_with_quote && !ends_with_quote) {
-        /* Orphan leading quote - strip it */
-        trimmed_src++;
-        trimmed_len--;
-        for (int i = 0; i < trimmed_len && out_len < max_len - 1; i++) {
-            if (trimmed_src[i] == quote && i + 1 < trimmed_len && trimmed_src[i + 1] == quote) {
-                CIMPORT_PUT(quote);
-                i++;
-            } else {
-                CIMPORT_PUT(trimmed_src[i]);
-            }
+        if (in_quotes && i + 1 < src_len && src[i + 1] == quote) {
+            CIMPORT_PUT(quote);
+            i++;
+            continue;
         }
-    } else if (strip_all && !starts_with_quote && ends_with_quote) {
-        /* Orphan trailing quote - strip it */
-        trimmed_len--;
-        for (int i = 0; i < trimmed_len && out_len < max_len - 1; i++) {
-            if (trimmed_src[i] == quote && i + 1 < trimmed_len && trimmed_src[i + 1] == quote) {
-                CIMPORT_PUT(quote);
-                i++;
-            } else {
-                CIMPORT_PUT(trimmed_src[i]);
-            }
-        }
-    } else {
-        /* No quotes - copy as-is from ORIGINAL src (preserving whitespace like Stata) */
-        int copy_len = (src_len < max_len - 1) ? src_len : max_len - 1;
-        if (!count_only) memcpy(output, src, copy_len);
-        out_len = copy_len;
+        in_quotes = !in_quotes;
+        if (!(lead && i == src_len - 1)) CIMPORT_PUT(quote);
     }
 
     if (!count_only) output[out_len] = '\0';
@@ -492,6 +468,14 @@ int cimport_extract_field_fast(const char *file_base, CImportFieldRef *field,
 /* ============================================================================
  * Type Detection
  * ============================================================================ */
+
+/* Native reads NaN and Infinity, with an optional sign and in this exact
+ * case only, as missing values. */
+static bool cimport_is_nan_or_infinity(const char *src, int len)
+{
+    if (len > 0 && (*src == '-' || *src == '+')) { src++; len--; }
+    return (len == 3 && memcmp(src, "NaN", 3) == 0) || (len == 8 && memcmp(src, "Infinity", 8) == 0);
+}
 
 bool cimport_field_looks_numeric_sep(const char *src, int len, char dec_sep, char grp_sep)
 {
@@ -514,9 +498,11 @@ bool cimport_field_looks_unquoted_numeric_sep(const char *src, int len, char dec
                        src[len-1] == '\r' || src[len-1] == '\n')) { len--; }
     if (len == 0) return true;
 
-    /* Stata extended missing values remain numeric; NA/NaN are strings. */
+    /* Stata extended missing values remain numeric; NA, nan and NAN are
+     * strings, while NaN and Infinity (signed or not) are missing. */
     if (len == 1 && *src == '.') return true;
     if (len == 2 && src[0] == '.' && src[1] >= 'a' && src[1] <= 'z') return true;
+    if (cimport_is_nan_or_infinity(src, len)) return true;
 
     if(cimport_locale_enabled) {
         double value;return cimport_locale_number(src,len,&value,SV_missval);
@@ -546,8 +532,8 @@ bool cimport_field_looks_unquoted_numeric_sep(const char *src, int len, char dec
         } else if (grp_sep != '\0' && c == grp_sep) {
             /* Group separator (e.g., thousand separator) - skip it */
             p++;
-        } else if (c == 'e' || c == 'E') {
-            /* Scientific notation - validate exponent */
+        } else if (c == 'e' || c == 'E' || c == 'd' || c == 'D') {
+            /* Scientific notation (native also reads a d/D exponent) */
             if (!has_digits) return false;  /* Need digits before E */
             p++;
             if (p < end && (*p == '-' || *p == '+')) p++;
@@ -593,7 +579,19 @@ bool cimport_parse_unquoted_number(const char *src, int len, double *value, doub
         memcpy(value, &bits, sizeof(bits));
         return true;
     }
+    if (cimport_is_nan_or_infinity(src, len)) { *value = missing; return true; }
     if(cimport_locale_enabled)return cimport_locale_number(src,len,value,missing);
+    /* A d/D exponent reads as e (the numeric test admits it only there). */
+    const char *dexp = NULL;
+    for (int i = 0; i < len; i++) {
+        if (src[i] == 'd' || src[i] == 'D') { dexp = src + i; break; }
+    }
+    if (dexp && len < 128) {
+        char text[128];
+        memcpy(text, src, (size_t)len);
+        text[dexp - src] = 'e';
+        return ctools_parse_double_with_separators(text, len, value, missing, decimal, group);
+    }
     return ctools_parse_double_with_separators(src, len, value, missing, decimal, group);
 }
 

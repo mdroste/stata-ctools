@@ -43,14 +43,24 @@ end
 
 program define cdecode, rclass
     version 14.1
-    syntax varlist [if] [in], [Generate(string) replace MAXLength(integer 0) Verbose THReads(integer 0)]
+    syntax varlist [if] [in], [Generate(string) replace MAXLength(string) Verbose THReads(integer 0)]
 
     if ("`generate'" == "") == ("`replace'" == "") {
         di as error "cdecode: specify either generate() or replace"
         exit 198
     }
-    if `maxlength' < 0 | `threads' < 0 {
-        di as error "cdecode: maxlength() and threads() must be nonnegative"
+    * As decode: an explicit maxlength() is an integer from 1 to 32000;
+    * 0 below means none
+    if "`maxlength'" != "" {
+        capture confirm integer number `maxlength'
+        if _rc | !inrange(real("`maxlength'"), 1, 32000) {
+            di as error "maxlength must be between 1 and 32000"
+            exit 198
+        }
+    }
+    else local maxlength 0
+    if `threads' < 0 {
+        di as error "cdecode: threads() must be nonnegative"
         exit 198
     }
     local nvars : word count `varlist'
@@ -112,7 +122,8 @@ program define cdecode, rclass
     * by Stata, as are labels the plugin protocol does not cover.
     local have_plugin = 0
     capture _ctools_load
-    if !_rc {
+    * Above Stata's plugin limit of 2^31-1 observations Stata decodes everything.
+    if !_rc & !(_N > 2147483647) {
         capture program ctools_plugin, plugin using("`__ctools_plugin'")
         if _rc == 0 | _rc == 110 local have_plugin = 1
     }
@@ -159,7 +170,11 @@ program define cdecode, rclass
         foreach v of local varlist {
             local ++i
             local decoded : word `i' of `staged'
-            if "`replace'" != "" drop `v'
+            * replace keeps the source's notes and characteristics
+            if "`replace'" != "" {
+                char rename `v' `decoded'
+                drop `v'
+            }
             else local v : word `i' of `generate'
             mata: st_varrename("`decoded'", "`v'")
         }

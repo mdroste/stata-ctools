@@ -505,3 +505,187 @@ int main(void)
     return 0;
 }
 #endif
+
+#if defined(CTOOLS_CASE_sort_work_merge)
+#define CTOOLS_SORT_WORK_CASE 1
+#endif
+#if defined(CTOOLS_CASE_sort_work_ips4o)
+#define CTOOLS_SORT_WORK_CASE 2
+#endif
+#if defined(CTOOLS_CASE_sort_work_sample)
+#define CTOOLS_SORT_WORK_CASE 3
+#endif
+#if defined(CTOOLS_SORT_WORK_CASE)
+/* Work and scratch bounds of the merge, IPS4o and sample engines, with
+ * strlen, qsort and the heap counted inside the engine's translation unit.
+ * Each sort is checked against a stable reference (key, then input order). */
+#include <assert.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "stplugin.h"
+#include "ctools_types.h"
+#include "ctools_config.h"
+
+static ST_plugin host;
+ST_plugin *_stata_ = &host;
+static int requested_threads = 1;
+int ctools_get_max_threads(void)
+{
+    return requested_threads;
+}
+
+static size_t strlen_calls, qsort_calls, heap_bytes;
+static size_t counted_strlen(const char *s)
+{
+    strlen_calls++;
+    return (strlen)(s);
+}
+static void counted_qsort(void *base, size_t n, size_t size, int (*cmp)(const void *, const void *))
+{
+    qsort_calls++;
+    (qsort)(base, n, size, cmp);
+}
+static void *counted_malloc(size_t n)
+{
+    heap_bytes += n;
+    return (malloc)(n);
+}
+static void *counted_calloc(size_t n, size_t size)
+{
+    heap_bytes += n * size;
+    return (calloc)(n, size);
+}
+static int counted_memalign(void **p, size_t align, size_t n)
+{
+    heap_bytes += n;
+    return (posix_memalign)(p, align, n);
+}
+#define strlen counted_strlen
+#define qsort counted_qsort
+#define malloc counted_malloc
+#define calloc counted_calloc
+#define posix_memalign counted_memalign
+#if defined(CTOOLS_CASE_sort_work_merge)
+#include "ctools_sort_merge.c"
+#define ENGINE_SORT ctools_sort_merge_order_only
+#elif defined(CTOOLS_CASE_sort_work_ips4o)
+#include "ctools_arena.c"
+#include "ctools_sort_ips4o.c"
+#define ENGINE_SORT ctools_sort_ips4o_order_only
+#else
+#include "ctools_sort_sample.c"
+#define ENGINE_SORT ctools_sort_sample_order_only
+#endif
+#undef strlen
+#undef qsort
+#undef malloc
+#undef calloc
+#undef posix_memalign
+
+/* Sorts n rows of one key (numeric when strings is NULL) with the engine and
+ * checks the order against a stable reference; returns the order. */
+static void check_sort(size_t n, double *numbers, char **strings, int threads)
+{
+    stata_variable var = {0};
+    var.nobs = n;
+    if (strings)
+    {
+        var.type = STATA_TYPE_STRING;
+        var.data.str = strings;
+    }
+    else
+    {
+        var.type = STATA_TYPE_DOUBLE;
+        var.data.dbl = numbers;
+    }
+    stata_data data = {.nobs = n, .nvars = 1, .vars = &var};
+    data.sort_order = (malloc)(n * sizeof(perm_idx_t));
+    assert(data.sort_order);
+    for (size_t i = 0; i < n; i++)
+        data.sort_order[i] = (perm_idx_t)i;
+    int key = 1;
+    requested_threads = threads;
+    strlen_calls = qsort_calls = heap_bytes = 0;
+    assert(ENGINE_SORT(&data, &key, 1) == STATA_OK);
+    for (size_t i = 1; i < n; i++)
+    {
+        perm_idx_t a = data.sort_order[i - 1], b = data.sort_order[i];
+        int cmp = strings ? strcmp(strings[a], strings[b])
+                          : (numbers[a] < numbers[b] ? -1 : numbers[a] > numbers[b]);
+        assert(cmp < 0 || (cmp == 0 && a < b));
+    }
+    (free)(data.sort_order);
+}
+
+int main(void)
+{
+    host.missval = 8.98846567431158e307;
+    const size_t big = 1000000;
+    double *numbers = (malloc)(big * sizeof(double));
+    assert(numbers);
+#if defined(CTOOLS_CASE_sort_work_merge)
+    /* 4,000 strings of 1,200 bytes with ties: one strlen per row for the
+     * maximum length and one for the cached lengths (2,400 passes measured
+     * each row twice per pass before). */
+    const size_t n = 4000, width = 1200;
+    char **strings = (malloc)(n * sizeof(char *));
+    assert(strings);
+    for (size_t i = 0; i < n; i++)
+    {
+        strings[i] = (malloc)(width + 1);
+        assert(strings[i]);
+        memset(strings[i], 'x', width);
+        snprintf(strings[i] + width - 4, 5, "%04zu", (i * 7919) % 300);
+    }
+    check_sort(n, NULL, strings, 1);
+    assert(strlen_calls <= 3 * n);
+    for (size_t i = 0; i < 40000; i++)
+        numbers[i] = (double)((i * 7919) % 97);
+    check_sort(40000, numbers, NULL, 4);
+    for (size_t i = 0; i < n; i++)
+        (free)(strings[i]);
+    (free)(strings);
+    puts("PASS merge engine string work");
+#else
+    /* All-equal keys: IPS4o's splitters cannot separate them, and the
+     * parallel buckets each received scratch the size of the largest one. */
+    for (size_t i = 0; i < big; i++)
+        numbers[i] = 7.0;
+    check_sort(200000, numbers, NULL, 1);
+#if defined(CTOOLS_CASE_sort_work_ips4o)
+    assert(qsort_calls <= 2);
+#endif
+#ifdef _OPENMP
+    check_sort(big, numbers, NULL, 16);
+    /* keys (8 bytes per row) and one scratch permutation (4) */
+    assert(heap_bytes <= 12 * big + (size_t)4 * 1024 * 1024);
+#endif
+    const size_t ns = 60000, width = 200;
+    char **strings = (malloc)(ns * sizeof(char *));
+    assert(strings);
+    for (size_t i = 0; i < ns; i++)
+    {
+        strings[i] = (malloc)(width + 1);
+        assert(strings[i]);
+        memset(strings[i], 'q', width);
+        strings[i][width] = '\0';
+    }
+    check_sort(ns, NULL, strings, 1);
+#if defined(CTOOLS_CASE_sort_work_ips4o)
+    assert(qsort_calls <= 2);
+#endif
+#ifdef _OPENMP
+    check_sort(ns, NULL, strings, 16);
+    assert(heap_bytes <= 4 * ns + (size_t)4 * 1024 * 1024);
+#endif
+    for (size_t i = 0; i < ns; i++)
+        (free)(strings[i]);
+    (free)(strings);
+    puts("PASS partitioning engine duplicate keys");
+#endif
+    (free)(numbers);
+    return 0;
+}
+#endif

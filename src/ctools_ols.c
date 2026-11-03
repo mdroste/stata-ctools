@@ -579,7 +579,23 @@ void ctools_inverse_add_constant(const ST_double *inv, ST_int K, const ST_double
  * Returns 0 on success, -1 on memory error.
  * Output: inv (K x K), rank_out (number of non-singular pivots)
  * ======================================================================== */
+static ST_int invsym_sweep(const ST_double *A, ST_int K, ST_double *inv, ST_int *rank_out,
+                           int in_order);
+
 ST_int ctools_invsym(const ST_double *A, ST_int K, ST_double *inv, ST_int *rank_out)
+{
+    return invsym_sweep(A, K, inv, rank_out, 0);
+}
+
+ST_int ctools_invsym_ordered(const ST_double *A, ST_int K, ST_double *inv, ST_int *rank_out)
+{
+    return invsym_sweep(A, K, inv, rank_out, 1);
+}
+
+/* in_order: sweep the columns 0..K-1 in turn (Mata's invsym(A, 1..K));
+ * otherwise pivot on the largest remaining diagonal */
+static ST_int invsym_sweep(const ST_double *A, ST_int K, ST_double *inv, ST_int *rank_out,
+                           int in_order)
 {
     if (K == 0) { if (rank_out) *rank_out = 0; return STATA_OK; }
     if (!A || !inv || K < 0) return STATA_ERR_INVALID_INPUT;
@@ -598,6 +614,7 @@ ST_int ctools_invsym(const ST_double *A, ST_int K, ST_double *inv, ST_int *rank_
         ST_int p = -1;
         for (i = 0; i < K; i++) {
             if (!swept[i] && (p < 0 || W[(size_t)i * K + i] > W[(size_t)p * K + p])) p = i;
+            if (in_order && p >= 0) break;
         }
         if (p < 0) break;
 

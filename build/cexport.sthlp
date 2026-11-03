@@ -61,7 +61,7 @@
 {syntab:I/O options}
 {synopt:{opt mmap}}use memory-mapped I/O (zero-copy formatting){p_end}
 {synopt:{opt nofsync}}skip the final disk synchronization{p_end}
-{synopt:{opt direct}}request direct I/O where supported{p_end}
+{synopt:{opt direct}}request write-through I/O on Windows{p_end}
 {synopt:{opt prefault}}pre-fault mmap pages to avoid stalls{p_end}
 {synopt:{opt crlf}}use Windows-style CRLF line endings{p_end}
 {synopt:{opt noparallel}}disable parallel I/O{p_end}
@@ -168,7 +168,7 @@ performance for large files.
 may not be fully flushed to disk when the command returns. The operating system may still have buffered data if the machine loses power.
 
 {phang}
-{opt direct} requests direct I/O to bypass the operating system page cache. Support depends on the operating system and selected I/O backend.
+{opt direct} is advisory. On Windows it asks the operating system to write data through its cache to disk; it does not bypass the cache. Other platforms ignore it.
 
 {phang}
 {opt prefault} pre-faults mmap pages to avoid page fault stalls during writing.
@@ -191,9 +191,12 @@ default Unix-style LF ({cmd:\n}).
 The name is limited to 31 characters. With an existing workbook,
 {cmd:sheet(name, modify)} writes into that worksheet while retaining cells
 outside the exported rectangle. {cmd:sheet(name, replace)} replaces the entire
-worksheet and retains other sheets. The top-level options {opt sheetmodify}
-and {opt sheetreplace} select the same modes. Neither mode may be combined
-with {opt replace}, which replaces the entire workbook.
+worksheet and retains other sheets; if both are given, the first applies.
+The top-level options {opt sheetmodify} and {opt sheetreplace} select the same
+modes, take precedence over a mode in {opt sheet()}, and may not be combined
+with each other. Without {opt sheet()}, a mode applies to the first worksheet.
+Neither mode may be combined with {opt replace}, which replaces the entire
+workbook.
 
 {phang}
 {opt cell(start)} specifies the starting cell for the data export. The default
@@ -223,8 +226,9 @@ exports them as periods.
 
 {phang}
 {opt keepcellfmt} retains existing formats for cells overwritten by
-{cmd:sheet(name, modify)}. Without it, overwritten cells receive the export's
-formats. It has no effect on a new workbook. With whole-workbook {opt replace},
+{cmd:sheet(name, modify)}; exported dates still receive date formats. Without
+it, overwritten cells receive the export's formats. It has no effect on a new
+workbook. With whole-workbook {opt replace},
 it retains style definitions but not the old cells, their format assignments,
 or other worksheets; use sheet modification to retain an existing layout.
 
@@ -280,6 +284,16 @@ As with {cmd:export spss} and {cmd:export sasxport8}, SPSS and XPORT8 exports
 write {cmd:%tC} values with {cmd:cofC()}, and write monthly, quarterly, weekly
 and half-yearly dates as the first day of the period with the matching SPSS or
 SAS date format. Business-calendar ({cmd:%tb}) values are written as numbers.
+The conversion uses one temporary variable for each such variable, so it needs
+free variable slots below {help maxvar:c(maxvar)}.
+
+{pstd}
+XPORT5 names the member after the file name, up to its first period and eight
+bytes, and drops trailing digits from value-label names ({cmd:lab1} is written
+as {cmd:LAB}), as {cmd:export sasxport5} does; XPORT8 names it {cmd:DATASET}.
+SPSS numeric formats follow the display format: its width plus 3, COMMA for
+comma formats and E for {cmd:%e}. dBase export allows 255
+variables and an observation width ({cmd:c(width)}) of 4,000 bytes.
 
 {p 8 12 2}
 {cmd:cexport shp using} {it:filename}
@@ -304,7 +318,16 @@ an existing destination is an error.
 New Excel workbooks use the 1900 date system. Daily dates retain their calendar
 date; datetimes retain fractional days, including milliseconds. {cmd:%tC}
 values are converted with {cmd:cofC()} because Excel has no leap-second
-representation. Other Stata period dates use the first day of the period.
+representation. Other Stata period dates use the first day of the period;
+{cmd:%tb} dates are converted through their business calendar, and {cmd:%tg}
+values are written as numbers. As with {cmd:export excel}, an empty dataset is
+error 2000. An Excel cell holds at most 32,767 characters: longer strL text is
+error 109, where {cmd:export excel} truncates it.
+
+{pstd}
+With {opt replace}, a destination that is a symbolic link is replaced by a
+regular file and its target is left unchanged; {cmd:sheet(name, modify)} writes
+through the link to its target. A write-protected destination is not replaced.
 
 {pstd}
 dBase numeric fields use widths of 3, 5, and 10 for {cmd:byte}, {cmd:int}, and

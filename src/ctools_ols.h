@@ -37,8 +37,9 @@ ST_int ctools_cholesky(ST_double *A, ST_int n);
  * Matrix inversion via Cholesky (for positive definite matrices)
  * Input: L (lower triangular Cholesky factor)
  * Output: inv (inverse of L*L')
- * Both row-major n x n; L is read-only and must not alias inv. Allocates n*n
- * doubles for the inverse factor. Requires a nonsingular factor from a
+ * Both row-major n x n; L is read-only. L may be the same array as inv: L is
+ * read completely into the inverse factor before inv is written (callers
+ * invert in place). Allocates n*n doubles for the inverse factor. Requires a nonsingular factor from a
  * successful factorization; no new factorization is performed here.
  * Returns STATA_OK or an internal stata_retcode (memory/input/singularity)
  * ======================================================================== */
@@ -188,5 +189,10 @@ void ctools_inverse_add_constant(const ST_double *inv, ST_int K, const ST_double
  * diagonal is not positive, below 1e-9 of its original diagonal, or below 1e-19.
  * Returns 0 on success, -1 on error. */
 ST_int ctools_invsym(const ST_double *A, ST_int K, ST_double *inv, ST_int *rank_out);
+
+/* ctools_invsym with the columns swept in the order 0..K-1, as Mata's
+ * invsym(A, 1..K); a column that fails the tolerance when its turn comes is
+ * zeroed. */
+ST_int ctools_invsym_ordered(const ST_double *A, ST_int K, ST_double *inv, ST_int *rank_out);
 
 #endif /* CTOOLS_OLS_H */

@@ -13,7 +13,10 @@ program define csplit, rclass
         local if "if `iftouse'"
     }
     if "`limit'" == "" local limit 0
-    if `threads' < 0 exit 198
+    if `threads' < 0 {
+        di as error "threads() must be nonnegative"
+        exit 198
+    }
     if _N > 2147483647 exit 920
     if "`destring'" == "" & `"`force'`float'`ignore'`percent'"' != "" {
         di as error "destring options require destring"
@@ -21,19 +24,32 @@ program define csplit, rclass
     }
     if "`generate'" == "" local generate `varlist'
     confirm name `generate'
-    if `: word count `generate'' != 1 exit 198
+    if `: word count `generate'' != 1 {
+        di as error "invalid stub `generate'"
+        exit 198
+    }
     local trimcode = "`trim'" == ""
-    if `"`parse'"' == "" | `"`parse'"' == `"""' {
-        if "`trim'" != "" exit 198
+    * parse("") is the default, as in split
+    if `"`parse'"' == "" | `"`parse'"' == `""""' {
+        if "`trim'" != "" {
+            di as error "parsing on spaces incompatible with notrim"
+            exit 198
+        }
         local parse `"" ""'
         local trimcode = 2
     }
     local nparse : word count `parse'
-    if !`nparse' exit 198
+    if !`nparse' {
+        di as error "parse() is empty"
+        exit 198
+    }
     tokenize `"`parse'"'
     forvalues i = 1/`nparse' {
         local csplit_delim`i' `"``i''"'
-        if `"`csplit_delim`i''"' == "" exit 198
+        if `"`csplit_delim`i''"' == "" {
+            di as error "parse() contains an empty delimiter"
+            exit 198
+        }
     }
     local cap = cond(`limit' == 0, 2046, min(`limit',2046))
     local threadopt
@@ -83,6 +99,15 @@ program define csplit, rclass
             quietly destring `staged', replace `force' `float' `ignopt' `percent'
         }
         rename (`staged') (`newvars')
+        * destring recorded the command with the temporary names; split
+        * runs it on the final ones (its list ends in a space)
+        if "`destring'" != "" {
+            foreach v of local newvars {
+                local cmd : char `v'[destring_cmd]
+                local cmd : subinstr local cmd "`staged'" "`newvars' "
+                char `v'[destring_cmd] `"`macval(cmd)'"'
+            }
+        }
     }
     local rc = _rc
     capture plugin call ctools_plugin, "csplit clear"

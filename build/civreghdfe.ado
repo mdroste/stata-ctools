@@ -1,6 +1,6 @@
 *! version 1.2.3 20261030 github.com/mdroste/stata-ctools
 
-program define civreghdfe, eclass
+program define civreghdfe, eclass byable(recall)
     version 14.1
 
     * Check observation limit (Stata plugin API limitation)
@@ -26,7 +26,8 @@ program define civreghdfe, eclass
         Robust ///
         CLuster(varlist) ///
         TOLerance(real 1e-8) ///
-        MAXiter(integer 500) ///
+        MAXiter(integer 16000) ///
+        ITERATE(integer 0) ///
         Verbose ///
         FIRST ///
         FFIRst ///
@@ -76,6 +77,8 @@ program define civreghdfe, eclass
         SAVERF ///
         SAVERFPrefix(string) ///
         THReads(integer 0) ///
+        COEFLegend ///
+        CFORMAT(string) ///
         NORETURN]
 
     * Drop whatever an earlier run left behind, so no stale state is read
@@ -88,22 +91,54 @@ program define civreghdfe, eclass
     tempname temp_redund_stat temp_redund_df
 
     * Handle standalone robust/cluster as aliases for vce()
-    if "`robust'" != "" & `"`vce'"' == "" {
-        local vce "robust"
-    }
     if "`cluster'" != "" & `"`vce'"' == "" {
         local vce "cluster `cluster'"
     }
-    if "`robust'" != "" & "`cluster'" != "" {
-        di as error "cannot specify both robust and cluster()"
-        exit 198
+    if "`robust'" != "" & `"`vce'"' == "" {
+        local vce "robust"
     }
-    if "`robust'" != "" & `"`vce'"' != "" & `"`vce'"' != "robust" {
+    * cluster() implies robust, as in ivreg2, so the two may be combined
+    if "`robust'" != "" & `"`vce'"' != "" & `"`vce'"' != "robust" & "`cluster'" == "" {
         di as error "cannot specify both robust and vce()"
         exit 198
     }
     if "`cluster'" != "" & `"`vce'"' != "" & !regexm(`"`vce'"', "^cluster") {
         di as error "cannot specify both cluster() and vce()"
+        exit 198
+    }
+
+    * iterate() is reghdfe's (and so ivreghdfe's) name for maxiter()
+    if `iterate' > 0 local maxiter = `iterate'
+
+    * b0() (ivreg2 evaluates the CUE objective at a given coefficient vector)
+    * is not implemented
+    if `"`b0'"' != "" {
+        di as error "civreghdfe: b0() is not supported"
+        exit 198
+    }
+
+    * Estimators that cannot be combined, as ivreg2 parses them: LIML,
+    * Fuller and k-class are not GMM estimators, LIML and kclass() are
+    * different k-class estimators, and gmm2s and cue are different GMM
+    * estimators; the Fuller and k-class parameters cannot be negative
+    if ("`liml'" != "" | `fuller' != 0 | `kclass' != 0) & "`gmm2s'`cue'" != "" {
+        di as error "GMM estimation not available with LIML or k-class estimators"
+        exit 198
+    }
+    if `fuller' < 0 {
+        di as error "invalid Fuller option"
+        exit 198
+    }
+    if `kclass' < 0 {
+        di as error "invalid k-class option"
+        exit 198
+    }
+    if ("`liml'" != "" | `fuller' != 0) & `kclass' != 0 {
+        di as error "cannot use liml and kclass options together"
+        exit 198
+    }
+    if "`gmm2s'" != "" & "`cue'" != "" {
+        di as error "incompatible options: 2-step efficient gmm and cue gmm"
         exit 198
     }
 
@@ -201,18 +236,20 @@ program define civreghdfe, eclass
     }
     local exogvars = strtrim("`exogvars'")
 
-    * Validate dependent variable exists and is numeric (error 109 for string vars)
-    foreach v of local depvar {
-        capture confirm string variable `v'
-        if _rc == 0 {
-            di as error "type mismatch"
-            exit 109
-        }
-        confirm numeric variable `v'
+    * Validate dependent variable exists and is numeric (error 109 for string
+    * vars). A time-series operator (L.y, D.y) is applied by tsrevar: the
+    * plugin gets the generated variable, depvar keeps the name as typed.
+    capture confirm string variable `depvar'
+    if _rc == 0 {
+        di as error "type mismatch"
+        exit 109
     }
+    tsrevar `depvar'
+    local depvar_var `r(varlist)'
+    confirm numeric variable `depvar_var'
     * Mark sample early for fvrevar
     marksample touse
-    markout `touse' `depvar'
+    markout `touse' `depvar_var'
 
     * One numeric variable per absorbed effect for the plugin: string
     * variables and interactions are numbered first (the plugin renumbers
@@ -325,12 +362,19 @@ program define civreghdfe, eclass
         * Base/omitted placeholders are not sent to the plugin, which also
         * detects collinearity. The fvrevar variables follow the three name
         * lists in order.
+        * A term listed twice is used once, and an endogenous term that is
+        * also an included exogenous regressor is exogenous, as in ivreg2
         foreach __grp in endogvars exogvars instruments {
             local __grp_vars ""
-            forvalues __i = 1/`: word count ``__grp'_names_all'' {
+            local __grp_names ""
+            foreach __name of local `__grp'_names_all {
                 gettoken __v __all_exp : __all_exp
+                if `: list __name in __grp_names' continue
+                if "`__grp'" == "endogvars" & `: list __name in exogvars_names_all' continue
                 local __grp_vars `__grp_vars' `__v'
+                local __grp_names `__grp_names' `__name'
             }
+            local `__grp'_names_all `__grp_names'
             _ctools_fvsplit, names(``__grp'_names_all') vars(`__grp_vars')
             local `__grp'_expanded "`r(vars)'"
             local `__grp'_coef "`r(names)'"
@@ -789,6 +833,11 @@ program define civreghdfe, eclass
     * terms (base levels included) so they are left out of e(b)
     local n_partial = 0
     local partial_terms ""
+    * Without absorb(), partial() also partials out the constant, as ivreg2
+    * does (with absorb() the constant is absorbed)
+    local partial_cons = 0
+    local __pc _cons
+    if `has_cons' & "`partial'" != "" local partial_cons = 1
     if "`partial'" != "" {
         _civreghdfe_optflags "`partial'" "`exogvars_names_all'" `touse'
         if "`r(bad)'" != "" {
@@ -801,6 +850,13 @@ program define civreghdfe, eclass
         if "`verbose'" != "" {
             di as text "Partialling out: `partial'"
         }
+    }
+    if `partial_cons' {
+        * the constant is the last exogenous column
+        if `n_partial' == 0 matrix __civreghdfe_partial_flags = J(1, `K_exog', 0)
+        matrix __civreghdfe_partial_flags[1, `K_exog'] = 1
+        local ++n_partial
+        local partial_terms `partial_terms' _cons
     }
     scalar __civreghdfe_n_partial = `n_partial'
 
@@ -835,7 +891,7 @@ program define civreghdfe, eclass
             local cluster_plugin_`dim' `cluster_id_`dim''
         }
     }
-    local plugin_vars `depvar' `endogvars_expanded' `exogvars_expanded' `instruments_expanded' `absorb'
+    local plugin_vars `depvar_var' `endogvars_expanded' `exogvars_expanded' `instruments_expanded' `absorb'
     if `vce_type' == 2 | `vce_type' == 3 | `vce_type' == 4 {
         local plugin_vars `plugin_vars' `cluster_plugin_1'
     }
@@ -1078,6 +1134,9 @@ program define civreghdfe, eclass
         matrix `wald_temp' = `Vinv' * `b_col'
         matrix `wald_stat' = `slope_b' * `wald_temp'
         local F_wald = `wald_stat'[1,1] / `model_df'
+        * No testable restriction (a perfect fit leaves V at rounding
+        * noise): missing, as ivreg2's test gives
+        if diag0cnt(`Vinv') == `model_df' local F_wald = .
     }
 
     * Post results
@@ -1127,9 +1186,19 @@ program define civreghdfe, eclass
         }
     }
 
-    * Store first-stage F statistics
+    * Store first-stage F statistics. The plugin numbers them over the
+    * endogenous regressors it kept; e(F_first#) follows the model's
+    * endogenous regressors, missing for one dropped as collinear.
+    local __fs_kept = 0
     forvalues e = 1/`K_endog' {
-        capture scalar `temp_F' = __civreghdfe_F1_`e'
+        local __fs_index_`e' = 0
+        if `: word `e' of `collinear_flags'' {
+            ereturn scalar F_first`e' = .
+            continue
+        }
+        local ++__fs_kept
+        local __fs_index_`e' = `__fs_kept'
+        capture scalar `temp_F' = __civreghdfe_F1_`__fs_kept'
         if _rc == 0 {
             ereturn scalar F_first`e' = `temp_F'
         }
@@ -1219,6 +1288,16 @@ program define civreghdfe, eclass
     ereturn scalar F = `F_wald'
     ereturn scalar Fdf1 = `model_df'
     ereturn scalar Fdf2 = `df_r'
+    * ivreg2's p-value of F, centered R2 and variable counts and lists
+    ereturn scalar Fp = Ftail(`model_df', `df_r', `F_wald')
+    ereturn scalar r2c = `r2'
+    ereturn scalar endog_ct = `K_endog'
+    ereturn scalar exexog_ct = `K_inst_excl'
+    ereturn scalar inexog_ct = `K_exog' - `has_cons' + `n_partial'
+    ereturn local instd "`endogvars_coef'"
+    ereturn local inexog "`: list exogvars_coef - __pc'"
+    ereturn local exexog "`instruments_coef'"
+    ereturn local insts "`: list exogvars_coef - __pc' `instruments_coef'"
 
     * Model degrees of freedom (use K from plugin, which reflects collinearity removal)
     ereturn scalar df_m = `model_df'
@@ -1254,7 +1333,8 @@ program define civreghdfe, eclass
     local adj_denom = `N_used' - `K' - `sdofminus'
     if `adj_denom' > 0 {
         * With absorb, constant is partialled out, so use N not N-1
-        local r2_a = 1 - (1 - `r2') * (`N_used' - (`G' == 0 & "`noconstant'" == "")) / `adj_denom'
+        * (N when the constant is partialled out with partial(), as ivreg2)
+        local r2_a = 1 - (1 - `r2') * (`N_used' - (`G' == 0 & "`noconstant'" == "" & !`partial_cons')) / `adj_denom'
     }
     else {
         local r2_a = .
@@ -1268,7 +1348,8 @@ program define civreghdfe, eclass
     if "`first'`rf'" != "" quietly gen byte `aux_sample' = e(sample)
     local aux_wt ""
     if "`weight'" != "" local aux_wt "[`weight'=`weight_var']"
-    local aux_vce = cond(`"`vce'"' == "", "unadjusted", `"`vce'"')
+    * The VCE as resolved above: pweights imply robust, as in the main fit
+    local aux_vce = cond(`"`vce'"' == "", cond(`vce_type' == 1, "robust", "unadjusted"), `"`vce'"')
     local aux_absorb ""
     if "`absorb'" != "" local aux_absorb "absorb(`absorb_names')"
 
@@ -1435,6 +1516,8 @@ program define civreghdfe, eclass
         if "`allbaselevels'" != "" local dispopt "`dispopt' allbaselevels"
         if "`plus'" != "" local dispopt "`dispopt' plus"
         if "`eform'" != "" local dispopt "`dispopt' eform(`eform')"
+        if "`coeflegend'" != "" local dispopt "`dispopt' coeflegend"
+        if `"`cformat'"' != "" local dispopt `"`dispopt' cformat(`cformat')"'
 
         * ivreg2 and ivreghdfe label the table with the dependent variable
         * itself, whatever depname() says; e(depvar) keeps the depname().
@@ -1456,10 +1539,20 @@ program define civreghdfe, eclass
         di as text _col(20) "Partial" _col(32) "F(" as result `K_inst_excl' as text "," ///
             as result `fs_df_r' as text ")" _col(52) "Prob > F"
 
+        * One row per endogenous regressor the plugin kept, labelled with its
+        * term (factor variables expanded); the statistics of the k-th kept
+        * one are the plugin's k-th
         forvalues e = 1/`K_endog' {
-            local endogvar : word `e' of `endogvars'
-            capture scalar `temp_F' = __civreghdfe_F1_`e'
-            capture scalar `temp_r2' = __civreghdfe_partial_r2_`e'
+            local endogvar : word `e' of `endogvars_coef'
+            if `__fs_index_`e'' == 0 {
+                ereturn scalar partial_r2_`e' = .
+                continue
+            }
+            local __fsk = `__fs_index_`e''
+            capture confirm scalar __civreghdfe_F1df_r_`__fsk'
+            if _rc == 0 local fs_df_r = scalar(__civreghdfe_F1df_r_`__fsk')
+            capture scalar `temp_F' = __civreghdfe_F1_`__fsk'
+            capture scalar `temp_r2' = __civreghdfe_partial_r2_`__fsk'
             if _rc == 0 {
                 local F_val = `temp_F'
                 local r2_val = `temp_r2'
@@ -1475,8 +1568,11 @@ program define civreghdfe, eclass
         di as text ""
     }
 
-    * Display diagnostic tests (if footer not suppressed)
-    if "`footer'" == "" {
+    * Diagnostic tests: always stored in e(); nofooter suppresses only their
+    * display (and that of the reduced form and the footer tables), so the
+    * block runs quietly then
+    local __footer_block = cond("`footer'" == "", "if 1", "quietly")
+    `__footer_block' {
 
     * Retrieve underidentification test
     capture scalar `temp_underid' = __civreghdfe_underid
@@ -1575,7 +1671,9 @@ program define civreghdfe, eclass
     }
     di as text "{hline 78}"
 
-    * Display reduced form if requested
+    * Display reduced form if requested; a failed reduced form is reported
+    * and the remaining statistics are still stored
+    local rf_rc = 0
     if "`rf'" != "" {
         di as text ""
         di as text "{hline 60}"
@@ -1603,8 +1701,15 @@ program define civreghdfe, eclass
         * Reduced form: y = [exogenous + excluded instruments] + error
         tempname rf_hold
         _estimates hold `rf_hold', restore
-        qui creghdfe `depvar' `exogvars' `instruments' `aux_wt' ///
+        capture qui creghdfe `depvar' `exogvars' `instruments' `aux_wt' ///
             if `aux_sample', `aux_absorb' vce(`aux_vce')
+        local rf_rc = _rc
+    }
+    if "`rf'" != "" & `rf_rc' {
+        di as error "  reduced-form regression failed (rc=`rf_rc')"
+        _estimates unhold `rf_hold'
+    }
+    else if "`rf'" != "" {
 
         * Display coefficient table
         tempname rf_b rf_V
@@ -1671,6 +1776,12 @@ program define civreghdfe, eclass
             ereturn scalar sarganp = `sargan_pval'
         }
         ereturn scalar cd_f = `cd_f_val'
+        * ivreg2's names for the overidentification and Cragg-Donald
+        * statistics
+        ereturn scalar j = `sargan_val'
+        ereturn scalar jdf = `sargan_df'
+        if `sargan_df' > 0 ereturn scalar jp = chi2tail(`sargan_df', `sargan_val')
+        ereturn scalar cdf = `cd_f_val'
 
         * Store weak ID statistics (widstat = Kleibergen-Paap F if robust, else Cragg-Donald F)
         capture scalar `temp_kp_f2' = __civreghdfe_kp_f
@@ -1836,7 +1947,7 @@ program define civreghdfe, eclass
     di as text ""
     } /* end if G > 0 */
 
-    } /* End of if "`footer'" == "" */
+    } /* End of the diagnostic tests (quietly under nofooter) */
 
     * savefirst/saverf: as ivreg2, store each first-stage regression as
     * <savefprefix><endogenous variable> and the reduced form as

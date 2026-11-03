@@ -1473,24 +1473,12 @@ else {
     test_fail "aweight + by" "rc=`=_rc'"
 }
 
-* discrete + controls
+* discrete + controls: the residualized x has more distinct values than
+* half the sample, which binscatter refuses (r(134))
 sysuse auto, clear
-capture cbinscatter price rep78, discrete controls(weight) nograph
-if _rc == 0 {
-    * Verify e(controls) is set and bindata has correct discrete bins
-    if "`e(controls)'" == "weight" {
-        mat _bd = e(bindata)
-        local nrows = rowsof(_bd)
-        if `nrows' >= 5 test_pass "discrete + controls (controls=`e(controls)', rows=`nrows')"
-        else test_fail "discrete + controls" "bindata has only `nrows' rows, expected >= 5"
-    }
-    else {
-        test_fail "discrete + controls" "e(controls)=`e(controls)' expected weight"
-    }
-}
-else {
-    test_fail "discrete + controls" "rc=`=_rc'"
-}
+test_error_match, stata_cmd(binscatter price rep78, discrete controls(weight) nodraw) ///
+    ctools_cmd(cbinscatter price rep78, discrete controls(weight) nograph) ///
+    testname("discrete + controls")
 
 * linetype + controls + absorb
 sysuse auto, clear
@@ -1736,6 +1724,233 @@ foreach target in "`rb_bins'" "`c(tmpdir)'/rb_no_such_dir/bins.dta" {
 use `rb_bins', clear
 if _N > 0 & c(k) == 5 test_pass "[savedata] bins saved"
 else test_fail "[savedata] bins saved" "N=`=_N' k=`=c(k)'"
+
+print_section "binscatter Options, Titles, Discrete Capacity, reportreg, qfit"
+if `binscatter_installed' {
+    * binscatter options cbinscatter does not implement are refused (with
+    * and without a graph), never ignored, and change nothing
+    clear
+    set seed 4101
+    quietly set obs 400
+    gen double x = rnormal()
+    gen double z = rnormal() + .5*x
+    gen double y = 1 + x + z + rnormal()
+    gen q = ceil(_n/20)
+    gen t = _n
+    tempfile before
+    quietly save `before'
+    foreach o in "medians" "noaddmean controls(z)" "rd(0)" "xq(q)" "mcolors(red)" ///
+        "lcolors(red)" "savegraph(_cb_unused.gph)" "randvar(x)" "randcut(.5)" "randn(10)" {
+        foreach g in nograph nodraw {
+            capture cbinscatter y x, `o' `g'
+            local rc = _rc
+            capture cf _all using `before'
+            if `rc' == 198 & _rc == 0 test_pass "binscatter option `o' refused (`g')"
+            else test_fail "binscatter option `o' refused (`g')" "rc=`rc'"
+        }
+    }
+    capture confirm file _cb_unused.gph
+    if _rc test_pass "savegraph() writes nothing"
+    else test_fail "savegraph() writes nothing" "file written"
+    * Typos are errors without a graph too, as twoway makes them in binscatter
+    foreach o in "bogusoption" "bogus(1)" "xlabel(1, bogus)" {
+        test_error_match, stata_cmd(binscatter y x, `o' nodraw) ///
+            ctools_cmd(cbinscatter y x, `o' nograph) testname("nograph option `o'")
+    }
+    * replace and nofastxtile change nothing in cbinscatter; valid graph
+    * options are accepted without a graph
+    quietly cbinscatter y x, nograph
+    matrix _cb_base = e(bindata)
+    foreach o in "replace" "nofastxtile" "xlabel(-2(1)2) title(T) ytitle(Y) legend(off)" "name(_cb_unused) saving(_cb_unused)" {
+        capture quietly cbinscatter y x, `o' nograph
+        local rc = _rc
+        if `rc' == 0 & mreldif(e(bindata), _cb_base) == 0 test_pass "option `o' accepted, bins unchanged"
+        else test_fail "option `o' accepted, bins unchanged" "rc=`rc'"
+    }
+    capture confirm file _cb_unused.gph
+    if _rc test_pass "saving() without a graph writes nothing"
+    else test_fail "saving() without a graph writes nothing" "file written"
+    capture graph describe _cb_unused
+    if _rc test_pass "name() without a graph stores nothing"
+    else test_fail "name() without a graph stores nothing" "graph stored"
+    matrix drop _cb_base
+
+    * Title and legend options reach twoway as binscatter passes them:
+    * suboptions, several lines, empty titles, legend() with one series.
+    * Compared on the graph objects (built with nodraw, never displayed).
+    capture program drop _cb_graph_props
+    program define _cb_graph_props, rclass
+        local p
+        foreach item in title.text.arrnels title.style.size.setting ///
+            yaxis1.title.text.arrnels xaxis1.title.text.arrnels legend.draw_view.setting {
+            local v ""
+            capture local v `"`.Graph.`item''"'
+            local p `"`p'|`v'"'
+        }
+        forvalues i = 1/2 {
+            foreach item in title yaxis1.title xaxis1.title {
+                local v ""
+                capture local v `"`.Graph.`item'.text[`i']'"'
+                local p `"`p'|`v'"'
+            }
+        }
+        return local props `"`p'"'
+    end
+    gen bv = mod(_n, 2)
+    foreach o in `"title("Line one" "Line two")"' `"title("My title", size(vsmall))"' ///
+        `"ytitle("Why", size(large)) xtitle("")"' `"ytitle("")"' `"ytitle("A" "B") xtitle("C" "D")"' ///
+        `"title(My plain title)"' `"legend(on)"' `"by(bv) legend(off)"' `"by(bv) legend(rows(2))"' {
+        quietly binscatter y x, `o' nodraw
+        _cb_graph_props
+        local ref `"`r(props)'"'
+        capture quietly cbinscatter y x, `o' nodraw
+        local rc = _rc
+        _cb_graph_props
+        local same = `rc' == 0 & `"`r(props)'"' == `"`ref'"'
+        * Test names and messages carry no quotation marks
+        local label : subinstr local o `"""' "", all
+        local got `"`r(props)'"'
+        local got : subinstr local got `"""' "", all
+        local ref : subinstr local ref `"""' "", all
+        if `same' test_pass "graph titles and legend: `label'"
+        else test_fail "graph titles and legend: `label'" "rc=`rc' binscatter `ref' cbinscatter `got'"
+    }
+    capture graph drop Graph
+    program drop _cb_graph_props
+
+    * Time-series operators in controls(). binscatter's savedata() CSV
+    * holds about 9 significant digits of a value near 1 but fewer of one
+    * near 0, so x and y are shifted away from 0 (the same bins, shifted).
+    tsset t
+    gen double xs = x + 10
+    gen double ys = y + 10
+    capture cbinscatter ys xs, controls(L.z) nograph
+    if _rc test_fail "controls(L.z)" "rc=`=_rc'"
+    else compare_binscatter_bins, ///
+        bs_cmd(binscatter ys xs, controls(L.z) savedata(_bs_test) replace) ///
+        cb_cmd(cbinscatter ys xs, controls(L.z) nograph) ///
+        nbins(20) yvar(ys) xvar(xs) testname("controls(L.z)")
+    tsset, clear
+    drop xs ys
+
+    * discrete: binscatter's (sample size)/2 rule on the residualized x, an
+    * exact result size for many values and many by-groups, and the
+    * capacity check before the per-bin buffers
+    test_error_match, stata_cmd(binscatter y x, discrete controls(z) nodraw) ///
+        ctools_cmd(cbinscatter y x, discrete controls(z) nograph) testname("discrete controls(z): too many values")
+    test_error_match, stata_cmd(binscatter y x, discrete nodraw) ///
+        ctools_cmd(cbinscatter y x, discrete nograph) testname("discrete continuous x: too many values")
+    clear
+    set seed 4102
+    quietly set obs 10000
+    gen x = mod(_n, 600)
+    gen double y = 10 + x/100 + rnormal()
+    capture cbinscatter y x, discrete nograph
+    if _rc test_fail "discrete with 600 values" "rc=`=_rc'"
+    else compare_binscatter_bins, ///
+        bs_cmd(binscatter y x, discrete savedata(_bs_test) replace) ///
+        cb_cmd(cbinscatter y x, discrete nograph) ///
+        nbins(600) yvar(y) xvar(x) testname("discrete with 600 values")
+    clear
+    quietly set obs 200000
+    gen double x = mod(_n, 70000)
+    gen double y = mod(_n, 7)
+    tempfile before
+    quietly save `before'
+    capture cbinscatter y x, discrete nograph
+    local rc = _rc
+    capture cf _all using `before'
+    if `rc' == 503 & _rc == 0 test_pass "discrete beyond c(max_matdim) bins refused, data unchanged"
+    else test_fail "discrete beyond c(max_matdim) bins refused, data unchanged" "rc=`rc'"
+    clear
+    set seed 4103
+    quietly set obs 70000
+    gen x = mod(_n, 5)
+    gen state = mod(floor(_n/5), 140)
+    gen double y = x + state/10 + rnormal()
+    capture quietly cbinscatter y x, discrete by(state) nograph
+    local rc = _rc
+    if `rc' == 0 {
+        mata: _cb = st_matrix("e(bindata)"); _cb = _cb[selectindex(_cb[., 2] :!= .), (1, 3, 4, 5)]
+        mata: st_matrix("_cb_data", sort(_cb, (1, 2)))
+        mata: mata drop _cb
+        preserve
+        collapse (mean) y (count) n=y, by(state x)
+        sort state x
+        mkmat x y n, mat(_ref)
+        restore
+        local ok = rowsof(_cb_data) == 700
+        local min_sf = 15
+        if `ok' {
+            forvalues r = 1/700 {
+                if _cb_data[`r', 2] != _ref[`r', 1] | _cb_data[`r', 4] != _ref[`r', 3] local ok 0
+                sigfigs `=_cb_data[`r', 3]' `=_ref[`r', 2]'
+                local min_sf = min(`min_sf', r(sigfigs))
+            }
+        }
+        if `ok' & `min_sf' >= $DEFAULT_SIGFIGS test_pass "discrete by() with 140 groups"
+        else test_fail "discrete by() with 140 groups" "rows=`=rowsof(_cb_data)' min sigfigs=`min_sf'"
+        matrix drop _cb_data _ref
+    }
+    else test_fail "discrete by() with 140 groups" "rc=`rc'"
+
+    * reportreg: the fit regressions use cbinscatter's sample, and pweights
+    * and iweights work; a failure leaves no scratch results
+    sysuse auto, clear
+    gen w = 1 + mod(_n, 3)
+    capture quietly cbinscatter price rep78, controls(weight) reportreg nograph
+    local rc = _rc
+    if `rc' == 0 capture confirm matrix e(reportreg_b)
+    if `rc' == 0 & _rc local rc = "no e(reportreg_b)"
+    if "`rc'" == "0" {
+        sigfigs `=e(reportreg_b)[1, colnumb(e(reportreg_b), "_cons")]' `=e(coefs)[1, 1]'
+        local sf_cons = r(sigfigs)
+        sigfigs `=e(reportreg_b)[1, colnumb(e(reportreg_b), "rep78")]' `=e(coefs)[1, 2]'
+        if min(`sf_cons', r(sigfigs)) >= $DEFAULT_SIGFIGS test_pass "reportreg fit on the plugin's sample"
+        else test_fail "reportreg fit on the plugin's sample" "sigfigs _cons=`sf_cons' slope=`r(sigfigs)'"
+    }
+    else test_fail "reportreg fit on the plugin's sample" "rc=`rc'"
+    foreach spec in "price mpg [pw=w], controls(weight)" "price mpg [iw=w], absorb(foreign)" ///
+        "price mpg [pw=w], absorb(foreign) method(binsreg)" "price mpg [iw=w], absorb(foreign) controls(weight) method(binsreg)" {
+        capture quietly cbinscatter `spec' reportreg nograph
+        local rc = _rc
+        local scratch : all scalars "__cbinscatter*"
+        local scratch_m : all matrices "__cbinscatter*"
+        if `rc' == 0 & "`scratch'`scratch_m'" == "" test_pass "reportreg with `spec'"
+        else test_fail "reportreg with `spec'" "rc=`rc' scratch=`scratch' `scratch_m'"
+    }
+
+    * linetype(qfit) with two distinct x values: binscatter's regress keeps
+    * x^2 and omits x (e(y1_coefs): x^2, x, _cons; e(coefs): _cons, x, x^2)
+    clear
+    set seed 4104
+    quietly set obs 400
+    gen x = runiform() < .4
+    gen double y = 2*x + rnormal()
+    gen g = mod(_n, 2)
+    foreach shift in 0 1 -.5 {
+        quietly replace x = x + `shift'
+        foreach byopt in "" "by(g)" {
+            quietly binscatter y x, linetype(qfit) `byopt' nodraw
+            matrix _ref = e(y1_coefs)
+            quietly cbinscatter y x, linetype(qfit) `byopt' nograph
+            local min_sf = 15
+            local ok = rowsof(_ref) == rowsof(e(coefs))
+            forvalues gr = 1/`=rowsof(_ref)' {
+                forvalues c = 1/3 {
+                    local a = _ref[`gr', 4 - `c']
+                    local b = e(coefs)[`gr', `c']
+                    if `a' == 0 & `b' == 0 continue
+                    sigfigs `a' `b'
+                    local min_sf = min(`min_sf', r(sigfigs))
+                }
+            }
+            if `ok' & `min_sf' >= $DEFAULT_SIGFIGS test_pass "qfit with two x values, shift `shift' `byopt'"
+            else test_fail "qfit with two x values, shift `shift' `byopt'" "min sigfigs=`min_sf'"
+            matrix drop _ref
+        }
+    }
+}
 
 * Clean up helpers
 capture program drop ctools_binsreg_reference

@@ -138,6 +138,21 @@ int main(void) {
     assert(strlen(ctx->col_cache[0].string_data[0])==20000);
     assert(cimport_blob(1,1,20001)==198);assert(cimport_blob(2,1,0)==198);
     cimport_free_context(ctx);g_cimport_ctx=NULL;
+    /* A scan failing after the file opened reports the worker's error (920,
+     * 109) or the caller's fallback, never 601 'file not found'. */
+    for(int error=0;error<2;error++) {
+        CImportContext *failed=calloc(1,sizeof(*failed));pthread_mutex_init(&failed->warning_mutex,NULL);
+        atomic_init(&failed->error_code,error?109:0);
+        assert(!cimport_fail(failed,920) && g_cimport_parse_status==(error?109:920));
+    }
+    /* More fields than the parser holds fail (902) instead of being dropped. */
+    char widefile[]="/tmp/ctools-cimport-wide-XXXXXX";
+    fd=mkstemp(widefile);assert(fd>=0);
+    for(int f=0;f<=CTOOLS_MAX_COLUMNS;f++) assert(write(fd,f?",1":"1",f?2:1)>0);
+    assert(write(fd,"\n",1)==1);close(fd);
+    assert(!cimport_parse_csv(widefile,',',false,0,false,CIMPORT_BINDQUOTES_LOOSE,
+        CIMPORT_NUMTYPE_AUTO,'.',0,CIMPORT_EMPTYLINES_SKIP,20,CIMPORT_ENC_UNKNOWN,NULL,0,NULL,0));
+    assert(g_cimport_parse_status==902);unlink(widefile);
     ctools_destroy_global_pool();return 0;
 }
 #endif

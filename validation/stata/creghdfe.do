@@ -3118,10 +3118,10 @@ local depvar = "`e(depvar)'"
 if "`depvar'" == "price" test_pass "e(depvar) = price"
 else test_fail "e(depvar)" "expected 'price', got '`depvar''"
 
-* e(vce) for unadjusted
+* e(vce) for unadjusted: ols, as reghdfe names it
 local vce = "`e(vce)'"
-if "`vce'" == "unadjusted" test_pass "e(vce) = unadjusted (default)"
-else test_fail "e(vce) default" "expected 'unadjusted', got '`vce''"
+if "`vce'" == "ols" test_pass "e(vce) = ols (default)"
+else test_fail "e(vce) default" "expected 'ols', got '`vce''"
 
 * e(vce) for robust
 sysuse auto, clear
@@ -3590,6 +3590,302 @@ if "`ct_names'" == "`ref_names'" test_pass "FV after singletons, level only on s
 else test_fail "FV after singletons, level only on singleton rows: names" "`ct_names' vs `ref_names'"
 benchmark_reghdfe y x i.grp, absorb(id) vce(robust) testname("FV after singletons, level only on singleton rows")
 
+* creghdfe against reghdfe on the cases below: the e(b) column names, e(b)
+* and e(V) (unless skip() lists V), and the e() scalars reghdfe posts (equal
+* when integer, to minsf significant figures otherwise, missing where
+* reghdfe's are; the R-squared family as 1 - ratio, at the scale of 1)
+capture program drop _creghdfe_cmp
+program define _creghdfe_cmp
+    syntax, ref(string) ct(string) testname(string) [skip(string) minsf(real 7)]
+    local ints N df_r df_m rank N_clust df_a
+    local reals r2 r2_a r2_within rss tss F rmse ll ll_0 r2_a_within sumweights
+    local ints : list ints - skip
+    local reals : list reals - skip
+    capture quietly `ref'
+    if _rc {
+        test_fail "`testname'" "reference failed rc=`=_rc'"
+        exit
+    }
+    local ref_names : colfullnames e(b)
+    tempname rb rV cb cV
+    matrix `rb' = e(b)
+    matrix `rV' = e(V)
+    foreach s in `ints' `reals' {
+        local r_`s' = e(`s')
+    }
+    capture quietly `ct'
+    if _rc {
+        test_fail "`testname'" "creghdfe failed rc=`=_rc'"
+        exit
+    }
+    local diffs
+    local ct_names : colfullnames e(b)
+    if "`ct_names'" != "`ref_names'" local diffs "`diffs' names: `ct_names' vs `ref_names'"
+    else {
+        matrix `cb' = e(b)
+        matrix `cV' = e(V)
+        matrix_min_sigfigs `rb' `cb'
+        if r(min_sigfigs) < `minsf' local diffs "`diffs' e(b):sf=`=r(min_sigfigs)'"
+        if !`: list posof "V" in skip' {
+            matrix_min_sigfigs `rV' `cV'
+            if r(min_sigfigs) < `minsf' local diffs "`diffs' e(V):sf=`=r(min_sigfigs)'"
+        }
+    }
+    foreach s of local ints {
+        if `r_`s'' != e(`s') & !(missing(`r_`s'') & missing(e(`s'))) local diffs "`diffs' e(`s'):`r_`s''!=`=e(`s')'"
+    }
+    foreach s of local reals {
+        if missing(`r_`s'') & missing(e(`s')) continue
+        if substr("`s'", 1, 2) == "r2" sigfigs_cancellation `r_`s'' `=e(`s')' 1
+        else sigfigs `r_`s'' `=e(`s')'
+        if r(sigfigs) < `minsf' local diffs "`diffs' e(`s'):`r_`s'' vs `=e(`s')'"
+    }
+    if !(e(ic) > 0) local diffs "`diffs' e(ic)=`=e(ic)'"
+    if "`diffs'" == "" test_pass "`testname'"
+    else test_fail "`testname'" "`=trim("`diffs'")'"
+end
+
+* Ill-conditioned regressors under robust and cluster VCEs: the sandwich is
+* made exactly symmetric, as reghdfe does, instead of failing r(505). On
+* x2 = x + 1e-4*noise reghdfe's own cluster V is all zeros (its V is missing),
+* so the reference is reghdfe on the equivalent well-conditioned model in x
+* and dx = x2 - x, mapped back: b(x) = theta(x) - theta(dx), b(x2) = theta(dx).
+* creghdfe's robust meat is accumulated in twice working precision, as
+* reghdfe's quadcross(); on the direct model reghdfe agrees with that
+* reference to 7.2 significant figures (robust) and 0 (cluster).
+clear
+set seed 1
+set obs 2000
+gen int id = ceil(_n/20)
+gen double x = rnormal()
+gen double dx = 1e-4*rnormal()
+gen double x2 = x + dx
+gen double y = x + rnormal()
+matrix ill_M = (1, -1, 0 \ 0, 1, 0 \ 0, 0, 1)
+foreach v in robust "cluster id" {
+    quietly reghdfe y x dx, absorb(id) vce(`v')
+    matrix ill_rb = e(b) * ill_M'
+    matrix ill_rV = ill_M * e(V) * ill_M'
+    capture quietly creghdfe y x x2, absorb(id) vce(`v')
+    if _rc {
+        test_fail "near-collinear regressors, vce(`v')" "rc=`=_rc'"
+        continue
+    }
+    matrix ill_cb = e(b)
+    matrix ill_cV = e(V)
+    matrix_min_sigfigs ill_rb ill_cb
+    local sf_b = r(min_sigfigs)
+    matrix_min_sigfigs ill_rV ill_cV
+    local sf_V = r(min_sigfigs)
+    if `sf_b' >= $DEFAULT_SIGFIGS & `sf_V' >= $DEFAULT_SIGFIGS & issymmetric(e(V)) ///
+        test_pass "near-collinear regressors, vce(`v')"
+    else test_fail "near-collinear regressors, vce(`v')" "b sf=`sf_b' V sf=`sf_V' symmetric=`=issymmetric(e(V))'"
+}
+matrix drop ill_M ill_rb ill_rV ill_cb ill_cV
+
+* A saturated model (no residual degrees of freedom), with more regressors
+* than the effects leave room for: reghdfe posts b, df_r = 0, zeros for V and
+* missing F and r2_a (rss and rmse are rounding noise and not compared)
+clear
+set seed 3
+set obs 12
+gen int a = ceil(_n/2)
+gen int cl = ceil(_n/4)
+gen double y = rnormal()
+forvalues i = 1/7 {
+    gen double v`i' = rnormal()
+}
+foreach v in "" "vce(robust)" "vce(cluster cl)" {
+    foreach k in 6 7 {
+        * With clusters the residual degrees of freedom are G - 1 and V is
+        * built from rounding-noise residuals, so it is not compared
+        local skip rss rmse ll
+        if "`v'" == "vce(cluster cl)" local skip `skip' V
+        _creghdfe_cmp, ref(reghdfe y v1-v`k', absorb(a) `v') ct(creghdfe y v1-v`k', absorb(a) `v') ///
+            skip(`skip') testname("saturated model, `k' regressors `v'")
+    }
+}
+capture quietly creghdfe y v1-v6, absorb(a)
+if _rc test_fail "saturated model: df_r 0, zero V, missing F and r2_a" "rc=`=_rc'"
+else {
+    matrix sat_V = e(V)
+    matrix sat_zero = J(7, 7, 0)
+    if e(df_r) == 0 & missing(e(F)) & missing(e(r2_a)) & mreldif(sat_V, sat_zero) == 0 ///
+        test_pass "saturated model: df_r 0, zero V, missing F and r2_a"
+    else test_fail "saturated model: df_r 0, zero V, missing F and r2_a" "df_r=`=e(df_r)' F=`=e(F)'"
+    matrix drop sat_V sat_zero
+}
+
+* Collinearity with the fixed effects by reghdfe's rule (partialled sum of
+* squares at most min(1e-6, tolerance/10) of the uncentered one) and among
+* the regressors by invsym() in their order, at the default and a tight
+* tolerance, with and without standardization
+clear
+set seed 12345
+set obs 3000
+gen long id = ceil(runiform()*150)
+gen int t = ceil(runiform()*12)
+gen double x1 = rnormal() + id/100
+gen double y = 1 + x1 + id/20 + t/3 + rnormal()
+duplicates drop id t, force
+gen double year = 1990 + t + runiform()
+foreach r in 1e-2 1e-3 1e-4 1e-6 1e-7 {
+    capture drop nf
+    gen double nf = 1000*id + `r'*1000*rnormal()
+    foreach o in "" "tolerance(1e-12)" {
+        _creghdfe_cmp, ref(reghdfe y x1 nf, absorb(id) `o') ct(creghdfe y x1 nf, absorb(id) `o') ///
+            testname("regressor near the fixed effects (`r') `o'")
+    }
+    * Two effects, where the projection is iterative. The unadjusted VCE: when
+    * reghdfe keeps nf, its robust V is all zeros (missing),
+    * so the robust sandwich is checked above instead
+    foreach o in "" "tolerance(1e-12)" {
+        _creghdfe_cmp, ref(reghdfe y x1 nf, absorb(id t) `o') ct(creghdfe y x1 nf, absorb(id t) `o') ///
+            testname("regressor near the fixed effects (`r'), two effects `o'")
+    }
+}
+_creghdfe_cmp, ref(reghdfe y c.year##c.year##c.year x1, absorb(id)) ///
+    ct(creghdfe y c.year##c.year##c.year x1, absorb(id)) testname("cubic in calendar years")
+_creghdfe_cmp, ref(reghdfe y c.year##c.year##c.year x1, noabsorb) ///
+    ct(creghdfe y c.year##c.year##c.year x1) testname("cubic in calendar years, no absorb")
+clear
+set seed 777
+set obs 100000
+gen firm = ceil(_n/20)
+gen year = mod(_n-1, 20) + 1
+gen x = rnormal()
+gen zf = runiform() if mod(_n-1,20)==0
+bysort firm (year): replace zf = zf[1]
+gen double z = 1e6 * (1 + zf)
+gen y = x + rnormal() + firm/1000
+drop if runiform() < 0.1
+foreach a in "year firm" "firm year" {
+    _creghdfe_cmp, ref(reghdfe y x z, absorb(`a')) ct(creghdfe y x z, absorb(`a') nostandardize) ///
+        testname("large-unit firm-level regressor, nostandardize, absorb(`a')")
+}
+clear
+set seed 778
+set obs 1000
+gen id = ceil(_n/10)
+gen double w = 1e-9 * rnormal()
+gen y = 1e8 * w + rnormal()
+_creghdfe_cmp, ref(reghdfe y w, absorb(id)) ct(creghdfe y w, absorb(id) nostandardize) ///
+    testname("tiny-unit regressor, nostandardize")
+
+* A dependent variable explained by the fixed effects is zeroed as in
+* reghdfe: b, rss and tss_within are 0, F and r2_within missing
+clear
+set seed 7
+set obs 3000
+gen int firm = ceil(runiform()*100)
+gen int t = ceil(runiform()*10)
+bys firm: gen double fsize = runiform() if _n==1
+bys firm: replace fsize = fsize[1]
+gen double fy = fsize + t/10
+gen double x = rnormal()
+_creghdfe_cmp, ref(reghdfe fsize x, absorb(firm)) ct(creghdfe fsize x, absorb(firm)) ///
+    skip(ll ll_0) testname("depvar constant within the effect")
+_creghdfe_cmp, ref(reghdfe fy x, absorb(firm t) vce(robust)) ct(creghdfe fy x, absorb(firm t) vce(robust)) ///
+    skip(ll ll_0) testname("depvar sum of two effects, robust")
+capture quietly creghdfe fsize x, absorb(firm)
+if _rc test_fail "depvar explained by the effects: exact zeros" "rc=`=_rc'"
+else if _b[x] == 0 & e(rss) == 0 & e(tss_within) == 0 & missing(e(F)) & missing(e(r2_within)) ///
+    test_pass "depvar explained by the effects: exact zeros"
+else test_fail "depvar explained by the effects: exact zeros" "b=`=_b[x]' rss=`=e(rss)'"
+
+* A perfect fit with regressors: F missing, as in reghdfe
+clear
+set obs 50
+gen int g = ceil(_n/5)
+gen double x = rnormal()
+gen double x2 = rnormal()
+gen double y = 2*x + 3*x2 + g
+capture quietly creghdfe y x x2, absorb(g)
+if _rc test_fail "perfect fit: missing F" "rc=`=_rc'"
+else if missing(e(F)) test_pass "perfect fit: missing F"
+else test_fail "perfect fit: missing F" "F=`=e(F)'"
+
+* reghdfe syntax: no regressors, noabsorb, noconstant, cluster(), vce(conventional),
+* verbose(#), keepsingletons and the display options
+sysuse auto, clear
+gen int sid = ceil(_n/4)
+replace sid = 100 + _n in 1/6
+foreach spec in "price, absorb(rep78)" "price, absorb(rep78) vce(robust)" "price" ///
+    "price weight, noabsorb" "price weight, absorb(rep78) noconstant" "price weight, noabsorb noconstant" ///
+    "price weight, absorb(rep78) cluster(foreign)" "price weight, absorb(rep78) vce(conventional)" ///
+    "price weight, absorb(rep78) level(90) verbose(0)" "price weight i.foreign, absorb(rep78) baselevels noomitted vsquish cformat(%9.3f) coeflegend" ///
+    "price weight, absorb(rep78 sid) keepsingletons" "price weight [aw=mpg], absorb(rep78 sid) keepsingletons vce(cluster foreign)" {
+    local ctspec "`spec'"
+    if "`spec'" == "price" local spec "price, noabsorb"
+    _creghdfe_cmp, ref(reghdfe `spec') ct(creghdfe `ctspec') testname("reghdfe syntax: `ctspec'")
+}
+capture quietly creghdfe price weight, absorb(rep78) noheader notable nofootnote
+if !_rc test_pass "noheader notable nofootnote accepted"
+else test_fail "noheader notable nofootnote accepted" "rc=`=_rc'"
+
+* Likelihood and solver results reghdfe posts, and estat ic
+sysuse auto, clear
+foreach w in "" "[aw=mpg]" "[fw=rep78]" {
+    _creghdfe_cmp, ref(reghdfe price weight length `w', absorb(foreign rep78)) ///
+        ct(creghdfe price weight length `w', absorb(foreign rep78)) testname("ll, ll_0, r2_a_within, sumweights `w'")
+    if "`e(model)'" == "ols" & "`e(marginsnotok)'" == "Residuals SCore" & e(converged) == 1 & e(report_constant) == 1 ///
+        test_pass "model, marginsnotok, converged, report_constant `w'"
+    else test_fail "model, marginsnotok, converged, report_constant `w'" "`e(model)' `e(marginsnotok)'"
+    capture estat ic
+    if _rc == 0 test_pass "estat ic `w'"
+    else test_fail "estat ic `w'" "rc=`=_rc'"
+}
+
+* groupvar() exists only where reghdfe creates it: not when an effect is
+* nested in the clusters or without mobility-group adjustments
+clear
+set seed 9
+set obs 2000
+gen int firm = ceil(runiform()*50)
+gen int year = ceil(runiform()*10)
+gen double x = rnormal()
+gen double y = x + rnormal()
+foreach o in "vce(cluster firm)" "dofadjustments(none)" "dofadjustments(clusters) vce(cluster year)" "vce(cluster year)" {
+    capture drop mg_ref mg_ct
+    quietly reghdfe y x, absorb(firm year) `o' groupvar(mg_ref)
+    capture quietly creghdfe y x, absorb(firm year) `o' groupvar(mg_ct)
+    capture confirm variable mg_ref
+    local has_ref = !_rc
+    capture confirm variable mg_ct
+    local has_ct = !_rc
+    if `has_ref' != `has_ct' test_fail "groupvar() created as reghdfe: `o'" "reghdfe `has_ref', creghdfe `has_ct'"
+    else if `has_ref' assert_var_equal mg_ct mg_ref $DEFAULT_SIGFIGS "groupvar() created as reghdfe: `o'"
+    else test_pass "groupvar() created as reghdfe: `o'"
+}
+
+* savefe on a low-mobility worker-firm panel: the effects are recovered by the
+* accelerated solver (plain backfitting stopped at iterate() with r(430)). An
+* individual effect on such a graph is poorly determined in both commands, so
+* the effects are compared through what reghdfe defines them by, their sum
+* plus the constant (y - xb - residual), with y at a level that keeps every
+* value away from zero
+clear
+set seed 6
+set obs 160000
+gen long worker = ceil(_n/8)
+gen int t = mod(_n-1, 8) + 1
+gen long firm0 = ceil(runiform()*1000) if t == 1
+bysort worker (t): replace firm0 = firm0[1]
+gen byte move = runiform() < .02
+bysort worker (t): gen long firm = firm0
+bysort worker (t): replace firm = cond(move, ceil(runiform()*1000), firm[_n-1]) if _n > 1
+gen double x = rnormal()
+gen double y = 100 + x + worker/20000 + firm/1000 + rnormal()
+quietly reghdfe y x, absorb(worker firm, savefe) tolerance(1e-12)
+gen double fe_ref = __hdfe1__ + __hdfe2__ + _b[_cons]
+drop __hdfe*
+capture quietly creghdfe y x, absorb(worker firm, savefe)
+if _rc test_fail "savefe, low-mobility worker-firm panel" "rc=`=_rc'"
+else {
+    gen double fe_ct = __hdfe1__ + __hdfe2__ + _b[_cons]
+    assert_var_equal fe_ct fe_ref $DEFAULT_SIGFIGS "savefe, low-mobility worker-firm panel"
+}
+
 * End of creghdfe validation
 noi print_summary "creghdfe"
 }
@@ -3633,6 +3929,16 @@ ereturn clear
 capture creghdfe
 assert _rc == 301
 test_pass "replay rejects absent or unrelated estimates without clearing them"
+* reghdfe's replay options suppress the header, the table and the absorbed
+* degrees of freedom; e() is kept
+quietly creghdfe y x, absorb(g)
+matrix replay_b = e(b)
+foreach options in ", noheader" ", notable" ", nofootnote" ", noheader notable nofootnote" {
+    capture quietly creghdfe `options'
+    local rc = _rc
+    if `rc' == 0 & mreldif(e(b), replay_b) == 0 & "`e(cmd)'" == "creghdfe" test_pass "replay option`options'"
+    else test_fail "replay option`options'" "rc=`rc'"
+}
 print_summary "creghdfe replay"
 global CTOOLS_COMPONENT_COMPLETE "creghdfe_replay"
 global CTOOLS_CASE_COMPLETE "creghdfe_replay"

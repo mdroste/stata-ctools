@@ -32,6 +32,10 @@ where {it:merge_type} is one of
 {p2col :{opt 1:m}}one-to-many merge{p_end}
 {p2col :{opt m:m}}match repeated keys sequentially within each key group{p_end}
 
+{pstd}
+As with {cmd:merge}, {opt n} may be written for {opt m} ({opt 1:n}, {opt n:1}, {opt n:n},
+{opt n:m}, {opt m:n}).
+
 {synoptset 28 tabbed}{...}
 {synopthdr}
 {synoptline}
@@ -120,7 +124,7 @@ missing. Key variables must have matching string/numeric types even with
 {p_end}
 
 {phang}
-{opt nolabel} prevents copying value-label definitions from the using data.
+{opt nolabel} (or {opt nolabels}) prevents copying value-label definitions from the using data.
 Without this option, labels are copied, but an existing master definition
 with the same name takes precedence.
 
@@ -140,7 +144,13 @@ nonmissing master values.
 
 {phang}
 {opt preserve_order(1)} retains master observation order, with using-only
-observations appended. The default is {cmd:preserve_order(0)}.
+observations appended. The default is {cmd:preserve_order(0)}: rows come out in
+{cmd:merge}'s order, the master observations in key order (the first output row
+of each), then the using-only rows and the later {opt 1:m} or {opt m:m}
+pairings of a master row, in key order. A {opt 1:1} result without using-only
+rows is sorted by the keys. Where the keys of an unsorted master have ties,
+{cmd:merge}'s order within them depends on {help set sortseed}; {cmd:cmerge}
+keeps their existing order.
 
 {phang}
 {opt noreport} suppresses the table of merge results.

@@ -1137,6 +1137,17 @@ static char *xlsx_shared_items(const XLSXExportContext *ctx)
     free(escaped);return sb.data;
 }
 
+/* Excel trims leading and trailing whitespace from text without
+ * xml:space="preserve"; native export adds the attribute exactly then. */
+static bool xlsx_needs_preserve(const char *text)
+{
+    if (!text || !*text) return false;
+    size_t n = strlen(text);
+    return strchr(" \t\n\r", text[0]) || strchr(" \t\n\r", text[n - 1]);
+}
+#define XLSX_INLINE_OPEN "\" t=\"inlineStr\"><is><t>"
+#define XLSX_INLINE_PRESERVE "\" t=\"inlineStr\"><is><t xml:space=\"preserve\">"
+
 /* Format a chunk of data rows into XML (called per thread) */
 static void *xlsx_format_chunk(void *arg) {
     xlsx_chunk_args_t *a = (xlsx_chunk_args_t *)arg;
@@ -1190,7 +1201,9 @@ static void *xlsx_format_chunk(void *arg) {
                     int pos = 0;
                     memcpy(cell_buf, prefix, prefix_len); pos = (int)prefix_len;
                     pos += ctools_int64_to_str((int64_t)row_num, cell_buf + pos);
-                    memcpy(cell_buf + pos, "\" t=\"inlineStr\"><is><t>", 23); pos += 23;
+                    const char *open = xlsx_needs_preserve(str) ? XLSX_INLINE_PRESERVE : XLSX_INLINE_OPEN;
+                    size_t open_len = strlen(open);
+                    memcpy(cell_buf + pos, open, open_len); pos += (int)open_len;
                     strbuf_append_n(sb, cell_buf, (size_t)pos);
                     strbuf_append_n(sb, escaped, esc_len);
                     strbuf_append_n(sb, "</t></is></c>\n", 14);
@@ -1213,7 +1226,9 @@ static void *xlsx_format_chunk(void *arg) {
                         int pos = 0;
                         memcpy(cell_buf, prefix, prefix_len); pos = (int)prefix_len;
                         pos += ctools_int64_to_str((int64_t)row_num, cell_buf + pos);
-                        memcpy(cell_buf + pos, "\" t=\"inlineStr\"><is><t>", 23); pos += 23;
+                        const char *open = xlsx_needs_preserve(ctx->missing_value) ? XLSX_INLINE_PRESERVE : XLSX_INLINE_OPEN;
+                        size_t open_len = strlen(open);
+                        memcpy(cell_buf + pos, open, open_len); pos += (int)open_len;
                         strbuf_append_n(sb, cell_buf, (size_t)pos);
                         strbuf_append_n(sb, a->escaped_missing, a->escaped_missing_len);
                         strbuf_append_n(sb, "</t></is></c>\n", 14);
@@ -1341,8 +1356,10 @@ static bool xlsx_gen_worksheet_segments(XLSXExportContext *ctx,
             if (xlsx_shared_cell(&preamble,ctx,header_prefix,data_start_row,ctx->varnames[j])) continue;
             char escaped_name[1025 * 7 + 1];
             xlsx_escape_xml(ctx->varnames[j], escaped_name, sizeof(escaped_name));
-            strbuf_appendf(&preamble, "      <c r=\"%s%lld\" t=\"inlineStr\"><is><t>%s</t></is></c>\n",
-                          col_letters_arr[j], data_start_row, escaped_name);
+            strbuf_appendf(&preamble, "      <c r=\"%s%lld%s%s</t></is></c>\n",
+                          col_letters_arr[j], data_start_row,
+                          xlsx_needs_preserve(ctx->varnames[j]) ? XLSX_INLINE_PRESERVE : XLSX_INLINE_OPEN,
+                          escaped_name);
         }
         strbuf_append(&preamble, "    </row>\n");
         data_start_row++;
@@ -1699,6 +1716,11 @@ ST_retcode cexport_xlsx_main(const char *args) {
         FILE *f = ctools_fopen(ctx.filename, "r");
         if (f) {
             fclose(f);
+            /* An edit writes through a symbolic link onto its target. */
+            char *target = ctools_output_target(ctx.filename);
+            if (!target) { xlsx_context_free(&ctx); return 920; }
+            if (strlen(target) < sizeof(ctx.filename)) strcpy(ctx.filename, target);
+            free(target);
             strcpy(ctx.input_filename, ctx.filename);
         }
     }

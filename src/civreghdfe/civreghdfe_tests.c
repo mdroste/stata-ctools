@@ -574,6 +574,7 @@ ST_retcode civreghdfe_compute_underid_test(
     ST_int K_endog,
     ST_int K_iv,
     ST_int df_a,
+    ST_int dofminus,
     const civ_omega *rk_om,
     ST_int rk_cluster,
     ST_int rk_nclust,
@@ -594,8 +595,12 @@ ST_retcode civreghdfe_compute_underid_test(
 
     if (K_endog <= 0 || L < K_endog) return 0;
 
-    ST_double df_resid = N_eff - K_iv - df_a;
+    /* ivreg2: the clustered rk F keeps dofminus in its residual dof */
+    ST_double df_resid_cl = N_eff - K_iv - df_a;
+    if (df_resid_cl <= 0) df_resid_cl = 1;
+    ST_double df_resid = N_eff - K_iv - df_a - dofminus;
     if (df_resid <= 0) df_resid = 1;
+    const ST_double lm_scale = (N_eff - dofminus) / N_eff;
 
     /* ranktest partials the included exogenous regressors out of the
        endogenous regressors and the excluded instruments */
@@ -671,7 +676,7 @@ ST_retcode civreghdfe_compute_underid_test(
         }
         if (ok) {
             ST_double min_eval = ev[0];
-            *underid_stat = (ST_double)N_eff * min_eval;
+            *underid_stat = (ST_double)N_eff * min_eval * lm_scale;
             if (min_eval > 0.0 && min_eval < 1.0)
                 *cd_f = min_eval / (1.0 - min_eval) * ((ST_double)df_resid / (ST_double)L);
         } else {
@@ -699,14 +704,14 @@ ST_retcode civreghdfe_compute_underid_test(
         ST_double lm = 0.0, wald = 0.0;
         ST_int lm_rc = civ_kp_rk(Y, K_endog, Zx, L, w, N, rk_om, 0, &lm);
         /* never the iid Anderson LM under the Kleibergen-Paap label */
-        *underid_stat = (lm_rc == 0) ? lm : SV_missval;
+        *underid_stat = (lm_rc == 0) ? (rk_cluster ? lm : lm * lm_scale) : SV_missval;
         ST_int wald_rc = civ_kp_rk(Y, K_endog, Zx, L, w, N, rk_om, 1, &wald);
         if (lm_rc == 920 || wald_rc == 920) trc = 920;
         *kp_f = SV_missval;   /* overwritten on success */
         if (wald_rc == 0) {
             if (rk_cluster) {
                 ST_double G = (ST_double)rk_nclust;
-                *kp_f = wald / (ST_double)(N_eff - 1) * (ST_double)df_resid *
+                *kp_f = wald / (ST_double)(N_eff - 1) * (ST_double)df_resid_cl *
                         (G > 0 ? (G - 1.0) / G : 1.0) / (ST_double)L;
             } else {
                 *kp_f = wald / (ST_double)N_eff * (ST_double)df_resid / (ST_double)L;
@@ -764,7 +769,10 @@ ST_retcode civreghdfe_compute_dwh_test(
     const ST_double *X_endog,
     const ST_double *Z,
     const ST_double *temp1,
+    const ST_double *weights,
+    ST_int weight_type,
     ST_int N,
+    ST_double N_eff,
     ST_int K_exog,
     ST_int K_endog,
     ST_int K_iv,
@@ -818,16 +826,30 @@ ST_retcode civreghdfe_compute_dwh_test(
     if (X_endog) memcpy(X_aug + (size_t)K_exog * N, X_endog, (size_t)N * K_endog * sizeof(ST_double));
     memcpy(X_aug + (size_t)K_total * N, v_resid, (size_t)N * K_endog * sizeof(ST_double));
 
-    /* Compute X_aug'X_aug */
-    ctools_matmul_ata(X_aug, N, K_aug, XaXa);
+    /* Compute X_aug'W X_aug */
+    const ST_double *w = (weights && weight_type != 0) ? weights : NULL;
+    if (w) {
+        ST_double *WX_aug = (ST_double *)malloc((size_t)N * K_aug * sizeof(ST_double));
+        if (!WX_aug) {
+            free(v_resid);
+            free(X_aug); free(XaXa); free(Xay);
+            return 920;
+        }
+        for (j = 0; j < K_aug; j++)
+            for (i = 0; i < N; i++)
+                WX_aug[(size_t)j * N + i] = w[i] * X_aug[(size_t)j * N + i];
+        ctools_matmul_atb(X_aug, WX_aug, N, K_aug, K_aug, XaXa);
+        free(WX_aug);
+    }
+    else ctools_matmul_ata(X_aug, N, K_aug, XaXa);
 
-    /* Compute X_aug'y (one independent sum per column) */
+    /* Compute X_aug'W y (one independent sum per column) */
     #pragma omp parallel for schedule(static) private(i) if(K_aug > 1 && (size_t)N * (size_t)K_aug > 200000)
     for (j = 0; j < K_aug; j++) {
         ST_double sum = 0.0;
         const ST_double *xa_col = X_aug + (size_t)j * N;
         for (i = 0; i < N; i++) {
-            sum += xa_col[i] * y[i];
+            sum += (w ? w[i] : 1.0) * xa_col[i] * y[i];
         }
         Xay[j] = sum;
     }
@@ -860,42 +882,44 @@ ST_retcode civreghdfe_compute_dwh_test(
             ctools_matvec_add(X_aug, N, K_aug, beta_aug, v_resid);
             for (i = 0; i < N; i++) {
                 ST_double r = y[i] - v_resid[i];
-                sse_aug += r * r;
+                sse_aug += (w ? w[i] : 1.0) * r * r;
             }
 
-            ST_int df_aug = N - K_aug - df_a;
+            ST_double df_aug = N_eff - K_aug - df_a;
             if (df_aug <= 0) df_aug = 1;
             ST_double sigma2_aug = sse_aug / df_aug;
 
             /* gamma = beta_aug[K_total:K_aug-1] */
             ST_double *gamma = beta_aug + K_total;
 
-            /* Extract v'v block from XaXa */
+            /* The v block of (X_aug'W X_aug)^-1 and its inverse: the Wald
+               statistic of gamma, chi2 = gamma' [inv_vv]^-1 gamma / s^2 */
             ST_double *XaXa_vv = (ST_double *)calloc(K_endog * K_endog, sizeof(ST_double));
-            if (XaXa_vv) {
+            ST_double *vv_inv = (ST_double *)calloc(K_endog * K_endog, sizeof(ST_double));
+            if (XaXa_vv && vv_inv) {
                 for (j = 0; j < K_endog; j++) {
                     for (i = 0; i < K_endog; i++) {
-                        XaXa_vv[j * K_endog + i] = XaXa[(K_total + j) * K_aug + (K_total + i)];
+                        XaXa_vv[j * K_endog + i] = XaXa_inv[(K_total + j) * K_aug + (K_total + i)];
                     }
                 }
-
-                /* chi2 = gamma' * XaXa_vv * gamma / sigma2_aug */
-                ST_double quad = 0.0;
-                for (j = 0; j < K_endog; j++) {
-                    ST_double sum = 0.0;
-                    for (i = 0; i < K_endog; i++) {
-                        sum += XaXa_vv[j * K_endog + i] * gamma[i];
+                if (ctools_cholesky(XaXa_vv, K_endog) == 0 &&
+                    ctools_invert_from_cholesky(XaXa_vv, K_endog, vv_inv) == STATA_OK) {
+                    ST_double quad = 0.0;
+                    for (j = 0; j < K_endog; j++) {
+                        ST_double sum = 0.0;
+                        for (i = 0; i < K_endog; i++) {
+                            sum += vv_inv[j * K_endog + i] * gamma[i];
+                        }
+                        quad += gamma[j] * sum;
                     }
-                    quad += gamma[j] * sum;
+                    *endog_chi2 = quad / sigma2_aug;
+                    *endog_f = (*endog_chi2) / K_endog;
                 }
-
-                *endog_chi2 = quad / sigma2_aug;
-                *endog_f = (*endog_chi2) / K_endog;
-
-                free(XaXa_vv);
             } else {
                 trc = 920;
             }
+            free(XaXa_vv);
+            free(vv_inv);
         }
     }
 

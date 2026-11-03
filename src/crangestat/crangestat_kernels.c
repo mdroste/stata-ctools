@@ -34,6 +34,10 @@ size_t crangestat_upper_bound(const double *key, size_t start, size_t end, doubl
     return start;
 }
 
+/* Stata's _pctile rule (also summarize, detail; collapse; egen pctile):
+ * with h = n*p/100, the percentile is the mean of x(h) and x(h+1) when h is an
+ * integer, and x(ceil(h)) otherwise (1-based order statistics). pctl is one of
+ * the integer percentiles 1..99, so n*p is exact in integer arithmetic. */
 double crangestat_compute_percentile(double *work, size_t n, double pctl)
 {
     if (n == 0)
@@ -41,29 +45,23 @@ double crangestat_compute_percentile(double *work, size_t n, double pctl)
     if (n == 1)
         return work[0];
 
-    double pos = (pctl / 100.0) * (double)(n - 1);
-    size_t k = (size_t)floor(pos);
+    size_t np = n * (size_t)pctl;
+    size_t k = np / 100; /* 0-based index of x(ceil(h)); x(h+1) when h is an integer */
     if (k >= n)
         k = n - 1;
+    if (np % 100 != 0 || k == 0)
+        return ctools_quickselect_double(work, n, k);
 
-    double val = ctools_quickselect_double(work, n, k);
-
-    double frac = pos - (double)k;
-    if (frac > 0.0 && k + 1 < n)
+    /* h = k is an integer: x(h) is sorted[k-1], x(h+1) is sorted[k] */
+    double lower = ctools_quickselect_double(work, n, k - 1);
+    /* work[k..n-1] >= lower after the select; its min is sorted[k] */
+    double upper = DBL_MAX;
+    for (size_t i = k; i < n; i++)
     {
-        /* work[k+1..n-1] >= val after the select; its min is sorted[k+1] */
-        double next_val = DBL_MAX;
-        for (size_t i = k + 1; i < n; i++)
-        {
-            if (work[i] < next_val)
-                next_val = work[i];
-        }
-        if (next_val < DBL_MAX)
-        {
-            val = val + frac * (next_val - val);
-        }
+        if (work[i] < upper)
+            upper = work[i];
     }
-    return val;
+    return (lower + upper) / 2;
 }
 
 void crangestat_build_prefix_arrays(const double *data, size_t start, size_t count,
@@ -580,6 +578,8 @@ int crangestat_stat_uses_prefix_sums(stat_type type)
     case STAT_MEAN:
     case STAT_SD:
     case STAT_VARIANCE:
+    case STAT_OBS:
+    case STAT_MISSING:
         return 1;
     default:
         return 0;
@@ -691,6 +691,13 @@ double crangestat_compute_stat_with_prefix(stat_type type, const prefix_arrays *
             n -= 1;
         }
     }
+
+    /* rangestat's obs counts every row of the window; missing counts the rows
+     * without a value, the self row included under excludeself. */
+    if (type == STAT_OBS)
+        return (double)(win_end - win_start);
+    if (type == STAT_MISSING)
+        return (double)(win_end - win_start - n);
 
     if (n == 0)
     {
@@ -947,6 +954,18 @@ double crangestat_compute_window_stat_simple(stat_type type, const double *data,
     /* Window without rows (or inverted interval): missing, as in rangestat */
     if (win_end <= win_start)
         return SV_missval;
+    if (type == STAT_OBS)
+        return (double)(win_end - win_start);
+    if (type == STAT_MISSING)
+    {
+        size_t present = 0;
+        for (size_t i = win_start; i < win_end; i++)
+        {
+            if (!(exclude_self && i == self_idx) && data[i] < SV_missval)
+                present++;
+        }
+        return (double)(win_end - win_start - present);
+    }
     if (type == STAT_MEAN)
         return stable_window_mean(data, win_start, win_end, self_idx, exclude_self);
     /* rangestat's first/last retain endpoint missing values. excludeself

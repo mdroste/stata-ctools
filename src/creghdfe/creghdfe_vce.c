@@ -10,6 +10,23 @@
 #include "creghdfe_vce.h"
 #include "../ctools_matrix.h"
 
+/* A model without residual degrees of freedom (a saturated model) has no
+ * VCE; reghdfe then posts zeros (its V is missing and set to zero). */
+static ST_retcode zero_vce(ST_int K, ST_double *V)
+{
+    memset(V, 0, (size_t)K * K * sizeof(ST_double));
+    return 0;
+}
+
+/* The sandwich D*M*D is symmetric only up to rounding; as reghdfe's
+ * _makesymmetric, the lower triangle is copied into the upper one. */
+static void make_symmetric(ST_int K, ST_double *V)
+{
+    for (ST_int i = 0; i < K; i++)
+        for (ST_int j = i + 1; j < K; j++)
+            V[(size_t)i * K + j] = V[(size_t)j * K + i];
+}
+
 /* ========================================================================
  * Compute unadjusted VCE: V = sigma^2 * (X'X)^(-1)
  * where sigma^2 = RSS / df_r
@@ -24,7 +41,8 @@ ST_retcode compute_vce_unadjusted(
 )
 {
     ST_int i;
-    if (!isfinite(df_r) || df_r <= 0.0) return 498;
+    if (!isfinite(df_r)) return 498;
+    if (df_r <= 0.0) return zero_vce(K, V);
     ST_double sigma2 = rss / df_r;
 
     for (i = 0; i < K * K; i++) {
@@ -55,7 +73,8 @@ ST_retcode compute_vce_robust(
     /* df_m is K_with_cons - 1 (X vars only, not constant) for consistency with reghdfe */
     ST_int df_m = K_with_cons - 1;
     /* HC1 adjustment: N_eff / (N_eff - df_m - df_a) - matches reghdfe.mata line 3924 */
-    if (!isfinite(N_eff) || N_eff <= df_m + df_a) return 498;
+    if (!isfinite(N_eff)) return 498;
+    if (N_eff <= df_m + df_a) return zero_vce(K_with_cons, V);
     ST_double dof_adj = N_eff / (N_eff - df_m - df_a);
 
     /* X_eff = data + N (skip y column, point to X1...X_K_keep, constant) */
@@ -69,7 +88,9 @@ ST_retcode compute_vce_robust(
     d.K = K_with_cons;
     d.normalize_weights = 1;
 
-    return ctools_vce_robust(&d, dof_adj, V);
+    ST_retcode rc = ctools_vce_robust(&d, dof_adj, V);
+    if (!rc) make_symmetric(K_with_cons, V);
+    return rc;
 }
 
 /* ========================================================================
@@ -107,7 +128,8 @@ ST_retcode compute_vce_cluster(
      * Use N_eff for fweight (sum of weights) */
     ST_double df_a_adjusted = df_a - df_a_nested;
     ST_int nested_adj = (df_a_nested > 0) ? 1 : 0;
-    if (!isfinite(N_eff) || N_eff <= nested_adj + df_m + df_a_adjusted) return 498;
+    if (!isfinite(N_eff)) return 498;
+    if (N_eff <= nested_adj + df_m + df_a_adjusted) return zero_vce(K_with_cons, V);
     ST_double dof_adj = ((ST_double)(N_eff - 1) / (N_eff - nested_adj - df_m - df_a_adjusted)) * ((ST_double)num_clusters / (num_clusters - 1));
 
     /* X_eff = data + N (skip y column, point to X1...X_K_keep, constant) */
@@ -121,5 +143,7 @@ ST_retcode compute_vce_cluster(
     d.K = K_with_cons;
     d.normalize_weights = 1;
 
-    return ctools_vce_cluster(&d, cluster_ids, num_clusters, dof_adj, V);
+    ST_retcode rc = ctools_vce_cluster(&d, cluster_ids, num_clusters, dof_adj, V);
+    if (!rc) make_symmetric(K_with_cons, V);
+    return rc;
 }

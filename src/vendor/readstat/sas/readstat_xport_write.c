@@ -17,6 +17,25 @@
 #define restrict __restrict
 #endif
 
+/* ctools: a format that is a bare name, with no width, is copied as the
+ * name; the generated parser rejects two-character names such as YN. */
+static readstat_error_t xport_format_name(const char *text, xport_format_t *format) {
+    size_t len = strlen(text), i;
+    int bare = len > 0 && len < sizeof(format->name) &&
+        !(text[len-1] >= '0' && text[len-1] <= '9');
+    for (i=0; bare && i<len; i++) {
+        char c = text[i];
+        bare = c == '_' || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+            (c >= '0' && c <= '9') || (c == '$' && i == 0);
+    }
+    if (!bare)
+        return xport_parse_format(text, len, format, NULL, NULL);
+    memcpy(format->name, text, len + 1);
+    format->width = 0;
+    format->decimals = 0;
+    return READSTAT_OK;
+}
+
 static void copypad(char * restrict dst, size_t dst_len, const char * restrict src) {
     char *dst_end = dst + dst_len;
     while (dst < dst_end && *src)
@@ -110,8 +129,7 @@ static readstat_error_t xport_write_variables(readstat_writer_t *writer) {
         if (variable->format[0]) {
             xport_format_t format; 
 
-            retval = xport_parse_format(variable->format, strlen(variable->format),
-                    &format, NULL, NULL);
+            retval = xport_format_name(variable->format, &format);
             if (retval != READSTAT_OK)
                 goto cleanup;
 
@@ -184,8 +202,7 @@ static readstat_error_t xport_write_variables(readstat_writer_t *writer) {
             if (variable->format[0]) {
                 xport_format_t format; 
 
-                retval = xport_parse_format(variable->format, strlen(variable->format),
-                        &format, NULL, NULL);
+                retval = xport_format_name(variable->format, &format);
                 if (retval != READSTAT_OK)
                     goto cleanup;
 
@@ -521,7 +538,9 @@ static readstat_error_t xport_metadata_ok(void *writer_ctx) {
             return sas_validate_name(writer->table_name, 32);
         }
         if (writer->version == 5) {
-            return sas_validate_name(writer->table_name, 8);
+            /* ctools: Stata names a version 5 member after the file, as
+             * written, and its reader accepts any eight bytes. */
+            return strlen(writer->table_name) > 8 ? READSTAT_ERROR_NAME_IS_TOO_LONG : READSTAT_OK;
         }
     }
 

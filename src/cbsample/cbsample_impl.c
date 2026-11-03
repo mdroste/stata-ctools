@@ -442,6 +442,17 @@ ST_retcode cbsample_main(const char *args) {
          * stratum boundary, so each stratum owns a contiguous run of
          * clusters: one cursor walks them once across all strata. */
         size_t cl_cursor = 0;
+        /* bsample refuses a stratum (or a sample) with a single cluster
+         * before drawing anything: its resamples would all be the same. */
+        for (size_t st = 0; st < nstrata_groups; st++) {
+            size_t st_start = strata[st].start;
+            size_t st_end = st_start + strata[st].count;
+            while (cl_cursor < nclusters && clusters[cl_cursor].start < st_start) cl_cursor++;
+            size_t first_cluster = cl_cursor;
+            while (cl_cursor < nclusters && clusters[cl_cursor].start < st_end) cl_cursor++;
+            if (cl_cursor - first_cluster == 1) { rc = 460; goto cleanup; }
+        }
+        cl_cursor = 0;
         for (size_t st = 0; st < nstrata_groups; st++) {
             size_t st_start = strata[st].start;
             size_t st_end = st_start + strata[st].count;
@@ -534,6 +545,7 @@ cleanup:
 
     if (rc) {
         if (rc == 498) SF_error("cbsample: resample size exceeds sampling units in a stratum\n");
+        if (rc == 460) SF_error("singleton cluster detected\n");
         return rc;
     }
 

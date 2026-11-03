@@ -1105,6 +1105,7 @@ static xls_error_t xls_preparseWorkSheet(xlsWorkSheet* pWS)
     xls_error_t retval = LIBXLS_OK;
 
     verbose ("xls_preparseWorkSheet");
+    int nested = 0, first = 1; /* ctools: substreams inside the sheet */
 
     if (ole2_seek(pWS->workbook->olestr,pWS->filepos) == -1) {
         retval = LIBXLS_ERROR_SEEK;
@@ -1130,6 +1131,18 @@ static xls_error_t xls_preparseWorkSheet(xlsWorkSheet* pWS)
                 retval = LIBXLS_ERROR_READ;
                 goto cleanup;
             }
+        }
+        /* ctools: an embedded chart is a BOF..EOF substream inside the
+         * worksheet; its cached cells and EOF are not the sheet's. */
+        if (tmp.id == XLS_RECORD_BOF && !first)
+            nested++;
+        first = 0;
+        if (nested) {
+            if (tmp.id == XLS_RECORD_EOF) {
+                nested--;
+                tmp.id = 0;
+            }
+            continue;
         }
 
         switch (tmp.id)
@@ -1279,6 +1292,7 @@ xls_error_t xls_parseWorkSheet(xlsWorkSheet* pWS)
         retval = LIBXLS_ERROR_SEEK;
         goto cleanup;
     }
+    int nested = 0, first = 1; /* ctools: substreams inside the sheet */
     do
     {
 		long lastPos = offset;
@@ -1308,6 +1322,17 @@ xls_error_t xls_parseWorkSheet(xlsWorkSheet* pWS)
 
 		if(xls_debug)
 			xls_showBOF(&tmp);
+        /* ctools: skip a nested BOF..EOF substream (an embedded chart). */
+        if (tmp.id == XLS_RECORD_BOF && !first)
+            nested++;
+        first = 0;
+        if (nested) {
+            if (tmp.id == XLS_RECORD_EOF) {
+                nested--;
+                tmp.id = 0;
+            }
+            continue;
+        }
 
         switch (tmp.id)
         {

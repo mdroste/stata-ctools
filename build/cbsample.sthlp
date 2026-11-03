@@ -17,7 +17,7 @@
 
 {p 8 17 2}
 {cmdab:cbsample}
-[{it:#}]
+[{it:exp}]
 {ifin}
 [{cmd:,} {it:options}]
 
@@ -25,7 +25,7 @@
 {synopthdr}
 {synoptline}
 {syntab:Main}
-{synopt:{it:#}}positional number of draws within each stratum; default is the original number of sampling units{p_end}
+{synopt:{it:exp}}positional number of draws within each stratum; default is the original number of sampling units{p_end}
 {synopt:{opt cl:uster(varlist)}}variables identifying resampling clusters{p_end}
 {synopt:{opt str:ata(varlist)}}variables identifying strata{p_end}
 {synopt:{opt weight(varname)}}store bootstrap weights instead of resampling{p_end}
@@ -67,11 +67,20 @@ from the same seed.
 {dlgtab:Main}
 
 {phang}
-The positional {it:#} specifies draws within each stratum. For example,
+The positional {it:exp} specifies draws within each stratum. For example,
 {cmd:cbsample 2, strata(s)} draws two observations from every stratum;
 adding {cmd:cluster(c)} draws two clusters from every stratum. Omitting the
-count uses each stratum's original number of sampling units. An explicit count
-must be a positive integer no greater than the available units in any stratum.
+count uses each stratum's original number of sampling units. As in
+{cmd:bsample}, {it:exp} is an expression, such as {cmd:_N/2}, evaluated in the
+sample (within each stratum with {opt strata()}, so {cmd:_N} counts the
+stratum's observations). It must be constant and an integer (r(198)), greater
+than zero and no greater than the available units in any stratum (r(498)).
+Sizes that differ across strata are not supported (r(198)); use {cmd:bsample}.
+
+{phang}
+As in {cmd:bsample}, a cluster sample, or a stratum, with a single cluster is
+refused with r(460) ("singleton cluster detected"): its resamples would all be
+identical. {cmd:bsample}'s {opt idcluster()} option is not supported.
 
 {phang}
 {opt cluster(varlist)} specifies the variables that identify resampling clusters.

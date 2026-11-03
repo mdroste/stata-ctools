@@ -65,7 +65,8 @@ program define civreghdfe_p, rclass
         else if `partial_ct' > 0 {
             * Frisch-Waugh-Lovell: the residual is y - Xb net of its
             * projection on the partialled-out terms, on the estimation
-            * sample with its weights (the constant stays in e(b))
+            * sample with its weights (with the constant: in e(b), or
+            * partialled out with the other terms)
             tempvar xbvar ypart esample rpart
             tempname ivest
             PredictXB `xbvar' `if' `in', xb
@@ -74,7 +75,10 @@ program define civreghdfe_p, rclass
             local pwt
             if "`e(wtype)'" != "" local pwt [`e(wtype)'`e(wexp)']
             local pcons = cond(colnumb(e(b), "_cons") < ., "noconstant", "")
+            * a partialled-out constant (no absorb()) is the regression's own
             local pterms `e(partial)'
+            local __cons_term _cons
+            local pterms : list pterms - __cons_term
             _estimates hold `ivest', restore
             quietly regress `ypart' `pterms' `pwt' if `esample', `pcons'
             quietly predict double `rpart' if `esample', residuals

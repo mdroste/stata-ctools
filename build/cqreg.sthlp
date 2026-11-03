@@ -21,7 +21,7 @@
 {p 8 14 2}
 {cmd:cqreg}
 {depvar}
-{indepvars}
+[{indepvars}]
 {ifin}
 [{cmd:,} {it:options}]
 
@@ -39,6 +39,9 @@
 {synopt:{opt bwmethod(method)}}bandwidth selection: {opt hsheather}, {opt bofinger}, or {opt chamberlain}{p_end}
 
 {syntab:Reporting}
+{synopt:{opt l:evel(#)}}set confidence level; default is {cmd:level(95)}{p_end}
+{synopt:{it:display_options}}{help estimation options##display_options:display options} of {cmd:qreg}{p_end}
+{synopt:{opt nolog}}accepted for compatibility with {cmd:qreg}; {cmd:cqreg} prints no iteration log{p_end}
 {synopt:{opt v:erbose}}display progress and elapsed times{p_end}
 {synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
 
@@ -59,8 +62,20 @@ primal-dual interior-point solver in C.
 
 {pstd}
 Factor-variable notation is allowed. Include explicit indicators for fixed
-effects, for example {cmd:cqreg y x i.group}. Weights and {opt absorb()} are
-not accepted.
+effects, for example {cmd:cqreg y x i.group}. Without {it:indepvars},
+{cmd:cqreg} fits the constant-only model. Weights and {opt absorb()} are
+not accepted. Typing {cmd:cqreg} without arguments, or
+{cmd:estimates replay}, redisplays the last estimates; {opt level()} and the
+display options may be given then.
+
+{pstd}
+The quantile regression objective can have several minimizers. With
+indicator regressors this is common: when a group's size times {it:q} is an
+integer, that group's coefficient can move within an interval without
+changing the objective. {cmd:cqreg} and {cmd:qreg} then may report different
+coefficients that are equally optimal: {cmd:e(sum_adev)} agrees, and the
+difference is not a loss of accuracy. ({cmd:qreg} sometimes prints
+"alternate solutions exist" in this case; {cmd:cqreg} does not test for it.)
 
 
 {marker options}{...}
@@ -90,7 +105,9 @@ Powell sandwich estimator.
 
 {phang2}
 {cmd:vce(cluster} {it:clustvar}{cmd:)} computes cluster-robust standard errors
-clustered on {it:clustvar}.
+clustered on {it:clustvar}. With a single cluster the covariance is undefined:
+as {cmd:qreg}, {cmd:cqreg} posts a zero {cmd:e(V)} with {cmd:e(rank)} 0 and
+displays no standard errors.
 
 {phang}
 {opt denmethod(method)} specifies the density estimation method for computing
@@ -130,6 +147,11 @@ density estimation used in computing standard errors.
 {dlgtab:Reporting}
 
 {phang}
+{opt level(#)} sets the confidence level of the reported intervals. As in
+{cmd:qreg}, it also enters the Hall-Sheather and Chamberlain bandwidths, and
+so the standard errors, through alpha = 1 - {it:#}/100.
+
+{phang}
 {opt verbose} displays progress and elapsed times.
 
 {phang}
@@ -150,9 +172,10 @@ Centering keeps full precision when the response has a large level, such as
 leading digit, while {cmd:cqreg} matches the computation on the centered response.
 Convergence is assessed in these normalized units. Coefficients, covariance,
 sparsity and deviation statistics are returned in the original response units.
-If Stata discards a covariance because its entries are too small or too large
-for its posting checks, {cmd:cqreg} returns error 498; rescale the dependent
-variable and refit.
+If the covariance underflows or overflows in the units of the dependent
+variable, or Stata discards it because its entries are too small or too large
+for its posting checks, {cmd:cqreg} returns error 498 and posts nothing;
+rescale the dependent variable and refit.
 
 {phang}
 {opt maxiter(#)} specifies the maximum number of IPM iterations. The default
@@ -215,13 +238,17 @@ the linear prediction. {cmd:if} and {cmd:in} may restrict the predictions.
 {synopt:{cmd:e(q_v)}}unconditional sample quantile of the dependent variable{p_end}
 {synopt:{cmd:e(f_r)}}estimated density, 1/e(sparsity){p_end}
 {synopt:{cmd:e(sum_w)}}number of observations (weights are not accepted){p_end}
-{synopt:{cmd:e(sparsity)}}estimated sparsity (1/f(0)); missing for the kernel
-method with {cmd:vce(robust)} or {cmd:vce(cluster)}, as in {cmd:qreg}{p_end}
+{synopt:{cmd:e(sparsity)}}estimated sparsity (1/f(0)); missing with
+{cmd:vce(robust)} or {cmd:vce(cluster)}, as in {cmd:qreg}; zero when the
+dependent variable has a mass point at the fitted quantile, as in {cmd:qreg},
+which then gives a zero covariance{p_end}
 {synopt:{cmd:e(bwidth)}}bandwidth used for sparsity estimation{p_end}
 {synopt:{cmd:e(kbwidth)}}kernel bandwidth (kernel method){p_end}
 {synopt:{cmd:e(iterations)}}number of IPM iterations{p_end}
 {synopt:{cmd:e(convcode)}}0 for a successfully converged fit{p_end}
 {synopt:{cmd:e(df_r)}}residual degrees of freedom, N - {cmd:e(rank)}{p_end}
+{synopt:{cmd:e(rank)}}rank of {cmd:e(V)}; 0 for a zero covariance (a single
+cluster, or zero sparsity), as in {cmd:qreg}{p_end}
 {synopt:{cmd:e(df_m)}}model degrees of freedom{p_end}
 {synopt:{cmd:e(N_clust)}}number of clusters (if {opt vce(cluster)}){p_end}
 
@@ -230,12 +257,12 @@ method with {cmd:vce(robust)} or {cmd:vce(cluster)}, as in {cmd:qreg}{p_end}
 {synopt:{cmd:e(cmd)}}{cmd:cqreg}{p_end}
 {synopt:{cmd:e(depvar)}}name of dependent variable{p_end}
 {synopt:{cmd:e(vce)}}variance estimation method{p_end}
+{synopt:{cmd:e(vcetype)}}{cmd:Robust} with {cmd:vce(robust)} or {cmd:vce(cluster)}{p_end}
 {synopt:{cmd:e(denmethod)}}density estimation method{p_end}
 {synopt:{cmd:e(kernel)}}kernel function (kernel method){p_end}
 {synopt:{cmd:e(bwmethod)}}bandwidth selection method{p_end}
 {synopt:{cmd:e(clustvar)}}cluster variable (if {opt vce(cluster)}){p_end}
 {synopt:{cmd:e(predict)}}program used to implement {cmd:predict}{p_end}
-{synopt:{cmd:e(title)}}title in estimation output{p_end}
 
 {synoptset 20 tabbed}{...}
 {p2col 5 20 24 2: Matrices}{p_end}

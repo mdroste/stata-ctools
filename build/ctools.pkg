@@ -24,6 +24,8 @@ d   csplit      - String splitting
 d   crangejoin  - Interval joins
 d   cpsmatch    - Propensity score matching (ATT)
 d   cppmlhdfe   - PPML with high-dimensional fixed effects
+d   cdistinct   - Distinct value counts
+d   chdfe       - Partial out high-dimensional fixed effects
 d
 d Version: 1.2.3
 d
@@ -33,11 +35,11 @@ d Distribution-Date: 20261030
 
 f ctools.ado
 f ctools.sthlp
+f ctools_licenses.sthlp
 f csort.ado
 f csort.sthlp
 f cmerge.ado
 f cmerge.sthlp
-f ctools-codecs-LICENSE.txt
 f _cio_import.ado
 f _cio_export.ado
 f _cio_shp_export.ado

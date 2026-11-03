@@ -79,7 +79,8 @@ label text. The number of names must match the number of variables in {it:varlis
 
 {phang}
 {opt replace} specifies that the variables in {it:varlist} should be replaced with their
-decoded string versions instead of creating new variables. The decoded variables keep the original names.
+decoded string versions instead of creating new variables. The decoded variables keep the original names,
+notes and characteristics.
 
 {pstd}
 You must specify either {opt generate()} or {opt replace}, but not both.
@@ -89,8 +90,8 @@ You must specify either {opt generate()} or {opt replace}, but not both.
 {phang}
 {opth maxlength(#)} specifies the maximum string length for the new variables.
 By default, the output type follows {cmd:decode}, including strL for
-long labels. {cmd:maxlength()} follows {cmd:decode}'s length and truncation rules. Use this option to truncate
-labels to a specific length.
+long labels. {cmd:maxlength()} follows {cmd:decode}'s length and truncation rules: {it:#} is an integer
+from 1 to 32,000. Use this option to truncate labels to a specific length.
 
 {phang}
 {opt threads(#)} limits the number of threads the ctools plugin uses. The

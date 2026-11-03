@@ -475,7 +475,8 @@ static ST_int cqreg_vce_cluster_kernel(ST_double *V,
     }
     *num_clusters = G;
     if (G < 2) {
-        for (j = 0; j < K*K; j++) V[j] = NAN;
+        /* qreg posts a zero covariance (rank 0) for a single cluster */
+        memset(V, 0, kk_size);
         rc = 0;
         goto cleanup;
     }

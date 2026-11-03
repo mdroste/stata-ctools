@@ -169,6 +169,9 @@ static void cimport_select_rows(CImportContext *ctx) {
   SF_macro_use("___cimport_autoheader", auto_text, sizeof(auto_text) - 1);
   CImportLineCursor cursor = {ctx->file_data, 0};
   size_t prev = 0, data_rows = 0, total = 0;
+  /* Native counts variables over the first row (header or header candidate,
+     unless varnames(nonames)), the selected rows and the seed row only. */
+  int auto_header = strcmp(auto_text, "1") == 0, widest = 0;
   for (int c = 0; c < ctx->num_chunks; c++) {
     CImportParsedChunk *chunk = &ctx->chunks[c];
     size_t header = c == 0 && ctx->has_header ? 1 : 0, write = header;
@@ -182,6 +185,9 @@ static void cimport_select_rows(CImportContext *ctx) {
       int seed = !selected && r >= header && data_rows == 0 &&
                  ctx->has_header && strcmp(auto_text, "1");
       prev = line;
+      if (c == 0 && r == 0 && (ctx->has_header || auto_header) &&
+          chunk->rows[r]->num_fields > widest)
+        widest = chunk->rows[r]->num_fields;
       if (r < header)
         continue;
       data_rows++;
@@ -190,6 +196,8 @@ static void cimport_select_rows(CImportContext *ctx) {
       CImportParsedRow *row = chunk->rows[r];
       uint64_t *values = cimport_row_values(row);
       CImportFieldRef field = {row->offset, 0};
+      if (row->num_fields > widest)
+        widest = row->num_fields;
       if (selected)
         chunk->rows[write++] = row;
       for (int f = 0; f < row->num_fields; f++) {
@@ -219,4 +227,6 @@ static void cimport_select_rows(CImportContext *ctx) {
     chunk->num_rows = write;
   }
   ctx->total_rows = total;
+  if (widest < ctx->num_columns)
+    ctx->num_columns = widest;
 }

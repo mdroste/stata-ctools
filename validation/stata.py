@@ -152,7 +152,7 @@ def cases():
                 raise ValueError("Missing completion assignment: " + name)
             found[name] = (path, f'global CTOOLS_COMPONENT_COMPLETE "{name}"' in body)
         called.update(re.findall(r'do "?validation/stata/\w+\.do"? (\w+)', source))
-    public = {p.stem for p in (ROOT / "build").glob("*.sthlp")} - {"ctools"}
+    public = {p.stem for p in (ROOT / "build").glob("*.sthlp")} - {"ctools", "ctools_licenses"}
     missing = public - found.keys()
     if missing:
         raise ValueError(f"Missing public-command tests: {sorted(missing)}")
@@ -267,10 +267,12 @@ def run_fixture(name, out):
             args = [plugin]
         elif name == "io_delimited_options":
             fixtures.delimited_fixtures(folder)
+            fixtures.delimited_parity_fixtures(folder)
             args = [folder]
         elif name == "io_excel_options":
             fixtures.excel_fixtures(folder)
             fixtures.formula_fixtures(folder)
+            fixtures.excel_import_fixtures(folder)
             for ext in ("xls", "xlsx"):
                 (folder / f"{ext}_invalid.{ext}").write_bytes(b"invalid file header\n")
                 (folder / f"{ext}_truncated.{ext}").write_bytes(

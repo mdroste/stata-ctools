@@ -159,6 +159,41 @@ confirm variable id t b w __ID1__
 confirm variable __L__t
 assert _N==999
 test_pass "clear factor/time sources and weight retention"
+* Option abbreviations and if expressions containing "v(" are parsed as hdfe
+* parses them (verbose(#) is a separate option, not a text rewrite)
+clear
+set seed 3
+set obs 500
+gen long id = ceil(_n/5)
+gen int t = mod(_n,7)
+gen str4 sid = "s" + string(mod(id,3))
+gen double x = rnormal()
+gen double y = x + rnormal()
+gen int cl = ceil(id/10)
+foreach o in "v(1)" "verbose(1)" "clusterv(cl)" "groupv(gg)" {
+    hdfe y x, absorb(id t) gen(ref_) `o'
+    capture drop gg
+    capture chdfe y x, absorb(id t) gen(got_) `o'
+    if _rc test_fail "option `o'" "rc=`=_rc'"
+    else {
+        assert_var_equal got_y ref_y $DEFAULT_SIGFIGS "option `o'"
+        drop got_*
+    }
+    drop ref_*
+    capture drop gg
+}
+hdfe y x if abbrev(sid,4)=="s1", absorb(id) gen(ref_)
+capture chdfe y x if abbrev(sid,4)=="s1", absorb(id) gen(got_)
+if _rc test_fail "if abbrev()" "rc=`=_rc'"
+else assert_var_equal got_y ref_y $DEFAULT_SIGFIGS "if abbrev()"
+drop ref_* got_*
+preserve
+capture chdfe y x, absorb(id t) clear keepv(t)
+local rc = _rc
+capture confirm variable t
+if `rc' == 0 & _rc == 0 test_pass "clear keepv()"
+else test_fail "clear keepv()" "rc=`rc'"
+restore
 
 }
 noisily print_summary "chdfe"

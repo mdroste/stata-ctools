@@ -232,8 +232,10 @@ gen obs = _n
 gen x = obs
 benchmark_range_pctile p99 x, interval(obs -10 10) testname("p99 statistic")
 
-* Fixed unequal-spacing fixture: guard the interpolation definition as well
-* as the moving-window checks above. Values are calculated independently.
+* Fixed unequal-spacing fixture: guard the percentile definition as well
+* as the moving-window checks above. Values are calculated independently with
+* Stata's _pctile rule (h = n*p/100; mean of x(h) and x(h+1) when h is an
+* integer, else x(ceil(h))), here with n = 4.
 clear
 input double x
 2
@@ -243,13 +245,13 @@ input double x
 end
 gen obs = _n
 local stats "p1 p5 p10 p25 p75 p90 p95 p99 iqr"
-local expected "2.09 2.45 2.9 4.25 11 16.4 18.2 19.64 6.75"
+local expected "2 2 2 3.5 14 20 20 20 10.5"
 forvalues j = 1/9 {
     local stat : word `j' of `stats'
     local value : word `j' of `expected'
     crangestat (`stat') got=x, interval(obs . .)
     gen double reference = `value'
-    assert_var_equal got reference $DEFAULT_SIGFIGS "known interpolated `stat'"
+    assert_var_equal got reference $DEFAULT_SIGFIGS "known _pctile `stat'"
     drop got reference
 }
 
@@ -1842,6 +1844,133 @@ foreach groups in 1 8 {
         else test_fail "canonical overflow and endpoints `groups' threads `nt'" "invalid numeric output"
         drop k small sk v sd s m f l
     }
+}
+
+* Percentiles and iqr follow _pctile on each window: unequal values with
+* ties, n even and odd, n*p/100 integer and not, by() groups and excludeself.
+clear
+set seed 20261102
+set obs 240
+gen long g = mod(_n, 3)
+gen double t = floor(_n / 3)
+gen double x = round(rnormal() * 10, 0.5)
+replace x = . if mod(_n, 11) == 0
+foreach stat in p1 p5 p10 p25 median p75 p90 p95 p99 iqr {
+    benchmark_range_pctile `stat' x, interval(t -10 9) by(g) testname("_pctile windows: `stat'")
+    benchmark_range_pctile `stat' x, interval(t -4 4) by(g) excludeself testname("_pctile windows excludeself: `stat'")
+}
+* One 40-row window: n*p/100 is an integer for p5, p10, p25, median, p75, p90
+* and p95, and not for p1 and p99.
+clear
+set obs 40
+gen double t = 1
+gen double x = (41 - _n)^2
+foreach stat in p1 p5 p10 p25 median p75 p90 p95 p99 iqr {
+    benchmark_range_pctile `stat' x, interval(t 0 0) testname("_pctile integer h: `stat'")
+}
+* collapse on the same values (40 rows) is the reference for the definition.
+clear
+set obs 40
+gen double t = 1
+gen double x = (41 - _n)^2
+crangestat (p10) a=x (p25) b=x (p75) c=x (iqr) d=x, interval(t 0 0)
+preserve
+collapse (p10) a=x (p25) b=x (p75) c=x (iqr) d=x
+foreach v in a b c d {
+    local ref_`v' = `v'[1]
+}
+restore
+foreach v in a b c d {
+    gen double ref_`v' = `ref_`v''
+    assert_var_equal `v' ref_`v' $DEFAULT_SIGFIGS "collapse percentile definition `v'"
+}
+
+* rangestat's obs and missing statistics, option abbreviations, the bare
+* (mean) form, varlists per statistic, if/in and its error codes.
+clear
+set seed 4401
+set obs 300
+gen long g = mod(_n, 3)
+gen double t = floor(runiform() * 50)
+gen double x = rnormal()
+replace x = . if runiform() < .3
+replace t = . in 1/5
+gen double y = rnormal()
+foreach ex in "" excludeself {
+    foreach stat in obs missing {
+        rangestat (`stat') ref=x, interval(t -3 3) by(g) `ex'
+        crangestat (`stat') got=x, interval(t -3 3) by(g) `ex'
+        assert_var_equal got ref $DEFAULT_SIGFIGS "rangestat (`stat') `ex'"
+        drop ref got
+    }
+}
+rangestat x, i(t -1 1) excl
+rename x_mean ref
+crangestat x, i(t -1 1) excl
+assert_var_equal x_mean ref $DEFAULT_SIGFIGS "bare form with i() and excl abbreviations"
+drop x_mean ref
+rangestat (sd) x y, interval(t -2 2)
+rename (x_sd y_sd) (ref_x ref_y)
+crangestat (sd) x y, interval(t -2 2)
+assert_var_equal x_sd ref_x $DEFAULT_SIGFIGS "varlist in one statistic: x"
+assert_var_equal y_sd ref_y $DEFAULT_SIGFIGS "varlist in one statistic: y"
+drop x_sd y_sd ref_x ref_y
+rangestat (mean) ref_m=x (count) ref_c=x if y < 0 in 10/250, interval(t -2 2) by(g)
+crangestat (mean) got_m=x (count) got_c=x if y < 0 in 10/250, interval(t -2 2) by(g)
+assert_var_equal got_m ref_m $DEFAULT_SIGFIGS "if/in mean against rangestat"
+assert_var_equal got_c ref_c $DEFAULT_SIGFIGS "if/in count against rangestat"
+drop ref_* got_*
+gen double t_if = t if y < 0 in 10/250
+benchmark_range_pctile p75 x, interval(t_if -2 2) by(g) testname("if/in reference window")
+crangestat (p75) got=x if y < 0 in 10/250, interval(t -2 2) by(g)
+crangestat (p75) ref=x, interval(t_if -2 2) by(g)
+assert_var_equal got ref $DEFAULT_SIGFIGS "if/in p75 equals the restricted key"
+drop got ref t_if
+gen double tm = .
+foreach call in "(mean) o=x (max) o=x, interval(t -1 1)" "(mean) q=x, interval(tm -1 1)" ///
+    "(mean) q=x if 0, interval(t -1 1)" {
+    capture rangestat `call'
+    local rs_rc = _rc
+    capture crangestat `call'
+    if _rc == `rs_rc' & `rs_rc' != 0 test_pass "error code matches rangestat: `call' (r(`rs_rc'))"
+    else test_fail "error code matches rangestat: `call'" "rangestat r(`rs_rc'), crangestat r(`=_rc')"
+}
+
+* rangestat syntax: abbreviated sources name results by their full name;
+* interval() separated by commas; extra interval() arguments refused
+capture which rangestat
+if !_rc {
+    sysuse auto, clear
+    gen t = _n
+    rangestat (mean) pri (sd) mp, interval(t -2 2)
+    rename (price_mean mpg_sd) (ref_price_mean ref_mpg_sd)
+    capture crangestat (mean) pri (sd) mp, interval(t -2 2)
+    local rc = _rc
+    capture confirm variable price_mean mpg_sd
+    if `rc' == 0 & _rc == 0 {
+        assert_var_equal price_mean ref_price_mean $DEFAULT_SIGFIGS "abbreviated source: mean"
+        assert_var_equal mpg_sd ref_mpg_sd $DEFAULT_SIGFIGS "abbreviated source: sd"
+        if `"`: variable label price_mean'"' == `"`: variable label ref_price_mean'"' test_pass "abbreviated source: label"
+        else test_fail "abbreviated source: label" `"`: variable label price_mean'"'
+        drop price_mean mpg_sd
+    }
+    else test_fail "abbreviated source" "rc=`rc'"
+    capture crangestat (mean) m_pri=pri, interval(t -2 2)
+    if _rc == 0 {
+        assert_var_equal m_pri ref_price_mean $DEFAULT_SIGFIGS "abbreviated source with newvar="
+        drop m_pri
+    }
+    else test_fail "abbreviated source with newvar=" "rc=`=_rc'"
+    rangestat (sd) price, interval(t,-2,2)
+    rename price_sd ref_price_sd
+    capture crangestat (sd) price, interval(t,-2,2)
+    if _rc == 0 {
+        assert_var_equal price_sd ref_price_sd $DEFAULT_SIGFIGS "interval() with commas"
+        drop price_sd
+    }
+    else test_fail "interval() with commas" "rc=`=_rc'"
+    test_error_match, stata_cmd(rangestat (sd) price, interval(t -2 2 junk)) ///
+        ctools_cmd(crangestat (sd) price, interval(t -2 2 junk)) testname("interval() extra argument")
 }
 
 * End of crangestat validation

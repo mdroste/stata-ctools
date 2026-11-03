@@ -66,12 +66,13 @@ and need not select the same observations from the same seed.
 {dlgtab:Main}
 
 {phang}
-{opt count(#)} specifies the number of observations to draw. This may not be
+{opt count(#)} specifies the number of observations to draw, zero or more. This may not be
 combined with the {it:#} percent syntax. When used with {opt by()}, {it:#}
 observations are drawn from each group, or all observations if the group is smaller.
+{cmd:count(0)}, like {cmd:sample 0, count}, drops every observation in the sample.
 
 {phang}
-{opt by(varlist)} specifies that sampling should be performed separately within
+{opt by(varlist)}, or the {cmd:by} {it:varlist}{cmd::} prefix as with {cmd:sample}, specifies that sampling should be performed separately within
 each group defined by {it:varlist}. Each group will have the specified
 percentage or count of observations sampled.
 

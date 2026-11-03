@@ -286,7 +286,6 @@ program define coverage_matching
     local att=r(att)
     local se=r(seatt)
     sort id
-    replace _weight=0 if missing(_weight)
     mata: coverage_matches=st_data(.,tokens("_pscore _weight _support _treated"))
     quietly use `original', clear
     capture quietly `candidate'
@@ -301,7 +300,6 @@ program define coverage_matching
     sigfigs `att' `actual'
     if r(sigfigs)<$DEFAULT_SIGFIGS coverage_failure "`name'" "ATT differs"
     sort id
-    replace _weight=0 if missing(_weight)
     mata: st_local("same",strofreal(coverage_isnumeric_equal(coverage_matches,st_data(.,tokens("_pscore _weight _support _treated")))))
     if !`same' coverage_failure "`name'" "scores, weights, or support differ"
     else test_pass "`name' scores weights support"

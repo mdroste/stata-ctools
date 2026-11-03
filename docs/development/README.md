@@ -1406,10 +1406,20 @@ An ado wrapper prepares a Stata command's arguments, calls the plugin and
 returns its results. `_ctools_load.ado` selects the platform's plugin and checks
 its identity. Each wrapper registers that plugin itself because Stata keeps
 registration local to the calling ado. If the platform file is missing, the
-helper may use `ctools.plugin`; an incompatible plugin returns an error.
+helper may use `ctools.plugin`. A plugin that fails to load stops with the
+loader's own return code and message, after the plugin name, `c(os)`,
+`c(machine_type)` and the path `findfile` found. The plugin's `version` call
+returns its protocol, an integer that `scripts/sync_release.py` stamps from
+`config/release.json` into `src/ctools_version.h` and `_ctools_load.ado`. When
+the plugin reports another protocol, or none, the loader stops with r(9) and asks
+the user to reinstall ctools and restart Stata, before the caller changes data or
+files. Change the protocol in `config/release.json` whenever an ado-to-plugin
+argument or result format changes. The `loader` case in
+`validation/stata/contracts.do` covers mismatched, missing and damaged plugins.
 The loader is not rclass and leaves the caller's `r()` in place; it returns the
 plugin file and identity in the caller's locals `__ctools_plugin`,
-`__ctools_plugin_version` and `__ctools_plugin_revision`. A wrapper marks its
+`__ctools_plugin_version`, `__ctools_plugin_revision` and
+`__ctools_plugin_protocol`. A wrapper marks its
 `if` straight after `syntax`, before any helper can replace the `r()` or `e()`
 results the condition names, and passes that marker to the plugin.
 
@@ -1544,10 +1554,13 @@ code lives in `src/hdfe/`, `src/formats/` and `src/io/`. Bundled libraries live
 in `src/vendor/`, with compiler settings applied only to those libraries. Keep
 Stata's SDK files `src/stplugin.c/h` unchanged.
 
-Set the release version, date and minimum Stata version in `config/release.json`.
-Run `python3 scripts/sync_release.py`, then run it with `--check`. Commit the
+Set the release version, date, minimum Stata version and ado/plugin protocol in
+`config/release.json`. Run `python3 scripts/sync_release.py`, then run it with `--check`. Commit the
 updated package files together. The script also copies `LICENSE` and
-`docs/licenses/THIRD_PARTY_NOTICES` into `build/`. Rebuild the plugin to update
+`docs/licenses/THIRD_PARTY_NOTICES` into `build/` and writes both texts into
+`build/ctools_licenses.sthlp`, which `net install` installs (the plain files are
+ancillary). Every `src/vendor/*/LICENSE` or `COPYING` must appear in the notices;
+`python3 validation/run.py --checks` enforces it. Rebuild the plugin to update
 its embedded version.
 
 Keep tracked documentation about current behavior. Investigation reports go in

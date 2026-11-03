@@ -226,6 +226,36 @@ foreach fault in schema post {
 }
 global CTOOLS_esample_using
 
+* DATA-13: by() variables take the wider using type, as in rangejoin
+foreach pair in "str3 str4" "float double" "byte long" "long float" {
+    gettoken mtype pair : pair
+    local utype = strtrim("`pair'")
+    clear
+    set obs 2
+    gen double k = _n
+    gen double y = 10 * _n
+    if substr("`utype'", 1, 3) == "str" gen `utype' g = cond(_n == 1, "ab", "abc")
+    else gen `utype' g = _n
+    tempfile g3_u
+    save `g3_u'
+    clear
+    set obs 2
+    gen double k = _n
+    if substr("`mtype'", 1, 3) == "str" gen `mtype' g = cond(_n == 1, "ab", "abc")
+    else gen `mtype' g = _n
+    preserve
+    rangejoin k -1 1 using `g3_u', by(g)
+    local native_type : type g
+    tempfile g3_ref
+    sort k k_U
+    save `g3_ref'
+    restore
+    crangejoin k -1 1 using `g3_u', by(g)
+    sort k k_U
+    capture cf _all using `g3_ref'
+    if !_rc & "`: type g'" == "`native_type'" test_pass "DATA-13 by() type `mtype' with using `utype'"
+    else test_fail "DATA-13 by() type `mtype' with using `utype'" "type `: type g' vs `native_type', cf r(`=_rc')"
+}
 }
 print_summary "crangejoin"
 global CTOOLS_COMPONENT_COMPLETE "crangejoin"

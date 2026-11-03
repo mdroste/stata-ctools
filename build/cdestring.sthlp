@@ -80,8 +80,12 @@ in {it:newvarlist} must equal the number of variables in {it:varlist}. This
 option may not be combined with {opt replace}.
 
 {phang}
-{opt replace} replaces string variables with numeric variables of the same name.
-This option may not be combined with {opt generate()}.
+{opt replace} replaces string variables with numeric variables of the same name,
+in the same positions, with their notes and characteristics.
+This option may not be combined with {opt generate()}. As with {cmd:destring},
+{opth generate(newvarlist)} places each new variable right after its source, and
+each converted variable gets the characteristics {cmd:destring} (the characters
+removed) and {cmd:destring_cmd} (the {cmd:cdestring} command).
 
 {dlgtab:Options}
 
