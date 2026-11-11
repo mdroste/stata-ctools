@@ -49,7 +49,7 @@ on:
 
 # Superseded branch builds must not publish binaries from an older source tree.
 concurrency:
-  group: ctools-${{ github.workflow }}-${{ github.ref }}
+  group: ctools-${{ github.workflow_ref }}
   cancel-in-progress: ${{ github.event_name != 'release' }}
 
 permissions:
@@ -72,13 +72,22 @@ jobs:
           # Host GCC runs the native tests; the plugin itself is built in manylinux2014.
 
       - name: Validate native code and release metadata
+        id: native-validation
         run: |
           python3 scripts/sync_release.py --check
           python3 validation/run.py --checks package build --metadata-only
           python3 validation/run.py --checks docs
           python3 -m validation.check_macos_signing
           python3 -c 'from validation.check_build import archive_main; archive_main()'
-          CC=gcc python3 validation/run.py --native
+          CC=gcc python3 validation/run.py --native --output temp/validation/ci
+
+      - name: Preserve native validation logs on failure
+        if: failure() && steps.native-validation.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-native-validation-logs
+          path: temp/validation/ci/*.log
+          if-no-files-found: ignore
 
       - name: Check adaptive transport memory ownership
         env:

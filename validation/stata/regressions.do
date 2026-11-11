@@ -823,17 +823,21 @@ foreach textcase in cdata comment shared_cdata shared_comment escaped {
 clear
 set obs 4
 gen str80 text=cond(_n==1,"a"+char(1)+"b", cond(_n==2,"a"+char(13)+"b",cond(_n==3,"_x0041_","_x005F_x0041_")))
-tempfile exported native original
+tempfile exported native original expected
 save `original'
+* Native Excel I/O on Windows normalizes a cell's CR to LF.
+if c(os) == "Windows" quietly replace text = subinstr(text, char(13), char(10), .)
+save `expected'
+use `original', clear
 cexport excel using "`exported'.xlsx", replace
 import excel using "`exported'.xlsx", clear
 rename A text
-cf _all using `original'
+cf _all using `expected'
 use `original', clear
 export excel using "`native'.xlsx", replace
 cimport excel using "`native'.xlsx", clear
 rename A text
-cf _all using `original'
+cf _all using `expected'
 
 * The existing workbook's shared-string indices survive appends/updates.
 use `original', clear
@@ -842,7 +846,7 @@ import excel using "`exported'.xlsx", clear
 assert A==B
 rename A text
 drop B
-cf _all using `original'
+cf _all using `expected'
 erase "`exported'.xlsx"
 erase "`native'.xlsx"
 
