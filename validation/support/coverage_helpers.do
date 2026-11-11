@@ -537,13 +537,22 @@ program define coverage_saved_iv, eclass
     syntax, CTOOLS(integer) STAGE(string)
     estimates clear
     local command=cond(`ctools',"civreghdfe","ivreghdfe")
+    tempvar main_sample
     if "`stage'"=="first" {
         `command' y x (endog=z z2), absorb(g) savefirst savefprefix(coverage_)
+        if !`ctools' quietly gen byte `main_sample' = e(sample)
         estimates restore coverage_endog
     }
     else {
         `command' y x (endog=z z2), absorb(g) saverf saverfprefix(coverage_)
+        if !`ctools' quietly gen byte `main_sample' = e(sample)
         estimates restore coverage_y
+    }
+    // Some ivreghdfe versions omit the sample marker on stored equations.
+    // These equations use the IV sample. The candidate must post it itself.
+    if !`ctools' {
+        quietly count if e(sample)
+        if r(N) == 0 & e(N) > 0 ereturn repost, esample(`main_sample')
     }
 end
 

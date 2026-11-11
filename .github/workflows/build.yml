@@ -49,7 +49,7 @@ on:
 
 # Superseded branch builds must not publish binaries from an older source tree.
 concurrency:
-  group: ctools-${{ github.workflow_ref }}
+  group: ctools-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name != 'release' }}
 
 permissions:
