@@ -1,4 +1,4 @@
-*! version 1.2.4 20261103 github.com/mdroste/stata-ctools
+*! version 1.2.6 20261111 github.com/mdroste/stata-ctools
 
 program define cexport, rclass
     version 14.1
@@ -49,7 +49,8 @@ program define cexport, rclass
 
     * Parse the rest with export delimited-style syntax
     * Support both "using filename" and just "filename" (like export delimited does)
-    syntax [anything] [using/] [if] [in], [Delimiter(string) NOVARNames QUOTE ///
+    * Abbreviations as export delimited takes them (q, novar)
+    syntax [anything] [using/] [if] [in], [Delimiter(string) NOVARnames Quote ///
         NOQUOTEif REPLACE DATAfmt DATEString(string) NOLabel Verbose ///
         MMAP NOFSYNC DIRECT PREFAULT CRLF NOPARALLEL THReads(integer 0)]
     * The if is evaluated now, as export delimited does, before any helper
@@ -75,6 +76,8 @@ program define cexport, rclass
         di as error "Syntax: cexport delimited [varlist] [using] filename [, options]"
         exit 198
     }
+    * ~ is the home directory, as for Stata's own file commands
+    _ctools_home using `"`macval(using)'"'
     mata: st_local("__basename", pathbasename(st_local("using")))
     if !strpos(`"`__basename'"', ".") local using `"`using'.csv"'
     * Resolve varlist from anything, leaving out the sample marker.
@@ -138,9 +141,21 @@ program define cexport, rclass
                 local ++ndec
                 tempvar dec`ndec'
                 local dname `dec`ndec''
-                qui decode `var', gen(`dname')
+                * A label attached but never defined labels nothing: as
+                * natively, every value is then written as a number.
+                mata: st_local("__lblexists", strofreal(st_vlexists(st_local("vallbl"))))
+                if `__lblexists' qui decode `var', gen(`dname')
+                else qui gen str1 `dname' = ""
                 local labfmt : format `var'
-                if !(substr("`labfmt'",1,2) == "%t" | substr("`labfmt'",1,3) == "%-t") local labfmt "%18.0g"
+                * Unlabeled values are written as in an unlabeled column: 16
+                * significant digits for doubles (%18.0g) and 8 for floats
+                * (%14.0g of the value rounded to float precision), whatever
+                * the display format; dates in their own format.
+                local labfloat 0
+                if !(substr("`labfmt'",1,2) == "%t" | substr("`labfmt'",1,3) == "%-t") {
+                    local labfmt "%18.0g"
+                    if "`: type `var''" == "float" local labfloat 1
+                }
                 * Under quote, native export quotes only the label text; a value
                 * without a label is still written as an unquoted number (and
                 * system missing as an empty unquoted field). Quote the label
@@ -150,7 +165,8 @@ program define cexport, rclass
                     qui replace `dname' = char(34) + subinstr(`dname', char(34), char(34)+char(34), .) + char(34) if `dname'!=""
                     local formatted_vars `formatted_vars' `dname'
                 }
-                qui replace `dname' = strtrim(string(`var',"`labfmt'")) if `dname'=="" & `var' != .
+                if `labfloat' qui replace `dname' = strtrim(string(real(string(`var',"%15.7e")),"%14.0g")) if `dname'=="" & `var' != .
+                else qui replace `dname' = strtrim(string(`var',"`labfmt'")) if `dname'=="" & `var' != .
                 local export_varlist `export_varlist' `dname'
                 local decoded_vars `decoded_vars' `dname'
                 local original_names `original_names' `var'
@@ -432,10 +448,17 @@ program define cexport_excel, rclass
     }
 
     * Support both "using filename" and just "filename" (like export excel does)
-    syntax [anything] [using/] [if] [in], [SHEET(string asis) FIRSTrow(string) ///
-        REPLACE DATAfmt DATEString(string) NOLabel Verbose ///
-        CELL(string) MISSING(string) KEEPCELLfmt THReads(integer 0) ///
+    * Abbreviations as export excel takes them (sh(), date(), miss())
+    syntax [anything] [using/] [if] [in], [SHeet(string asis) FIRSTrow(string) ///
+        REPLACE DATAfmt DATEstring(string) NOLabel Verbose ///
+        CELL(string) MISSing(string) KEEPCELLfmt THReads(integer 0) ///
         SHEETMODify SHEETREPlace LOCALE(string)]
+    * As export excel does, missing() holds at most 16 bytes
+    if strlen(`"`macval(missing)'"') > 16 {
+        di as error "invalid string in option {bf:missing()}"
+        di as error "{p 4 4 2}The string is too long.{p_end}"
+        exit 198
+    }
     * The if is evaluated now, as export excel does, before any helper
     * replaces the r() or e() results it may name.
     local iftouse ""
@@ -515,18 +538,17 @@ program define cexport_excel, rclass
         local cell `"`cell_upper'"'
     }
 
-    * Native export assumes .xlsx when no Excel extension is supplied.
-    if !inlist(lower(substr(`"`using'"',-4,4)),".xls") & lower(substr(`"`using'"',-5,5)) != ".xlsx" {
+    * ~ is the home directory, as for Stata's own file commands
+    _ctools_home using `"`macval(using)'"'
+    * As export excel does: a file name without an extension gets .xlsx; one
+    * ending in .xls is a binary workbook; any other name (.xlsm, .xltx, .dat)
+    * is kept as given and holds an Office Open XML workbook.
+    mata: st_local("__xlbase", pathbasename(st_local("using")))
+    if !strpos(`"`__xlbase'"', ".") {
         local using `"`using'.xlsx"'
     }
-    * Validate file extension
-    local ext = substr(lower(`"`using'"'), -5, 5)
     local excel_engine "cexport_xlsx"
     if lower(substr(`"`using'"',-4,4)) == ".xls" local excel_engine "cexport_xls"
-    if "`ext'" != ".xlsx" & "`excel_engine'" != "cexport_xls" {
-        di as error "cexport excel: file must have .xls or .xlsx extension"
-        exit 198
-    }
 
     * Parse firstrow option
     local opt_firstrow = "nofirstrow"
@@ -557,11 +579,16 @@ program define cexport_excel, rclass
                 local ++ndec
                 tempvar dec`ndec'
                 local dname `dec`ndec''
-                qui decode `var', gen(`dname')
+                * A label attached but never defined labels nothing (native
+                * then writes every value as below).
+                mata: st_local("__lblexists", strofreal(st_vlexists(st_local("vallbl"))))
+                if `__lblexists' qui decode `var', gen(`dname')
+                else qui gen str1 `dname' = ""
                 * Unlabeled values, extended missing values included (.b), are
-                * written as numbers as native export excel does; only system
+                * written as text in %9.0g, whatever the storage type or
+                * display format, as native export excel does; only system
                 * missing is left empty
-                qui replace `dname' = string(`var',"%18.0g") if `dname'=="" & `var' != .
+                qui replace `dname' = string(`var',"%9.0g") if `dname'=="" & `var' != .
                 local export_varlist `export_varlist' `dname'
                 local decoded_vars `decoded_vars' `dname'
             }

@@ -1,4 +1,4 @@
-*! version 1.2.4 20261103 github.com/mdroste/stata-ctools
+*! version 1.2.6 20261111 github.com/mdroste/stata-ctools
 *! Private helper for cmerge.
 program define _cmerge_native, rclass
     args cmdline
@@ -7,14 +7,20 @@ program define _cmerge_native, rclass
     syntax [anything] using/ [, Keep(string) ASSert(string) GENerate(name) ///
         NOGENerate KEEPUSing(string) SORTED FORCE NOREPort Verbose noLabels ///
         NONotes UPDATE REPLACE PRESERVE_order(integer 0) THReads(integer 0) ///
-        SNAPshot FAST]
+        SNAPshot FAST TEMPdta DEBUG]
     local nolabel = cond("`labels'" != "", "nolabel", "")
-    local opts `nogenerate' `sorted' `force' `noreport' `nolabel' `nonotes' `update' `replace'
-    if "`keep'" != "" local opts `opts' keep(`keep')
+    local opts `sorted' `force' `noreport' `nolabel' `nonotes' `update' `replace' `debug'
+    local keep_codes
+    if "`keep'" != "" _cmerge_results keep_codes : `keep'
+    if "`nogenerate'" != "" {
+        tempvar marker
+        local generate `marker'
+    }
     if "`assert'" != "" local opts `opts' assert(`assert')
     if "`generate'" != "" local opts `opts' generate(`generate')
     if "`keepusing'" != "" local opts `opts' keepusing(`keepusing')
-    di as txt "(note: strL variables are involved; cmerge runs {bf:merge})"
+    * merge prints what it prints; the note only with verbose
+    if "`verbose'" != "" di as txt "(note: strL variables are involved; cmerge runs {bf:merge})"
     local caller = cond("$CTOOLS_cmerge_caller" != "", "$CTOOLS_cmerge_caller", "`c(stata_version)'")
     * merge can fail after sorting the master, so by default this path keeps
     * a snapshot: a frame in memory, which cmerge restores after a failure
@@ -41,13 +47,20 @@ program define _cmerge_native, rclass
     * Validation hook: fail as Break would once the result is in place
     if "$CTOOLS_cmerge_fault" == "post" exit 1
     local mvar = cond("`generate'" != "", "`generate'", "_merge")
-    return scalar N = _N
-    if "`nogenerate'" == "" {
-        forvalues c = 1/5 {
-            quietly count if `mvar' == `c'
-            return scalar N_`c' = r(N)
-        }
+    forvalues c = 1/5 {
+        quietly count if `mvar' == `c'
+        local count`c' = r(N)
     }
+    if "`keep'" != "" {
+        local keep_list : subinstr local keep_codes " " ",", all
+        quietly keep if inlist(`mvar', `keep_list')
+    }
+    if "`nogenerate'" != "" drop `mvar'
+    return scalar N = _N
+    forvalues c = 1/5 {
+        return scalar N_`c' = `count`c''
+    }
+    return scalar time = .
     return local using `"`using'"'
     return local keyvars "`anything'"
     if `preserved' restore, not

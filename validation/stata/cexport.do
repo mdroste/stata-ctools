@@ -17,6 +17,58 @@ if "`__case'" == "cexport" {
 * Load setup (works from project root or validation dir)
 do "validation/support/validate_setup.do"
 
+* Single numeric column: compare every CSV cell, including the exact missing
+* token. Numeric formatting may differ, but must retain seven significant digits.
+capture program drop _cexport_numeric_cells
+program define _cexport_numeric_cells
+    args reference candidate
+    tempname a b
+    file open `a' using `"`reference'"', read text
+    file open `b' using `"`candidate'"', read text
+    file read `a' left
+    file read `b' right
+    assert `"`left'"' == `"`right'"'
+    while 1 {
+        file read `a' left
+        local eof_a = r(eof)
+        file read `b' right
+        assert r(eof)==`eof_a'
+        if `eof_a' continue, break
+        local x = real(`"`left'"')
+        local y = real(`"`right'"')
+        if missing(`x') | missing(`y') | `x'==0 {
+            assert `"`left'"' == `"`right'"'
+        }
+        else assert abs((`x'-`y')/`x')<=1e-7
+    }
+    file close `a'
+    file close `b'
+end
+
+mata:
+/* These fixtures have no embedded line breaks. Compare exact record bytes;
+   _fget removes the host's LF/CRLF terminator, which differs on Windows. */
+real scalar _cexport_same_records(string scalar ref, string scalar got)
+{
+    real scalar fa, fb, same
+    string matrix a, b
+    fa=fopen(ref,"r"); fb=fopen(got,"r"); same=1
+    while (1) {
+        a=_fget(fa); b=_fget(fb)
+        if (!rows(a) | !rows(b)) {
+            same=(rows(a)==rows(b))
+            break
+        }
+        if (a!=b) {
+            same=0
+            break
+        }
+    }
+    fclose(fa); fclose(fb)
+    return(same)
+}
+end
+
 capture mkdir "temp"
 
 quietly {
@@ -336,20 +388,20 @@ benchmark_export, testname("sparse data (mostly missing)")
 
 * Extended missing values - compare with Stata's behavior
 clear
-set obs 10
+set obs 28
 gen x = .
-replace x = .a in 1
-replace x = .b in 2
-replace x = .c in 3
-replace x = .z in 4
-replace x = 100 in 5
-replace x = . in 6
-capture export delimited using "temp/ext_missing_stata.csv", replace
-local stata_rc = _rc
-capture cexport delimited using "temp/ext_missing.csv", replace
-local cexport_rc = _rc
-if `stata_rc' == `cexport_rc' test_pass "extended missing values (.a-.z) - matches Stata behavior"
-else test_fail "extended missing values" "cexport rc=`cexport_rc' but Stata rc=`stata_rc'"
+forvalues j=1/26 {
+    local letter = char(96+`j')
+    replace x = .`letter' in `j'
+}
+replace x = 100 in 28
+capture noisily {
+    export delimited using "temp/ext_missing_stata.csv", replace
+    cexport delimited using "temp/ext_missing.csv", replace
+    _cexport_numeric_cells "temp/ext_missing_stata.csv" "temp/ext_missing.csv"
+}
+if !_rc test_pass "extended missing CSV cells (.a-.z) match native"
+else test_fail "extended missing CSV cells" "r(`=_rc')"
 
 * SECTION: Pathological Data - String Edge Cases
 print_section "Pathological - String Edge Cases"
@@ -467,18 +519,19 @@ benchmark_export, testname("very large numbers")
 clear
 set obs 6
 gen double extreme = .
-replace extreme = 1e308 in 1
-replace extreme = -1e308 in 2
+replace extreme = 8e307 in 1
+replace extreme = -8e307 in 2
 replace extreme = 1e-308 in 3
 replace extreme = -1e-308 in 4
 replace extreme = 0 in 5
 replace extreme = . in 6
-capture export delimited using "temp/extreme_range_stata.csv", replace
-local stata_rc = _rc
-capture cexport delimited using "temp/extreme_range.csv", replace
-local cexport_rc = _rc
-if `stata_rc' == `cexport_rc' test_pass "extreme numeric range - matches Stata behavior (rc=`cexport_rc')"
-else test_fail "extreme numeric range" "cexport rc=`cexport_rc' but Stata rc=`stata_rc'"
+capture noisily {
+    export delimited using "temp/extreme_range_stata.csv", replace
+    cexport delimited using "temp/extreme_range.csv", replace
+    _cexport_numeric_cells "temp/extreme_range_stata.csv" "temp/extreme_range.csv"
+}
+if !_rc test_pass "extreme numeric CSV cells match native"
+else test_fail "extreme numeric CSV cells" "r(`=_rc')"
 
 * All numeric types
 clear
@@ -845,6 +898,9 @@ if _rc == 0 {
     format interview_date %td
     benchmark_export, testname("datafmt: nlswork with dates") exportopts(datafmt)
 }
+else {
+    test_fail "required fixture: nlswork" "dataset could not be loaded"
+}
 
 * SECTION 18: Missing values
 print_section "Missing Values"
@@ -1135,17 +1191,26 @@ capture ctools_fixture voter, clear
 if _rc == 0 {
     benchmark_export, testname("voter dataset")
 }
+else {
+    test_fail "required fixture: voter" "dataset could not be loaded"
+}
 
 * bplong dataset (repeated measures)
 capture ctools_fixture bplong, clear
 if _rc == 0 {
     benchmark_export, testname("bplong (repeated measures)")
 }
+else {
+    test_fail "required fixture: bplong" "dataset could not be loaded"
+}
 
 * cancer dataset (survival)
 capture ctools_fixture cancer, clear
 if _rc == 0 {
     benchmark_export, testname("cancer (survival data)")
+}
+else {
+    test_fail "required fixture: cancer" "dataset could not be loaded"
 }
 
 * SECTION: Synthetic Datasets for Testing
@@ -1536,13 +1601,21 @@ capture erase "temp/excel_exists_test.xlsx"
 use `excel_basic_data', clear
 capture export excel using "temp/native_wrong.csv", firstrow(variables) replace
 local native_rc=_rc
+capture erase "temp/wrong.csv.xlsx"
 capture cexport excel using "temp/wrong.csv", firstrow(variables) replace
 local c_rc=_rc
+* As native: the name is kept (an .xlsx workbook named wrong.csv)
+capture confirm file "temp/native_wrong.csv"
+local n_kept = !_rc
 capture confirm file "temp/wrong.csv.xlsx"
-if `c_rc' == `native_rc' & `native_rc' == 0 & _rc == 0 {
-    test_pass "Excel non-Excel extension appends .xlsx like native"
+local c_renamed = !_rc
+capture confirm file "temp/wrong.csv"
+if `c_rc' == `native_rc' & `native_rc' == 0 & !_rc & `n_kept' & !`c_renamed' {
+    test_pass "Excel non-Excel extension kept like native"
 }
 else test_fail "Excel extension resolution" "native rc=`native_rc', cexport rc=`c_rc'"
+capture erase "temp/native_wrong.csv"
+capture erase "temp/wrong.csv"
 capture erase "temp/native_wrong.csv.xlsx"
 capture erase "temp/wrong.csv.xlsx"
 
@@ -1637,14 +1710,37 @@ if _N == 5 & c(k) == 3 test_pass "Excel keepcellfmt - file updated"
 else test_fail "Excel keepcellfmt" "expected N=5 K=3, got N=`=_N' K=`=c(k)'"
 capture erase "temp/excel_keepfmt.xlsx"
 
+* Compare every read-back value at the requested Excel location. A nonempty
+* sheet alone does not establish that cell(), missing(), or the update worked.
+capture program drop assert_excel_readback
+program define assert_excel_readback
+    syntax [varlist] using/, TESTname(string) [CELLrange(string) MISSING(string)]
+    preserve
+    keep `varlist'
+    quietly ds, has(type numeric)
+    foreach v in `r(varlist)' {
+        tempvar wasmissing
+        gen byte `wasmissing' = missing(`v')
+        tostring `v', replace force format(%18.0g)
+        replace `v' = "`missing'" if `wasmissing'
+        drop `wasmissing'
+    }
+    tempfile expected actual
+    quietly save "`expected'"
+    local rangeopt
+    if "`cellrange'" != "" local rangeopt cellrange(`cellrange')
+    import excel using "`using'", firstrow allstring `rangeopt' clear
+    quietly save "`actual'"
+    assert_data_equal "`expected'" "`actual'" "`testname'"
+    restore
+end
+
 * Test combination: cell() + missing()
 use `excel_missing_data', clear
 cexport excel using "temp/excel_combo.xlsx", firstrow(variables) cell(C3) missing("N/A") replace
-clear
-import excel using "temp/excel_combo.xlsx", clear
-* Data should start at C3, with N/A for missing values
-if _N > 0 test_pass "Excel cell() + missing() combination"
-else test_fail "Excel cell() + missing() combination" "no data imported"
+use `excel_missing_data', clear
+assert_excel_readback using "temp/excel_combo.xlsx", cellrange(C3:E8) missing("N/A") ///
+    testname("Excel cell() + missing(): exact location and values")
 capture erase "temp/excel_combo.xlsx"
 
 * Test combination: cell() + keepcellfmt
@@ -1652,32 +1748,31 @@ use `excel_basic_data', clear
 cexport excel using "temp/excel_combo2.xlsx", firstrow(variables) replace
 use `excel_missing_data', clear
 cexport excel using "temp/excel_combo2.xlsx", firstrow(variables) cell(F1) keepcellfmt replace
-clear
-import excel using "temp/excel_combo2.xlsx", firstrow clear
-if _N > 0 test_pass "Excel cell() + keepcellfmt combination"
-else test_fail "Excel cell() + keepcellfmt combination" "no data imported"
+use `excel_missing_data', clear
+assert_excel_readback using "temp/excel_combo2.xlsx", cellrange(F1:H6) ///
+    testname("Excel cell() + keepcellfmt: exact updated values")
 capture erase "temp/excel_combo2.xlsx"
 
 * Test all three options together
 use `excel_missing_data', clear
 cexport excel using "temp/excel_allopts.xlsx", firstrow(variables) replace
 cexport excel using "temp/excel_allopts.xlsx", firstrow(variables) cell(B2) missing("--") keepcellfmt replace
-clear
-import excel using "temp/excel_allopts.xlsx", clear
-if _N > 0 test_pass "Excel cell() + missing() + keepcellfmt all together"
-else test_fail "Excel all options" "no data imported"
+use `excel_missing_data', clear
+assert_excel_readback using "temp/excel_allopts.xlsx", cellrange(B2:D7) missing("--") ///
+    testname("Excel cell() + missing() + keepcellfmt: exact location and values")
 capture erase "temp/excel_allopts.xlsx"
 
 * Test with real dataset (auto) and new options
 sysuse auto, clear
 replace price = . in 1/5
+tempfile excel_auto_options
+save `excel_auto_options'
 cexport excel make price mpg using "temp/excel_auto_opts.xlsx", firstrow(variables) cell(B2) missing("N/A") replace
-clear
-import excel using "temp/excel_auto_opts.xlsx", clear
-* Import starts at B2, so first row (row 1) should be empty or headers start at row 2
-if _N > 0 test_pass "Excel auto dataset with new options"
-else test_fail "Excel auto dataset with new options" "no data imported"
+use `excel_auto_options', clear
+assert_excel_readback make price mpg using "temp/excel_auto_opts.xlsx", cellrange(B2:D76) missing("N/A") ///
+    testname("Excel auto dataset: exact location and missing replacements")
 capture erase "temp/excel_auto_opts.xlsx"
+program drop assert_excel_readback
 
 * SECTION: Comprehensive Excel Export Round-Trip Tests
 * These tests export with both Stata's export excel and cexport excel,
@@ -1870,15 +1965,24 @@ if _rc == 0 {
     keep in 1/2000
     benchmark_xlsx_export, testname("xlsx export: nlswork 2K") exportopts(firstrow(variables))
 }
+else {
+    test_fail "required fixture: nlswork" "dataset could not be loaded"
+}
 
 capture ctools_fixture lifeexp, clear
 if _rc == 0 {
     benchmark_xlsx_export, testname("xlsx export: lifeexp") exportopts(firstrow(variables))
 }
+else {
+    test_fail "required fixture: lifeexp" "dataset could not be loaded"
+}
 
 capture ctools_fixture bplong, clear
 if _rc == 0 {
     benchmark_xlsx_export, testname("xlsx export: bplong") exportopts(firstrow(variables))
+}
+else {
+    test_fail "required fixture: bplong" "dataset could not be loaded"
 }
 
 * --- Numeric Types ---
@@ -2343,20 +2447,14 @@ tempfile cx_native cx_ctools
 foreach o in "datafmt" "datafmt quote" `"datafmt delimiter(";")"' `"datafmt quote delimiter(";")"' "datafmt nolabel" {
     export delimited using "`cx_native'", `o' replace
     cexport delimited using "`cx_ctools'", `o' replace
-    checksum "`cx_native'"
-    local sum = "`r(checksum)' `r(filelen)'"
-    checksum "`cx_ctools'"
-    local same = ("`sum'" == "`r(checksum)' `r(filelen)'")
+    mata: st_local("same", strofreal(_cexport_same_records(st_local("cx_native"), st_local("cx_ctools"))))
     if `same' test_pass `"datafmt comma formats bytes: `o'"'
     else test_fail `"datafmt comma formats bytes: `o'"' "file differs from export delimited"
 }
 sysuse auto, clear
 export delimited using "`cx_native'", datafmt replace
 cexport delimited using "`cx_ctools'", datafmt replace
-checksum "`cx_native'"
-local sum = "`r(checksum)' `r(filelen)'"
-checksum "`cx_ctools'"
-local same = ("`sum'" == "`r(checksum)' `r(filelen)'")
+mata: st_local("same", strofreal(_cexport_same_records(st_local("cx_native"), st_local("cx_ctools"))))
 if `same' test_pass "datafmt bytes: auto (price %8.0gc)"
 else test_fail "datafmt bytes: auto (price %8.0gc)" "file differs from export delimited"
 
@@ -2375,10 +2473,7 @@ foreach o in "" "quote" {
     local rc = _rc
     local same = 0
     if !`rc' {
-        checksum "`cx_native'"
-        local sum = "`r(checksum)' `r(filelen)'"
-        checksum "`cx_ctools'"
-        local same = ("`sum'" == "`r(checksum)' `r(filelen)'")
+        mata: st_local("same", strofreal(_cexport_same_records(st_local("cx_native"), st_local("cx_ctools"))))
     }
     if `same' test_pass `"labeled 32-character names bytes: `o'"'
     else test_fail `"labeled 32-character names bytes: `o'"' "rc=`rc' or file differs from export delimited"
@@ -2399,10 +2494,7 @@ capture noisily {
     local rc = _rc
     local same = 0
     if !`rc' {
-        checksum "`cx_native'"
-        local sum = "`r(checksum)' `r(filelen)'"
-        checksum "`cx_ctools'"
-        local same = ("`sum'" == "`r(checksum)' `r(filelen)'")
+        mata: st_local("same", strofreal(_cexport_same_records(st_local("cx_native"), st_local("cx_ctools"))))
     }
     if `same' test_pass "labeled export within max_memory: delimited"
     else test_fail "labeled export within max_memory: delimited" "rc=`rc' or file differs from export delimited"
@@ -2414,6 +2506,392 @@ capture noisily {
 if _rc test_fail "labeled export within max_memory" "setup rc=`=_rc'"
 clear
 set max_memory .
+
+* Fixed with the 2026-11-08 audit (docs/development/CIMPORT_CEXPORT_AUDIT.md);
+* each is compared with the native command. Delimited output is compared
+* byte for byte (native ends lines with CRLF on Windows: option crlf).
+print_section "audit regressions"
+capture program drop audit_samefile
+program define audit_samefile, rclass
+    args a b
+    mata: __n = fopen(st_local("a"), "r"); __x = fread(__n, 100000000); fclose(__n); ///
+        __n = fopen(st_local("b"), "r"); __y = fread(__n, 100000000); fclose(__n); ///
+        st_local("same", strofreal(__x == __y))
+    mata: mata drop __n __x __y
+    return scalar same = `same'
+end
+local audit_crlf = cond(c(os) == "Windows", "crlf", "")
+
+* Values just below a power of ten keep all their digits (floor(log10())
+* rounds up there)
+clear
+set obs 9
+gen double x = .
+replace x = 99.99999999999999 in 1
+replace x = 999.9999999999999 in 2
+replace x = 9999.999999999998 in 3
+replace x = .9999999999999999 in 4
+replace x = 999999999999999.875 in 5
+replace x = 100 in 6
+replace x = 1000.0000000000001 in 7
+replace x = 9.999999999999999e22 in 8
+replace x = -99.99999999999999 in 9
+gen float f = 99.99999
+replace f = 999.99994 in 2
+replace f = 9999999 in 3
+replace f = .99999994 in 4
+export delimited using "temp/audit_digits_native.csv", replace
+capture cexport delimited using "temp/audit_digits.csv", replace `audit_crlf'
+if _rc test_fail "values just below a power of ten" "cexport rc=`=_rc'"
+else {
+    audit_samefile "temp/audit_digits_native.csv" "temp/audit_digits.csv"
+    if r(same) test_pass "values just below a power of ten"
+    else test_fail "values just below a power of ten" "output differs from export delimited"
+}
+
+* Value labels: unlabeled values of a labeled variable are written as in an
+* unlabeled column (floats to float precision, display formats ignored), and
+* a label attached but never defined labels nothing.
+clear
+set obs 6
+gen float f = 1
+replace f = .1 in 2
+replace f = 1234567.5 in 3
+replace f = 1e-6 in 4
+replace f = 123.456 in 5
+replace f = .b in 6
+gen double d = 1
+replace d = .1 in 2
+replace d = 1/3 in 3
+replace d = 1e-6 in 4
+replace d = 123456789.123 in 5
+replace d = .b in 6
+gen float g = f
+format g %6.2f
+gen long l = 1
+replace l = 123456789 in 2
+label define audit_one 1 "one"
+label values f d g l audit_one
+gen y = 5
+label values y audit_undefined
+foreach q in "" quote {
+    export delimited using "temp/audit_labels_native.csv", replace `q'
+    capture cexport delimited using "temp/audit_labels.csv", replace `q' `audit_crlf'
+    if _rc test_fail "unlabeled values of labeled variables `q'" "cexport rc=`=_rc'"
+    else {
+        audit_samefile "temp/audit_labels_native.csv" "temp/audit_labels.csv"
+        if r(same) test_pass "unlabeled values of labeled variables `q'"
+        else test_fail "unlabeled values of labeled variables `q'" "output differs from export delimited"
+    }
+}
+* Excel writes unlabeled values as text in %9.0g
+tempfile audit_labeled
+save `audit_labeled'
+capture erase "temp/audit_labels_native.xlsx"
+capture erase "temp/audit_labels.xlsx"
+export excel using "temp/audit_labels_native.xlsx", firstrow(variables)
+capture cexport excel using "temp/audit_labels.xlsx", firstrow(variables)
+if _rc test_fail "unlabeled values of labeled variables: excel" "cexport rc=`=_rc'"
+else {
+    local rc 0
+    foreach a in "" allstring {
+        import excel using "temp/audit_labels_native.xlsx", firstrow clear `a'
+        tempfile audit_native_xlsx
+        save `audit_native_xlsx', replace
+        import excel using "temp/audit_labels.xlsx", firstrow clear `a'
+        capture cf _all using `audit_native_xlsx', all
+        if _rc local rc = _rc
+    }
+    if !`rc' test_pass "unlabeled values of labeled variables: excel"
+    else test_fail "unlabeled values of labeled variables: excel" "cf rc=`rc'"
+}
+use `audit_labeled', clear
+capture erase "temp/audit_labels_native.xlsx"
+capture erase "temp/audit_labels.xlsx"
+
+* Excel: text that goes to the shared-string table (text holding _x) in many
+* columns, each cell written with its column's prefix
+clear
+set obs 50
+forvalues j = 1/40 {
+    gen str40 s`j' = cond(mod(_n + `j', 3) == 0, "file_x`j'.csv", ///
+        cond(mod(_n + `j', 3) == 1, "dir_x/`j'", "plain`j'"))
+}
+capture erase "temp/audit_shared_native.xlsx"
+capture erase "temp/audit_shared.xlsx"
+export excel using "temp/audit_shared_native.xlsx", firstrow(variables)
+capture cexport excel using "temp/audit_shared.xlsx", firstrow(variables)
+if _rc test_fail "excel shared strings in many columns" "cexport rc=`=_rc'"
+else {
+    import excel using "temp/audit_shared_native.xlsx", firstrow clear allstring
+    tempfile audit_shared_native
+    save `audit_shared_native', replace
+    capture import excel using "temp/audit_shared.xlsx", firstrow clear allstring
+    local rc = _rc
+    if !`rc' {
+        capture cf _all using `audit_shared_native', all
+        local rc = _rc
+    }
+    if !`rc' test_pass "excel shared strings in many columns"
+    else test_fail "excel shared strings in many columns" "rc=`rc'"
+}
+capture erase "temp/audit_shared_native.xlsx"
+capture erase "temp/audit_shared.xlsx"
+
+* Parallel export of rows of very different widths: the file is pre-sized
+* from the average row, not the longest (which could ask for far more disk
+* than the output needs); output still matches export delimited.
+clear
+set obs 120000
+gen long id = _n
+gen str2000 note = cond(mod(_n, 40000) == 1, 1900 * "z", "")
+gen double x = _n / 7
+export delimited using "temp/audit_skew_native.csv", replace
+capture cexport delimited using "temp/audit_skew.csv", replace threads(4) `audit_crlf'
+if _rc test_fail "parallel export of skewed row widths" "cexport rc=`=_rc'"
+else {
+    audit_samefile "temp/audit_skew_native.csv" "temp/audit_skew.csv"
+    if r(same) test_pass "parallel export of skewed row widths"
+    else test_fail "parallel export of skewed row widths" "output differs from export delimited"
+}
+
+* Editing a workbook again and again reuses ctools' cell styles and date-time
+* format rather than appending 11 more cell formats each time (Excel limits
+* both). styles.xml is read back with unzipfile.
+clear
+set obs 5
+gen double t = clock("2024-01-0" + string(_n) + " 10:00:00", "YMDhms")
+format t %tc
+gen x = _n
+capture erase "temp/audit_styles.xlsx"
+cexport excel using "temp/audit_styles.xlsx", firstrow(variables)
+forvalues i = 2/6 {
+    cexport excel using "temp/audit_styles.xlsx", sheet("S`i'") firstrow(variables)
+}
+rename (t x) (t2 x2)
+cexport excel using "temp/audit_styles.xlsx", sheet("S3", modify) cell(D1) firstrow(variables)
+local here `"`c(pwd)'"'
+capture mkdir "temp/audit_unzip"
+quietly cd "temp/audit_unzip"
+capture erase "xl/styles.xml"
+capture noisily unzipfile "../audit_styles.xlsx", replace
+local urc = _rc
+local xfs = .
+local fmts = .
+if !`urc' {
+    mata: __f = fopen("xl/styles.xml", "r"); __s = fread(__f, 10000000); fclose(__f)
+    mata: __c = substr(__s, strpos(__s, "<cellXfs"), .); __c = substr(__c, 1, strpos(__c, "</cellXfs>"))
+    mata: st_local("xfs", strofreal((strlen(__c) - strlen(subinstr(__c, "<xf ", ""))) / 4))
+    mata: st_local("fmts", strofreal((strlen(__s) - strlen(subinstr(__s, "<numFmt ", ""))) / 8))
+    mata: mata drop __s __f __c
+}
+quietly cd `"`here'"'
+if !`urc' & `xfs' == 11 & `fmts' == 1 test_pass "repeated excel edits reuse cell styles"
+else test_fail "repeated excel edits reuse cell styles" "unzip rc=`urc', cellXfs `xfs' (11 expected), numFmts `fmts' (1)"
+import excel using "temp/audit_styles.xlsx", sheet("S3") firstrow clear
+capture confirm variable t x t2 x2
+if !_rc & _N == 5 test_pass "repeated excel edits keep the data"
+else test_fail "repeated excel edits keep the data" "sheet S3 N=`=_N' rc=`=_rc'"
+capture erase "temp/audit_styles.xlsx"
+clear
+
+* Audit batch E. missing(): at most 16 bytes, and a number only when it is a
+* decimal number (hex such as 0x1A is text), as export excel writes it
+clear
+set obs 2
+gen x = 1 in 1
+local rc_n 0
+local rc_c 0
+capture export excel using "temp/audit_mlong_n.xlsx", missing("`=17*"z"'") replace
+local rc_n = _rc
+capture cexport excel using "temp/audit_mlong_c.xlsx", missing("`=17*"z"'") replace
+local rc_c = _rc
+if `rc_n' == `rc_c' & `rc_c' == 198 test_pass "excel missing() longer than 16 bytes"
+else test_fail "excel missing() longer than 16 bytes" "cexport rc=`rc_c', native rc=`rc_n'"
+local rc 0
+foreach m in "0x1A" " 2" "1e3" "1,5" "inf" {
+    clear
+    set obs 2
+    gen x = 1 in 1
+    capture erase "temp/audit_miss_n.xlsx"
+    capture erase "temp/audit_miss_c.xlsx"
+    export excel using "temp/audit_miss_n.xlsx", missing("`m'")
+    cexport excel using "temp/audit_miss_c.xlsx", missing("`m'")
+    import excel using "temp/audit_miss_n.xlsx", clear
+    tempfile audit_miss
+    save `audit_miss', replace
+    import excel using "temp/audit_miss_c.xlsx", clear
+    capture cf _all using `audit_miss', all
+    if _rc local rc = _rc
+}
+if !`rc' test_pass "excel missing(): numbers and text as native"
+else test_fail "excel missing(): numbers and text as native" "cf rc=`rc'"
+capture erase "temp/audit_miss_n.xlsx"
+capture erase "temp/audit_miss_c.xlsx"
+
+* A sheet name equal to another only ignoring the case of non-ASCII letters
+* fails as natively (r(9901)) and adds no second sheet
+clear
+set obs 2
+gen y = _n
+capture erase "temp/audit_case.xlsx"
+export excel using "temp/audit_case.xlsx", sheet("Données") firstrow(variables)
+capture cexport excel using "temp/audit_case.xlsx", sheet("DONNÉES")
+local rc = _rc
+import excel using "temp/audit_case.xlsx", describe
+if `rc' == 9901 & r(N_worksheet) == 1 test_pass "excel sheet names differing only in case"
+else test_fail "excel sheet names differing only in case" "rc=`rc', sheets `=r(N_worksheet)'"
+capture erase "temp/audit_case.xlsx"
+
+* A carriage return is written as export excel writes it (as such), so a
+* reader takes CR and CR LF for LF in both workbooks
+clear
+set obs 5
+gen str20 s = "a" + char(13) + "b"
+replace s = "a" + char(13) + char(10) + "b" in 2
+replace s = "a" + char(10) + "b" in 3
+replace s = char(13) + "lead" in 4
+replace s = "tail" + char(13) + char(13) in 5
+capture erase "temp/audit_cr_n.xlsx"
+capture erase "temp/audit_cr_c.xlsx"
+export excel using "temp/audit_cr_n.xlsx", firstrow(variables)
+capture cexport excel using "temp/audit_cr_c.xlsx", firstrow(variables)
+local rc = _rc
+if !`rc' {
+    import excel using "temp/audit_cr_n.xlsx", firstrow clear
+    tempfile audit_cr
+    save `audit_cr', replace
+    import excel using "temp/audit_cr_c.xlsx", firstrow clear
+    capture cf _all using `audit_cr', all
+    local rc = _rc
+}
+if !`rc' test_pass "excel text with carriage returns"
+else test_fail "excel text with carriage returns" "rc=`rc'"
+capture erase "temp/audit_cr_n.xlsx"
+capture erase "temp/audit_cr_c.xlsx"
+
+* Data past column XFD: r(198), as natively
+clear
+set obs 2
+gen a = 1
+gen b = 2
+capture export excel using "temp/audit_xfd_n.xlsx", cell(XFD1) replace
+local rc_n = _rc
+capture cexport excel using "temp/audit_xfd_c.xlsx", cell(XFD1) replace
+if _rc == `rc_n' & `rc_n' == 198 test_pass "excel data past column XFD"
+else test_fail "excel data past column XFD" "cexport rc=`=_rc', native rc=`rc_n'"
+clear
+
+* S3 gaps (FUNCTIONALITY_GAPS IO-11, IO-15, IO-16, IO-18): native option
+* abbreviations and file names, each against the native command.
+sysuse auto, clear
+keep make price foreign rep78
+replace rep78 = .b in 3
+* IO-15: export delimited takes q (quote) and novar (novarnames)
+capture erase "temp/gap_q_n.csv"
+capture erase "temp/gap_q_c.csv"
+export delimited using "temp/gap_q_n.csv", q novar
+capture cexport delimited using "temp/gap_q_c.csv", q novar
+local rc = _rc
+if !`rc' {
+    import delimited using "temp/gap_q_n.csv", clear varnames(nonames) stringcols(_all) bindquotes(strict) stripquotes(no)
+    tempfile gap_n
+    save `gap_n', replace
+    import delimited using "temp/gap_q_c.csv", clear varnames(nonames) stringcols(_all) bindquotes(strict) stripquotes(no)
+    capture cf _all using `gap_n', all
+    local rc = _rc
+}
+if !`rc' test_pass "IO-15 export delimited q novar"
+else test_fail "IO-15 export delimited q novar" "rc=`rc'"
+capture erase "temp/gap_q_n.csv"
+capture erase "temp/gap_q_c.csv"
+
+* IO-16: export excel takes sh(), date() and miss(); IO-11: any file name
+* but one ending in .xls holds an .xlsx workbook under that name, and a name
+* without an extension gets .xlsx
+sysuse auto, clear
+keep make price foreign rep78
+gen int day = 21000 + _n
+format day %td
+foreach w in n c {
+    local cmd = cond("`w'" == "n", "export", "cexport")
+    capture erase "temp/gap_sh_`w'.xlsx"
+    capture noisily `cmd' excel using "temp/gap_sh_`w'.xlsx", sh("S1") date("%tdCCYY-NN-DD") miss("NA") firstrow(variables)
+    local rc_`w' = _rc
+}
+local rc = `rc_c'
+if !`rc' & !`rc_n' {
+    import excel using "temp/gap_sh_n.xlsx", sheet("S1") firstrow clear allstring
+    tempfile gap_n
+    save `gap_n', replace
+    import excel using "temp/gap_sh_c.xlsx", sheet("S1") firstrow clear allstring
+    capture cf _all using `gap_n', all
+    local rc = _rc
+}
+if !`rc' & !`rc_n' test_pass "IO-16 export excel sh() date() miss()"
+else test_fail "IO-16 export excel sh() date() miss()" "cexport rc=`rc_c', native rc=`rc_n', compare rc=`rc'"
+capture erase "temp/gap_sh_n.xlsx"
+capture erase "temp/gap_sh_c.xlsx"
+sysuse auto, clear
+keep make price
+foreach e in xlsm xltx dat "" {
+    local dot = cond("`e'" == "", "", ".")
+    foreach w in n c {
+        local cmd = cond("`w'" == "n", "export", "cexport")
+        capture erase "temp/gap_ext_`w'`dot'`e'"
+        capture erase "temp/gap_ext_`w'.xlsx"
+        capture erase "temp/gap_ext_`w'`dot'`e'.xlsx"
+        capture `cmd' excel using "temp/gap_ext_`w'`dot'`e'", firstrow(variables)
+        local rc_`w' = _rc
+        local f_`w' = cond("`e'" == "", "temp/gap_ext_`w'.xlsx", "temp/gap_ext_`w'.`e'")
+        capture confirm file "`f_`w''"
+        local there_`w' = !_rc
+        capture confirm file "temp/gap_ext_`w'.`e'.xlsx"
+        local renamed_`w' = !_rc & "`e'" != ""
+    }
+    local rc = `rc_c'
+    if !`rc' & `there_c' & !`renamed_c' & `there_n' {
+        import excel using "`f_n'", firstrow clear
+        tempfile gap_n
+        save `gap_n', replace
+        import excel using "`f_c'", firstrow clear
+        capture cf _all using `gap_n', all
+        local rc = _rc
+    }
+    else local rc = 9
+    if !`rc' test_pass "IO-11 export excel file name [`dot'`e']"
+    else test_fail "IO-11 export excel file name [`dot'`e']" "cexport rc=`rc_c', kept=`there_c', renamed=`renamed_c'"
+    capture erase "`f_n'"
+    capture erase "`f_c'"
+}
+
+* IO-18: export sasxport5 takes val() for vallabfile()
+sysuse auto, clear
+keep make price foreign
+foreach w in n c {
+    local cmd = cond("`w'" == "n", "export", "cexport")
+    capture erase "temp/gap_val_`w'.xpt"
+    capture erase "temp/formats.xpf"
+    capture `cmd' sasxport5 * using "temp/gap_val_`w'.xpt", val(none)
+    local rc_`w' = _rc
+    capture confirm file "temp/formats.xpf"
+    local xpf_`w' = !_rc
+}
+if !`rc_c' & !`rc_n' & `xpf_c' == `xpf_n' {
+    import sasxport5 "temp/gap_val_n.xpt", clear novallabels
+    tempfile gap_n
+    save `gap_n', replace
+    import sasxport5 "temp/gap_val_c.xpt", clear novallabels
+    capture cf _all using `gap_n', all
+    local rc = _rc
+}
+else local rc = 9
+if !`rc' test_pass "IO-18 export sasxport5 val(none)"
+else test_fail "IO-18 export sasxport5 val(none)" "cexport rc=`rc_c', native rc=`rc_n'"
+capture erase "temp/gap_val_n.xpt"
+capture erase "temp/gap_val_c.xpt"
+capture erase "temp/formats.xpf"
+clear
 
 * Cleanup and summary
 

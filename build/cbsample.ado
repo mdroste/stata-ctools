@@ -1,7 +1,15 @@
-*! version 1.2.4 20261103 github.com/mdroste/stata-ctools
+*! version 1.2.6 20261111 github.com/mdroste/stata-ctools
 
 program define cbsample
     version 14.1
+
+    * Under version 7 or earlier, bsample draws with its old algorithm
+    * (bsample_7), which scripts rely on to reproduce old resamples; that
+    * program does the draw here too
+    if _caller() < 8 {
+        _cbsample_version7 `0'
+        exit
+    }
 
     * Check observation limit (Stata plugin API limitation)
     if _N > 2147483647 {
@@ -139,6 +147,23 @@ program define cbsample
         local nstrata : word count `strata'
     }
 
+    * strL strata() and cluster() values the plugin cannot read (binary, or
+    * over 2,045 bytes) are grouped through stand-in ranks in their sort
+    * order; Stata's own steps below keep the variables themselves
+    local plugin_cluster `cluster'
+    local plugin_strata `strata'
+    foreach role in cluster strata {
+        if "``role''" != "" {
+            local stubs
+            foreach v of local `role' {
+                tempvar stub
+                local stubs `stubs' `stub'
+            }
+            _ctools_strlkey ``role'', generate(`stubs')
+            local plugin_`role' `__ctools_keys'
+        }
+    }
+
     * Create temporary frequency weight variable
     tempvar __cbsample_weight__
     quietly gen double `__cbsample_weight__' = 0
@@ -179,7 +204,7 @@ program define cbsample
     * Build cluster variable indices
     local cluster_indices ""
     if "`cluster'" != "" {
-        foreach cv of local cluster {
+        foreach cv of local plugin_cluster {
             local idx = 1
             foreach v of local allvars {
                 if ("`v'" == "`cv'") {
@@ -194,7 +219,7 @@ program define cbsample
     * Build strata variable indices
     local strata_indices ""
     if "`strata'" != "" {
-        foreach sv of local strata {
+        foreach sv of local plugin_strata {
             local idx = 1
             foreach v of local allvars {
                 if ("`v'" == "`sv'") {
@@ -312,6 +337,13 @@ program define cbsample
     }
 end
 
+* bsample_7, without the ctools-only options
+program define _cbsample_version7
+    syntax [anything(everything)] [, Verbose THReads(integer 0) *]
+    if `"`options'"' != "" local options `", `options'"'
+    bsample_7 `anything' `options'
+end
+
 * The resample size bsample takes from [exp]: constant (within each stratum
 * under strata()), an integer, and greater than zero. Stata evaluates _N in
 * the sample (strata: in the stratum). Sizes that differ across strata are
@@ -324,12 +356,18 @@ program define _cbsample_size
         local constant 1
     }
     else if "`strata'" == "" {
-        tempvar nsamp
+        * bsample evaluates subscripts after moving eligible rows first.
+        * Preserve restores the caller's observation order on success or error.
+        preserve
+        tempvar nsamp eligible
+        quietly generate byte `eligible' = !`touse'
+        sort `eligible', stable
         quietly generate double `nsamp' = (`exp') if `touse'
         mata: __cb_v = st_data(., st_local("nsamp"), st_local("touse")); ///
             st_local("constant", strofreal(all(__cb_v :== __cb_v[1]))); ///
             st_local("values", strofreal(__cb_v[1], "%21.0g"))
         mata: mata drop __cb_v
+        restore
     }
     else {
         * bsample evaluates the expression by stratum, the data sorted by

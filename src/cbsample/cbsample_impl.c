@@ -739,8 +739,8 @@ ST_retcode cbsample_main(const char *args) {
             }
         }
         if (iduniq && id_total > id_max) id_max = id_total;
-        SF_scal_save("_cbsample_idmax", (double)id_max);
-        SF_scal_save("_cbsample_idrandom", (double)id_random);
+        if ((rc = SF_scal_save("_cbsample_idmax", (double)id_max))) goto cleanup;
+        if ((rc = SF_scal_save("_cbsample_idrandom", (double)id_random))) goto cleanup;
     }
 
     t_store = ctools_timer_seconds() - store_start;
@@ -775,19 +775,19 @@ cleanup:
 
     /* Store timing scalars */
     double total = ctools_timer_seconds() - t_start;
-    SF_scal_save("_cbsample_time_load", t_load);
-    SF_scal_save("_cbsample_time_sort", t_sort_cluster);
-    SF_scal_save("_cbsample_time_sample", t_sample);
-    SF_scal_save("_cbsample_time_store", t_store);
-    SF_scal_save("_cbsample_time_total", total);
-    SF_scal_save("_cbsample_nobs", (double)nobs);
-    SF_scal_save("_cbsample_n_selected", (double)n_selected);
-    SF_scal_save("_cbsample_total_weight", total_weight);
-    SF_scal_save("_cbsample_nclusters", (double)nclusters);
-    SF_scal_save("_cbsample_nstrata", (double)nstrata_groups);
+    if ((rc = SF_scal_save("_cbsample_time_load", t_load))) return rc;
+    if ((rc = SF_scal_save("_cbsample_time_sort", t_sort_cluster))) return rc;
+    if ((rc = SF_scal_save("_cbsample_time_sample", t_sample))) return rc;
+    if ((rc = SF_scal_save("_cbsample_time_store", t_store))) return rc;
+    if ((rc = SF_scal_save("_cbsample_time_total", total))) return rc;
+    if ((rc = SF_scal_save("_cbsample_nobs", (double)nobs))) return rc;
+    if ((rc = SF_scal_save("_cbsample_n_selected", (double)n_selected))) return rc;
+    if ((rc = SF_scal_save("_cbsample_total_weight", total_weight))) return rc;
+    if ((rc = SF_scal_save("_cbsample_nclusters", (double)nclusters))) return rc;
+    if ((rc = SF_scal_save("_cbsample_nstrata", (double)nstrata_groups))) return rc;
 
     /* Draws are serial in every build to preserve the seeded sequence. */
-    SF_scal_save("_cbsample_threads", 1.0);
+    if ((rc = SF_scal_save("_cbsample_threads", 1.0))) return rc;
 
     if (config.verbose) {
         ctools_msg(CBSAMPLE_MODULE, "%zu obs, %zu clusters, %zu strata, selected %zu, total weight %.0f",

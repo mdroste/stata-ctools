@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.4 20261103}{...}
+{* *! version 1.2.6 20261111}{...}
 {viewerjumpto "Syntax" "cppmlhdfe##syntax"}{...}
 {viewerjumpto "Description" "cppmlhdfe##description"}{...}
 {viewerjumpto "Options" "cppmlhdfe##options"}{...}
@@ -35,7 +35,9 @@
 {synopt:{opt dof:adjustments(doftype)}}degrees of freedom adjustment method{p_end}
 
 {syntab:SE/Robust}
-{synopt:{opt vce(vcetype)}}variance estimator; {opt robust} or {opt cluster} {it:clustvars}{p_end}
+{synopt:{opt vce(vcetype)}}variance estimator; {opt robust}, {opt cluster} {it:clustvars}, or {opt boot:strap}[{cmd:,} {it:bootopts}]{p_end}
+{synopt:{opt fevce(bootstrap[, feopts])}}bootstrap standard errors of the saved fixed effects and of {opt d()}{p_end}
+{synopt:{opt wild:bootstrap}[{opt (wildopts)}]}score bootstrap p-values (and, with {opt ci}, confidence intervals) of the coefficients{p_end}
 
 {syntab:IRLS Convergence}
 {synopt:{opt irlstol:erance(#)}}IRLS convergence tolerance; default is {cmd:1e-8}{p_end}
@@ -51,7 +53,7 @@
 {syntab:Reporting}
 {synopt:{opt v:erbose(#)}}display detailed timing and convergence information{p_end}
 {synopt:{opt ef:orm}}report exponentiated coefficients{p_end}
-{synopt:{opt ir:r}}report incidence-rate ratios; {opt eform} with the column titled IRR{p_end}
+{synopt:{opt ir:r}}a synonym for {opt eform}, as in {cmd:ppmlhdfe}{p_end}
 {synoptline}
 {p2colreset}{...}
 
@@ -83,7 +85,8 @@ observations after missing values, singleton groups, and separation are removed.
 {opt absorb(varlist)} specifies one or more categorical variables whose effects
 are to be absorbed (partialled out). Numeric and string categories are allowed.
 Examples include {cmd:g#h}, {cmd:g#c.z}, {cmd:g##c.z}, and
-{cmd:g##c.(z t)}. Up to ten expanded FE terms are supported. Omitting
+{cmd:g##c.(z t)}, which may also be written {cmd:g##(c.z c.t)} as in
+{cmd:ppmlhdfe}. Up to ten expanded FE terms are supported. Omitting
 {cmd:absorb()} estimates a model with a constant and no absorbed effects.
 Save individual effects with {cmd:absorb(firm_fe=firm year_fe=year)} or
 {cmd:absorb(firm year, savefe)}. The latter uses names {cmd:__hdfe1__}, etc.,
@@ -91,9 +94,14 @@ replacing those variables if they exist; when the model itself uses such a
 variable, {cmd:cppmlhdfe} exits with error 198 and changes nothing.
 Slope coefficients use suffixes {cmd:Slope1}, {cmd:Slope2}, etc.
 Their contributions reconstruct the sum saved by {cmd:d(newvar)}; individual fixed-effect levels depend on normalization. Absorb suboptions also accept
-{cmd:generate}, {cmd:keepsingletons}, {cmd:tolerance()}, {cmd:iterate()},
-{cmd:dofadjustments()}, {cmd:acceleration()}, {cmd:transform()}, and
-{cmd:poolsize()}. Models without regressors are allowed.
+{cmd:generate}, {cmd:keepsingletons}, {cmd:tolerance()}, {cmd:iterate()} (or
+reghdfe's name {cmd:maxiterations()}), {cmd:dofadjustments()},
+{cmd:acceleration()}, {cmd:transform()}, {cmd:poolsize()}, {cmd:verbose(#)}
+(the fixed-effects object's verbosity: {cmd:verbose(-1)} hides the note on
+dropped singletons), and the options {cmd:prune}, {cmd:condition}, {cmd:rre()},
+{cmd:algorithm()}, {cmd:slopemethod()} and the GLM options below (by their full
+names), all as {cmd:ppmlhdfe} hands them to {cmd:reghdfe}. Models without
+regressors are allowed.
 
 {phang}
 {opt exposure(varname)} specifies an exposure variable. This adds the logarithm of {it:varname} to the linear predictor. Values must
@@ -118,6 +126,108 @@ cluster subsets (2^Q-1). {cmd:vce(unadjusted)} is accepted as an alias for
 {cmd:ppmlhdfe}, a type beginning with {cmd:ols} or {cmd:un}, or
 {cmd:conventional}, means {cmd:unadjusted}, and one beginning with {cmd:r}
 means {cmd:robust}; {cmd:vce(iid)} is an error.
+
+{phang}
+{opt vce(bootstrap} [{cmd:,} {it:bootopts}]{opt )} computes bootstrap standard
+errors (a pairs bootstrap: observations or clusters are resampled with
+replacement). {cmd:ppmlhdfe} has no such option; the replicates run inside the
+plugin on the data loaded for the fit. The results are those
+{cmd:vce(bootstrap)} posts after official estimation commands, so
+{helpb bootstrap postestimation:estat bootstrap} reports the normal,
+percentile and bias-corrected intervals, and the robust covariance of the
+fit is posted as {cmd:e(V_modelbased)}. {it:bootopts} are those of
+{helpb creghdfe}: {opt reps(#)} (default 50),
+{opt seed(#)}, {opt cluster(clustvar)}, {opt strata(varlist)},
+{opt draws(stata|fast)} (default {cmd:stata}), {opt mse}, {opt level(#)}, {opt nodots}/{opt dots(#)} and
+{opt saving()}. As with {cmd:bootstrap}, {cmd:e(p)} is the p-value of the Wald
+{cmd:e(chi2)}, {opt mse} posts {cmd:e(vcetype)} {cmd:Bstrap *} and
+{cmd:e(mse)}, and the command's own {opt level()} sets the bootstrap's.
+
+{pmore}
+Each replicate is the PPML fit on the drawn rows, each weighted by how often
+it was drawn: singletons and outcomes that are zero throughout a level are
+screened on the draws, the separation checks of {opt separation()} run again
+(rows they find leave the replicate, which is then refit), and the IRLS
+starts from the full fit's linear predictor. A replicate that does not
+converge, or whose omitted regressors differ from the full sample's, is
+missing, as with the {cmd:bootstrap} prefix. With {cmd:draws(stata)} the draws
+are {helpb bsample}'s, so the results reproduce
+{cmd:bootstrap _b, reps(}{it:#}{cmd:) seed(}{it:#}{cmd:): cppmlhdfe} {it:...} for the same seed,
+to the IRLS tolerance. Weights are allowed: {cmd:aweight}s and
+{cmd:pweight}s multiply the resampled rows; with {opt cluster()}, each drawn
+copy of an {cmd:fweight}ed row keeps its weight (and counts once for the
+singleton rule, as the fit counts it); without {opt cluster()},
+{cmd:fweight}s are resampled as the observations they stand for, as in
+{helpb creghdfe} ({cmd:draws(stata)}: the prefix's draws on the expanded
+data). Heterogeneous slopes in {opt absorb()} are re-estimated in every
+replicate (a slope that is centered within its levels in the fit is centered
+in the replicate too). Not with {opt tagsep()} or without regressors.
+
+{phang}
+{opt fevce(bootstrap} [{cmd:,} {it:feopts}]{opt )} computes bootstrap standard
+errors of the fixed effects that {opt absorb()} saves ({opt savefe} or
+{it:newvar}{cmd:=}) and of the sum of fixed effects {opt d()}, by the same
+pairs bootstrap. Each replicate recovers its fixed effects as the fit does
+(the minimum-norm coefficients of its d); a level's standard error is the
+standard deviation of its effect over the replicates in which it is
+estimable, saved on the estimation sample as {it:newvar}{cmd:_se} for a named
+effect and {cmd:__fese}{it:g}{cmd:__} for {opt savefe}'s {cmd:__hdfe}{it:g}{cmd:__}
+({cmd:__fese}{it:g}{cmd:__Slope}{it:h} for a slope, replaced, like the effects,
+on a rerun). With {opt d()}, the standard error of d is
+saved as {it:name}{cmd:_se} unless {opt dse()} names it. With
+{opt vce(bootstrap)} the coefficients and the fixed effects share one set of
+replicates; resampling options given to both must agree, and {opt level()},
+{opt mse} and {opt dots()} are those of {opt vce()} ({opt fevce()} may repeat
+them). Where the full fit estimates a level's slope but a replicate cannot,
+that replicate does not estimate the level's intercept either. Alone,
+{opt fevce()} leaves {cmd:e(V)} as {opt vce()} computes it. {it:feopts} are
+{it:bootopts} and {opt sestub(stub)} (name the
+standard errors {it:stub}{it:g}), {opt nreps} (also save each level's count of
+estimating replicates, {it:...}{cmd:_nrep} or {cmd:__fenrep}{it:g}{cmd:__}),
+{opt ci} (also save percentile bounds, {it:...}{cmd:_lb} and {it:...}{cmd:_ub}
+or {cmd:__felb}{it:g}{cmd:__} and {cmd:__feub}{it:g}{cmd:__}, as in
+{helpb creghdfe}) and {opt dse(newvar)}.
+
+{pmore}
+A level is estimable in a replicate when it was drawn and the connected set
+of levels it belongs to in the full sample, over all absorbed effects, did
+not split; a replicate whose omitted regressors differ from the full sample's
+estimates none. {cmd:e(fe_bs_table)} reports per effect the levels, those
+never and always estimable, and the minimum and median count of estimating
+replicates. With two or more absorbed effects, individual fixed effects are
+identified only up to a normalization within each connected set, so their
+standard errors depend on it; {cmd:cppmlhdfe} then displays a warning (also on
+replay) and sets {cmd:e(fe_norm_warning)} to 1. The normalization concerns
+the intercepts: a slope is identified within its level, and is estimable
+where the replicate's slope variable varies.
+
+{phang}
+{opt wildbootstrap}[{opt (wildopts)}] adds score bootstrap p-values for the
+coefficients (Kline and Santos 2012, the wild bootstrap of ML estimates as
+{browse "https://ideas.repec.org/c/boc/bocode/s458121.html":boottest}
+computes it), after the analytic fit: e(b), e(V) and the coefficient table are
+unchanged, and a second table reports, for each tested coefficient, the
+bootstrap p-value of H0: b = 0. For each tested coefficient the model is refit
+under the null on the estimation sample (the regressor leaves the model and
+enters the offset), and each replicate perturbs the efficient score
+contributions of the clusters by the bootstrap weights and studentizes them,
+recentered by each cluster's share of the observations. It needs
+{opt vce(robust)} (one weight per observation) or {opt vce(cluster}
+{it:clustvar}{opt )} with one variable. {it:wildopts} are those of
+{helpb creghdfe}'s {opt wildbootstrap()}: {opt reps(#)} (999), {opt seed(#)},
+{opt weighttype()}, {opt coefs()}, {opt ptype()}, {opt noenumerate},
+{opt level(#)}, {opt bootcluster()} and {opt nodots}, and {opt ci}: also the
+confidence interval found by inverting the bootstrap test, which refits the
+model under each trial value (typically 30 to 50 fits per coefficient), and
+whose bounds are bisected to 1e-4 standard errors. {opt nonull} is not
+available. For the same seed, the p-values are those of {cmd:boottest} after
+{cmd:poisson} with the fixed effects as dummies, without weights. With
+weights, {cmd:cppmlhdfe} weights the score contributions, so a frequency
+weight counts as the observations it stands for; {cmd:boottest} takes the
+scores unweighted, and its results with frequency weights differ from its own
+results on the expanded data, which {cmd:cppmlhdfe} reproduces. It may be
+combined with {opt fevce(bootstrap)}, not with {opt vce(bootstrap)}.
+{opt nowildtable} hides the table.
 
 {pstd}
 Inference uses normal critical values and Wald chi-squared tests, as in
@@ -202,9 +312,32 @@ observations not identified as separated. Excluded observations remain
 missing.
 
 {phang}
+{cmd:r2}, with {cmd:tagsep()} and {cmd:zvarname()}, verifies the certificate
+of separation as {cmd:ppmlhdfe} does: it regresses the certificate on the
+regressors and the absorbed effects (with {helpb creghdfe}, where
+{cmd:ppmlhdfe} uses {cmd:reghdfe}) when observations were separated; an
+R-squared of 1 confirms it. {cmd:relu_report_r2(1)} is the same.
+{cmd:target_inner_tol(#)} is {cmd:itolerance(#)}, and {cmd:relu_debug(0|1)} is
+accepted, as {cmd:ppmlhdfe}'s properties of those names.
+
+{phang}
 {cmd:acceleration()} accepts {cmd:cg} (default), {cmd:none}, {cmd:sd},
 {cmd:aitken}, {cmd:hybrid}, and {cmd:lsmr}. {cmd:transform()} accepts
-{cmd:symmetric_kaczmarz} (default), {cmd:kaczmarz}, and {cmd:cimmino}.
+{cmd:symmetric_kaczmarz} (default), {cmd:kaczmarz}, and {cmd:cimmino}. As in
+{cmd:reghdfe}, the values may be typed in any case and shortened to any leading
+part ({cmd:conj}, {cmd:stee}, {cmd:CIM}), and {cmd:off} means {cmd:none}.
+
+{phang}
+The partialling options {cmd:ppmlhdfe} passes to {cmd:reghdfe} do not change
+the estimates: {cmd:algorithm()} and {cmd:slopemethod()} are accepted and
+unused (as there), {cmd:rre(varname)} is accepted (reghdfe's partialling
+diagnostic), and {cmd:prune} (which prunes degree-1 vertices of two fixed
+effects in reghdfe, a speedup) is accepted and does not post {cmd:e(pruned)}.
+{cmd:condition} requires two absorbed effects and posts
+{cmd:e(finite_condition)} = -1, as {cmd:ppmlhdfe} does (its fit does not
+compute the number). {cmd:precondition} and {cmd:residuals()} are refused, as
+by {cmd:ppmlhdfe}; {cmd:groupvar()}, which {cmd:ppmlhdfe} accepts, is not
+supported.
 {cmd:poolsize(0)} projects all columns together; positive values limit each pool.
 LSMR accepts {cmd:btol(1e-8)} and {cmd:conlim(1e8)}.
 
@@ -230,12 +363,32 @@ be combined with {opt absorb()}. {opt cluster(varlist)} is an alias for
 {phang}
 {opt threads(#)} sets the maximum number of threads, from 1 to 256.
 The default follows the {help ctools##threads:ctools thread setting}.
-{opt verbose(#)} sets reporting detail; default 0. {opt timeit} requests timing
-output. {opt nolog} is accepted; the command does not print an iteration log.
+{opt verbose(#)} sets reporting detail; default 0. As in {cmd:ppmlhdfe},
+{cmd:verbose(-1)} hides the iteration log, notes and convergence message, and a
+positive level adds diagnostic messages. {opt timeit} requests timing output.
+The IRLS iteration log (deviance, relative change, partialling iterations and
+tolerance at each iteration) is shown by default; {opt nolog} hides it.
 
 {phang}
-{opt eform} reports exponentiated coefficients. {opt irr} gives the same values
-with the column labeled IRR. Stored coefficients remain on the log scale.
+{opt eform} reports exponentiated coefficients, in the column exp(b); {opt irr}
+is a synonym, as in {cmd:ppmlhdfe}. Stored coefficients remain on the log scale.
+
+{phang}
+The output follows {cmd:ppmlhdfe}: its notes (dropped singletons and observations
+separated by a fixed effect, the separated observations each method drops, the
+warning that {cmd:keepsingletons} keeps fixed effects that cause separation, and
+the warning for an outcome with very low values after standardizing), its
+header (observations, residual df, Wald test, deviance, log pseudolikelihood,
+pseudo R2 and the clusters per dimension), the coefficient table and the
+absorbed degrees of freedom table (not without absorbed effects).
+
+{phang}
+Typed without a variable list, {cmd:cppmlhdfe} replays the last fit with the
+header, the table and the footnote; {opt eform}, {opt irr}, {opt noheader},
+{opt notable} and the display options apply. {cmd:cppmlhdfe, version} shows
+the command's location and version and the ctools plugin;
+{cmd:cppmlhdfe, reload} tells how to reinstall ctools ({cmd:ppmlhdfe}'s reinstalls
+from its author's working copy).
 
 
 {marker prediction}{...}
@@ -243,7 +396,9 @@ with the column labeled IRR. Stored coefficients remain on the log scale.
 
 {pstd}
 {cmd:predict newvar, xb} returns Xb including the constant and the offset or
-log exposure. The default {cmd:mu} returns the fitted mean. Other supported
+log exposure. The default {cmd:mu} returns the fitted mean (with the note
+"(option mu assumed; predicted mean of depvar)"); the new variables carry
+{cmd:ppmlhdfe_p}'s labels. Other supported
 options are {cmd:eta}, {cmd:xbd}, {cmd:d}, {cmd:stdp}, {cmd:response}, {cmd:scores},
 {cmd:pearson}, {cmd:deviance}, {cmd:anscombe}, and {cmd:working}. For absorbed
 models, options other than {cmd:xb} require {opt d()} or {opt d2} at estimation.
@@ -311,7 +466,8 @@ as {cmd:[aw=2*w]} are allowed and are evaluated in double precision.
 {synopt:{cmd:e(rss)}}weighted residual sum of squares of the final working regression{p_end}
 {synopt:{cmd:e(rmse)}}its root mean squared error, on N - df_a - rank - df_a_nested{p_end}
 {synopt:{cmd:e(converged)}}1 if IRLS converged, 0 otherwise{p_end}
-{synopt:{cmd:e(N_hdfe)}}number of absorbed FE groups{p_end}
+{synopt:{cmd:e(N_hdfe)}}number of {cmd:absorb()} terms, as {cmd:reghdfe} counts them (1 without absorbed effects){p_end}
+{synopt:{cmd:e(finite_condition)}}-1 with {cmd:condition}, as {cmd:ppmlhdfe}{p_end}
 {synopt:{cmd:e(num_singletons)}}number of singleton observations dropped{p_end}
 {synopt:{cmd:e(num_separated)}}number of separated observations dropped{p_end}
 {synopt:{cmd:e(df_a)}}degrees of freedom absorbed by FEs{p_end}
@@ -321,8 +477,10 @@ as {cmd:[aw=2*w]} are allowed and are evaluated in double precision.
 {synopt:{cmd:e(cmd)}}{cmd:cppmlhdfe}{p_end}
 {synopt:{cmd:e(title)}}{cmd:HDFE PPML regression}, or {cmd:PPML regression} without absorbed effects{p_end}
 {synopt:{cmd:e(title2)}}{cmd:Absorbing} # {cmd:HDFE group(s)} (with absorbed effects){p_end}
+{synopt:{cmd:e(title3)}}{cmd:Statistics robust to heteroskedasticity} (with clustering){p_end}
+{synopt:{cmd:e(indepvars)}}the estimated regressors (factor levels as {it:#}{cmd:bn.}{it:var}, without base levels and omitted terms) and {cmd:_cons}, as {cmd:ppmlhdfe}{p_end}
 {synopt:{cmd:e(footnote)}}{cmd:_cppmlhdfe_footnote}, the program displaying the absorbed degrees of freedom{p_end}
-{synopt:{cmd:e(estat_cmd)}}{cmd:_cppmlhdfe_estat}: {cmd:estat summarize}, {cmd:estat vce}, and {cmd:estat ic} with e(df_m) + 1 degrees of freedom{p_end}
+{synopt:{cmd:e(estat_cmd)}}{cmd:_cppmlhdfe_estat}: {cmd:estat summarize}, {cmd:estat vce}, {cmd:estat ic} with e(df_m) + 1 degrees of freedom, and {cmd:estat bootstrap} after {cmd:vce(bootstrap)}{p_end}
 {synopt:{cmd:e(marginsnotok)}}predictions {cmd:margins} may not use, as {cmd:ppmlhdfe}{p_end}
 {synopt:{cmd:e(cmdline)}}command as typed{p_end}
 {synopt:{cmd:e(depvar)}}name of dependent variable{p_end}
@@ -335,11 +493,19 @@ as {cmd:[aw=2*w]} are allowed and are evaluated in double precision.
 {synopt:{cmd:e(dofmethod)}}degrees-of-freedom adjustments{p_end}
 {synopt:{cmd:e(wtype)}, {cmd:e(wexp)}}weight type and expression{p_end}
 {synopt:{cmd:e(vce)}}VCE type{p_end}
+{synopt:{cmd:e(wb_method)}}{cmd:score} (if {cmd:wildbootstrap}); {cmd:e(wb_weighttype)}, {cmd:e(wb_ptype)}, {cmd:e(wb_coefs)}, {cmd:e(wb_bootclust)} and {cmd:e(wb_rngstate)} its settings{p_end}
+{synopt:{cmd:e(fevce)}}{cmd:bootstrap} (if {cmd:fevce(bootstrap)}); {cmd:e(fe_se)}, {cmd:e(fe_nrep)}, {cmd:e(fe_lb)}, {cmd:e(fe_ub)}, {cmd:e(fe_dse)} name its variables, {cmd:e(fe_rngstate)} and {cmd:e(fe_draws)} its random-number state and draws{p_end}
 {synopt:{cmd:e(clustvar)}}cluster variable (if clustering){p_end}
 
 {p2col 5 24 28 2: Matrices}{p_end}
 {synopt:{cmd:e(b)}}coefficient vector{p_end}
 {synopt:{cmd:e(V)}}variance-covariance matrix{p_end}
+{synopt:{cmd:e(V_modelbased)}}the fit's robust covariance (if {cmd:vce(bootstrap)}){p_end}
+{synopt:{cmd:e(b_bs)}, {cmd:e(reps)}, {cmd:e(bias)}, {cmd:e(se)}, {cmd:e(z0)}}bootstrap means, complete replicates, bias, standard errors and bias-correction constants (if {cmd:vce(bootstrap)}){p_end}
+{synopt:{cmd:e(ci_normal)}, {cmd:e(ci_percentile)}, {cmd:e(ci_bc)}}bootstrap intervals (if {cmd:vce(bootstrap)}){p_end}
+{synopt:{cmd:e(boot_status)}}replicates that were complete, collinear, empty, did not converge, or failed otherwise (if {cmd:vce(bootstrap)}){p_end}
+{synopt:{cmd:e(wb_t)}, {cmd:e(wb_score)}, {cmd:e(wb_p)}, {cmd:e(wb_fail)}}analytic (Wald) z statistics, the score statistics the bootstrap studentizes (shown in the table), score bootstrap p-values, and 1 where the fit under the null failed (if {cmd:wildbootstrap}); {cmd:e(wb_ci)} and {cmd:e(wb_cistatus)} with {opt ci}; scalars {cmd:e(wb_reps)}, {cmd:e(wb_misreps)}, {cmd:e(wb_enumerated)}, {cmd:e(wb_N_clust)}, {cmd:e(wb_level)}{p_end}
+{synopt:{cmd:e(fe_bs_table)}}per effect: levels, never and always estimable, minimum and median replicates estimating a level (if {cmd:fevce(bootstrap)} with saved effects){p_end}
 {synopt:{cmd:e(dof_table)}}absorbed categories, redundant coefficients, and nesting by effect{p_end}
 
 {p2col 5 24 28 2: Functions}{p_end}

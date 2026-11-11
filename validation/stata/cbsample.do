@@ -102,16 +102,16 @@ cbsample, weight(bsweight)
 if _N == 100 test_pass "weight option keeps all obs"
 else test_fail "weight option keeps all obs" "N=`=_N'"
 
-* Check weight variable was populated (not all missing)
-count if bsweight != .
-if r(N) > 0 test_pass "weight variable populated"
-else test_fail "weight variable populated" "all values missing"
+* Bootstrap multiplicities are nonnegative integers for every input row.
+count if missing(bsweight) | bsweight < 0 | bsweight != floor(bsweight)
+if r(N) == 0 test_pass "weight variable contains nonnegative integer counts"
+else test_fail "weight variable populated" "`r(N)' invalid weights"
 
-* Check total weight sums to ~100
+* Randomness changes which rows are selected, not the number of draws.
 summarize bsweight, meanonly
 local total_weight = r(sum)
-if abs(`total_weight' - 100) < 5 test_pass "total weight ~100 (got `total_weight')"
-else test_fail "total weight ~100" "got `total_weight'"
+if `total_weight' == 100 test_pass "total weight exactly 100"
+else test_fail "total weight exactly 100" "got `total_weight'"
 
 * SECTION 4: Stratified bootstrap
 print_section "Stratified Bootstrap"
@@ -124,16 +124,17 @@ gen bsweight = .
 set seed 12345
 cbsample, strata(stratum) weight(bsweight)
 
-* Check each stratum has some weight
+assert !missing(bsweight) & bsweight >= 0 & bsweight == floor(bsweight)
+* Every stratum draws exactly its original number of observations.
 local all_ok = 1
 forvalues s = 0/9 {
     summarize bsweight if stratum == `s', meanonly
-    if r(sum) == 0 {
+    if r(N) != 100 | r(sum) != 100 {
         local all_ok = 0
     }
 }
-if `all_ok' test_pass "stratified bootstrap has weight in all strata"
-else test_fail "stratified bootstrap" "some strata have zero weight"
+if `all_ok' test_pass "stratified bootstrap has exactly 100 draws in every stratum"
+else test_fail "stratified bootstrap" "incorrect per-stratum draw count"
 
 * SECTION 5: Cluster bootstrap
 print_section "Cluster Bootstrap"
@@ -146,12 +147,13 @@ gen bsweight = .
 set seed 12345
 cbsample, cluster(cluster_id) weight(bsweight)
 
+assert !missing(bsweight) & bsweight >= 0 & bsweight == floor(bsweight)
 * Within each cluster, all obs should have same weight
 local all_ok = 1
 levelsof cluster_id, local(clusters)
 foreach cl of local clusters {
     summarize bsweight if cluster_id == `cl'
-    if r(sd) > 0.001 & r(sd) != . {
+    if r(N) != 10 | r(min) != r(max) {
         local all_ok = 0
     }
 }
@@ -198,8 +200,8 @@ set seed 12345
 cbsample, weight(bsweight)
 summarize bsweight, meanonly
 local total = r(sum)
-* Small N means more variance; use 2-unit tolerance (~20% for N=10)
-if abs(`total' - 10) < 2 test_pass "small dataset bootstrap (total weight ~10)"
+assert !missing(bsweight) & bsweight >= 0 & bsweight == floor(bsweight)
+if `total' == 10 test_pass "small dataset bootstrap (total weight exactly 10)"
 else test_fail "small dataset bootstrap" "total weight=`total'"
 
 * Large n (positional argument, like bsample)
@@ -285,18 +287,19 @@ set seed 12345
 
 cbsample, strata(strata1 strata2) weight(bsweight)
 
-* Check each stratum combination has weight
+assert !missing(bsweight) & bsweight >= 0 & bsweight == floor(bsweight)
+* Each of the 20 combinations has exactly 50 observations and draws.
 local all_ok = 1
 forvalues s1 = 0/4 {
     forvalues s2 = 0/3 {
         summarize bsweight if strata1 == `s1' & strata2 == `s2', meanonly
-        if r(sum) == 0 | r(sum) == . {
+        if r(N) != 50 | r(sum) != 50 {
             local all_ok = 0
         }
     }
 }
-if `all_ok' test_pass "multiple strata variables: all combinations sampled"
-else test_fail "multiple strata variables" "some combinations have zero weight"
+if `all_ok' test_pass "multiple strata variables: exactly 50 draws per combination"
+else test_fail "multiple strata variables" "incorrect per-combination draw count"
 
 * Multiple cluster variables (treated as compound cluster ID)
 clear
@@ -309,12 +312,13 @@ set seed 12345
 
 cbsample, cluster(cluster1 cluster2) weight(bsweight)
 
+assert !missing(bsweight) & bsweight >= 0 & bsweight == floor(bsweight)
 * Within each compound cluster, weights should be uniform
 local all_ok = 1
 forvalues c1 = 1/50 {
     forvalues c2 = 0/1 {
         summarize bsweight if cluster1 == `c1' & cluster2 == `c2'
-        if r(sd) > 0.001 & r(sd) != . {
+        if r(N) != 10 | r(min) != r(max) {
             local all_ok = 0
         }
     }
@@ -337,21 +341,22 @@ set seed 12345
 
 cbsample, strata(stratum) cluster(cluster_id) weight(bsweight)
 
+assert !missing(bsweight) & bsweight >= 0 & bsweight == floor(bsweight)
 * Within each cluster, weights should be uniform
 local cluster_ok = 1
 levelsof cluster_id, local(clusters)
 foreach cl of local clusters {
     summarize bsweight if cluster_id == `cl'
-    if r(sd) > 0.001 & r(sd) != . {
+    if r(N) != 20 | r(min) != r(max) {
         local cluster_ok = 0
     }
 }
 
-* Each stratum should have some weight
+* Equal-size clusters imply exactly 25*20 weighted rows in each stratum.
 local strata_ok = 1
 forvalues s = 0/3 {
     summarize bsweight if stratum == `s', meanonly
-    if r(sum) == 0 | r(sum) == . {
+    if r(N) != 500 | r(sum) != 500 {
         local strata_ok = 0
     }
 }
@@ -370,13 +375,12 @@ local N_before = _N
 
 cbsample
 
-* Without weight(), data should be expanded/contracted via expand
-* Total obs should be approximately equal to N_before (may differ due to sampling)
+* Without clusters, the draw count equals the original number of rows.
 local N_after = _N
-if `N_after' > 0 & `N_after' <= 2 * `N_before' test_pass "without weight(): data modified (N went from `N_before' to `N_after')"
+if `N_after' == `N_before' test_pass "without weight(): exact bootstrap draw count"
 else test_fail "without weight(): data modified" "N=`N_after' from `N_before' (unexpected size)"
 
-* With explicit n, expanded data should sum to approximately n
+* With explicit n, expanded data must contain exactly n observations.
 clear
 set obs 100
 gen id = _n
@@ -389,7 +393,7 @@ test_pass "explicit count expands to exactly 50 observations"
 print_section "Strata Independence Verification"
 
 * Verify that strata are truly sampled independently
-* Each stratum should have total weight approximately equal to its size
+* Each stratum must have total weight exactly equal to its size.
 clear
 set obs 1000
 gen stratum = cond(_n <= 200, 0, cond(_n <= 600, 1, 2))
@@ -400,23 +404,24 @@ set seed 12345
 
 cbsample, strata(stratum) weight(bsweight)
 
-* Total weight per stratum should be close to stratum size
+assert !missing(bsweight) & bsweight >= 0 & bsweight == floor(bsweight)
+* These are fixed draw counts, not estimated population proportions.
 local all_ok = 1
 summarize bsweight if stratum == 0, meanonly
-if abs(r(sum) - 200) > 20 {
+if r(N) != 200 | r(sum) != 200 {
     local all_ok = 0
 }
 summarize bsweight if stratum == 1, meanonly
-if abs(r(sum) - 400) > 30 {
+if r(N) != 400 | r(sum) != 400 {
     local all_ok = 0
 }
 summarize bsweight if stratum == 2, meanonly
-if abs(r(sum) - 400) > 30 {
+if r(N) != 400 | r(sum) != 400 {
     local all_ok = 0
 }
 
-if `all_ok' test_pass "strata independence: each stratum weighted ~proportionally"
-else test_fail "strata independence" "stratum weights not proportional to size"
+if `all_ok' test_pass "strata independence: exact draw count in each stratum"
+else test_fail "strata independence" "incorrect per-stratum draw count"
 
 * SECTION 13: Cluster sampling verification
 print_section "Cluster Sampling Verification"
@@ -431,13 +436,14 @@ set seed 12345
 
 cbsample, cluster(cluster_id) weight(bsweight)
 
+assert !missing(bsweight) & bsweight >= 0 & bsweight == floor(bsweight)
 * For each cluster, either all have same weight or all have zero
 * (With bootstrap, a cluster may be sampled multiple times, so weight can vary
 *  but within a cluster, all obs should have the same weight)
 local all_ok = 1
 forvalues cl = 1/100 {
     summarize bsweight if cluster_id == `cl'
-    if r(sd) > 0.001 & r(sd) != . {
+    if r(N) != 5 | r(min) != r(max) {
         local all_ok = 0
     }
 }
@@ -813,6 +819,117 @@ foreach call in "sz, strata(s)" "sz, strata(s) weight(w)" "sz, strata(s) cluster
     else test_fail "P3-13 per-stratum sizes: `call'" "bsample r(`rc_bsample') [`draws_bsample'], cbsample r(`rc_cbsample') [`draws_cbsample']"
 }
 
+* _ct_output runs a command and returns its output (r(text), lines joined
+* by |) and return code (r(rc)). _ct_same_output runs a native and a ctools
+* command on copies of the data in memory and passes when the output, return
+* code, variable names and types, and (unless "nodata") values agree.
+capture program drop _ct_output
+program define _ct_output, rclass
+    tempfile f
+    tempname fh
+    capture log close _ctout
+    quietly log using `"`f'"', text replace name(_ctout)
+    capture noisily `0'
+    local rc = _rc
+    quietly log close _ctout
+    local text
+    file open `fh' using `"`f'"', read text
+    file read `fh' line
+    while !r(eof) {
+        if `"`macval(line)'"' != "" & substr(`"`macval(line)'"', 1, 5) != "r; t=" {
+            local text `"`macval(text)'`macval(line)'|"'
+        }
+        file read `fh' line
+    }
+    file close `fh'
+    return local text `"`macval(text)'"'
+    return scalar rc = `rc'
+end
+capture program drop _ct_same_output
+program define _ct_same_output
+    args name native ctools nodata
+    tempfile want
+    preserve
+    _ct_output `native'
+    local want_text `"`r(text)'"'
+    local want_rc = r(rc)
+    local want_vars
+    local want_types
+    forvalues j = 1/`c(k)' {
+        mata: st_local("v", st_varname(`j'))
+        local want_vars `want_vars' `v'
+        local want_types `want_types' `: type `v''
+    }
+    capture quietly save `"`want'"', emptyok
+    restore, preserve
+    _ct_output `ctools'
+    local got_text `"`r(text)'"'
+    local got_rc = r(rc)
+    local got_vars
+    local got_types
+    forvalues j = 1/`c(k)' {
+        mata: st_local("v", st_varname(`j'))
+        local got_vars `got_vars' `v'
+        local got_types `got_types' `: type `v''
+    }
+    local same_data = 1
+    if "`nodata'" == "" & "`got_vars'" != "" {
+        capture cf _all using `"`want'"'
+        local same_data = !_rc
+    }
+    restore
+    if "`nodata'" != "" {
+        local want_vars
+        local got_vars
+        local want_types
+        local got_types
+    }
+    if `"`macval(want_text)'"' == `"`macval(got_text)'"' & `want_rc' == `got_rc' & ///
+        "`want_vars'" == "`got_vars'" & "`want_types'" == "`got_types'" & `same_data' {
+        test_pass "`name'"
+    }
+    else {
+        noisily di as error `"`name': ctools [`macval(got_text)'] rc `got_rc' vars `got_vars' (`got_types')"'
+        noisily di as error `"`name': native [`macval(want_text)'] rc `want_rc' vars `want_vars' (`want_types') same data `same_data'"'
+        test_fail "`name'" "output, return code, variables or data differ from the native command"
+    }
+end
+* BSAMP-02: under version 7 or earlier, bsample's old algorithm (bsample_7)
+* draws the same resample, with its messages and return codes
+clear
+set obs 30
+gen long id = _n
+gen byte c = mod(_n, 6)
+gen byte s = mod(_n, 2)
+foreach pair in `""' `"20"' `", cluster(c)"' `"4, cluster(c)"' `"4, cluster(c) idcluster(nc)"' ///
+    `", cluster(c) idcluster(id)"' `"40"' `"0"' `"7, cluster(c)"' `", idcluster(nc)"' `"2.5"' ///
+    `", strata(s)"' `"10 if s"' `", weight(id)"' `"20, threads(2) verbose"' {
+    tempfile want
+    local npair : subinstr local pair "threads(2) verbose" ""
+    preserve
+    set seed 23
+    _ct_output version 7: bsample `npair'
+    local want_text `"`r(text)'"'
+    local want_rc = r(rc)
+    quietly save `want'
+    restore, preserve
+    set seed 23
+    _ct_output version 7: cbsample `pair'
+    local got_text `"`r(text)'"'
+    local got_rc = r(rc)
+    capture cf _all using `want'
+    local same = !_rc
+    restore
+    if `same' & `got_rc' == `want_rc' & `"`got_text'"' == `"`want_text'"' {
+        test_pass "BSAMP-02 version 7 resample: `pair'"
+    }
+    else test_fail "BSAMP-02 version 7 resample: `pair'" "rc `got_rc' vs `want_rc', same data `same'"
+}
+* Version 8 and later use the ctools draw; version 7 does not leak into it
+set seed 23
+version 8: cbsample 10
+if _N == 10 test_pass "BSAMP-02 version 8 uses cbsample"
+else test_fail "BSAMP-02 version 8 uses cbsample" "N=`=_N'"
 * End of cbsample validation
 noi print_summary "cbsample"
 }

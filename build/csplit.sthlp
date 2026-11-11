@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.4 20261103}{...}
+{* *! version 1.2.6 20261111}{...}
 {viewerjumpto "Syntax" "csplit##syntax"}{...}
 {viewerjumpto "Description" "csplit##description"}{...}
 {viewerjumpto "Options" "csplit##options"}{...}
@@ -62,6 +62,10 @@ turns unconvertible values into missing; {opt float} requests float storage;
 percentage values. Without force, a field containing nonnumeric values can
 remain a string, as with Stata's {cmd:destring}.
 
+{pstd}As {cmd:split} does, {cmd:csplit} lists the new variables under
+"variables created as string:" (or "born as string:" with {opt destring}),
+followed by {cmd:destring}'s report for each variable.
+
 {pstd}{opt threads(#)} sets the maximum number of threads, from 1 to 256.
 Omitting it or specifying zero uses the {help ctools##threads:ctools setting}.
 
@@ -73,7 +77,7 @@ determining output lengths, and writing the new variables.
 {title:Stored results}
 
 {pstd}For fixed-width input, the macros {cmd:r(varlist)} and {cmd:r(nvars)} contain the generated variable
-names and their count. Scalar {cmd:r(k_new)} also contains the count. For {cmd:strL} input, results follow {help split}.
+names (followed by a space, as in {cmd:split}) and their count. Scalar {cmd:r(k_new)} also contains the count. For {cmd:strL} input, results follow {help split}.
 
 {marker examples}{...}
 

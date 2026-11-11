@@ -1228,18 +1228,23 @@ static void xlsx_store_cell(const XLSXContext *ctx, xlsx_scan_local *loc, int ro
  * truncated or memory runs out. */
 static const char *xlsx_scan_cell(const XLSXContext *ctx, xlsx_scan_local *loc,
                                   const char *attrs, const char *gt, const char *end,
-                                  int row, int *prev_col, bool skip)
+                                  int row, bool implicit_row, int *prev_col, bool skip)
 {
     static const char *const names[] = {"r", "t", "s"};
+    const XLSXCellRange *range = &ctx->cell_range;
     xlsx_span a[3];
     xlsx_attrs(attrs, gt, names, a, 3);
     int col, ref_row;
-    if (a[0].value && xlsx_cell_ref(a[0].value, a[0].len, &col, &ref_row)) row = ref_row;
+    if (a[0].value && xlsx_cell_ref(a[0].value, a[0].len, &col, &ref_row)) {
+        /* In a row without r=, numbered by position, native import excel
+         * keeps the cell in that row whatever row its own r= names (only its
+         * column counts); the row's number also decides cellrange(). */
+        if (!implicit_row) row = ref_row;
+    }
     else col = *prev_col + 1;  /* no usable r=: the cell follows its predecessor */
     *prev_col = col;
     bool valueless = gt[-1] == '/';  /* <c/> holds no value */
 
-    const XLSXCellRange *range = &ctx->cell_range;
     skip = skip || row < 1 || row > XLSX_MAX_ROWS || col >= XLSX_MAX_COLUMNS ||
            (range->start_col >= 0 && col < range->start_col) ||
            (range->end_col >= 0 && col > range->end_col);
@@ -1341,6 +1346,24 @@ cell_value:
 
     const char *t = a[1].value;
     size_t tn = t ? a[1].len : 0;
+    /* <v> as an XML reader gives it: CDATA and entities decoded, and for
+     * booleans, shared-string indices and numbers without the whitespace
+     * around it (native reads <v> 1 </v> as TRUE, <v><![CDATA[5]]></v> as
+     * 5). Formula text (t="str") keeps its spaces and is decoded below. */
+    if (v && vlen && !(tn == 3 && !memcmp(t, "str", 3))) {
+        if (memchr(v, '<', vlen) || memchr(v, '&', vlen)) {
+            const char *text = xlsx_arena_text(loc, v, vlen);
+            if (!text) {
+                loc->failed = true;
+                return NULL;
+            }
+            v = text;
+            vlen = strlen(text);
+        }
+        while (vlen && (*v == ' ' || *v == '\t' || *v == '\r' || *v == '\n')) { v++; vlen--; }
+        while (vlen && (v[vlen - 1] == ' ' || v[vlen - 1] == '\t' ||
+                        v[vlen - 1] == '\r' || v[vlen - 1] == '\n')) vlen--;
+    }
     /* A cell without s= takes cellXfs[0], as in native. */
     int style = a[2].value ? xlsx_index(a[2].value, a[2].len) : 0;
     uint8_t format = style >= 0 && style < ctx->num_styles ? ctx->excel_formats[style] : 0;
@@ -1402,7 +1425,7 @@ static void xlsx_scan_rows(const XLSXContext *ctx, xlsx_scan_local *loc,
     static const char *const names[] = {"r"};
     const XLSXCellRange *range = &ctx->cell_range;
     int row = 0, prev_col = -1;
-    bool numbered = first, skip = false;
+    bool numbered = first, skip = false, implicit_row = false;
     while (p < end) {
         const char *lt = (const char *)memchr(p, '<', (size_t)(end - p));
         if (!lt) return;
@@ -1416,13 +1439,14 @@ static void xlsx_scan_rows(const XLSXContext *ctx, xlsx_scan_local *loc,
         if (closing) {
             if (XLSX_TAG_IS(name, len, "sheetData")) return;
         } else if (XLSX_TAG_IS(name, len, "c")) {
-            p = xlsx_scan_cell(ctx, loc, attrs, gt, end, row, &prev_col, skip);
+            p = xlsx_scan_cell(ctx, loc, attrs, gt, end, row, implicit_row, &prev_col, skip);
             if (!p) return;
         } else if (XLSX_TAG_IS(name, len, "row")) {
             xlsx_span r;
             xlsx_attrs(attrs, gt, names, &r, 1);
             int number = r.value ? xlsx_index(r.value, r.len) : -1;
-            if (number >= 1 && number <= XLSX_MAX_ROWS) {
+            implicit_row = !(number >= 1 && number <= XLSX_MAX_ROWS);
+            if (!implicit_row) {
                 row = number;
                 numbered = true;
             } else if (numbered) {

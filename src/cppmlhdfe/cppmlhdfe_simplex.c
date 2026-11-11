@@ -69,6 +69,7 @@ int ppml_simplex_tableau(double *X, int n, int k, int maxiter, int *separated)
             X[(size_t)i * rank + j] = A[(size_t)basic[i] * k + j];
     for (int iter = 0; iter < maxiter; iter++)
     {
+        if (ctools_cancel_requested()) { rc = -1; goto done; }
         int enter = -1;
         double gain = 0;
         for (int j = 0; j < rank; j++)
@@ -137,7 +138,8 @@ done:
 }
 
 int ppml_simplex(const PPML_Options *options, HDFE_State *S, const double *y, const double *X,
-                 const double *w_user, int weight_type, int N, int K, int *separated)
+                 const double *w_user, int weight_type, const double *w_pos, int N, int K,
+                 int *separated)
 {
     double *data = malloc((size_t)N * K * sizeof(double));
     double *full = malloc((size_t)N * K * sizeof(double));
@@ -171,7 +173,8 @@ int ppml_simplex(const PPML_Options *options, HDFE_State *S, const double *y, co
         goto done;
     }
     for (int i = 0; i < N; i++)
-        S->weights[i] = y[i] > 0 ? (weight_type == 2 && w_user ? w_user[i] : 1) : 0;
+        S->weights[i] = y[i] > 0 ? (w_pos ? w_pos[i] : (weight_type == 2 && w_user ? w_user[i] : 1))
+                                 : 0;
     ppml_update_fe_weights(S, S->weights, N);
     memcpy(data, X, (size_t)N * K * sizeof(double));
     /* The positive-sample null space must be resolved more accurately than

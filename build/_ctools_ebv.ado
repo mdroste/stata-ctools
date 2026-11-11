@@ -1,4 +1,4 @@
-*! version 1.2.4 20261103 github.com/mdroste/stata-ctools
+*! version 1.2.6 20261111 github.com/mdroste/stata-ctools
 *! ctools: e(b) and e(V) from a plugin's compact results
 * _ctools_ebv <b> <V>, names() vmatrix() [base() stub() kkeep() bmatrix()
 *     collinear() cons() kept() colnames()]
@@ -48,7 +48,9 @@ capture mata: mata drop _ctools_ebv_omit()
 mata:
 /* The omitted form of a term: o.x, and for an interaction the o operator on
  * every part (co.x#co.x, 1o.g#co.x), which is how Stata names it; an o.
- * prefix on an interaction is not recognized as omitted. */
+ * prefix on an interaction is not recognized as omitted. A base part keeps
+ * its name (3o.race#0b.union, as regress names it): Stata has no "bo"
+ * operator, and matrix colnames rejects 0bo.union. */
 string scalar _ctools_ebv_omit(string scalar name)
 {
     string rowvector parts
@@ -58,6 +60,7 @@ string scalar _ctools_ebv_omit(string scalar name)
     parts = tokens(subinstr(name, "#", " "))
     for (i = 1; i <= cols(parts); i++) {
         dot = strpos(parts[i], ".")
+        if (dot & (strpos(substr(parts[i], 1, dot - 1), "b") | strpos(substr(parts[i], 1, dot - 1), "o"))) continue
         if (dot) parts[i] = substr(parts[i], 1, dot - 1) + "o" + substr(parts[i], dot, .)
         else parts[i] = "o." + parts[i]
     }

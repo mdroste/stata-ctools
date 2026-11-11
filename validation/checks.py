@@ -395,6 +395,19 @@ seeds_SEED = re.compile(
     r"^\s*" + seeds_PREFIX + r"(?:set\s+(?:seed|rngstate)\b|(?:drawnorm|bootstrap|permute"
     r"|simulate|corr2data)\b.*\bseed\(\s*[^)\s])|\brseed\(\s*[^)\s]"
 )
+# The bootstrap options of the ctools estimators draw from Stata's generator
+# (docs/development/BOOTSTRAP_PLAN.md, 5.8); a seed() inside them seeds it.
+# Quoted text is ignored, so messages that name the options do not count.
+seeds_BOOT_COMMAND = r"^\s*" + seeds_PREFIX + r"(?:creghdfe|cppmlhdfe|civreghdfe)\b.*"
+seeds_BOOT_OPTION = r"(?:\b(?:vce|fevce)\(\s*boot|\bwildbootstrap\b)"
+seeds_BOOT = re.compile(seeds_BOOT_COMMAND + seeds_BOOT_OPTION)
+seeds_BOOT_SEED = re.compile(seeds_BOOT_COMMAND + seeds_BOOT_OPTION + r".*\br?seed\(\s*[^)\s]")
+
+
+def seeds_unquoted(statement):
+    return re.sub(r'"[^"]*"', '""', statement)
+
+
 seeds_CALL = re.compile(r"^\s*" + seeds_PREFIX + r"([A-Za-z_]\w*)")
 seeds_DO = re.compile(
     r"^\s*" + seeds_PREFIX + r"(?:do|run)\s+\"?(validation/[\w./]+\.do)\"?(?:\s+\"?(\w+))?"
@@ -486,9 +499,14 @@ def seeds_findings(root):
         for number, statement in statements:
             if isinstance(statement, tuple):
                 continue
-            if seeds_SEED.search(statement):
+            unquoted = seeds_unquoted(statement)
+            if seeds_SEED.search(statement) or seeds_BOOT_SEED.search(unquoted):
                 return ("seed", number, statement)
-            if seeds_FUNCTION.search(statement) or seeds_COMMAND.match(statement):
+            if (
+                seeds_FUNCTION.search(statement)
+                or seeds_COMMAND.match(statement)
+                or seeds_BOOT.search(unquoted)
+            ):
                 return ("draw", number, statement)
             called = seeds_DO.match(statement)
             if called:
@@ -557,6 +575,8 @@ def seeds_selftest():
             "subcase": "do validation/stata/other.do seeded\ngen y = runiform()",
             "program_after_seed": "set seed 6\nprogram local_draw\n    gen x = runiform()\nend",
             "strings": 'di "runiform values"\nforeach sample in a b {\n    di "`sample\'"\n}',
+            "boot_seeded": "creghdfe y x, absorb(g) vce(bootstrap, reps(5) seed(3))\ngen x = rnormal()",
+            "boot_message": 'di "vce(bootstrap) is new"\nset seed 1\ngen x = runiform()',
         }
         dirty = {
             "unseeded": "gen x = runiform()",
@@ -568,6 +588,8 @@ def seeds_selftest():
             "program_before_seed": "program p_draw\n    bsample\nend\nset seed 1\np_`which'",
             "unseeded_subcase": "do validation/stata/other.do unseeded",
             "plugin_declaration": 'program p_io, plugin using("x.plugin")\ngen x = runiform()',
+            "boot_unseeded": "creghdfe y x, absorb(g) vce(bootstrap, reps(5))\nset seed 1",
+            "wild_unseeded": "creghdfe y x, absorb(g) vce(cluster g) wildbootstrap(reps(99))",
         }
         blocks = {**clean, **dirty}
         (root / "validation/stata/other.do").write_text(
@@ -642,6 +664,7 @@ def run(out):
         ("build.dependencies", "validation.check_build", "build_dependency_metadata"),
         ("build.fail_fast", "validation.check_build", "build_fail_fast_builds"),
         ("build.incremental", "validation.check_build", "build_incremental_builds"),
+        ("build.depfile_paths", "validation.check_build", "build_depfile_paths"),
         ("release.archive", "validation.check_build", "archive_main"),
         ("release.workflow", "validation.checks", "release_workflow_contract"),
         ("release.macos_signing", "validation.check_macos_signing", "main"),

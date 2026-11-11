@@ -232,8 +232,10 @@ print_section "discrete Option"
 
 * Create discrete x variable
 sysuse auto, clear
+count if !missing(price, rep78)
+local expected_N = r(N)
 cbinscatter price rep78, discrete nograph
-if e(N) > 0 test_pass "discrete with rep78 (5 values)"
+if e(N) == `expected_N' test_pass "discrete with rep78 (5 values)"
 else test_fail "discrete" "returned no observations"
 
 * Discrete with few unique values
@@ -385,7 +387,7 @@ else test_fail "controls(weight length)" "e(controls)=`e(controls)'"
 * Many controls
 sysuse auto, clear
 cbinscatter price mpg, controls(weight length turn displacement) nograph
-if e(N) > 0 test_pass "controls (4 variables)"
+if e(N) == _N test_pass "controls (4 variables)"
 else test_fail "controls (4 variables)" "returned no observations"
 
 * Compare bin X/Y values with controls against binscatter
@@ -1044,7 +1046,7 @@ print_section "linetype Option"
 
 sysuse auto, clear
 cbinscatter price mpg, linetype(none) nograph
-if e(N) > 0 test_pass "linetype(none)"
+if e(N) == _N test_pass "linetype(none)"
 else test_fail "linetype(none)" "returned no observations"
 
 sysuse auto, clear
@@ -1084,7 +1086,7 @@ gen fw = ceil(mpg/5)
 capture cbinscatter price mpg [fw=fw], nograph
 if _rc == 0 {
     capture confirm matrix e(bindata)
-    if _rc == 0 & e(N) > 0 test_pass "fweight (N=`=e(N)')"
+    if _rc == 0 & e(N) > 0 & e(N) < . test_pass "fweight (N=`=e(N)')"
     else test_fail "fweight" "bindata missing or N=`=e(N)'"
 }
 else {
@@ -1176,6 +1178,8 @@ print_section "savedata Option"
 
 sysuse auto, clear
 capture erase _cbins_test.dta
+capture erase _cbins_test.csv
+capture erase _cbins_test.do
 cbinscatter price mpg, savedata(_cbins_test) nograph
 
 capture confirm file "_cbins_test.dta"
@@ -1192,6 +1196,14 @@ if _rc == 0 {
     if `nobs' > 0 test_pass "savedata file has data"
     else test_fail "savedata file" "empty"
     cap erase _cbins_test.dta
+    * binscatter's .csv and .do, written besides the .dta
+    capture confirm file "_cbins_test.csv"
+    local csv_rc = _rc
+    capture confirm file "_cbins_test.do"
+    if !`csv_rc' & !_rc test_pass "savedata also writes binscatter's .csv and .do"
+    else test_fail "savedata .csv and .do" "not written"
+    cap erase _cbins_test.csv
+    cap erase _cbins_test.do
 }
 else {
     test_fail "savedata" "file not created"
@@ -1259,7 +1271,7 @@ replace x = . if _n <= 50
 gen y = 2*x + rnormal()
 
 cbinscatter y x, nograph
-if e(N) == 450 & e(N_dropped) >= 50 test_pass "missing in x: handled correctly"
+if e(N) == 450 & e(N_dropped) == 50 test_pass "missing in x: handled correctly"
 else test_fail "missing in x" "N=`=e(N)' N_dropped=`=e(N_dropped)'"
 
 * Missing in controls
@@ -1320,25 +1332,25 @@ print_section "Panel Data (nlswork)"
 ctools_fixture nlswork, clear
 keep in 1/10000
 cbinscatter ln_wage age, nograph
-if e(N) > 0 test_pass "nlswork basic"
+if e(N) > 0 & e(N) < . test_pass "nlswork basic"
 else test_fail "nlswork basic" "N=`=e(N)'"
 
 ctools_fixture nlswork, clear
 keep in 1/10000
 cbinscatter ln_wage age, controls(tenure) nograph
-if e(N) > 0 test_pass "nlswork with controls"
+if e(N) > 0 & e(N) < . test_pass "nlswork with controls"
 else test_fail "nlswork with controls" "N=`=e(N)'"
 
 ctools_fixture nlswork, clear
 keep in 1/10000
 cbinscatter ln_wage age, absorb(idcode) nograph
-if e(N) > 0 test_pass "nlswork with individual FE"
+if e(N) > 0 & e(N) < . test_pass "nlswork with individual FE"
 else test_fail "nlswork with individual FE" "N=`=e(N)'"
 
 ctools_fixture nlswork, clear
 keep in 1/10000
 cbinscatter ln_wage age, absorb(idcode year) nograph
-if e(N) > 0 test_pass "nlswork with two-way FE"
+if e(N) > 0 & e(N) < . test_pass "nlswork with two-way FE"
 else test_fail "nlswork with two-way FE" "N=`=e(N)'"
 
 * SECTION 17: Stress tests - method(binsreg)
@@ -1696,6 +1708,7 @@ note: dataset note
 char _dta[rb_char] dataset characteristic
 sort foreign make
 tempfile rb_copy rb_bins
+tempname saved_bins
 save `rb_copy'
 _ctools_rb_state
 local before `"`r(state)'"'
@@ -1707,6 +1720,7 @@ if c(stata_version) >= 16 {
 foreach target in "`rb_bins'" "`c(tmpdir)'/rb_no_such_dir/bins.dta" {
     capture cbinscatter price mpg, nquantiles(5) nograph savedata("`target'")
     local rc = _rc
+    if "`target'" == "`rb_bins'" & !`rc' matrix `saved_bins' = e(bindata)
     _ctools_rb_state
     local after `"`r(state)'"'
     local frames_now ""
@@ -1722,13 +1736,26 @@ foreach target in "`rb_bins'" "`c(tmpdir)'/rb_no_such_dir/bins.dta" {
     else test_fail "`name'" "rc=`rc', state or frames changed"
 }
 use `rb_bins', clear
-if _N > 0 & c(k) == 5 test_pass "[savedata] bins saved"
-else test_fail "[savedata] bins saved" "N=`=_N' k=`=c(k)'"
+capture {
+    if _N != 5 | c(k) != 5 | rowsof(`saved_bins') != 5 error 9
+    local j = 0
+    foreach v in by_group bin_id x_mean y_mean n_obs {
+        local ++j
+        * svmat stores float columns by default: require exactly the values
+        * representable in the file's declared storage type, not just rows.
+        local type : type `v'
+        if "`type'" == "float" assert `v' == float(`saved_bins'[_n, `j'])
+        else assert `v' == `saved_bins'[_n, `j']
+    }
+}
+if !_rc test_pass "[savedata] exact bin coordinates and counts saved"
+else test_fail "[savedata] bins saved" "dimensions or values differ from e(bindata)"
 
 print_section "binscatter Options, Titles, Discrete Capacity, reportreg, qfit"
 if `binscatter_installed' {
-    * binscatter options cbinscatter does not implement are refused (with
-    * and without a graph), never ignored, and change nothing
+    * binscatter's own options are accepted with and without a graph and
+    * leave the data unchanged (s2_bin compares their results); with
+    * method(binsreg), to which they do not apply, they are refused
     clear
     set seed 4101
     quietly set obs 400
@@ -1737,21 +1764,32 @@ if `binscatter_installed' {
     gen double y = 1 + x + z + rnormal()
     gen q = ceil(_n/20)
     gen t = _n
+    gen double u = runiform()
     tempfile before
     quietly save `before'
     foreach o in "medians" "noaddmean controls(z)" "rd(0)" "xq(q)" "mcolors(red)" ///
-        "lcolors(red)" "savegraph(_cb_unused.gph)" "randvar(x)" "randcut(.5)" "randn(10)" {
+        "lcolors(red)" "randvar(u)" "randcut(.5)" "randn(100)" {
         foreach g in nograph nodraw {
             capture cbinscatter y x, `o' `g'
             local rc = _rc
             capture cf _all using `before'
-            if `rc' == 198 & _rc == 0 test_pass "binscatter option `o' refused (`g')"
-            else test_fail "binscatter option `o' refused (`g')" "rc=`rc'"
+            if `rc' == 0 & _rc == 0 test_pass "binscatter option `o' accepted (`g')"
+            else test_fail "binscatter option `o' accepted (`g')" "rc=`rc'"
+        }
+        if !inlist("`o'", "mcolors(red)", "lcolors(red)") {
+            capture cbinscatter y x, `o' method(binsreg) nograph
+            local rc = _rc
+            capture cf _all using `before'
+            if `rc' == 198 & _rc == 0 test_pass "binscatter option `o' refused with method(binsreg)"
+            else test_fail "binscatter option `o' refused with method(binsreg)" "rc=`rc'"
         }
     }
+    capture erase _cb_unused.gph
+    capture cbinscatter y x, savegraph(_cb_unused.gph) nograph
+    local rc = _rc
     capture confirm file _cb_unused.gph
-    if _rc test_pass "savegraph() writes nothing"
-    else test_fail "savegraph() writes nothing" "file written"
+    if `rc' == 198 & _rc test_pass "savegraph() with nograph refused, writes nothing"
+    else test_fail "savegraph() with nograph refused, writes nothing" "rc=`rc'"
     * Typos are errors without a graph too, as twoway makes them in binscatter
     foreach o in "bogusoption" "bogus(1)" "xlabel(1, bogus)" {
         test_error_match, stata_cmd(binscatter y x, `o' nodraw) ///

@@ -1,6 +1,27 @@
-*! version 1.2.4 20261103 github.com/mdroste/stata-ctools
+*! version 1.2.6 20261111 github.com/mdroste/stata-ctools
 
 program define csort, rclass
+    version 14.1
+    local command `"`0'"'
+    syntax varlist [in], [STReam(integer 0) NOSTReam *]
+    * Match the native automatic-stream threshold. Streaming keeps bounded
+    * C buffers; Stata's preserve may spill the recovery copy to disk.
+    local recover = "`nostream'" == "" & (`stream' > 0 | (c(k) > 30 & _N > 10000000))
+    if "`: sortedby'" == "`varlist'" & "`in'" == "" local recover 0
+    nobreak {
+        if `recover' preserve
+        capture noisily break _csort_impl `command'
+        local rc = _rc
+        if !`rc' return add
+        if `recover' {
+            if `rc' restore
+            else restore, not
+        }
+        if `rc' exit `rc'
+    }
+end
+
+program define _csort_impl, rclass
     version 14.1
 
     * Check observation limit (Stata plugin API limitation)
@@ -10,7 +31,9 @@ program define csort, rclass
         exit 920
     }
 
-    syntax varlist, [Verbose ALGorithm(string) STReam(integer 0) THReads(integer 0) NOSORTedby NOSTReam]
+    * sort's in range and its stable option (csort is always stable, so
+    * stable changes nothing)
+    syntax varlist [in], [Verbose ALGorithm(string) STReam(integer 0) THReads(integer 0) NOSORTedby NOSTReam STABLE]
 
     * Start wall-clock timer as early as possible to match rmsg
     local __do_timing = ("`verbose'" != "")
@@ -76,14 +99,15 @@ program define csort, rclass
         }
     }
 
-    * Every column may need to move, including non-key strL payloads. Reject
-    * unsupported storage before the sortedby shortcut as well as plugin I/O.
+    * Every column moves, and the plugin cannot write strL values. A dataset
+    * with a strL variable, key or not, is sorted by sort itself (stable, as
+    * csort is); nosortedby then drops the marker sort sets.
     unab allvars : *
+    local __has_strl = 0
     foreach v of local allvars {
-        local storage : type `v'
-        if "`storage'" == "strL" {
-            di as error "csort: strL I/O is unsupported; recast to str2045 when lossless"
-            exit 109
+        if "`: type `v''" == "strL" {
+            local __has_strl = 1
+            continue, break
         }
     }
 
@@ -95,8 +119,61 @@ program define csort, rclass
     if `"`if'"' == "" & `"`in'"' == "" {
         local __sortedby : sortedby
         if "`__sortedby'" == "`varlist'" {
-            exit 0
+            if "`nosortedby'" != "" _csort_clear_sortedby
+            if `__do_timing' di as text "csort: data already sorted"
+            return scalar N = _N
+            foreach __stat in time_load time_sort time_permute time_store time_stream ///
+                time_cleanup time_total {
+                return scalar `__stat' = 0
+            }
+            return scalar threads_max = .
+            return scalar openmp_enabled = .
+            return scalar stream = 0
+            return local algorithm "`alg_name'"
+            return local sortvars "`varlist'"
+            return local cmd "csort"
+            exit
         }
+    }
+
+    * sort varlist in range orders only the observations in the range and
+    * leaves the others where they are; Stata's sort does it, stable as
+    * csort is (sortedby is set only when the range is the whole dataset).
+    if `"`in'"' != "" {
+        sort `varlist' `in', stable
+        if "`nosortedby'" != "" _csort_clear_sortedby
+        if `__do_timing' di as text "csort: used sort for an in range"
+        return scalar N = _N
+        foreach __stat in time_load time_sort time_permute time_store time_stream ///
+            time_cleanup time_total threads_max openmp_enabled {
+            return scalar `__stat' = .
+        }
+        return scalar stream = 0
+        return local algorithm "`alg_name'"
+        return local sortvars "`varlist'"
+        return local cmd "csort"
+        exit
+    }
+
+    if `__has_strl' {
+        * (with no observations there is nothing to order, and nosortedby
+        * leaves the marker as it was, as the plugin path does)
+        if "`nosortedby'" == "" sort `varlist', stable
+        else if _N {
+            sort `varlist', stable
+            _csort_clear_sortedby
+        }
+        if `__do_timing' di as text "csort: used sort for data with strL variables"
+        return scalar N = _N
+        foreach __stat in time_load time_sort time_permute time_store time_stream ///
+            time_cleanup time_total threads_max openmp_enabled {
+            return scalar `__stat' = .
+        }
+        return scalar stream = 0
+        return local algorithm "`alg_name'"
+        return local sortvars "`varlist'"
+        return local cmd "csort"
+        exit
     }
 
     * =========================================================================
@@ -194,6 +271,9 @@ program define csort, rclass
         }
     }
     else plugin call ctools_plugin `allvars' `if' `in', "csort `threads_code' `var_indices' `alg_code' `stream_code' `nostream_code' `strw_code'"
+
+    * Regression hook: exercise restoration after every column was moved.
+    if "$CTOOLS_csort_fault" == "post" error 1
 
     * End plugin timer, start post-plugin timer
     if `__do_timing' {

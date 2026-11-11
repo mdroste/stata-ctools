@@ -55,6 +55,7 @@
 #include "ctools_config.h"
 #include "ctools_threads.h"
 #include "ctools_runtime.h"
+#include "ctools_cancel.h"
 #include "cdistinct/cdistinct_impl.h"
 #include "chdfe/chdfe_impl.h"
 #include "ctools_version.h"
@@ -250,6 +251,7 @@ static ST_retcode thread_settings_call(const char *args)
 #include "civreghdfe/civreghdfe_impl.h"
 #include "cimport/cimport_impl.h"
 #include "io/cio.h"
+#include "io/cparquet.h"
 #include "io/cexport_xls.h"
 #include "cexport/cexport_impl.h"
 #include "cexport/cexport_xlsx.h"
@@ -269,12 +271,19 @@ static ST_retcode thread_settings_call(const char *args)
 #include "csplit/csplit_impl.h"
 #include "crangejoin/crangejoin_impl.h"
 #include "cgroup/cgroup_impl.h"
+#include "formats/ctools_dta.h"
 
 static const ctools_command_descriptor commands[] = {
 #define CTOOLS_COMMAND(name, owner, handler, cleanup) {name, owner, handler, cleanup},
 #include "ctools_commands.def"
 #undef CTOOLS_COMMAND
 };
+
+static int ctools_host_cancel(void)
+{
+    if (SF_poll) SF_poll();
+    return _stata_->stopflag && SW_stopflag;
+}
 
 /*
     Main plugin entry point.
@@ -383,7 +392,11 @@ STDLL stata_call(int argc, char *argv[])
         if (!strcmp(cmd_name, commands[i].name)) { command = &commands[i]; break; }
     }
     rc = ctools_command_begin(command, cmd_args);
-    if (!rc) rc = command->handler(cmd_args);
+    if (!rc) {
+        ctools_cancel_begin(ctools_host_cancel);
+        rc = command->handler(cmd_args);
+        ctools_cancel_end();
+    }
     else SF_error("ctools: unknown command or invalid command phase\n");
 
     free(cmd_str);

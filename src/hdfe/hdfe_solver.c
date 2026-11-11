@@ -359,6 +359,7 @@ ST_int cg_solve_column_threaded(HDFE_State *S, ST_double *y, ST_int thread_id)
 
         for (iter = 1; iter <= S->maxiter; iter++)
         {
+            if (ctools_cancel_requested()) return -iter;
             transform_sym_kaczmarz_threaded(S, u, v, S->thread_fe_means, thread_id);
 
             uv = weighted_dot_product(u, v, weights, N);
@@ -396,6 +397,7 @@ ST_int cg_solve_column_threaded(HDFE_State *S, ST_double *y, ST_int thread_id)
 
         for (iter = 1; iter <= S->maxiter; iter++)
         {
+            if (ctools_cancel_requested()) return -iter;
             transform_sym_kaczmarz_threaded(S, u, v, S->thread_fe_means, thread_id);
 
             uv = dot_product(u, v, N);
@@ -447,6 +449,9 @@ HDFE_SolveResult partial_out_columns(HDFE_State *S, ST_double *data, ST_int N, S
         return (HDFE_SolveResult){198, 0, 0};
     }
     (void)num_threads; /* Use S->num_threads or OpenMP default */
+    if (ctools_cancel_requested())
+        return (HDFE_SolveResult){1, 0, 0};
+    ctools_cancel_team team = {0};
 
     /* G=0 short-circuit: no FE factors, nothing to partial out */
     if (S->G == 0)
@@ -457,56 +462,114 @@ HDFE_SolveResult partial_out_columns(HDFE_State *S, ST_double *data, ST_int N, S
     /* G=1 short-circuit: direct demean, no CG iteration */
     if (S->G == 1)
     {
-#pragma omp parallel for num_threads(S->num_threads) schedule(dynamic)
-        for (k = 0; k < K; k++)
+#pragma omp parallel num_threads(S->num_threads)
         {
-            int tid = 0;
+#pragma omp for schedule(dynamic) nowait
+            for (k = 0; k < K; k++)
+            {
+                if (ctools_cancel_requested()) continue;
+                int tid = 0;
 #ifdef _OPENMP
-            tid = omp_get_thread_num();
+                tid = omp_get_thread_num();
 #endif
-            demean_column_single_fe(S, data + (size_t)k * S->N, tid);
+                demean_column_single_fe(S, data + (size_t)k * S->N, tid);
+            }
+            ctools_cancel_wait(&team);
         }
+        if (ctools_cancel_requested()) return (HDFE_SolveResult){1, 0, 1};
         return (HDFE_SolveResult){0, 1, 1};
     }
 
 /* General CG solve for G >= 2 */
-#pragma omp parallel for num_threads(S->num_threads) schedule(dynamic) reduction(max : max_iters)  \
+#pragma omp parallel num_threads(S->num_threads) reduction(max : max_iters)  \
     reduction(| : any_failed)
-    for (k = 0; k < K; k++)
     {
-        int tid = 0;
+#pragma omp for schedule(dynamic) nowait
+        for (k = 0; k < K; k++)
+        {
+            if (ctools_cancel_requested()) continue;
+            int tid = 0;
 #ifdef _OPENMP
-        tid = omp_get_thread_num();
+            tid = omp_get_thread_num();
 #endif
-        ST_int iters = cg_solve_column_threaded(S, data + (size_t)k * S->N, tid);
+            ST_int iters = cg_solve_column_threaded(S, data + (size_t)k * S->N, tid);
 
-        if (iters < 0)
-        {
-            any_failed = 1;
-            if (-iters > max_iters)
-                max_iters = -iters;
+            if (iters < 0)
+            {
+                any_failed = 1;
+                if (-iters > max_iters)
+                    max_iters = -iters;
+            }
+            else
+            {
+                if (iters > max_iters)
+                    max_iters = iters;
+            }
         }
-        else
-        {
-            if (iters > max_iters)
-                max_iters = iters;
-        }
+        ctools_cancel_wait(&team);
     }
-
+    if (ctools_cancel_requested()) return (HDFE_SolveResult){1, 0, max_iters};
     return (HDFE_SolveResult){any_failed ? 430 : 0, !any_failed, max_iters};
 }
 
+/* hdfe's experimental random Kaczmarz: a symmetric sweep (forward, then
+ * back) over the factors in a random order. The order is drawn once per
+ * column from a xorshift generator seeded by the column (so that every sweep
+ * of a column applies the same symmetric operator, as conjugate gradient
+ * needs; results do not depend on the thread schedule, and Stata's
+ * random-number state is not touched). */
+static int hdfe_random_sym_kaczmarz(HDFE_State *S, const double *y, double *out, int tid,
+                                    unsigned long long seed)
+{
+    double **means = S->thread_fe_means;
+    int order_small[64];
+    int G = S->G;
+    int *order = G <= 64 ? order_small : malloc((size_t)G * sizeof(*order));
+    if (!order)
+        return -1;
+    for (int g = 0; g < G; g++)
+        order[g] = g;
+    unsigned long long x = seed;
+    for (int g = G - 1; g > 0; g--)
+    {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        int j = (int)(x % (unsigned long long)(g + 1));
+        int t = order[g];
+        order[g] = order[j];
+        order[j] = t;
+    }
+    project_from_source_fe(y, out, &S->factors[order[0]], S->N, S->weights,
+                           means[tid * G + order[0]]);
+    for (int g = 1; g < G; g++)
+        project_and_subtract_fe(out, &S->factors[order[g]], S->N, S->weights,
+                                means[tid * G + order[g]]);
+    for (int g = G - 2; g >= 0; g--)
+        project_and_subtract_fe(out, &S->factors[order[g]], S->N, S->weights,
+                                means[tid * G + order[g]]);
+    for (int i = 0; i < S->N; i++)
+        out[i] = y[i] - out[i];
+    if (order != order_small)
+        free(order);
+    return 0;
+}
+
 /* Optional hdfe transforms. out is (I-T)y; scratch may not alias either.
- * 0: symmetric Kaczmarz, 1: forward Kaczmarz, 2: Cimmino. */
-static void hdfe_map_complement(HDFE_State *S, const double *y, double *out, double *scratch,
-                                int tid, int transform)
+ * 0: symmetric Kaczmarz, 1: forward Kaczmarz, 2: Cimmino, 3: random
+ * (symmetric) Kaczmarz in the order that seed draws. Returns -1 when
+ * memory runs out, else 0. */
+static int hdfe_map_complement(HDFE_State *S, const double *y, double *out, double *scratch,
+                               int tid, int transform, unsigned long long seed)
 {
     double **means = S->thread_fe_means;
     if (transform == 0)
     {
         transform_sym_kaczmarz_threaded(S, y, out, means, tid);
-        return;
+        return 0;
     }
+    if (transform == 3)
+        return hdfe_random_sym_kaczmarz(S, y, out, tid, seed);
     if (transform == 1)
     {
         project_from_source_fe(y, out, &S->factors[0], S->N, S->weights, means[tid * S->G]);
@@ -526,6 +589,7 @@ static void hdfe_map_complement(HDFE_State *S, const double *y, double *out, dou
                 out[i] += (y[i] - scratch[i]) / S->G;
         }
     }
+    return 0;
 }
 
 static double hdfe_map_dot(HDFE_State *S, const double *a, const double *b)
@@ -537,92 +601,148 @@ HDFE_SolveResult partial_out_columns_options(HDFE_State *S, double *data, int N,
                                              int transform, int acceleration)
 {
     if (!S || !data || N != S->N || K < 1 || S->num_threads < 1 || S->maxiter < 1 ||
-        !isfinite(S->tolerance) || S->tolerance <= 0 || transform < 0 || transform > 2 ||
-        acceleration < 0 || acceleration > 3 || (transform == 1 && acceleration == 1))
+        !isfinite(S->tolerance) || S->tolerance <= 0 || transform < 0 || transform > 3 ||
+        acceleration < 0 || acceleration > 4)
         return (HDFE_SolveResult){198, 0, 0};
+    if (ctools_cancel_requested())
+        return (HDFE_SolveResult){1, 0, 0};
     if (S->G == 0)
         return (HDFE_SolveResult){0, 1, 0};
     if (transform == 0 && acceleration == 1)
         return partial_out_columns(S, data, N, K, S->num_threads);
     int failed = 0, max_iterations = 0;
-#pragma omp parallel for num_threads(S->num_threads) schedule(dynamic) reduction(| : failed)       \
+    const double tol_sq = S->tolerance * S->tolerance;
+    ctools_cancel_team team = {0};
+#pragma omp parallel num_threads(S->num_threads) reduction(| : failed)       \
     reduction(max : max_iterations)
-    for (int k = 0; k < K; k++)
     {
-        int tid = 0;
+#pragma omp for schedule(dynamic) nowait
+        for (int k = 0; k < K; k++)
+        {
+            if (ctools_cancel_requested()) continue;
+            int tid = 0;
 #ifdef _OPENMP
-        tid = omp_get_thread_num();
+            tid = omp_get_thread_num();
 #endif
-        double *y = data + (size_t)k * N;
-        double *r = S->thread_cg_r[tid], *u = S->thread_cg_u[tid], *v = S->thread_cg_v[tid];
-        /* Cimmino needs a distinct projection buffer. Allocate per active
-         * column, never through SPI on a worker thread. */
-        double *scratch = malloc((size_t)N * sizeof(*scratch));
-        if (!scratch)
-        {
-            failed |= 2;
-            continue;
-        }
-        double scale = hdfe_map_dot(S, y, y);
-        double threshold = S->tolerance * S->tolerance * scale;
-        double roundoff = 2.220446049250313e-16 * 2.220446049250313e-16 * scale;
-        hdfe_map_complement(S, y, r, scratch, tid, transform);
-        memcpy(u, r, (size_t)N * sizeof(*u));
-        double rr = hdfe_map_dot(S, r, r);
-        int iter = 0;
-        while (iter < S->maxiter && rr > threshold)
-        {
-            iter++;
-            double step = 1;
-            if (acceleration == 1 || acceleration == 2)
+            double *y = data + (size_t)k * N;
+            double *r = S->thread_cg_r[tid], *u = S->thread_cg_u[tid], *v = S->thread_cg_v[tid];
+            unsigned long long seed = 0x9E3779B97F4A7C15ULL * (unsigned long long)(k + 1);
+            /* Cimmino needs a distinct projection buffer. Allocate per active
+             * column, never through SPI on a worker thread. */
+            double *scratch = malloc((size_t)N * sizeof(*scratch));
+            if (!scratch)
             {
-                hdfe_map_complement(S, acceleration == 1 ? u : r, v, scratch, tid, transform);
-                double denom = hdfe_map_dot(S, acceleration == 1 ? u : r, v);
-                if (denom > 0)
-                    step = rr / denom;
-                if (!isfinite(step) || step <= 0)
-                    step = 1;
+                failed |= 2;
+                continue;
             }
-            if (acceleration == 3)
+            double scale = hdfe_map_dot(S, y, y);
+            double threshold = tol_sq * scale;
+            double roundoff = 2.220446049250313e-16 * 2.220446049250313e-16 * scale;
+            /* Conjugate gradient stops by the Hestenes rule of reghdfe and of
+             * the default solver: the last step's decrease of the squared norm
+             * is at most tol^2 times what is left to decrease (improvement) */
+            double improvement = scale;
+            int oom = hdfe_map_complement(S, y, r, scratch, tid, transform, seed);
+            memcpy(u, r, (size_t)N * sizeof(*u));
+            double rr = hdfe_map_dot(S, r, r);
+            int iter = 0;
+            int done = rr <= threshold;
+            while (!oom && iter < S->maxiter && !done)
             {
-                /* Vector Aitken: every third step after five plain sweeps,
-                 * extrapolate along the last change using its second difference.
-                 * u retains the previous iterate. */
-                if (iter >= 6 && iter % 3 == 0)
+                if (ctools_cancel_requested()) break;
+                iter++;
+                /* hybrid (hdfe's experimental acceleration): three plain sweeps,
+                 * then conjugate gradient from the current residual */
+                int accel = acceleration;
+                if (acceleration == 4)
                 {
-                    for (int i = 0; i < N; i++)
-                        v[i] = u[i] - y[i] - r[i];
-                    double denom = hdfe_map_dot(S, v, v);
-                    if (denom > 0)
-                        step = 1 + hdfe_map_dot(S, r, v) / denom;
-                    if (!isfinite(step))
-                        step = 1;
+                    accel = iter <= 3 ? 0 : 1;
+                    if (iter == 4)
+                    {
+                        memcpy(u, r, (size_t)N * sizeof(*u));
+                        improvement = hdfe_map_dot(S, y, y);
+                    }
                 }
-                memcpy(u, y, (size_t)N * sizeof(*u));
-            }
-            for (int i = 0; i < N; i++)
-                y[i] -= step * (acceleration == 1 ? u[i] : r[i]);
-            if (acceleration == 1)
-            {
+                double step = 1;
+                if (accel == 1 || accel == 2)
+                {
+                    oom |= hdfe_map_complement(S, accel == 1 ? u : r, v, scratch, tid, transform, seed);
+                    double denom = hdfe_map_dot(S, accel == 1 ? u : r, v);
+                    if (accel == 1)
+                        step = fabs(denom) < 1e-30 ? 0.0 : rr / denom;
+                    else
+                    {
+                        if (denom > 0)
+                            step = rr / denom;
+                        if (!isfinite(step) || step <= 0)
+                            step = 1;
+                    }
+                }
+                if (accel == 3)
+                {
+                    /* Vector Aitken: every third step after five plain sweeps,
+                     * extrapolate along the last change using its second difference.
+                     * u retains the previous iterate. */
+                    if (iter >= 6 && iter % 3 == 0)
+                    {
+                        for (int i = 0; i < N; i++)
+                            v[i] = u[i] - y[i] - r[i];
+                        double denom = hdfe_map_dot(S, v, v);
+                        if (denom > 0)
+                            step = 1 + hdfe_map_dot(S, r, v) / denom;
+                        if (!isfinite(step))
+                            step = 1;
+                    }
+                    memcpy(u, y, (size_t)N * sizeof(*u));
+                }
                 for (int i = 0; i < N; i++)
-                    r[i] -= step * v[i];
-                double next = hdfe_map_dot(S, r, r), beta = rr > 0 ? next / rr : 0;
-                for (int i = 0; i < N; i++)
-                    u[i] = r[i] + beta * u[i];
-                rr = next;
+                    y[i] -= step * (accel == 1 ? u[i] : r[i]);
+                if (accel == 1)
+                {
+                    double recent = step * rr;
+                    improvement -= recent;
+                    /* as reghdfe (edittozerotol(, 1e-15) on its standardized
+                     * data, mean square one): a negligible step has converged */
+                    if (fabs(recent) < 1e-15 * scale / N)
+                        recent = 0;
+                    for (int i = 0; i < N; i++)
+                        r[i] -= step * v[i];
+                    double next = hdfe_map_dot(S, r, r), beta = rr > 0 ? next / rr : 0;
+                    for (int i = 0; i < N; i++)
+                        u[i] = r[i] + beta * u[i];
+                    rr = next;
+                    if (transform == 1)
+                    {
+                        /* forward Kaczmarz is not symmetric, so the recurrence's
+                         * residual need not shrink: stop by reghdfe's Hestenes rule */
+                        done = improvement <= 1e-30 * scale || recent <= tol_sq * improvement;
+                    }
+                    else
+                    {
+                        threshold = fmax(roundoff, tol_sq * hdfe_map_dot(S, y, y));
+                        done = rr <= threshold;
+                    }
+                }
+                else
+                {
+                    oom |= hdfe_map_complement(S, y, r, scratch, tid, transform, seed);
+                    rr = hdfe_map_dot(S, r, r);
+                    threshold = fmax(roundoff, tol_sq * hdfe_map_dot(S, y, y));
+                    done = rr <= threshold;
+                }
+                if (!isfinite(rr))
+                    break;
             }
-            else
-            {
-                hdfe_map_complement(S, y, r, scratch, tid, transform);
-                rr = hdfe_map_dot(S, r, r);
-            }
-            threshold = fmax(roundoff, S->tolerance * S->tolerance * hdfe_map_dot(S, y, y));
+            if (oom)
+                failed |= 2;
+            else if (!done || !isfinite(rr))
+                failed |= 1;
+            if (iter > max_iterations)
+                max_iterations = iter;
+            free(scratch);
         }
-        if (!isfinite(rr) || rr > threshold)
-            failed |= 1;
-        if (iter > max_iterations)
-            max_iterations = iter;
-        free(scratch);
+        ctools_cancel_wait(&team);
     }
+    if (ctools_cancel_requested()) return (HDFE_SolveResult){1, 0, max_iterations};
     return (HDFE_SolveResult){(failed & 2) ? 920 : failed ? 430 : 0, !failed, max_iterations};
 }

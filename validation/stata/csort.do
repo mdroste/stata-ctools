@@ -217,6 +217,9 @@ if _rc == 0 {
     sysuse auto2, clear
     benchmark_sort price, testname("auto2: price")
 }
+else {
+    test_fail "required fixture: auto2" "dataset could not be loaded"
+}
 
 * bplong dataset (blood pressure long format)
 capture sysuse bplong, clear
@@ -232,6 +235,9 @@ if _rc == 0 {
     sysuse bplong, clear
     benchmark_sort bp, testname("bplong: bp")
 }
+else {
+    test_fail "required fixture: bplong" "dataset could not be loaded"
+}
 
 * bpwide dataset (blood pressure wide format)
 capture sysuse bpwide, clear
@@ -240,6 +246,9 @@ if _rc == 0 {
 
     sysuse bpwide, clear
     benchmark_sort bp_before, testname("bpwide: bp_before")
+}
+else {
+    test_fail "required fixture: bpwide" "dataset could not be loaded"
 }
 
 * cancer dataset (survival data)
@@ -252,6 +261,9 @@ if _rc == 0 {
 
     sysuse cancer, clear
     benchmark_sort drug studytime, testname("cancer: drug studytime")
+}
+else {
+    test_fail "required fixture: cancer" "dataset could not be loaded"
 }
 
 * census dataset
@@ -287,6 +299,9 @@ if _rc == 0 {
     sysuse citytemp, clear
     benchmark_sort tempjuly, testname("citytemp: tempjuly")
 }
+else {
+    test_fail "required fixture: citytemp" "dataset could not be loaded"
+}
 
 * gnp96 dataset
 capture sysuse gnp96, clear
@@ -295,6 +310,9 @@ if _rc == 0 {
 
     sysuse gnp96, clear
     benchmark_sort gnp96, testname("gnp96: gnp96")
+}
+else {
+    test_fail "required fixture: gnp96" "dataset could not be loaded"
 }
 
 * lifeexp dataset
@@ -310,6 +328,9 @@ if _rc == 0 {
 
     sysuse lifeexp, clear
     benchmark_sort region lexp, testname("lifeexp: region lexp")
+}
+else {
+    test_fail "required fixture: lifeexp" "dataset could not be loaded"
 }
 
 * nlsw88 dataset
@@ -332,6 +353,9 @@ if _rc == 0 {
     sysuse nlsw88, clear
     benchmark_sort industry occupation, testname("nlsw88: industry occupation")
 }
+else {
+    test_fail "required fixture: nlsw88" "dataset could not be loaded"
+}
 
 * pop2000 dataset
 capture sysuse pop2000, clear
@@ -340,6 +364,9 @@ if _rc == 0 {
 
     sysuse pop2000, clear
     benchmark_sort total, testname("pop2000: total")
+}
+else {
+    test_fail "required fixture: pop2000" "dataset could not be loaded"
 }
 
 * sp500 dataset
@@ -353,6 +380,9 @@ if _rc == 0 {
     sysuse sp500, clear
     benchmark_sort volume, testname("sp500: volume")
 }
+else {
+    test_fail "required fixture: sp500" "dataset could not be loaded"
+}
 
 * uslifeexp dataset
 capture sysuse uslifeexp, clear
@@ -361,6 +391,9 @@ if _rc == 0 {
 
     sysuse uslifeexp, clear
     benchmark_sort le, testname("uslifeexp: le")
+}
+else {
+    test_fail "required fixture: uslifeexp" "dataset could not be loaded"
 }
 
 * voter dataset
@@ -373,6 +406,9 @@ if _rc == 0 {
 
     sysuse voter, clear
     benchmark_sort pop, testname("voter: pop")
+}
+else {
+    test_fail "required fixture: voter" "dataset could not be loaded"
 }
 
 * SECTION 10: Webuse Datasets
@@ -418,6 +454,9 @@ if _rc == 0 {
     ctools_fixture grunfeld, clear
     benchmark_sort invest, testname("grunfeld: invest")
 }
+else {
+    test_fail "required fixture: grunfeld" "dataset could not be loaded"
+}
 
 * educ99gdp dataset
 ctools_fixture educ99gdp, clear
@@ -431,6 +470,9 @@ capture ctools_fixture bplong, clear
 if _rc == 0 {
     benchmark_sort patient when, testname("webuse bplong: patient when")
 }
+else {
+    test_fail "required fixture: bplong" "dataset could not be loaded"
+}
 
 * cancer webuse
 capture ctools_fixture cancer, clear
@@ -439,6 +481,9 @@ if _rc == 0 {
 
     ctools_fixture cancer, clear
     benchmark_sort age drug, testname("webuse cancer: age drug")
+}
+else {
+    test_fail "required fixture: cancer" "dataset could not be loaded"
 }
 
 * SECTION 11: Empty/Minimal Dataset Edge Cases
@@ -1536,6 +1581,92 @@ capture noisily {
 if _rc test_fail "RELEASE-05 csort on 2,602 variables and 1,201 keys" "r(`=_rc')"
 else test_pass "RELEASE-05 csort on 2,602 variables and 1,201 keys"
 
+* S3 gaps (FUNCTIONALITY_GAPS SORT-01, SORT-02, SORT-05), against sort.
+* SORT-01: sort varlist in range orders only that range (csort is stable,
+* so the result is sort's with stable); sortedby only for the whole data
+clear
+set obs 12
+gen x = mod(_n * 7, 4)
+gen str2 s = char(65 + mod(_n, 3))
+gen o = _n
+tempfile gap_sort
+save `gap_sort'
+foreach spec in "x in 3/9" "x in 1/12" "x in f/l" "s x in 2/10" "x in 5" "x in -4/l" "x in 1/12, nosortedby" {
+    local opts ""
+    local nsb 0
+    if strpos("`spec'", ", nosortedby") {
+        local spec = subinstr("`spec'", ", nosortedby", "", 1)
+        local opts ", nosortedby"
+        local nsb 1
+    }
+    use `gap_sort', clear
+    sort `spec', stable
+    mata: st_local("n_order", invtokens(strofreal(st_data(., "o")')))
+    local n_sb : sortedby
+    if `nsb' local n_sb ""
+    use `gap_sort', clear
+    capture csort `spec' `opts'
+    local rc = _rc
+    mata: st_local("c_order", invtokens(strofreal(st_data(., "o")')))
+    local c_sb : sortedby
+    if !`rc' & "`n_order'" == "`c_order'" & "`n_sb'" == "`c_sb'" test_pass "SORT-01 csort `spec'`opts'"
+    else test_fail "SORT-01 csort `spec'`opts'" "rc=`rc' order [`c_order'] vs [`n_order'], sortedby [`c_sb'] vs [`n_sb']"
+}
+foreach spec in "x in 13/14" "x if x > 1" "x in 0" {
+    use `gap_sort', clear
+    capture sort `spec'
+    local nrc = _rc
+    capture csort `spec'
+    if _rc == `nrc' & `nrc' test_pass "SORT-01 csort `spec': r(`nrc')"
+    else test_fail "SORT-01 csort `spec'" "csort r(`=_rc'), sort r(`nrc')"
+}
+* SORT-02: stable is accepted (csort is always stable)
+use `gap_sort', clear
+sort x, stable
+mata: st_local("n_order", invtokens(strofreal(st_data(., "o")')))
+use `gap_sort', clear
+capture csort x, stable
+local rc = _rc
+mata: st_local("c_order", invtokens(strofreal(st_data(., "o")')))
+if !`rc' & "`n_order'" == "`c_order'" & "`: sortedby'" == "x" test_pass "SORT-02 csort x, stable"
+else test_fail "SORT-02 csort x, stable" "rc=`rc'"
+* SORT-05: frame alias variables (Stata 18), as keys and as other variables
+if c(stata_version) >= 18 {
+    capture noisily {
+        clear
+        set obs 9
+        gen id = mod(_n, 3) + 1
+        gen v = 10 - _n
+        gen o = _n
+        capture frame drop gap_other
+        frame create gap_other
+        frame gap_other {
+            set obs 3
+            gen id = _n
+            gen z = 10 * mod(_n, 2)
+        }
+        frlink m:1 id, frame(gap_other)
+        fralias add z, from(gap_other)
+        foreach keys in "v" "z" "z v" "id z" {
+            preserve
+            csort `keys'
+            mata: st_local("c_order", invtokens(strofreal(vec(st_data(., "o z"))')))
+            mata: st_local("c_alias", strofreal(st_isalias("z")))
+            restore
+            preserve
+            sort `keys', stable
+            mata: st_local("n_full", invtokens(strofreal(vec(st_data(., "o z"))')))
+            restore
+            if "`c_order'" == "`n_full'" & `c_alias' test_pass "SORT-05 csort `keys' with a frame alias variable"
+            else test_fail "SORT-05 csort `keys' with a frame alias variable" "[`c_order'] vs [`n_full'], alias=`c_alias'"
+        }
+        clear
+        frame drop gap_other
+    }
+    if _rc test_fail "SORT-05 frame alias setup" "r(`=_rc')"
+}
+clear
+
 * End of csort validation
 noi print_summary "csort"
 }
@@ -1618,16 +1749,25 @@ program define _csort_strl_case
     if "`mode'" == "standard" local options "nostream"
     if "`mode'" == "stream" local options "stream(1)"
     if "`api'" == "ado" {
-        capture csort `key', `options' nosortedby
+        * csort hands data with strL variables to sort (stable); nosortedby
+        * drops the marker, including the already-sorted shortcut.
+        preserve
+        sort `key', stable
+        tempfile expected
+        quietly save `expected'
+        restore
+        csort `key', `options' nosortedby
+        cf _all using `expected'
+        local after : sortedby
+        assert "`after'" == ""
+        exit
     }
-    else {
-        * Exercise C validation independently of the ado preflight.
-        _ctools_load
-        capture program ctools_plugin, plugin using("`__ctools_plugin'")
-        if _rc != 0 & _rc != 110 exit 601
-        local index = cond("`key'" == "key", 1, 2)
-        capture plugin call ctools_plugin key text row, "csort `index' `options'"
-    }
+    * The plugin itself still refuses strL I/O.
+    _ctools_load
+    capture program ctools_plugin, plugin using("`__ctools_plugin'")
+    if _rc != 0 & _rc != 110 exit 601
+    local index = cond("`key'" == "key", 1, 2)
+    capture plugin call ctools_plugin key text row, "csort `index' `options'"
     local rc = _rc
     assert `rc' == 109
     assert row == _n & text == "payload:" + string(_n)

@@ -414,33 +414,13 @@ gen mu = exp(0.5 * x + 0.1 * fe1)
 gen y = rpoisson(mu)
 replace y = 0 if fe1 == 10
 
-ppmlhdfe y x, absorb(fe1) vce(robust)
-local ppml_N = e(N)
-tempname ppml_b_sep
-matrix `ppml_b_sep' = e(b)
-
-cppmlhdfe y x, absorb(fe1) vce(robust)
-local cppml_N = e(N)
-local cppml_sep = e(num_separated)
-tempname cppml_b_sep
-matrix `cppml_b_sep' = e(b)
-
-* Coefficient comparison
-local ppml_bk = `ppml_b_sep'[1,1]
-local cppml_bk = `cppml_b_sep'[1,1]
-if abs(`ppml_bk') > 1e-12 {
-    sigfigs `ppml_bk' `cppml_bk'
-    if r(sigfigs) >= 4 {
-        test_pass "separation: b[x] single group"
-    }
-    else {
-        local sf_fmt : display %4.1f r(sigfigs)
-        test_fail "separation: b[x] single group" "sigfigs=`sf_fmt'"
-    }
-}
-else {
-    test_pass "separation: b[x] single group (near zero)"
-}
+benchmark_ppmlhdfe y x, absorb(fe1) vce(robust) tolerance(1e-12) ///
+    testname("separation: single group, full results and sample")
+* The helper restores the input data, which invalidates e(sample). Refit to
+* test the exact retained observations as well as the reference comparison.
+cppmlhdfe y x, absorb(fe1) vce(robust) tolerance(1e-12)
+assert e(N) == 900
+assert e(sample) == (fe1 != 10)
 
 * Multiple FE groups all zeros
 clear
@@ -452,31 +432,11 @@ gen mu = exp(0.5 * x + 0.1 * fe1)
 gen y = rpoisson(mu)
 replace y = 0 if fe1 >= 9
 
-ppmlhdfe y x, absorb(fe1) vce(robust)
-local ppml_N2 = e(N)
-tempname ppml_b_sep2
-matrix `ppml_b_sep2' = e(b)
-
-cppmlhdfe y x, absorb(fe1) vce(robust)
-local cppml_N2 = e(N)
-tempname cppml_b_sep2
-matrix `cppml_b_sep2' = e(b)
-
-local ppml_bk = `ppml_b_sep2'[1,1]
-local cppml_bk = `cppml_b_sep2'[1,1]
-if abs(`ppml_bk') > 1e-12 {
-    sigfigs `ppml_bk' `cppml_bk'
-    if r(sigfigs) >= 4 {
-        test_pass "separation: b[x] two groups"
-    }
-    else {
-        local sf_fmt : display %4.1f r(sigfigs)
-        test_fail "separation: b[x] two groups" "sigfigs=`sf_fmt'"
-    }
-}
-else {
-    test_pass "separation: b[x] two groups (near zero)"
-}
+benchmark_ppmlhdfe y x, absorb(fe1) vce(robust) tolerance(1e-12) ///
+    testname("separation: two groups, full results and sample")
+cppmlhdfe y x, absorb(fe1) vce(robust) tolerance(1e-12)
+assert e(N) == 800
+assert e(sample) == (fe1 < 9)
 
 * SECTION 14: Missing values
 noi di as text "--- Section 14: Missing Values ---"
@@ -554,9 +514,10 @@ capture cppmlhdfe y x1 x2 x3, absorb(fe1) vce(robust)
 local cppml_rc = _rc
 
 if `ppml_rc' == 0 & `cppml_rc' == 0 {
-    test_pass "collinearity: both handle collinear vars"
+    benchmark_ppmlhdfe y x1 x2 x3, absorb(fe1) vce(robust) tolerance(1e-12) ///
+        testname("collinearity: perfect, full results")
 }
-else if `ppml_rc' != 0 & `cppml_rc' != 0 {
+else if `ppml_rc' == `cppml_rc' {
     test_pass "collinearity: both error (ppml rc=`ppml_rc', cppml rc=`cppml_rc')"
 }
 else {
@@ -580,9 +541,10 @@ capture cppmlhdfe y x1 x2 x3, absorb(fe1) vce(robust)
 local cppml_rc = _rc
 
 if `ppml_rc' == 0 & `cppml_rc' == 0 {
-    test_pass "collinearity: near-collinear (both succeed)"
+    benchmark_ppmlhdfe y x1 x2 x3, absorb(fe1) vce(robust) tolerance(1e-12) ///
+        testname("collinearity: near-collinear, full results")
 }
-else if `ppml_rc' != 0 & `cppml_rc' != 0 {
+else if `ppml_rc' == `cppml_rc' {
     test_pass "collinearity: near-collinear (both error)"
 }
 else {
@@ -739,7 +701,7 @@ benchmark_ppmlhdfe y x, ///
     absorb(fe1) vce(robust) testname("constant Y = 5")
 
 * All Y = 0 (degenerate case — all obs separated)
-* ppmlhdfe errors (rc=2001); cppmlhdfe should also error or handle gracefully
+* All observations are separated: the return code must match ppmlhdfe.
 clear
 set seed 225
 set obs 500
@@ -752,15 +714,11 @@ local ppml_rc = _rc
 capture cppmlhdfe y x, absorb(fe1) vce(robust)
 local cppml_rc = _rc
 
-if `ppml_rc' != 0 & `cppml_rc' != 0 {
+if `ppml_rc' != 0 & `ppml_rc' == `cppml_rc' {
     test_pass "all Y=0: both error (ppml rc=`ppml_rc', cppml rc=`cppml_rc')"
 }
 else if `ppml_rc' == 0 & `cppml_rc' == 0 {
-    test_pass "all Y=0: both succeed"
-}
-else if `ppml_rc' != 0 & `cppml_rc' == 0 {
-    * ppmlhdfe errors but cppmlhdfe succeeds — acceptable difference
-    test_pass "all Y=0: cppml succeeds (ppml rc=`ppml_rc')"
+    benchmark_ppmlhdfe y x, absorb(fe1) vce(robust) testname("all Y=0: full results")
 }
 else {
     test_fail "all Y=0" "ppml rc=`ppml_rc', cppml rc=`cppml_rc'"
@@ -839,13 +797,14 @@ local ppml_rc = _rc
 capture cppmlhdfe y x, absorb(fe1) vce(robust)
 local cppml_rc = _rc
 
-if `ppml_rc' == 0 | `ppml_rc' == 2001 {
-    if `cppml_rc' == 0 | `cppml_rc' == 2001 test_pass "all singletons: both handle gracefully (ppml rc=`ppml_rc', cppml rc=`cppml_rc')"
-    else test_fail "all singletons" "cppml rc=`cppml_rc'"
+if `ppml_rc' == 0 & `cppml_rc' == 0 {
+    benchmark_ppmlhdfe y x, absorb(fe1) vce(robust) testname("all singletons: full results")
+}
+else if `ppml_rc' == `cppml_rc' {
+    test_pass "all singletons: matching error r(`ppml_rc')"
 }
 else {
-    if `cppml_rc' != 0 test_pass "all singletons: both error (ppml rc=`ppml_rc', cppml rc=`cppml_rc')"
-    else test_fail "all singletons" "ppml rc=`ppml_rc', cppml rc=`cppml_rc'"
+    test_fail "all singletons" "ppml rc=`ppml_rc', cppml rc=`cppml_rc'"
 }
 
 * Two-way FE with singletons
@@ -874,7 +833,7 @@ gen mu = exp(0.3 * x)
 gen y = rpoisson(mu)
 
 * Tight IRLS tolerance
-ppmlhdfe y x, absorb(fe1) vce(robust)
+ppmlhdfe y x, absorb(fe1) vce(robust) tolerance(1e-12)
 local ppml_ll = e(ll)
 tempname ppml_b_tol
 matrix `ppml_b_tol' = e(b)
@@ -886,14 +845,8 @@ matrix `cppml_b_tol' = e(b)
 
 local ppml_bk = `ppml_b_tol'[1,1]
 local cppml_bk = `cppml_b_tol'[1,1]
-sigfigs `ppml_bk' `cppml_bk'
-if r(sigfigs) >= 5 {
-    test_pass "tight tolerance: b[1]"
-}
-else {
-    local sf_fmt : display %4.1f r(sigfigs)
-    test_fail "tight tolerance: b[1]" "sigfigs=`sf_fmt'"
-}
+assert_matrix_equal `ppml_b_tol' `cppml_b_tol' $DEFAULT_SIGFIGS "tight tolerance: full b"
+assert_scalar_equal `cppml_ll' `ppml_ll' $DEFAULT_SIGFIGS "tight tolerance: log likelihood"
 
 * This fixture cannot converge within two IRLS iterations.
 capture cppmlhdfe y x, absorb(fe1) vce(robust) irlsmaxiter(2)
@@ -924,7 +877,7 @@ gen x = rnormal()
 gen y = rnormal()
 
 capture cppmlhdfe y x, absorb(fe1) vce(robust)
-if _rc != 0 test_pass "error: negative Y rejected (rc=`=_rc')"
+if _rc == 198 test_pass "error: negative Y rejected (rc=`=_rc')"
 else test_fail "error: negative Y" "should error on negative depvar"
 
 * No absorbed effects: the C engine fits the constant directly.
@@ -953,7 +906,7 @@ gen x = rnormal()
 gen y = rpoisson(exp(0.3 * x))
 
 capture cppmlhdfe y x if y > 9999, absorb(fe1) vce(robust)
-if _rc != 0 test_pass "error: no observations (rc=`=_rc')"
+if _rc == 2000 test_pass "error: no observations (rc=`=_rc')"
 else test_fail "error: no observations" "should error when no obs match"
 
 * Negative exposure variable
@@ -966,7 +919,7 @@ gen y = rpoisson(exp(0.3 * x))
 gen bad_exp = rnormal()
 
 capture cppmlhdfe y x, absorb(fe1) exposure(bad_exp)
-if _rc != 0 test_pass "error: negative exposure rejected (rc=`=_rc')"
+if _rc == 198 test_pass "error: negative exposure rejected (rc=`=_rc')"
 else test_fail "error: negative exposure" "should error on non-positive exposure"
 
 * SECTION 24: Additional real datasets
@@ -1408,6 +1361,402 @@ foreach model in "|absorb(rep78)" "|noabsorb" "|absorb(rep78 foreign)" "|absorb(
 
 } // end quietly
 
+* (outside quietly: these compare the displayed lines, captured in logs)
+* ---------------------------------------------------------------------
+* PPML-03..17 (docs/development/FUNCTIONALITY_GAPS.md): replay and its
+* options, the header and footnote, messages, e() results, absorb()
+* suboptions, partialling and GLM options, tagsep's r2, version/reload and
+* predict, each against ppmlhdfe 2.3.3
+* ---------------------------------------------------------------------
+
+* The lines a command displays (between markers, in a text log)
+capture program drop _pq_lines
+program define _pq_lines, rclass
+    args file cmd
+    capture log close _pqlog
+    quietly log using `"`file'"', text replace name(_pqlog)
+    noisily di "@@BEGIN"
+    capture noisily `cmd'
+    local rc = _rc
+    noisily di "@@END"
+    quietly log close _pqlog
+    return scalar rc = `rc'
+end
+
+* The next line between the markers of an open log that begins with one of
+* the words in keep (any line when keep is empty): r(line), r(eof)
+capture program drop _pq_next
+program define _pq_next, rclass
+    args h keep
+    while 1 {
+        file read `h' line
+        if r(eof) | `"`macval(line)'"' == "@@END" {
+            return scalar eof = 1
+            exit
+        }
+        local ok = (`"`keep'"' == "")
+        local trimmed = strtrim(`"`macval(line)'"')
+        foreach p of local keep {
+            if strpos(`"`macval(trimmed)'"', `"`p'"') == 1 local ok 1
+        }
+        if `ok' {
+            return local line = strrtrim(`"`macval(line)'"')
+            return scalar eof = 0
+            exit
+        }
+    }
+end
+
+* Skip an open log to its first marker
+capture program drop _pq_start
+program define _pq_start
+    args h
+    while 1 {
+        file read `h' line
+        if r(eof) | `"`macval(line)'"' == "@@BEGIN" exit
+    }
+end
+
+* Whether the lines between the markers of two logs are the same (only
+* those beginning with a word of keep, when given): r(same), r(n) lines
+capture program drop _pq_same
+program define _pq_same, rclass
+    args f1 f2 keep
+    tempname h1 h2
+    file open `h1' using `"`f1'"', read text
+    file open `h2' using `"`f2'"', read text
+    _pq_start `h1'
+    _pq_start `h2'
+    local same 1
+    local n 0
+    while 1 {
+        _pq_next `h1' `"`keep'"'
+        local e1 = r(eof)
+        local l1 `"`r(line)'"'
+        _pq_next `h2' `"`keep'"'
+        local e2 = r(eof)
+        local l2 `"`r(line)'"'
+        if `e1' & `e2' continue, break
+        if `e1' != `e2' | `"`macval(l1)'"' != `"`macval(l2)'"' {
+            noisily di as text `"REF: `macval(l1)'"'
+            noisily di as text `"CT:  `macval(l2)'"'
+            local same 0
+            continue, break
+        }
+        local ++n
+    }
+    file close `h1'
+    file close `h2'
+    return scalar same = `same'
+    return scalar n = `n'
+end
+
+* The number of lines between the markers of a log that contain text
+capture program drop _pq_count
+program define _pq_count, rclass
+    args file text
+    tempname h
+    file open `h' using `"`file'"', read text
+    _pq_start `h'
+    local n 0
+    while 1 {
+        _pq_next `h' ""
+        if r(eof) continue, break
+        if strpos(`"`r(line)'"', `"`text'"') local ++n
+    }
+    file close `h'
+    return scalar n = `n'
+end
+
+* The replays of ppmlhdfe and cppmlhdfe after the same model, with the
+* same replay options, show the same lines
+capture program drop _pq_replay
+program define _pq_replay
+    syntax, MODEL(string) NAME(string) [ROPTions(string)]
+    tempfile f1 f2
+    capture noisily {
+        quietly ppmlhdfe `model'
+        _pq_lines `"`f1'"' "ppmlhdfe, `roptions'"
+        local rc1 = r(rc)
+        quietly cppmlhdfe `model'
+        _pq_lines `"`f2'"' "cppmlhdfe, `roptions'"
+        local rc2 = r(rc)
+        _pq_same `"`f1'"' `"`f2'"' ""
+        local same = r(same) & r(n) > 0
+    }
+    if _rc test_fail "`name'" "r(`=_rc')"
+    else if `rc1' | `rc2' | !`same' test_fail "`name'" "rc `rc1'/`rc2', same `same'"
+    else test_pass "`name'"
+end
+
+* The notes and warnings ppmlhdfe and cppmlhdfe print while fitting a model
+capture program drop _pq_notes
+program define _pq_notes
+    syntax, MODEL(string) NAME(string) [NONE]
+    tempfile f1 f2
+    local keep "(dropped (ReLU (simplex (IRLS warning: (identifying"
+    capture noisily {
+        _pq_lines `"`f1'"' "ppmlhdfe `model'"
+        local rc1 = r(rc)
+        _pq_lines `"`f2'"' "cppmlhdfe `model'"
+        local rc2 = r(rc)
+        _pq_same `"`f1'"' `"`f2'"' `"`keep'"'
+        local same = r(same) & (r(n) > 0) == ("`none'" == "")
+    }
+    if _rc test_fail "`name'" "r(`=_rc')"
+    else if `rc1' | `rc2' | !`same' test_fail "`name'" "rc `rc1'/`rc2', same `same'"
+    else test_pass "`name'"
+end
+
+clear
+set seed 12345
+set obs 2000
+generate id1 = ceil(_n/40)
+generate id2 = mod(_n, 20) + 1
+generate double x1 = rnormal()
+generate double x2 = rnormal()
+generate double y = rpoisson(exp(0.3*x1 - 0.2*x2 + 0.1*mod(id1,5)))
+replace y = 0 if id1 == 3
+generate double yl = y * 1e-8
+replace yl = 50 in 1
+generate double rrev = x1
+generate byte sepx = (id1 == 7 & y == 0)
+
+* PPML-03, PPML-11, PPML-12: replay with header and footnote, and its
+* eform, noheader, notable and display options
+foreach model in "y x1 x2, absorb(id1 id2)" "y x1 x2, absorb(id1) vce(cluster id2)" ///
+    "y x1 x2, absorb(id1) vce(cluster id1 id2)" "y x1 x2" "y x1 x2, absorb(id1##c.x2 id2)" ///
+    "y x1 x2 [fw=id2], absorb(id1)" {
+    _pq_replay, model(`model') name("PPML-03/11/12 replay: `model'")
+}
+foreach ropt in eform noheader notable "level(90)" "eform level(80) noheader" {
+    _pq_replay, model(y x1 x2, absorb(id1 id2)) roptions(`ropt') name("PPML-03 replay, `ropt'")
+}
+* irr at estimation shows exp(b), as ppmlhdfe's
+_pq_replay, model(y x1 x2, absorb(id1 id2) irr) name("PPML-03 irr shows exp(b)")
+capture noisily {
+    quietly cppmlhdfe y x1 x2, absorb(id1 id2)
+    cppmlhdfe, eform
+    confirm matrix r(table)
+    assert colsof(r(table)) == 3
+}
+if _rc test_fail "PPML-03 replay returns r(table)" "r(`=_rc')"
+else test_pass "PPML-03 replay returns r(table)"
+
+* PPML-13, PPML-14, PPML-15: e(title2), e(title3), e(N_hdfe) (absorb()
+* terms), e(N_hdfe_extended) and e(indepvars) (with _cons), as ppmlhdfe
+foreach model in "y x1 x2, absorb(id1 id2)" "y x1 x2, absorb(id1) vce(cluster id2)" ///
+    "y x1 x2, absorb(i.id1#i.id2 id1)" "y x1 x2, absorb(id1 id1#c.x2)" "y x1 x2, absorb(id1##c.x2 id2)" ///
+    "y x1, absorb(id2##c.(x2) id1)" "y x1 x2" "y i.id2 x1, absorb(id1)" "y x1, absorb(id1 id2)" {
+    quietly ppmlhdfe `model'
+    local r_title2 `"`e(title2)'"'
+    local r_title3 `"`e(title3)'"'
+    local r_indep `"`e(indepvars)'"'
+    local r_N_hdfe = e(N_hdfe)
+    local r_ext = e(N_hdfe_extended)
+    quietly cppmlhdfe `model'
+    if `"`r_title2'"' == `"`e(title2)'"' & `"`r_title3'"' == `"`e(title3)'"' & ///
+        `"`r_indep'"' == `"`e(indepvars)'"' & `r_N_hdfe' == e(N_hdfe) & `r_ext' == e(N_hdfe_extended) ///
+        test_pass "PPML-13/14/15 e() names: `model'"
+    else test_fail "PPML-13/14/15 e() names: `model'" ///
+        `"[`e(title2)'|`e(title3)'|`e(indepvars)'|`=e(N_hdfe)'] vs [`r_title2'|`r_title3'|`r_indep'|`r_N_hdfe']"'
+}
+
+* PPML-17 and the notes: dropped singletons, keepsingletons, a low
+* standardized outcome, ReLU, simplex and IRLS separation, as ppmlhdfe
+foreach model in "y x1 x2, absorb(id1 id2)" "y x1 x2, absorb(id1 id2, keepsingletons)" ///
+    "yl x1 x2, absorb(id1 id2)" "y x1 sepx, absorb(id2) separation(mu)" ///
+    "y x1 x2, absorb(id1 id2) separation(relu)" "y x1 sepx, absorb(id2) separation(simplex)" ///
+    "y x1 sepx, absorb(id2) separation(relu)" ///
+    "y x1 x2, absorb(id1 id2) separation(relu) keepsingletons" {
+    _pq_notes, model(`model') name("PPML-17 notes: `model'")
+}
+
+* verbose(-1), and the HDFE object's verbose(-1), hide them
+foreach model in "y x1 x2, absorb(id1 id2, verbose(-1))" "y x1 x2, absorb(id1 id2) verbose(-1)" {
+    _pq_notes, model(`model') name("PPML-17 notes: `model'") none
+}
+
+* PPML-05: absorb(, maxiterations() verbose()) as ppmlhdfe accepts them;
+* PPML-06: prune, condition, rre(), algorithm(), slopemethod() leave the
+* estimates as they are; condition posts ppmlhdfe's e(finite_condition)
+quietly cppmlhdfe y x1 x2, absorb(id1 id2)
+matrix pq_b0 = e(b)
+foreach opts in "absorb(id1 id2, maxiterations(500) verbose(0))" "absorb(id1 id2, maxit(500))" ///
+    "absorb(id1 id2) condition" "absorb(id1 id2, condition)" "absorb(id1 id2) rre(rrev)" ///
+    "absorb(id1 id2) algorithm(cg)" "absorb(id1 id2) slopemethod(foo)" "absorb(id1 id2, algorithm(map))" {
+    capture quietly ppmlhdfe y x1 x2, `opts'
+    local rc1 = _rc
+    local r_fc = e(finite_condition)
+    capture quietly cppmlhdfe y x1 x2, `opts'
+    local rc2 = _rc
+    if !`rc1' & !`rc2' & mreldif(e(b), pq_b0) < 1e-7 & ///
+        (e(finite_condition) == `r_fc' | (missing(e(finite_condition)) & missing(`r_fc'))) ///
+        test_pass "PPML-05/06 `opts'"
+    else test_fail "PPML-05/06 `opts'" "rc `rc1'/`rc2'"
+}
+* prune is accepted (ppmlhdfe's needs moremata, not installed here)
+capture quietly cppmlhdfe y x1 x2, absorb(id1 id2) prune
+if !_rc & mreldif(e(b), pq_b0) < 1e-7 test_pass "PPML-06 prune"
+else test_fail "PPML-06 prune" "r(`=_rc')"
+* condition requires two absorbed effects; precondition and residuals()
+* are refused, as by ppmlhdfe (whose codes come from Mata: 3598, 3498)
+foreach opts in "absorb(id1) condition" "noabsorb condition" "absorb(id1 id2) precondition" ///
+    "absorb(id1 id2) residuals(rr)" "absorb(id1 id2, verbose(6))" "absorb(id1 id2) rre(nosuchvar)" {
+    capture quietly ppmlhdfe y x1 x2, `opts'
+    local rc1 = _rc
+    capture quietly cppmlhdfe y x1 x2, `opts'
+    local rc2 = _rc
+    if `rc1' & `rc2' & (`rc2' == `rc1' | inlist(`rc1', 3010, 3498, 3598)) test_pass "PPML-06 refused: `opts'"
+    else test_fail "PPML-06 refused: `opts'" "rc `rc1'/`rc2'"
+}
+
+* PPML-07: acceleration() and transform() values as reghdfe reads them
+foreach a in off CG Conj sd stee ai none lsmr steepest_descent {
+    capture quietly ppmlhdfe y x1 x2, absorb(id1 id2) acceleration(`a')
+    local rc1 = _rc
+    capture quietly cppmlhdfe y x1 x2, absorb(id1 id2) acceleration(`a')
+    local rc2 = _rc
+    if !`rc1' & !`rc2' & mreldif(e(b), pq_b0) < 1e-6 test_pass "PPML-07 acceleration(`a')"
+    else test_fail "PPML-07 acceleration(`a')" "rc `rc1'/`rc2'"
+}
+foreach t in CIM kac sym Symmetric_Kaczmarz cimmino {
+    capture quietly ppmlhdfe y x1 x2, absorb(id1 id2) transform(`t')
+    local rc1 = _rc
+    capture quietly cppmlhdfe y x1 x2, absorb(id1 id2) transform(`t')
+    local rc2 = _rc
+    if !`rc1' & !`rc2' & mreldif(e(b), pq_b0) < 1e-6 test_pass "PPML-07 transform(`t')"
+    else test_fail "PPML-07 transform(`t')" "rc `rc1'/`rc2'"
+}
+foreach o in "acceleration(bogus)" "transform(bogus)" "transform(rand)" {
+    capture quietly ppmlhdfe y x1 x2, absorb(id1 id2) `o'
+    local rc1 = _rc
+    capture quietly cppmlhdfe y x1 x2, absorb(id1 id2) `o'
+    local rc2 = _rc
+    if `rc1' & `rc2' & (`rc2' == `rc1' | inlist(`rc1', 3010, 3498, 3598)) test_pass "PPML-07 refused: `o'"
+    else test_fail "PPML-07 refused: `o'" "rc `rc1'/`rc2'"
+}
+
+* PPML-09: ppmlhdfe's GLM properties, at the top level and in absorb()
+foreach prop in "target_inner_tol(1e-10)" "relu_debug(0)" "relu_report_r2(0)" "min_ok(2)" ///
+    "standardize_data(1)" "use_exact_partial(1)" "simplex_tol(1e-11)" "mu_tol(1e-7)" {
+    capture quietly ppmlhdfe y x1 x2, absorb(id1 id2) `prop'
+    local rc1 = _rc
+    matrix pq_r = e(b)
+    capture quietly cppmlhdfe y x1 x2, absorb(id1 id2) `prop'
+    local rc2 = _rc
+    matrix pq_c = e(b)
+    capture quietly cppmlhdfe y x1 x2, absorb(id1 id2, `prop')
+    local rc3 = _rc
+    if !`rc1' & !`rc2' & !`rc3' & mreldif(pq_c, pq_r) < 1e-5 & mreldif(e(b), pq_c) == 0 ///
+        test_pass "PPML-09 `prop'"
+    else test_fail "PPML-09 `prop'" "rc `rc1'/`rc2'/`rc3'"
+}
+* target_inner_tol() is itolerance()
+quietly cppmlhdfe y x1 x2, absorb(id1 id2) itolerance(1e-11)
+matrix pq_c = e(b)
+quietly cppmlhdfe y x1 x2, absorb(id1 id2) target_inner_tol(1e-11)
+if mreldif(e(b), pq_c) == 0 & e(ic2) < . test_pass "PPML-09 target_inner_tol() is itolerance()"
+else test_fail "PPML-09 target_inner_tol() is itolerance()" "b differs"
+foreach o in "absorb(id1 id2, bogus_prop(1))" "absorb(id1 id2, min_o(2))" "absorb(id1 id2) bogus_prop(1)" {
+    capture quietly ppmlhdfe y x1 x2, `o'
+    local rc1 = _rc
+    capture quietly cppmlhdfe y x1 x2, `o'
+    local rc2 = _rc
+    if `rc1' & `rc2' == `rc1' test_pass "PPML-09 refused: `o'"
+    else test_fail "PPML-09 refused: `o'" "rc `rc1'/`rc2'"
+}
+
+* PPML-08: r2 with tagsep() and zvarname() regresses the certificate on the
+* model (creghdfe here, reghdfe in ppmlhdfe): R-squared 1
+tempfile pq_f1 pq_f2
+capture drop pq_sep pq_z
+_pq_lines `"`pq_f1'"' "ppmlhdfe y x1 x2, absorb(id1 id2) tagsep(pq_sep) zvarname(pq_z) r2"
+local rc1 = r(rc)
+local r_r2 = e(r2)
+quietly count if pq_sep == 1
+local r_nsep = r(N)
+capture drop pq_sep pq_z
+_pq_lines `"`pq_f2'"' "cppmlhdfe y x1 x2, absorb(id1 id2) tagsep(pq_sep) zvarname(pq_z) r2"
+local rc2 = r(rc)
+local c_r2 = e(r2)
+quietly count if pq_sep == 1
+local c_nsep = r(N)
+_pq_same `"`pq_f1'"' `"`pq_f2'"' "(identifying (ReLU Verifying"
+if !`rc1' & !`rc2' & r(same) & r(n) == 3 & `r_nsep' == `c_nsep' & `c_nsep' > 0 & abs(`c_r2' - 1) < 1e-8 & ///
+    abs(`r_r2' - 1) < 1e-8 & "`e(cmd)'" == "creghdfe" test_pass "PPML-08 r2 with tagsep()"
+else test_fail "PPML-08 r2 with tagsep()" "rc `rc1'/`rc2' sep `r_nsep'/`c_nsep' r2 `r_r2'/`c_r2'"
+capture drop pq_sep pq_z
+* relu_report_r2(1) is r2; without zvarname() nothing is regressed
+capture drop pq_sep pq_z
+capture noisily quietly cppmlhdfe y x1 x2, absorb(id1 id2) tagsep(pq_sep) zvarname(pq_z) relu_report_r2(1)
+if !_rc & "`e(cmd)'" == "creghdfe" test_pass "PPML-08 relu_report_r2(1)"
+else test_fail "PPML-08 relu_report_r2(1)" "r(`=_rc') `e(cmd)'"
+capture drop pq_sep pq_z
+ereturn clear
+capture quietly cppmlhdfe y x1 x2, absorb(id1 id2) tagsep(pq_sep) r2
+if !_rc & "`e(cmd)'" == "" test_pass "PPML-08 r2 without zvarname()"
+else test_fail "PPML-08 r2 without zvarname()" "r(`=_rc') `e(cmd)'"
+capture drop pq_sep pq_z
+
+* PPML-10: cppmlhdfe, version and cppmlhdfe, reload (standalone)
+ereturn clear
+_pq_lines `"`pq_f2'"' "cppmlhdfe, version"
+local rc_v = r(rc)
+_pq_count `"`pq_f2'"' "Required packages installed?"
+local pq_which = r(n)
+capture quietly cppmlhdfe, reload
+local rc_r = _rc
+capture quietly cppmlhdfe, version level(90)
+local rc_bad = _rc
+if !`rc_v' & `pq_which' == 1 & !`rc_r' & `rc_bad' == 301 test_pass "PPML-10 version and reload"
+else test_fail "PPML-10 version and reload" "rc `rc_v'/`rc_r'/`rc_bad' which `pq_which'"
+
+* PPML-16: predict's statistics, labels and the default's note, as
+* ppmlhdfe_p
+local pq_stats "default mu eta xbd xb d response pearson deviance anscombe working scores stdp"
+foreach model in "y x1 x2, absorb(id1 id2) d" "y x1 x2" "y x1 x2 if id2 > 3, absorb(id1 id2) d" {
+    quietly ppmlhdfe `model'
+    local i 0
+    foreach stat of local pq_stats {
+        local ++i
+        local o = cond("`stat'" == "default", "", ", `stat'")
+        capture drop pq_r`i'
+        * (ppmlhdfe_p's d fails without absorbed effects; cppmlhdfe_p gives 0)
+        capture quietly predict pq_r`i' `o'
+        local r_rc`i' = _rc
+        if !_rc local r_lab`i' : variable label pq_r`i'
+    }
+    quietly cppmlhdfe `model'
+    local fails
+    local i 0
+    foreach stat of local pq_stats {
+        local ++i
+        local o = cond("`stat'" == "default", "", ", `stat'")
+        capture drop pq_c
+        quietly predict pq_c `o'
+        if `r_rc`i'' {
+            drop pq_c
+            continue
+        }
+        local c_lab : variable label pq_c
+        capture assert reldif(pq_r`i', pq_c) < 1e-6 | (missing(pq_r`i') & missing(pq_c))
+        if _rc | `"`r_lab`i''"' != `"`c_lab'"' local fails `fails' `stat'
+        drop pq_r`i' pq_c
+    }
+    if "`fails'" == "" test_pass "PPML-16 predict labels and values: `model'"
+    else test_fail "PPML-16 predict labels and values: `model'" "`fails'"
+    capture drop _ppmlhdfe_d
+}
+quietly ppmlhdfe y x1 x2, absorb(id1 id2) d(pq_d1)
+_pq_lines `"`pq_f1'"' "predict pq_m1"
+quietly cppmlhdfe y x1 x2, absorb(id1 id2) d(pq_d2)
+_pq_lines `"`pq_f2'"' "predict pq_m2"
+_pq_same `"`pq_f1'"' `"`pq_f2'"' ""
+if r(same) & r(n) == 1 test_pass "PPML-16 predict's default note"
+else test_fail "PPML-16 predict's default note" "lines differ"
+capture drop pq_d1 pq_d2 pq_m1 pq_m2
+
 * Summary
 print_summary "cppmlhdfe"
 
@@ -1599,6 +1948,7 @@ program define ppml_native_compare
     preserve
     capture noisily {
         tempvar refsample rd cd
+        ereturn clear
         quietly ppmlhdfe `varlist' `wt' `if' `in', `opts' d(`rd') tol(1e-14) ///
             `precise_ref' `referenceopts'
         matrix rb=e(b)
@@ -1617,6 +1967,7 @@ program define ppml_native_compare
                 quietly predict double `rp_`opt'', `opt'
             }
         }
+        ereturn clear
         quietly cppmlhdfe `varlist' `wt' `if' `in', `opts' `nativeopts' d(`cd') tol(1e-14)
         matrix cb=e(b)
         matrix cv=e(V)

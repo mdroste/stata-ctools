@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.4 20261103}{...}
+{* *! version 1.2.6 20261111}{...}
 {viewerjumpto "Syntax" "civreghdfe##syntax"}{...}
 {viewerjumpto "Description" "civreghdfe##description"}{...}
 {viewerjumpto "Options" "civreghdfe##options"}{...}
@@ -24,11 +24,23 @@
 {weight}
 [{cmd:,} {opt a:bsorb(varlist)} {it:options}]
 
+{pstd}Replay syntax
+
+{p 8 17 2}
+{cmdab:civreghdfe}
+[{cmd:,} {opt first} {opt ffir:st} {opt rf} {opt sfirst} {opt dropfirst} {opt droprf} {opt dropsfirst}
+{opt l:evel(#)} {opt nohe:ader} {opt nofo:oter} {opt eform(string)} {opt plus} {it:display_options}]
+
+{pstd}
+After {cmd:estimates restore} of a stored first-stage, reduced-form or system
+equation, {cmd:civreghdfe} without arguments displays that equation, as
+{cmd:ivreg2} does.
+
 {synoptset 28 tabbed}{...}
 {synopthdr}
 {synoptline}
 {syntab:Main}
-{synopt:{opt a:bsorb(varlist)}}categorical variables to absorb as fixed effects{p_end}
+{synopt:{opt a:bsorb(absvars[, savefe])}}categorical variables to absorb as fixed effects; {it:newvar}{cmd:=}{it:absvar} or {opt savefe} saves them{p_end}
 
 {syntab:Estimators}
 {synopt:{opt liml}}use limited-information maximum likelihood (LIML){p_end}
@@ -37,12 +49,18 @@
 {synopt:{opt gmm2s}}use two-step efficient GMM{p_end}
 {synopt:{opt cue}}use continuously-updated GMM (CUE){p_end}
 {synopt:{opt b0(matrix)}}evaluate the CUE objective and statistics at the coefficients in {it:matrix}{p_end}
+{synopt:{opt wmatrix(matrix)}}GMM with the user-supplied weighting matrix {it:matrix}; first step of {opt gmm2s}{p_end}
+{synopt:{opt smatrix(matrix)}}user-supplied covariance matrix S of the orthogonality conditions{p_end}
+{synopt:{opt center}}center the moments in the robust, cluster and kernel S matrix{p_end}
+{synopt:{opt psd0}, {opt psda}}make S positive semidefinite: negative eigenvalues set to 0 ({opt psd0}) or to their absolute values ({opt psda}){p_end}
 
 {syntab:VCE/SE}
-{synopt:{opt vce(vcetype)}}variance-covariance estimation: {opt un:adjusted}, {opt r:obust}, {opt cl:uster} {it:clustvar} [{it:clustvar2}]{p_end}
+{synopt:{opt vce(vcetype)}}variance-covariance estimation: {opt un:adjusted}, {opt r:obust}, {opt cl:uster} {it:clustvar} [{it:clustvar2}], {opt boot:strap}[{cmd:,} {it:bootopts}]{p_end}
+{synopt:{opt fevce(bootstrap[, feopts])}}bootstrap standard errors of the saved fixed effects{p_end}
+{synopt:{opt wild:bootstrap}[{opt (wildopts)}]}wild restricted efficient (WRE) bootstrap p-values and confidence intervals of the coefficients{p_end}
 {synopt:{opt r:obust}}heteroskedasticity-robust SEs (alias for vce(robust)){p_end}
 {synopt:{opt cl:uster(varlist)}}cluster-robust SEs (alias for vce(cluster varlist)); may be combined with {opt robust}{p_end}
-{synopt:{opt small}}use small-sample adjustments (df corrections){p_end}
+{synopt:{opt sm:all}}use small-sample adjustments (df corrections){p_end}
 {synopt:{opt dofminus(#)}}subtract {it:#} from residual degrees of freedom{p_end}
 {synopt:{opt sdofminus(#)}}additional DOF adjustment for small-sample VCE correction{p_end}
 {synopt:{opt nopartialsmall}}exclude partialled variables from K in small-sample adjustment{p_end}
@@ -50,10 +68,11 @@
 {synopt:{opt keepsin:gletons}}keep singleton groups of the absorbed effects{p_end}
 
 {syntab:HAC Standard Errors (data must be {help tsset})}
-{synopt:{opt bw(#)}}bandwidth for kernel-based estimation: AC, or HAC with {opt robust}{p_end}
-{synopt:{opt kernel(string)}}kernel (requires {opt bw()}): {opt bar:tlett} (default), {opt par:zen}, {opt qs}, {opt tru:ncated}, {opt thann}{p_end}
+{synopt:{opt bw(#|auto)}}bandwidth for kernel-based estimation: AC, or HAC with {opt robust}; {cmd:auto} selects it (Newey-West 1994){p_end}
+{synopt:{opt kernel(string)}}kernel (requires {opt bw()}): {opt bar:tlett} (default), {opt par:zen}, {opt qs}, {opt tru:ncated}, {opt thann}, {opt thamm}, {opt dan}, {opt ten}{p_end}
 {synopt:{opt dkraay(#)}}Driscoll-Kraay SEs with bandwidth {it:#} (tsset panel data){p_end}
 {synopt:{opt kiefer}}Kiefer SEs: within-panel autocorrelation (tsset panel data){p_end}
+{synopt:{opt t:var(varname)}, {opt i:var(varname)}}the tsset time and panel variables (as {cmd:ivreg2}, they must be the tsset ones){p_end}
 
 {syntab:Estimation Settings}
 {synopt:{opt tol:erance(#)}}convergence tolerance for CG solver (default: 1e-8){p_end}
@@ -62,19 +81,27 @@
 {synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
 {synopt:{opt noc:onstant}}suppress constant term (absorbed with FE){p_end}
 {synopt:{opt nocollin}}skip {cmd:ivreg2}'s collinearity checks of the variables{p_end}
+{synopt:{opt bvclean}}leave base levels and omitted terms out of {cmd:e(b)} and {cmd:e(V)} (implied by {opt partial()}){p_end}
+{synopt:{opt fvall}, {opt fvsep}, {opt useqr}}accepted for {cmd:ivreg2} compatibility; they do not change the results{p_end}
+{synopt:{opt groupv:ar(newvar)}}save {cmd:reghdfe}'s mobility group of the first two absorbed effects{p_end}
+{synopt:{opt tec:hnique()} {opt tra:nsform()} {opt accel:eration()} {opt prec:onditioner()} {opt prune} {opt pool:size(#)} {opt nosamp:le}}{cmd:reghdfe}'s solver and memory options, which {cmd:ivreghdfe} passes on: checked as {cmd:reghdfe} checks them; civreghdfe's own solver does not use them{p_end}
 
 {syntab:Reporting}
-{synopt:{opt first}}report first-stage regression statistics{p_end}
-{synopt:{opt ffir:st}}report full first-stage statistics (partial R², F-stat){p_end}
+{synopt:{opt first}}report the first-stage regressions and the first-stage statistics{p_end}
+{synopt:{opt ffir:st}}report the first-stage, identification and weak-instrument-robust statistics{p_end}
+{synopt:{opt sfirst}}report the first-stage and reduced-form regressions as one system of equations{p_end}
 {synopt:{opt rf}}report reduced-form estimates{p_end}
 {synopt:{opt coviv}}LIML and k-class covariance from the 2SLS form (X'P_Z X)^-1{p_end}
-{synopt:{opt v:erbose}}display progress and elapsed times{p_end}
+{synopt:{opt v:erbose}[{opt (#)}]}display progress and elapsed times; {opt verbose(#)} with {it:#} > 0 is {opt verbose}{p_end}
+{synopt:{opt timeit}}display the elapsed times{p_end}
+{synopt:{opt nowarn}}accepted, as {cmd:reghdfe}'s{p_end}
 
 {syntab:Display}
 {synopt:{opt l:evel(#)}}set confidence level; default is {cmd:level(95)}{p_end}
-{synopt:{opt nohead:er}}suppress output header{p_end}
-{synopt:{opt nofoot:er}}suppress output footer (diagnostic tests){p_end}
+{synopt:{opt nohe:ader}}suppress output header{p_end}
+{synopt:{opt nofo:oter}}suppress output footer (diagnostic tests){p_end}
 {synopt:{opt noout:put}}suppress coefficient table{p_end}
+{synopt:{opt nowild:table}}suppress the wild bootstrap table{p_end}
 {synopt:{opt ti:tle(string)}}custom title for output{p_end}
 {synopt:{opt sub:title(string)}}subtitle displayed below title{p_end}
 {synopt:{opt depn:ame(string)}}custom label for dependent variable in output{p_end}
@@ -91,27 +118,32 @@
 {synopt:{opt allbaselev:els}}display all base levels{p_end}
 
 {syntab:Diagnostic Tests}
-{synopt:{opt orth:og(varlist)}}test orthogonality/exogeneity of specified excluded instruments (C-statistic){p_end}
+{synopt:{opt orth:og(varlist)}}test orthogonality/exogeneity of specified excluded or included instruments (C-statistic){p_end}
 {synopt:{opt endog:test(varlist)}}test endogeneity of specified endogenous regressors{p_end}
 {synopt:{opt red:undant(varlist)}}test redundancy of specified excluded instruments{p_end}
 
 {syntab:Estimation}
-{synopt:{opt part:ial(varlist)}}partial out specified exogenous regressors via FWL{p_end}
+{synopt:{opt part:ial(varlist)}}partial out specified exogenous regressors via FWL; {cmd:_cons} partials out the constant (also alone), {cmd:_all} every included exogenous regressor{p_end}
 {synopt:{opt fwl(varlist)}}alias for {opt partial()} (Frisch-Waugh-Lovell){p_end}
 
 {syntab:Save Results}
 {synopt:{opt res:iduals(newvar)}}save residuals to new variable{p_end}
-{synopt:{opt residuals2}}save residuals to auto-named variable _civreghdfe_resid{p_end}
+{synopt:{opt residuals2}}save residuals to {cmd:_reghdfe_resid}, replaced if it exists (as {cmd:ivreghdfe}){p_end}
 {synopt:{opt savef:irst}}store the first-stage regressions using {cmd:estimates store}{p_end}
-{synopt:{opt savefp:refix(string)}}prefix for stored results (default: _civreghdfe_){p_end}
+{synopt:{opt savefp:refix(string)}}prefix for stored results (default: _ivreg2_){p_end}
 {synopt:{opt saverf}}store reduced-form estimation results{p_end}
-{synopt:{opt saverfp:refix(string)}}prefix for stored RF results (default: _civreghdfe_rf_){p_end}
+{synopt:{opt saverfp:refix(string)}}prefix for stored RF results (default: _ivreg2_){p_end}
+{synopt:{opt savesf:irst}}store the system of first-stage and reduced-form equations{p_end}
+{synopt:{opt savesfp:refix(name)}}prefix for the stored system (default: _ivreg2_; implies {opt savesfirst}){p_end}
 {synopt:{opt noreturn}}skip all result storage (faster for scripted use){p_end}
 {synoptline}
 {p2colreset}{...}
 {p 4 6 2}
 {opt aweight}s, {opt fweight}s, and {opt pweight}s are allowed;
-see {help weight}. {cmd:by} is allowed; see {help prefix}.
+see {help weight}. {opt iweight}s are allowed as {cmd:ivreg2} allows them:
+without {opt absorb()} and with the homoskedastic VCE (not with {opt robust},
+{opt cluster()}, {opt gmm2s} or kernels), and not negative; {cmd:e(N)} is
+the integer part of their sum. {cmd:by} is allowed; see {help prefix}.
 
 
 {marker description}{...}
@@ -151,7 +183,20 @@ leaves its name unmarked with a zero coefficient and variance;
 {cmd:civreghdfe} also omits variables whose remaining variation after removing
 fixed effects falls below its numerical threshold. {cmd:ivreghdfe} may retain
 these variables, producing different coefficients and degrees of freedom.
-{opt sfirst} is not available.
+
+{pstd}
+Typed without a variable list, {cmd:civreghdfe} redisplays the last
+{cmd:civreghdfe} results (also {cmd:estimates replay}). As with {cmd:ivreg2},
+the replay options {opt first}, {opt ffirst}, {opt rf} and {opt sfirst} show the
+first-stage results stored at estimation ({opt first} and {opt sfirst} need the
+equations stored by {opt savefirst} and {opt savesfirst}, {opt rf} the one of
+{opt saverf}; the summary of {opt ffirst} needs {cmd:e(first)}, stored with
+{opt first}, {opt ffirst}, {opt sfirst}, {opt savefirst} or {opt savesfirst});
+{opt dropfirst}, {opt droprf} and {opt dropsfirst} drop the stored equations
+after the display; {opt level()}, {opt noheader}, {opt nofooter}, {opt eform()},
+{opt plus} and the factor-variable display options apply to the redisplay.
+{cmd:by} cannot be combined with replay (error 601), and replay after another
+estimation command is error 301.
 
 
 {marker options}{...}
@@ -164,9 +209,31 @@ these variables, producing different coefficients and degrees of freedom.
 absorbed from all variables (dependent, endogenous, exogenous, and instruments)
 before IV estimation. As in {cmd:reghdfe}, each term is a numeric or string
 variable, an {cmd:i.}{it:var}, or an interaction {it:var1}{cmd:#}{it:var2}
-absorbed as one effect; heterogeneous slopes and suboptions are not supported.
+absorbed as one effect. Heterogeneous slopes are absorbed as {cmd:reghdfe}
+absorbs them: {it:id}{cmd:#c.}{it:x} (the slope alone), {it:id}{cmd:##c.}{it:x}
+(intercept and slope), {it:id}{cmd:##c.(}{it:x z}{cmd:)} and
+{it:id}{cmd:##(c.}{it:x} {cmd:c.}{it:z}{cmd:)}, with at most ten intercepts and
+slopes in all. Their degrees of freedom follow {cmd:reghdfe}'s rules
+({cmd:e(extended_absvars)}, and {cmd:?} in the absorbed degrees-of-freedom table
+where the redundant count may be higher). {opt vce(bootstrap)},
+{opt fevce()} and {opt wildbootstrap()} are not available with slopes.
 The cluster variables of {opt vce(cluster)} may likewise be string variables or
 interactions.
+
+{pmore}
+As in {cmd:reghdfe}, {it:newvar}{cmd:=}{it:absvar} saves the estimated effect of
+that term in {it:newvar} (a slope in {it:newvar}{cmd:Slope}{it:#}), and the suboption {opt savefe} saves every effect,
+those not named in {cmd:__hdfe}{it:#}{cmd:__}. The names must be new. The effects
+are those of d = y - Xb - e, the actual endogenous and exogenous regressors and
+the structural residual: recovered by {helpb creghdfe} on y - Xb with the fit's
+weights and normalized as {cmd:reghdfe} normalizes them, with the constant,
+which is partialled out with the effects, in the first effect as
+{cmd:ivreghdfe} saves them. {cmd:e(savefe)} lists the variables. With
+{opt partial()}, the partialled-out regressors, whose coefficients
+{cmd:e(b)} leaves out, are regressors in that recovery: by the
+Frisch-Waugh-Lovell theorem their coefficients are those of y - Xb on them
+with the effects absorbed, so the effects are those of the model without
+{opt partial()}.
 
 {dlgtab:Estimators}
 
@@ -209,6 +276,22 @@ covariance at those coefficients, and the residual statistics follow from them
 regressors by name ({cmd:_cons} included without {opt absorb()}). {opt b0()} implies
 {opt noid} and cannot be combined with another estimator.
 
+{phang}
+{opt wmatrix(matrix)} and {opt smatrix(matrix)} supply {cmd:ivreg2}'s GMM weighting
+matrix W and covariance matrix S of the orthogonality conditions (S in
+{cmd:ivreg2}'s scale, as its {cmd:e(S)}). The rows and columns are picked by the
+instruments' names (excluded instruments, included instruments and, without
+{opt absorb()}, {cmd:_cons}; extra rows and columns are ignored), and the matrix
+must be symmetric. As in {cmd:ivreg2}: with {opt smatrix()} (and no
+{opt wmatrix()}) the estimator is efficient GMM with that S, its J statistic and
+covariance use it whatever the VCE; with {opt wmatrix()} and a robust, cluster or
+kernel VCE the estimator is the (possibly inefficient) GMM estimator with weights W,
+its VCE the sandwich with S, and J that of efficient GMM ({cmd:e(model)} is
+{cmd:gmmw}); with {opt gmm2s} the W estimator is the first step; with neither
+{opt gmm2s} nor a non-iid VCE, {cmd:ivreg2} ignores W and so does {cmd:civreghdfe}
+(2SLS, labelled {cmd:gmmw}). LIML, k-class and CUE do not use either matrix, as in
+{cmd:ivreg2}.
+
 {dlgtab:VCE/SE}
 
 {phang}
@@ -218,6 +301,7 @@ regressors by name ({cmd:_cons} included without {opt absorb()}). {opt b0()} imp
 {phang2}{opt robust} - heteroskedasticity-robust standard errors{p_end}
 {phang2}{opt cluster} {it:clustvar} - cluster-robust standard errors{p_end}
 {phang2}{opt cluster} {it:clustvar1} {it:clustvar2} - two-way cluster-robust standard errors{p_end}
+{phang2}{opt bootstrap} [{cmd:,} {it:bootopts}] - pairs bootstrap standard errors (below){p_end}
 
 {pstd}
 Two-way clustering computes standard errors that are robust to arbitrary correlation
@@ -235,6 +319,110 @@ inference uses the normal distribution.
 of freedom. {opt sdofminus(#)} supplies an additional nonnegative adjustment
 for the small-sample covariance multiplier. {opt nopartialsmall} excludes
 partialled-out regressors from that multiplier's regressor count.
+
+
+{phang}
+{opt vce(bootstrap} [{cmd:,} {it:bootopts}]{opt )} computes bootstrap standard
+errors (a pairs bootstrap: observations or clusters are resampled with
+replacement). The replicates run inside the plugin on the data loaded for the
+fit, much faster than the {helpb bootstrap} prefix (around which
+{cmd:ivreghdfe} does not run). Each replicate re-estimates the model with the
+chosen estimator ({cmd:2SLS}, {opt liml}, {opt fuller()}, {opt kclass()},
+{opt gmm2s} or {opt cue}), after dropping its own singletons, partialling out
+the fixed effects and {opt partial()} again and applying the collinearity rules
+of the fit; a replicate whose omitted regressors or instruments differ from the
+full sample's is missing, as with the {cmd:bootstrap} prefix. The results are
+those {cmd:vce(bootstrap)} posts after official estimation commands, so
+{helpb bootstrap postestimation:estat bootstrap} reports the normal, percentile
+and bias-corrected intervals. Inference is z-based: {cmd:e(df_r)} is not
+posted, and the header reports a Wald chi-squared test of the regressors.
+{it:bootopts} are those of {helpb creghdfe}'s {opt vce(bootstrap)}:
+{opt r:eps(#)} (default 50), {opt seed(#)}, {opt cl:uster(clustvar)},
+{opt str:ata(varlist)}, {opt draws(stata|fast)} (default {cmd:stata}), {opt mse}, {opt l:evel(#)},
+{opt nodots}, {opt dots(#)} and {opt saving()}.
+
+{pmore}
+The fit itself still needs a covariance: the identification, weak-instrument
+and overidentification statistics, the first-stage and reduced-form
+regressions and the moment covariance S of {opt gmm2s} and {opt cue} use a
+base VCE, cluster-robust on the bootstrap's {opt cluster()} variable if given,
+otherwise heteroskedasticity-robust. Its covariance is posted as
+{cmd:e(V_modelbased)}, and a note under the table names it. In the replicates
+of {opt gmm2s} and {opt cue}, S is that of the data each replicate stands for:
+each drawn copy of a cluster is a cluster of its own (as {cmd:idcluster()}
+makes it), and each copy of an observation an observation. With
+{cmd:draws(stata)} and the same seed, the results equal the bootstrap prefix's
+on {cmd:ivreghdfe} as it would run on the drawn, expanded data. Weights are
+allowed: {cmd:aweight}s and {cmd:pweight}s multiply the resampled rows, and
+without {opt cluster()} {cmd:fweight}s are resampled as the observations they
+stand for ({cmd:draws(stata)}: {cmd:bsample}'s draws on the expanded data). Not with {opt bw()},
+{opt kernel()}, {opt dkraay()} or {opt kiefer} (resample panels with
+{opt cluster()} instead), {opt b0()}, {opt smatrix()} or {opt wmatrix()}.
+{opt cue} re-optimizes in every replicate.
+
+{phang}
+{opt fevce(bootstrap} [{cmd:,} {it:feopts}]{opt )} computes bootstrap standard
+errors of the saved fixed effects ({opt absorb(..., savefe)} or
+{it:newvar}{cmd:=}{it:absvar}), as {helpb creghdfe}'s {opt fevce()} does: each
+replicate re-estimates the model and recovers the effects of d = y - Xb - e as
+the fit saves them (the constant in the first effect). The standard error of
+an effect saved in {cmd:__hdfe}{it:g}{cmd:__} is saved in {cmd:__fese}{it:g}{cmd:__},
+that of {it:newvar} in {it:newvar}{cmd:_se}. {it:feopts} are {it:bootopts}
+and {opt sestub(stub)}, {opt nreps}, {opt ci} and {opt dse(newvar)} as in
+{helpb creghdfe}. With {opt partial()}, each replicate recovers the
+partialled regressors' coefficients as the fit does. With {opt vce(bootstrap)} the
+coefficients and the fixed effects share one set of replicates, and
+{opt level()}, {opt mse} and {opt dots()} are those of {opt vce()}
+({opt fevce()} may repeat them). Alone,
+{opt fevce()} leaves {cmd:e(V)} as {opt vce()} computes it; with {opt gmm2s}
+or {opt cue} that {opt vce()} must then be robust or one-way cluster, whose S
+each replicate re-estimates. With two or more absorbed effects, individual
+effects are identified only up to a normalization within each connected set
+of levels; their standard errors depend on it, and a warning says so. The sum
+d is identified: {opt dse()} saves its standard errors.
+
+{phang}
+{opt wildbootstrap}[{opt (wildopts)}] adds wild bootstrap p-values and
+confidence intervals for the coefficients, after the analytic fit: e(b),
+e(V), the diagnostics and the coefficient table are unchanged, and a second
+table reports, for each tested coefficient (endogenous or exogenous), the
+bootstrap p-value of H0: b = 0 and the interval found by inverting the
+bootstrap test. It is the wild restricted efficient bootstrap (WRE) of
+Davidson and MacKinnon (2010), as
+{browse "https://ideas.repec.org/c/boc/bocode/s458121.html":boottest}
+computes it: under the null, the structural equation is estimated by LIML
+(whatever the estimator), the first stage regresses the endogenous
+regressors on the instruments and that structural residual, and each
+replication perturbs both residuals by the same weight, then re-estimates
+with the command's estimator ({opt 2sls}, {opt liml}, {opt fuller()} or
+{opt kclass()}) and its analytic standard error. {opt nonull} bootstraps
+from the unrestricted LIML fit instead (WUE). It needs {opt vce(robust)} or
+{opt vce(cluster} {it:clustvar}{opt )}, and is not available with
+{opt gmm2s}, {opt cue}, kernel standard errors, {opt b0()},
+{opt smatrix()}, {opt wmatrix()} or {opt vce(bootstrap)}. {it:wildopts}
+are those of {helpb creghdfe}'s {opt wildbootstrap()}: {opt reps(#)}
+(default 999), {opt seed(#)}, {opt weighttype()}, {opt nonull},
+{opt coefs()}, {opt ptype()}, {opt noenumerate}, {opt fedgp()}, {opt noci},
+{opt level()}, {opt bootcluster()}, {opt nodots} and {opt dots()}; for the
+same {opt seed()} the weights, and hence the p-values, are boottest's after
+{helpb ivreg2} with the absorbed effects as dummies.
+
+{pmore}
+Absorbed effects nested in the bootstrap clusters cost nothing; an effect
+that crosses them is partialled out of each replicate's perturbed data (the
+bootstrap of the full model; {cmd:fedgp(partialled)} skips that), and
+{cmd:e(wb_fe_path)} records which. {opt partial()} variables stay
+regressors of the bootstrap model, so the results do not depend on
+{opt partial()}. Every value b0 costs a few small matrix products per
+replication and cluster, so the intervals are exact inversions of the
+bootstrap test, as in {helpb creghdfe}. boottest after {cmd:ivreghdfe} with
+{opt absorb()} does not reproduce the WRE statistic in version 4.5.5; the
+reference is boottest after {cmd:ivreg2} (or {cmd:ivreghdfe} without
+{opt absorb()}) with the effects as dummies. boottest does not take
+{opt fuller()} or {opt kclass()}; there the replicates use the same Fuller
+constant as the fit. {opt wildbootstrap()} may be combined with
+{opt fevce(bootstrap)}. With {opt vce(robust)} and {cmd:fweight}s it needs
+{opt bootcluster()}.
 
 
 {dlgtab:HAC Standard Errors}
@@ -267,9 +455,32 @@ span of the estimation sample (in units of the tsset delta).
 {phang2}{opt tru:ncated} or {opt trunc} - Truncated{p_end}
 {phang2}{opt thann}, {opt tukey} or {opt tukey-hanning} - Tukey-Hanning{p_end}
 
-{pstd}
-{cmd:bw(auto)}, {opt center}, and the Tukey-Hamming, Daniell, and Tent kernels
-are not supported.
+{phang2}{opt thamm} or {opt tukey-hamming} - Tukey-Hamming{p_end}
+{phang2}{opt dan} or {opt danielle} - Daniell (uses every lag up to the time span; {cmd:e(kernel)} is "Danielle", as in {cmd:ivreg2}){p_end}
+{phang2}{opt ten} or {opt tent} - Tent (uses every lag up to the time span){p_end}
+
+{phang}
+{cmd:bw(auto)} selects the bandwidth by Newey and West's (1994) procedure, as
+{cmd:ivreg2} does, from the first-step (IV or {opt wmatrix()} GMM) residuals and the
+instruments (with {opt absorb()}, after the fixed effects are partialled out);
+the lag truncation and the time span come from the time variable of the sample.
+It is available for the Bartlett, Parzen and Quadratic Spectral kernels and for
+time series only (not for panel data, error 198); with another kernel the
+bandwidth is 1, with {cmd:ivreg2}'s warning. The chosen bandwidth is stored in
+{cmd:e(bw)} (to {cmd:ivreg2}'s 7 significant digits) and the choice is described
+in {cmd:e(bwchoice)}. {cmd:bw(auto)} is not available with LIML, k-class or
+{opt b0()} estimation, which {cmd:ivreg2} runs with an unset bandwidth.
+
+{phang}
+{opt center} centers the moment conditions in the moment covariance S, as in
+{cmd:ivreg2}: in the robust and kernel S each contribution is centered at the
+weighted mean of the moments, in the cluster (and Driscoll-Kraay) S each
+observation's moment is centered before the clusters are summed. It changes the
+efficient GMM weighting matrix ({opt gmm2s}, {opt cue}), the J and C statistics,
+the LIML and k-class sandwich and the first-stage statistics; the 2SLS VCE does
+not change (its moments are orthogonal to the mean), and the homoskedastic
+statistics are unaffected. The underidentification and weak-identification
+statistics are not centered, as in {cmd:ivreg2}. {cmd:e(center)} is 1.
 
 {phang}
 {opt dkraay(#)} requests Driscoll-Kraay standard errors, robust to heteroskedasticity
@@ -318,19 +529,36 @@ The default follows the {help ctools##threads:ctools thread setting}.
 {dlgtab:Reporting}
 
 {phang}
-{opt first} displays the first-stage regressions. Use {opt ffirst}
-to display a formatted first-stage summary table.
+{opt first} displays each first-stage regression, its F test of the excluded
+instruments and the Sanderson-Windmeijer multivariate F test, followed by the
+summary of {opt ffirst}, as {cmd:ivreg2} does.
 
 {phang}
-{opt ffirst} reports full first-stage regression summary statistics in a
-tabular format. For each endogenous variable, displays the partial R-squared
-(the R² from regressing the endogenous variable on all instruments after
-partialling out exogenous regressors) and the first-stage F-statistic with
-its p-value. As in {cmd:ivreg2}, the F-statistic tests the excluded instruments
-under the model's covariance estimator (robust, cluster or kernel when one is
-specified), and its denominator degrees of freedom are G-1 with G clusters.
-These statistics are also stored in {cmd:e()} for each
-endogenous variable (e.g., {cmd:e(partial_r2_1)}, {cmd:e(F_first1)}).
+{opt ffirst} displays {cmd:ivreg2}'s summary of the first-stage statistics: for
+each endogenous regressor the F test of the excluded instruments and the
+Sanderson-Windmeijer chi-squared and F statistics; the underidentification and
+weak-identification tests with the Stock-Yogo critical values; and the
+weak-instrument-robust Anderson-Rubin Wald tests (F and chi-squared) and the
+Stock-Wright LM S statistic of H0: the coefficients of the endogenous regressors
+are zero. As in {cmd:ivreg2}, the statistics use the model's covariance
+estimator (robust, cluster, two-way, kernel, Driscoll-Kraay, Kiefer, with
+{opt center}), and with G clusters the F statistics have G-1 denominator
+degrees of freedom. They are stored in {cmd:e(first)}, {cmd:e(arf)} ... and
+{cmd:e(sstat)} ... (see {it:Stored results}), with {cmd:e(partial_r2_}{it:#}{cmd:)}
+and {cmd:e(F_first}{it:#}{cmd:)}. A Wald statistic whose covariance matrix is not
+positive definite (as can happen with two-way clustering) is missing, as in
+{cmd:ivreg2}.
+
+{phang}
+{opt sfirst} displays the first-stage and reduced-form regressions as one
+system of equations (the dependent variable and each endogenous regressor on
+all the instruments), with their joint covariance matrix under the model's VCE
+and {cmd:ivreg2}'s small-sample adjustment, followed by the summary of
+{opt ffirst}. {opt savesfirst} stores the system as
+{it:prefix}{cmd:sfirst_}{it:depvar} ({opt savesfprefix()}, default
+{cmd:_civreghdfe_}), with {cmd:e(S)}, {cmd:e(k_eq)} and {cmd:e(model)} =
+{cmd:sfirst}; its name is in {cmd:e(sfirsteq)}. Base levels of factor variables
+are not added to the stored system.
 
 {phang}
 {opt rf} reports reduced-form regression estimates (regression of the dependent
@@ -338,8 +566,13 @@ variable directly on all instruments).
 
 {phang}
 The first-stage and reduced-form regressions of {opt first}, {opt rf},
-{opt savefirst} and {opt saverf} are run by {cmd:creghdfe}, which clusters in one
-dimension only; with two-way clustering these options are an error.
+{opt savefirst} and {opt saverf} are {cmd:civreghdfe} fits without endogenous
+regressors over the IV estimation sample, as {cmd:ivreg2} runs them. They use
+the main fit's weights, fixed effects and VCE (kernels, Driscoll-Kraay, Kiefer
+and two-way clustering included), its {opt partial()} and {opt noconstant}, and
+small-sample statistics. As in {cmd:ivreg2}, {opt rf} is shown ahead of the
+first-stage regressions, with {opt level()}; the first-stage tables use the
+{cmd:set level} confidence level.
 
 {phang}
 {opt coviv} computes the covariance of the LIML, Fuller and k-class estimators
@@ -387,7 +620,9 @@ The test is still computed and stored in {cmd:e(idstat)}.
 
 {phang}
 {opt orthog(varlist)} requests the C-statistic (orthogonality test) for the specified
-excluded instruments. The test evaluates whether the specified instruments satisfy
+excluded or included instruments (an included one is treated as endogenous in
+the restricted model, as in {cmd:ivreg2}); partialled-out regressors cannot be
+tested. The test evaluates whether the specified instruments satisfy
 the exclusion restriction (i.e., are uncorrelated with the structural error).
 The C-statistic is computed as C = J_full - J_restricted, where J_restricted is the
 Sargan/Hansen statistic of the efficient GMM fit without the tested instruments,
@@ -415,7 +650,7 @@ The varlists of {opt orthog()}, {opt endogtest()}, {opt redundant()} and
 {opt partial()} may use factor-variable and time-series operators; they are
 expanded and matched term by term against the model's (expanded) variables, as
 {cmd:ivreg2} does. Repeated names are counted once and base levels are skipped.
-{opt orthog()} and {opt redundant()} accept excluded instruments only. A listed
+{opt redundant()} accepts excluded instruments only. A listed
 instrument or endogenous regressor that was dropped as collinear (or absorbed by
 the fixed effects) cannot be tested, and the command exits with an error.
 
@@ -443,7 +678,10 @@ absorption, on the demeaned data, and uses the estimation weights. A partial()
 variable that is collinear with earlier ones or absorbed by the fixed effects
 is dropped with a note. Without {opt absorb()}, the constant is partialled out
 as well and counted in {cmd:e(partial_ct)}, as in {cmd:ivreg2}; {cmd:e(b)}
-then has no {cmd:_cons}.
+then has no {cmd:_cons}. {cmd:partial(_cons)} partials out only the constant
+(not with {opt absorb()}, which absorbs it, nor with {opt noconstant}), and
+{cmd:partial(_all)} every included exogenous regressor. As in {cmd:ivreg2},
+{opt partial()} implies {opt bvclean}: {cmd:e(b)} has no base levels.
 
 {dlgtab:Save Results}
 
@@ -453,25 +691,27 @@ variable named {it:newvar}.
 
 {phang}
 {opt savefirst} stores each first-stage regression, as {cmd:ivreg2} does, with
-{cmd:estimates store} under the prefix (default: "_civreghdfe_") followed by the
-name of the endogenous regressor, so they can be retrieved later with
-{cmd:estimates restore}. The constant is partialled out with the fixed effects.
-The IV estimation results are also stored, under the prefix followed by "main".
+{cmd:estimates store} under the prefix (default: "_ivreg2_", {cmd:ivreg2}'s)
+followed by the name of the endogenous regressor, so they can be retrieved later
+with {cmd:estimates restore}. The constant is partialled out with the fixed
+effects. The stored equations keep their estimation sample, {cmd:e(sample)},
+{cmd:ivreg2}'s residual degrees of freedom and {cmd:e(S)} (their block of the
+system's moment covariance), and {cmd:predict} gives their linear prediction.
 
 {phang}
 {opt savefprefix(string)} specifies the prefix to use when storing first-stage
-results with {opt savefirst}. The default prefix is "_civreghdfe_".
+results, and implies {opt savefirst}, as in {cmd:ivreg2}. The default prefix is
+"_ivreg2_". Likewise {opt saverfprefix()} implies {opt saverf}.
 
 {phang}
 {opt saverf} stores the reduced-form regression of the dependent variable on
 the instruments, as {cmd:ivreg2} does, with {cmd:estimates store} under the
-prefix (default: "_civreghdfe_rf_") followed by the name of the dependent
-variable. The IV estimation results are also stored, under the prefix followed
-by "main".
+prefix (default: "_ivreg2_") followed by the name of the dependent
+variable.
 
 {phang}
 {opt saverfprefix(string)} specifies the prefix to use when storing reduced-form
-results with {opt saverf}. The default prefix is "_civreghdfe_rf_".
+results with {opt saverf}. The default prefix is "_ivreg2_".
 
 {phang}
 {opt noreturn} skips storing estimation results in {cmd:e()}. Use it when only
@@ -484,9 +724,11 @@ generated variables, such as residuals, are needed.
 {pstd}
 {cmd:predict newvar} defaults to {opt xb}, the structural linear prediction
 excluding absorbed effects. {opt stdp} gives its standard error.
-{opt residuals} returns estimation-sample residuals; with absorbed effects,
-specify {opt residuals(newvar)} during estimation first. The option
-{opt residuals2} saves these as {cmd:_civreghdfe_resid}.
+{opt residuals} returns the residuals, also outside the estimation sample
+without absorbed effects, as {cmd:ivreg2}'s {cmd:predict}; with absorbed
+effects, specify {opt residuals(newvar)} during estimation first (they are then
+the estimation-sample residuals). The option {opt residuals2} saves these as
+{cmd:_reghdfe_resid}.
 
 {pstd}
 {cmd:predict newvar, xbd} returns y minus the saved residual, including absorbed
@@ -576,19 +818,24 @@ coefficients, as with {cmd:ivreghdfe}.
 {synopt:{cmd:e(ll)}}log likelihood, as {cmd:ivreg2} ({cmd:estat ic} uses it){p_end}
 {synopt:{cmd:e(num_singletons)}, {cmd:e(N_full)}}singletons dropped and observations before they are dropped{p_end}
 {synopt:{cmd:e(nocollin)}}1 if {opt nocollin} was specified{p_end}
-{synopt:{cmd:e(df_r)}}residual degrees of freedom (with {opt small} or {opt absorb()}){p_end}
+{synopt:{cmd:e(df_r)}}residual degrees of freedom (with {opt small} or {opt absorb()}; not with {cmd:vce(bootstrap)}){p_end}
 {synopt:{cmd:e(df_a)}}absorbed degrees of freedom{p_end}
 {synopt:{cmd:e(K)}}number of regressors{p_end}
 {synopt:{cmd:e(K_endog)}}number of endogenous regressors{p_end}
 {synopt:{cmd:e(K_exog)}}number of exogenous regressors{p_end}
 {synopt:{cmd:e(K_iv)}}number of instruments (including exogenous){p_end}
-{synopt:{cmd:e(G)}}number of absorbed FE groups{p_end}
-{synopt:{cmd:e(N_hdfe)}}number of absorbed FE dimensions (same as G){p_end}
+{synopt:{cmd:e(G)}}number of absorbed intercepts and slopes{p_end}
+{synopt:{cmd:e(N_hdfe)}}number of absorbed effects{p_end}
+{synopt:{cmd:e(N_hdfe_extended)}}number of absorbed intercepts and slopes (as reghdfe){p_end}
 {synopt:{cmd:e(N_clust)}}number of clusters (if clustered); for two-way equals e(N_clust1){p_end}
 {synopt:{cmd:e(N_clust1)}}number of first-dimension clusters (if two-way clustered){p_end}
 {synopt:{cmd:e(N_clust2)}}number of second-dimension clusters (if two-way clustered){p_end}
 {synopt:{cmd:e(bw)}}bandwidth of a kernel-based VCE (Kiefer: the time span T){p_end}
-{synopt:{cmd:e(F)}}Wald F-statistic{p_end}
+{synopt:{cmd:e(F)}}Wald F-statistic (not with {cmd:vce(bootstrap)}){p_end}
+{synopt:{cmd:e(chi2)}, {cmd:e(p)}}Wald chi-squared test of the regressors and its p-value (with {cmd:vce(bootstrap)}){p_end}
+{synopt:{cmd:e(N_reps)}, {cmd:e(N_misreps)}}bootstrap replicates, and those incomplete (with {cmd:vce(bootstrap)}){p_end}
+{synopt:{cmd:e(fe_N_reps)}, {cmd:e(fe_split_reps)}, {cmd:e(fe_norm_warning)}}as {helpb creghdfe} (with {cmd:fevce(bootstrap)}){p_end}
+{synopt:{cmd:e(wb_reps)}, {cmd:e(wb_misreps)}, {cmd:e(wb_enumerated)}, {cmd:e(wb_N_clust)}, {cmd:e(wb_level)}}as {helpb creghdfe} (with {cmd:wildbootstrap}){p_end}
 {synopt:{cmd:e(r2)}}R-squared{p_end}
 {synopt:{cmd:e(r2_a)}}adjusted R-squared{p_end}
 {synopt:{cmd:e(rss)}}residual sum of squares{p_end}
@@ -596,6 +843,9 @@ coefficients, as with {cmd:ivreghdfe}.
 {synopt:{cmd:e(tss)}}total sum of squares{p_end}
 {synopt:{cmd:e(rmse)}}root mean squared error{p_end}
 {synopt:{cmd:e(level)}}confidence level{p_end}
+{synopt:{cmd:e(condzz)}, {cmd:e(condxx)}}condition numbers of Z'Z and X'X (after partialling out), as {cmd:ivreg2}{p_end}
+{synopt:{cmd:e(df_a_initial)}, {cmd:e(df_a_redundant)}, {cmd:e(df_a_nested)}}absorbed categories, redundant and nested ones, as {cmd:reghdfe} (with {opt absorb()}){p_end}
+{synopt:{cmd:e(drop_singletons)}}1 unless {opt keepsingletons} (with {opt absorb()}){p_end}
 
 {p2col 5 20 24 2: First-stage scalars}{p_end}
 {synopt:{cmd:e(F_first1)}}first-stage F-stat for 1st endogenous var (missing for an endogenous variable dropped as collinear){p_end}
@@ -603,6 +853,11 @@ coefficients, as with {cmd:ivreghdfe}.
 {synopt:{cmd:e(...)}}(additional F_first{it:k} for each endogenous var){p_end}
 {synopt:{cmd:e(partial_r2_1)}}partial R² for 1st endogenous var (if ffirst){p_end}
 {synopt:{cmd:e(partial_r2_2)}}partial R² for 2nd endogenous var (if ffirst){p_end}
+{synopt:{cmd:e(arf)}, {cmd:e(arfp)}}Anderson-Rubin Wald F test and its p-value (with first, ffirst, sfirst, savefirst or savesfirst){p_end}
+{synopt:{cmd:e(ardf)}, {cmd:e(ardf_r)}}its degrees of freedom{p_end}
+{synopt:{cmd:e(archi2)}, {cmd:e(archi2p)}}Anderson-Rubin Wald chi-squared test and its p-value{p_end}
+{synopt:{cmd:e(sstat)}, {cmd:e(sstatp)}, {cmd:e(sstatdf)}}Stock-Wright LM S statistic, p-value and dof{p_end}
+{synopt:{cmd:e(center)}}1 if {opt center}, else 0{p_end}
 
 {p2col 5 20 24 2: Diagnostic test scalars}{p_end}
 {synopt:{cmd:e(idstat)}}underidentification test statistic (Anderson or Kleibergen-Paap){p_end}
@@ -616,6 +871,9 @@ coefficients, as with {cmd:ivreghdfe}.
 {synopt:{cmd:e(sargan_p)}}p-value for overidentification test{p_end}
 {synopt:{cmd:e(j)}, {cmd:e(jdf)}, {cmd:e(jp)}}the same, under {cmd:ivreg2}'s names{p_end}
 {synopt:{cmd:e(cdf)}}the Cragg-Donald F, under {cmd:ivreg2}'s name{p_end}
+{synopt:{cmd:e(cd)}, {cmd:e(rkf)}}{cmd:ivreg2}'s Cragg-Donald eigenvalue and Kleibergen-Paap rk Wald F (robust, cluster or kernel VCE){p_end}
+{synopt:{cmd:e(sargandf)}}{cmd:ivreg2}'s Sargan dof (without robust or cluster VCEs){p_end}
+{synopt:{cmd:e(arubin)}, {cmd:e(arubin_lin)}, {cmd:e(arubinp)}, {cmd:e(arubin_linp)}, {cmd:e(arubindf)}}LIML's Anderson-Rubin overidentification statistic, its linearized form, p-values and dof (LIML and Fuller){p_end}
 {synopt:{cmd:e(Fp)}}p-value of {cmd:e(F)}{p_end}
 {synopt:{cmd:e(r2c)}}centered R-squared (as {cmd:e(r2)}){p_end}
 {synopt:{cmd:e(endog_ct)}, {cmd:e(exexog_ct)}, {cmd:e(inexog_ct)}}numbers of endogenous regressors, excluded instruments and included exogenous regressors{p_end}
@@ -634,6 +892,9 @@ coefficients, as with {cmd:ivreghdfe}.
 {synopt:{cmd:e(redund)}}instrument redundancy test statistic (if redundant() specified){p_end}
 {synopt:{cmd:e(redund_df)}}degrees of freedom for redundancy test{p_end}
 {synopt:{cmd:e(redund_p)}}p-value for redundancy test{p_end}
+{synopt:{cmd:e(cstatp)}, {cmd:e(cstatdf)}}the C statistic's p-value and dof under {cmd:ivreg2}'s names (when it is positive){p_end}
+{synopt:{cmd:e(estat)}, {cmd:e(estatp)}, {cmd:e(estatdf)}}the endogeneity test under {cmd:ivreg2}'s names{p_end}
+{synopt:{cmd:e(redstat)}, {cmd:e(redp)}, {cmd:e(reddf)}}the redundancy test under {cmd:ivreg2}'s names{p_end}
 
 {p2col 5 20 24 2: LIML/Fuller scalars}{p_end}
 {synopt:{cmd:e(lambda)}}LIML k-value (if liml or fuller){p_end}
@@ -648,16 +909,32 @@ coefficients, as with {cmd:ivreghdfe}.
 {synopt:{cmd:e(endogvars)}}endogenous variables{p_end}
 {synopt:{cmd:e(exogvars)}}exogenous variables{p_end}
 {synopt:{cmd:e(instruments)}}excluded instruments{p_end}
-{synopt:{cmd:e(instd)}, {cmd:e(inexog)}, {cmd:e(exexog)}, {cmd:e(insts)}}instrumented, included exogenous, excluded and all instruments (expanded terms), as {cmd:ivreg2} names them{p_end}
+{synopt:{cmd:e(instd)}, {cmd:e(inexog)}, {cmd:e(exexog)}, {cmd:e(insts)}}instrumented, included exogenous, excluded and all instruments (expanded terms with base levels), as {cmd:ivreg2} names them{p_end}
+{synopt:{cmd:e(instd0)}, {cmd:e(inexog0)}, {cmd:e(exexog0)}, {cmd:e(insts0)}, {cmd:e(depvar0)}}{cmd:ivreg2}'s lists after duplicates and reclassification, with base levels and omitted terms, without partialled-out terms{p_end}
+{synopt:{cmd:e(instd1)}, {cmd:e(inexog1)}, {cmd:e(exexog1)}, {cmd:e(insts1)}, {cmd:e(depvar1)}, {cmd:e(partial1)}}the same without base levels and omitted terms{p_end}
+{synopt:{cmd:e(partial)}}partialled-out terms (without {cmd:_cons}){p_end}
+{synopt:{cmd:e(clist)}, {cmd:e(elist)}, {cmd:e(redlist)}}instruments tested by {opt orthog()}, regressors by {opt endogtest()}, instruments by {opt redundant()}{p_end}
+{synopt:{cmd:e(absvars)}, {cmd:e(title2)}, {cmd:e(dofmethod)}}{cmd:reghdfe}'s absorbed terms as typed, title and dof adjustments (with {opt absorb()}){p_end}
+{synopt:{cmd:e(subtitle)}, {cmd:e(hacsubtitleB)}, {cmd:e(hacsubtitleV)}, {cmd:e(hacsubtitleV2)}}{cmd:ivreg2}'s subtitles{p_end}
+{synopt:{cmd:e(partialsmall)}}{cmd:small} unless {opt nopartialsmall}{p_end}
 {synopt:{cmd:e(absorb)}}absorbed fixed effects{p_end}
+{synopt:{cmd:e(extended_absvars)}}absorbed intercepts and slopes, as reghdfe names them{p_end}
+{synopt:{cmd:e(savefe)}}variables holding the saved fixed effects (with {opt savefe} or {it:newvar}{cmd:=}){p_end}
 {synopt:{cmd:e(dups)}, {cmd:e(collin)}, {cmd:e(ecollin)}}duplicate terms, terms dropped as collinear, endogenous regressors reclassified as exogenous{p_end}
-{synopt:{cmd:e(title)}}estimation method title{p_end}
-{synopt:{cmd:e(model)}}estimator: 2sls, liml, fuller, kclass, gmm2s, or cue{p_end}
-{synopt:{cmd:e(vcetype)}}VCE type: Robust, Cluster, or Two-way Cluster (Robust for Driscoll-Kraay; empty for AC and Kiefer){p_end}
+{synopt:{cmd:e(title)}}{cmd:ivreg2}'s title (or {opt title()}): IV (2SLS) estimation, LIML estimation, ...{p_end}
+{synopt:{cmd:e(model)}}estimator, as {cmd:ivreg2}: iv, ols (no endogenous regressors), liml (also Fuller's), kclass, gmm2s, cue (also {opt b0()}), or gmmw ({opt wmatrix()} GMM){p_end}
+{synopt:{cmd:e(vcetype)}}VCE type: Robust, Cluster, or Two-way Cluster (Robust for Driscoll-Kraay; empty for AC and Kiefer; Bootstrap with {cmd:vce(bootstrap)}, Bstrap * with its {opt mse}, and then {cmd:e(mse)} is {cmd:mse}){p_end}
+{synopt:{cmd:e(vce)}}{cmd:ivreg2}'s VCE description: robust, cluster or two-way cluster, hac or ac with the kernel and bandwidth, psd0 or psda (empty for the homoskedastic VCE){p_end}
+{synopt:{cmd:e(vce)}, {cmd:e(prefix)}, {cmd:e(rngstate)}, {cmd:e(draws)}, {cmd:e(cluster_bs)}, {cmd:e(strata_bs)}}{cmd:bootstrap} and the bootstrap's settings, as Stata's {cmd:vce(bootstrap)} posts them (with {cmd:vce(bootstrap)}){p_end}
+{synopt:{cmd:e(fevce)}, {cmd:e(fe_se)}, {cmd:e(fe_nrep)}, {cmd:e(fe_lb)}, {cmd:e(fe_ub)}, {cmd:e(fe_dse)}}as {helpb creghdfe} (with {cmd:fevce(bootstrap)}){p_end}
+{synopt:{cmd:e(wb_method)}}{cmd:wre}, or {cmd:wue} with {opt nonull} (with {cmd:wildbootstrap}){p_end}
+{synopt:{cmd:e(wb_weighttype)}, {cmd:e(wb_ptype)}, {cmd:e(wb_coefs)}, {cmd:e(wb_bootclust)}, {cmd:e(wb_fe_path)}, {cmd:e(wb_rngstate)}}as {helpb creghdfe} (with {cmd:wildbootstrap}){p_end}
 {synopt:{cmd:e(clustvar)}}cluster variable (if clustered); contains both variable names for two-way clustering{p_end}
 {synopt:{cmd:e(clustvar1)}}first cluster variable (if two-way clustered){p_end}
 {synopt:{cmd:e(clustvar2)}}second cluster variable (if two-way clustered){p_end}
-{synopt:{cmd:e(kernel)}}kernel of a kernel-based VCE: Bartlett, Parzen, Quadratic Spectral, Truncated or Tukey-Hanning{p_end}
+{synopt:{cmd:e(kernel)}}kernel of a kernel-based VCE: Bartlett, Parzen, Quadratic Spectral, Truncated, Tukey-Hanning, Tukey-Hamming, Danielle or Tent{p_end}
+{synopt:{cmd:e(bwchoice)}}the bandwidth choice of {cmd:bw(auto)}{p_end}
+{synopt:{cmd:e(firsteqs)}, {cmd:e(rfeq)}, {cmd:e(sfirsteq)}}names of the equations stored by {opt savefirst}, {opt saverf} and {opt savesfirst}{p_end}
 {synopt:{cmd:e(tvar)}}tsset time variable (kernel-based VCE){p_end}
 {synopt:{cmd:e(ivar)}}tsset panel variable (kernel-based VCE with panel data){p_end}
 {synopt:{cmd:e(wtype)}, {cmd:e(wexp)}}weight type and expression (if weighted){p_end}
@@ -665,13 +942,21 @@ coefficients, as with {cmd:ivreghdfe}.
 {synopt:{cmd:e(marginsnotok)}}predictions disallowed by {cmd:margins} (with endogenous regressors){p_end}
 
 {p2col 5 20 24 2: DOF adjustment scalars (if specified)}{p_end}
-{synopt:{cmd:e(dofminus)}}user-specified DOF adjustment (if {cmd:dofminus()} specified){p_end}
+{synopt:{cmd:e(dofminus)}}user-specified DOF adjustment (0 by default, as {cmd:ivreg2}){p_end}
 {synopt:{cmd:e(sdofminus_opt)}}user-specified small-sample DOF adjustment (if {cmd:sdofminus()} specified){p_end}
 
 {synoptset 20 tabbed}{...}
 {p2col 5 20 24 2: Matrices}{p_end}
 {synopt:{cmd:e(b)}}coefficient vector{p_end}
-{synopt:{cmd:e(V)}}variance-covariance matrix of the estimators{p_end}
+{synopt:{cmd:e(V)}}variance-covariance matrix of the estimators (the bootstrap's with {cmd:vce(bootstrap)}){p_end}
+{synopt:{cmd:e(V_modelbased)}}the base VCE's covariance (with {cmd:vce(bootstrap)}){p_end}
+{synopt:{cmd:e(b_bs)}, {cmd:e(reps)}, {cmd:e(bias)}, {cmd:e(se)}, {cmd:e(z0)}, {cmd:e(ci_normal)}, {cmd:e(ci_percentile)}, {cmd:e(ci_bc)}, {cmd:e(boot_status)}}as {helpb creghdfe} (with {cmd:vce(bootstrap)}){p_end}
+{synopt:{cmd:e(fe_bs_table)}}as {helpb creghdfe}, one row per saved effect (with {cmd:fevce(bootstrap)}){p_end}
+{synopt:{cmd:e(wb_t)}, {cmd:e(wb_p)}, {cmd:e(wb_ci)}, {cmd:e(wb_cistatus)}}as {helpb creghdfe} (with {cmd:wildbootstrap}){p_end}
+{synopt:{cmd:e(S)}, {cmd:e(W)}}{cmd:ivreg2}'s covariance of the orthogonality conditions and GMM weighting matrix (no {cmd:e(W)} for LIML and k-class), over the instruments kept: excluded, then included, then {cmd:_cons}{p_end}
+{synopt:{cmd:e(ccev)}, {cmd:e(cdev)}}squared canonical correlations and Cragg-Donald eigenvalues, as {cmd:ivreg2}{p_end}
+{synopt:{cmd:e(dof_table)}}{cmd:reghdfe}'s absorbed degrees of freedom: categories, redundant, coefficients, inexact and nested indicators (with {opt absorb()}){p_end}
+{synopt:{cmd:e(first)}}{cmd:ivreg2}'s first-stage statistics, one column per endogenous regressor: rmse, Shea partial R2 (sheapr2), partial R2 (pr2), F, df, df_r, pvalue, the Sanderson-Windmeijer (SWF, SWFdf1, SWFdf2, SWFp, SWchi2, SWchi2p, SWr2) and Angrist-Pischke (APF ... APr2) statistics{p_end}
 
 {synoptset 20 tabbed}{...}
 {p2col 5 20 24 2: Functions}{p_end}

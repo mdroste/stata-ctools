@@ -1756,7 +1756,7 @@ benchmark_merge m:m group using `unbal_10x_using', testname("unbalanced m:m: 10K
 * SECTION 28: Variable Conflicts
 print_section "Variable Conflicts"
 
-* Same non-key variable names (should fail without force)
+* Shared non-key names retain the master values unless update/replace is used.
 clear
 set obs 50
 gen id = _n
@@ -1781,11 +1781,12 @@ use `conflict_master', clear
 capture cmerge 1:1 id using `conflict_using', nogenerate noreport
 local cmerge_conflict_rc = _rc
 
-if `stata_conflict_rc' != 0 & `cmerge_conflict_rc' != 0 {
+if `stata_conflict_rc' != 0 & `stata_conflict_rc' == `cmerge_conflict_rc' {
     test_pass "variable conflict detected (same var names)"
 }
 else if `stata_conflict_rc' == 0 & `cmerge_conflict_rc' == 0 {
-    test_pass "variable conflict handled (both succeeded)"
+    use `conflict_master', clear
+    benchmark_merge 1:1 id using `conflict_using', nogenerate testname("shared variable: master values retained")
 }
 else {
     test_fail "variable conflict" "rc differ: stata=`stata_conflict_rc' cmerge=`cmerge_conflict_rc'"
@@ -2731,6 +2732,136 @@ if c(stata_version) >= 18 {
     frame drop g3_alias
 }
 program drop _g3_merge_order
+
+* S3/S4 gaps (FUNCTIONALITY_GAPS MERGE-01/02/03/05/06/07), against merge.
+clear
+set obs 4
+gen long id = _n
+gen str5 s = "abcde"
+gen float t = 1
+gen double z = 2.5
+gen str8 w = "x"
+tempfile gap_u
+save `gap_u'
+clear
+set obs 3
+gen byte id = _n
+gen s = _n
+gen str2 t = "q"
+gen int z = 2
+gen str3 w = "y"
+tempfile gap_m
+save `gap_m'
+* MERGE-05/06: the force notes and the widening notes, as merge prints them
+* (captured inline with a log: noisily output of a program defined in this
+* block would not reach it)
+foreach opts in "force" "force update" "force keepusing(w z)" "force noreport" {
+    foreach w in merge cmerge {
+        use `gap_m', clear
+        capture log close gap_notes
+        tempfile gap_log
+        log using `"`gap_log'"', text replace name(gap_notes)
+        capture noisily `w' 1:1 id using `gap_u', `opts'
+        local rc_`w' = _rc
+        log close gap_notes
+        local notes_`w' ""
+        tempname fh
+        file open `fh' using `"`gap_log'"', read text
+        file read `fh' line
+        while !r(eof) {
+            if substr(`"`macval(line)'"', 1, 7) == "(note: " | substr(`"`macval(line)'"', 1, 10) == "(variable " {
+                local notes_`w' `"`macval(notes_`w')'|`macval(line)'"'
+            }
+            file read `fh' line
+        }
+        file close `fh'
+        if "`w'" == "merge" {
+            tempfile gap_n
+            save `gap_n', replace
+        }
+    }
+    local nn `"`notes_merge'"'
+    local cn `"`notes_cmerge'"'
+    local nn_rc `rc_merge'
+    local cn_rc `rc_cmerge'
+    local ok = `nn_rc' == 0 & `cn_rc' == 0 & `"`nn'"' == `"`cn'"' & `"`nn'"' != ""
+    if `ok' {
+        capture cf _all using `gap_n', all
+        local ok = !_rc
+    }
+    if `ok' test_pass "MERGE-05/06 storage-type notes [`opts']"
+    else test_fail "MERGE-05/06 storage-type notes [`opts']" `"merge [`nn'] cmerge [`cn'] rc `nn_rc'/`cn_rc'"'
+}
+* MERGE-01: the old syntax (no match type) is merge's own, unique and
+* several using files included
+clear
+set obs 4
+gen id = _n
+gen a = 10 * _n
+tempfile gap_o1 gap_o2 gap_om
+save `gap_o1'
+replace a = a + 1
+rename a b
+save `gap_o2'
+clear
+set obs 3
+gen id = _n + 1
+gen c = _n
+sort id
+save `gap_om'
+foreach cmd in "id using `gap_o1'" "id using `gap_o1' `gap_o2', unique" "using `gap_o1'" "id using `gap_o1', uniqmaster" {
+    use `gap_om', clear
+    capture merge `cmd'
+    local nrc = _rc
+    tempfile gap_n
+    save `gap_n', replace
+    use `gap_om', clear
+    capture cmerge `cmd'
+    local crc = _rc
+    local ok = `nrc' == `crc'
+    if `ok' & !`crc' {
+        capture cf _all using `gap_n', all
+        local ok = !_rc
+    }
+    if `ok' test_pass "MERGE-01 old syntax: merge `cmd' (r(`nrc'))"
+    else test_fail "MERGE-01 old syntax: merge `cmd'" "merge r(`nrc'), cmerge r(`crc')"
+}
+* MERGE-02 and the sequential-merge errors: merge's return codes
+use `gap_om', clear
+foreach cmd in "2:2 id" "1:1x id" "1-1 id" "1:m _n" "m:1 _n" {
+    capture merge `cmd' using `gap_o1'
+    local nrc = _rc
+    capture cmerge `cmd' using `gap_o1'
+    if _rc == `nrc' & `nrc' test_pass "MERGE-02 merge `cmd': r(`nrc')"
+    else test_fail "MERGE-02 merge `cmd'" "merge r(`nrc'), cmerge r(`=_rc')"
+}
+* MERGE-03: debug is accepted and changes nothing
+use `gap_om', clear
+merge 1:1 id using `gap_o1', debug
+tempfile gap_n
+save `gap_n', replace
+use `gap_om', clear
+capture cmerge 1:1 id using `gap_o1', debug
+local rc = _rc
+if !`rc' {
+    capture cf _all using `gap_n', all
+    local rc = _rc
+}
+if !`rc' test_pass "MERGE-03 debug"
+else test_fail "MERGE-03 debug" "rc=`rc'"
+* MERGE-07: a sequential merge into a dataset without variables
+foreach n in 0 2 {
+    clear
+    if `n' set obs `n'
+    capture merge 1:1 _n using `gap_o1'
+    local nrc = _rc
+    clear
+    if `n' set obs `n'
+    capture cmerge 1:1 _n using `gap_o1'
+    if _rc == `nrc' & `nrc' == 3 test_pass "MERGE-07 1:1 _n with no variables, `n' obs: r(3)"
+    else test_fail "MERGE-07 1:1 _n with no variables, `n' obs" "merge r(`nrc'), cmerge r(`=_rc')"
+}
+clear
 
 * End of cmerge validation
 noi print_summary "cmerge"

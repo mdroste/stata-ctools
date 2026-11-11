@@ -31,6 +31,12 @@
 #define CIVREGHDFE_KERNEL_QS        3
 #define CIVREGHDFE_KERNEL_TRUNCATED 4
 #define CIVREGHDFE_KERNEL_TUKEY     5
+#define CIVREGHDFE_KERNEL_THAMMING  6
+#define CIVREGHDFE_KERNEL_DANIELL   7
+#define CIVREGHDFE_KERNEL_TENT      8
+
+/* Spectral windows weight every lag up to the time span */
+#define CIVREGHDFE_KERNEL_SPECTRAL(k) ((k) == CIVREGHDFE_KERNEL_QS || (k) == CIVREGHDFE_KERNEL_DANIELL || (k) == CIVREGHDFE_KERNEL_TENT)
 
 /*
     Compute two-way clustered VCE using Cameron-Gelbach-Miller (2011) formula.

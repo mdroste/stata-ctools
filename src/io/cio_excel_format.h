@@ -66,7 +66,15 @@ static inline uint8_t cio_excel_format_code(int id, const char *custom)
         }
         if (*p == '[')
         {
-            if (p[1] == 'h' || p[1] == 'm' || p[1] == 's')
+            /* Only a bracket holding one repeated h, m or s ([h], [mm], [ss])
+               is an elapsed time; colors such as [Magenta] and conditions or
+               locales such as [<100] and [$-409] are not. */
+            char unit = p[1];
+            size_t run = 0;
+            if (unit == 'h' || unit == 'm' || unit == 's')
+                while (p[1 + run] == unit)
+                    run++;
+            if (run && p[1 + run] == ']')
                 time = elapsed = 1;
             while (p[1] && *p != ']')
                 p++;

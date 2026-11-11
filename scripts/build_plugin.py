@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shlex
 import shutil
@@ -19,7 +20,12 @@ import tempfile
 
 def dependencies(path):
     text = path.read_text().replace("\\\n", " ")
-    return [Path(p) for p in shlex.split(text.split(":", 1)[1])]
+    # A Windows target begins with a drive colon; only the colon followed by
+    # whitespace separates the target from its prerequisites.
+    separator = re.search(r":\s", text)
+    if separator is None:
+        raise ValueError("Malformed compiler dependency file: " + str(path))
+    return [Path(p) for p in shlex.split(text[separator.end():])]
 
 
 def dirty(obj, depfile, source):

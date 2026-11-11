@@ -2264,6 +2264,9 @@ if _rc == 0 {
     benchmark_excel using "temp/xi_nlswork.xlsx", testname("xlsx import: nlswork 2K") importopts(firstrow clear)
     capture erase "temp/xi_nlswork.xlsx"
 }
+else {
+    test_fail "required fixture: nlswork" "dataset could not be loaded"
+}
 
 capture ctools_fixture lifeexp, clear
 if _rc == 0 {
@@ -2271,12 +2274,18 @@ if _rc == 0 {
     benchmark_excel using "temp/xi_lifeexp.xlsx", testname("xlsx import: lifeexp") importopts(firstrow clear)
     capture erase "temp/xi_lifeexp.xlsx"
 }
+else {
+    test_fail "required fixture: lifeexp" "dataset could not be loaded"
+}
 
 capture ctools_fixture bplong, clear
 if _rc == 0 {
     export excel using "temp/xi_bplong.xlsx", firstrow(variables) replace
     benchmark_excel using "temp/xi_bplong.xlsx", testname("xlsx import: bplong") importopts(firstrow clear)
     capture erase "temp/xi_bplong.xlsx"
+}
+else {
+    test_fail "required fixture: bplong" "dataset could not be loaded"
 }
 
 * --- Numeric Types ---
@@ -2929,6 +2938,572 @@ foreach file in float_range float_late {
     }
 }
 set type float
+
+* strL columns reach Stata through Mata: in memory from Stata 16 (positions
+* through a frame, with doubled quotes or CR LF undone in Mata and other
+* values as text in global macros), or through a short-lived file (forced
+* here with the ado's validation hook), or with option tempdta through a
+* temporary .dta. Each must match import delimited. The file has quoted
+* values with doubled quotes, CR LF inside quotes, a mostly empty column,
+* quotes inside an unquoted field, and one value longer than a macro holds.
+print_section "strL transfer"
+capture erase "temp/strl_transfer.csv"
+mata: __strl_q = char(34); __strl_eol = char(13) + char(10); ///
+    __strl_fh = fopen("temp/strl_transfer.csv", "w"); fwrite(__strl_fh, "id,a,b,c" + __strl_eol); ///
+    for (__strl_i = 1; __strl_i <= 300; __strl_i++) fwrite(__strl_fh, strofreal(__strl_i) + "," + ///
+        (__strl_i == 150 ? __strl_q + 110000 * ("x" + __strl_q + __strl_q + "y") + __strl_q : ///
+         __strl_q + 2100 * "a" + __strl_q + __strl_q + "q" + strofreal(__strl_i) + __strl_q + __strl_q + __strl_q) + "," + ///
+        (mod(__strl_i, 50) ? "" : __strl_q + "line1" + __strl_eol + "line2 " + 2100 * "b" + __strl_q) + "," + ///
+        (mod(__strl_i, 3) ? "ab" + __strl_q + "cd" + __strl_q + "ef" + 2100 * "c" : "") + __strl_eol); ///
+    fclose(__strl_fh)
+mata: mata drop __strl_q __strl_eol __strl_fh __strl_i
+foreach o in "bindquotes(strict)" "bindquotes(loose)" "bindquotes(strict) stripquotes(yes)" "bindquotes(strict) stripquotes(no)" {
+    import delimited using "temp/strl_transfer.csv", clear encoding(utf-8) `o'
+    local ntypes
+    foreach v of varlist _all {
+        local ntypes `ntypes' `: type `v''
+    }
+    tempfile native_strl
+    save `native_strl', replace
+    foreach path in memory file tempdta {
+        if "`path'" == "file" global CTOOLS_cimport_fault "blobmem"
+        capture cimport delimited using "temp/strl_transfer.csv", clear encoding(utf-8) `o' `=cond("`path'" == "tempdta", "tempdta", "")'
+        local rc = _rc
+        global CTOOLS_cimport_fault
+        local ctypes
+        if !`rc' {
+            foreach v of varlist _all {
+                local ctypes `ctypes' `: type `v''
+            }
+            capture cf _all using `native_strl', all
+            local rc = _rc
+        }
+        if !`rc' & "`ntypes'" == "`ctypes'" test_pass "strL transfer: `o', `path'"
+        else test_fail "strL transfer: `o', `path'" "rc=`rc', types `ctypes' vs `ntypes'"
+    }
+}
+* threads() reaches every strL route (cimport threads(#) blobmem, blobs,
+* blobfill, fulldta and strldta).
+import delimited using "temp/strl_transfer.csv", clear encoding(utf-8) bindquotes(strict)
+tempfile native_strl_threads
+save `native_strl_threads', replace
+foreach path in memory file tempdta strldta {
+    if "`path'" == "file" global CTOOLS_cimport_fault "blobmem"
+    if "`path'" == "strldta" global CTOOLS_cimport_fault "fulldta"
+    capture cimport delimited using "temp/strl_transfer.csv", clear encoding(utf-8) bindquotes(strict) threads(2) ///
+        `=cond(inlist("`path'", "tempdta", "strldta"), "tempdta", "")'
+    local rc = _rc
+    global CTOOLS_cimport_fault
+    if !`rc' {
+        capture cf _all using `native_strl_threads', all
+        local rc = _rc
+    }
+    if !`rc' test_pass "strL transfer with threads(2): `path'"
+    else test_fail "strL transfer with threads(2): `path'" "rc=`rc'"
+}
+capture erase "temp/strl_transfer.csv"
+
+* Fixed with the 2026-11-08 audit (docs/development/CIMPORT_CEXPORT_AUDIT.md);
+* each is compared with the native command.
+print_section "audit regressions"
+* A last line that ends in a delimiter, without a final line end, keeps its
+* empty last field: a lone delimiter is a row, not a blank line, and the
+* field can add a column.
+mata: __a_fh = fopen("temp/audit_lastdelim.csv", "w"); fwrite(__a_fh, "a,b" + char(10) + "1,2" + char(10) + ","); fclose(__a_fh)
+mata: __a_fh = fopen("temp/audit_lastwide.csv", "w"); fwrite(__a_fh, "1,2" + char(10) + "3,4,"); fclose(__a_fh)
+mata: __a_fh = fopen("temp/audit_lasttab.tsv", "w"); fwrite(__a_fh, "a" + char(9) + "b" + char(10) + "1" + char(9) + "2" + char(10) + char(9)); fclose(__a_fh)
+mata: __a_fh = fopen("temp/audit_lastcrlf.csv", "w"); fwrite(__a_fh, "a,b,c" + char(13) + char(10) + "1,2," + char(13) + char(10) + "3,4,"); fclose(__a_fh)
+mata: mata drop __a_fh
+benchmark_import using "temp/audit_lastdelim.csv", testname("last line a lone delimiter, no final line end")
+benchmark_import using "temp/audit_lastwide.csv", testname("last row ends in a delimiter, no final line end") ///
+    importopts(varnames(nonames))
+benchmark_import using "temp/audit_lasttab.tsv", testname("last line a lone tab, no final line end") importopts(delimiters(tab))
+benchmark_import using "temp/audit_lastcrlf.csv", testname("CRLF rows ending in a delimiter, no final line end")
+benchmark_import using "temp/audit_lastcrlf.csv", testname("CRLF rows ending in a delimiter, strict") ///
+    importopts(bindquotes(strict))
+
+* verbose has no load to time for a file with a header and no rows
+mata: __a_fh = fopen("temp/audit_header.csv", "w"); fwrite(__a_fh, "a,b" + char(10)); fclose(__a_fh)
+mata: mata drop __a_fh
+import delimited using "temp/audit_header.csv", clear encoding(utf-8)
+local nn = _N
+local nk = c(k)
+capture cimport delimited using "temp/audit_header.csv", clear encoding(utf-8) verbose
+if !_rc & _N == `nn' & c(k) == `nk' test_pass "verbose on a header-only file"
+else test_fail "verbose on a header-only file" "rc=`=_rc', N=`=_N' k=`=c(k)' (native N=`nn' k=`nk')"
+
+* Native abbreviations: decimals() and groups()
+mata: __a_fh = fopen("temp/audit_eu.csv", "w"); fwrite(__a_fh, "a;b" + char(10) + "1.234,5;2" + char(10) + "7,25;3" + char(10)); fclose(__a_fh)
+mata: mata drop __a_fh
+benchmark_import using "temp/audit_eu.csv", testname("decimals() and groups() abbreviations") ///
+    importopts(delimiters(";") decimals(,) groups(.))
+
+* Excel: native abbreviation sh(), and number formats whose brackets hold a
+* color or condition rather than an elapsed time ([h], [mm], [ss] are)
+clear
+set obs 3
+gen double x = _n + .5
+gen str5 s = "r" + string(_n)
+capture erase "temp/audit_sheet.xlsx"
+export excel using "temp/audit_sheet.xlsx", sheet("Data") firstrow(variables)
+import excel using "temp/audit_sheet.xlsx", sh("Data") firstrow clear
+tempfile native_sheet
+save `native_sheet', replace
+capture cimport excel using "temp/audit_sheet.xlsx", sh("Data") firstrow clear
+local rc = _rc
+if !`rc' {
+    capture cf _all using `native_sheet', all
+    local rc = _rc
+}
+if !`rc' test_pass "excel sh() abbreviation"
+else test_fail "excel sh() abbreviation" "rc=`rc'"
+capture erase "temp/audit_sheet.xlsx"
+
+capture erase "temp/audit_formats.xlsx"
+capture noisily {
+    putexcel set "temp/audit_formats.xlsx", replace
+    putexcel A1 = "magenta" B1 = "red" C1 = "cond" D1 = "hours" E1 = "minutes"
+    putexcel A2 = 12.5, nformat("[Magenta]0.00")
+    putexcel A3 = -2, nformat("[Magenta]0.00")
+    putexcel B2 = 3.25, nformat("0.00;[Red]-0.00")
+    putexcel B3 = -1, nformat("0.00;[Red]-0.00")
+    putexcel C2 = 7, nformat("[<100]0;0.0")
+    putexcel C3 = 250, nformat("[<100]0;0.0")
+    putexcel D2 = 1.5, nformat("[h]:mm:ss")
+    putexcel D3 = .25, nformat("[h]:mm:ss")
+    putexcel E2 = .01, nformat("[mm]:ss")
+    putexcel E3 = .02, nformat("[mm]:ss")
+    putexcel clear
+}
+if _rc test_fail "excel bracketed number formats" "putexcel setup rc=`=_rc'"
+else {
+    import excel using "temp/audit_formats.xlsx", firstrow clear
+    local nfmts
+    foreach v of varlist _all {
+        local nfmts `nfmts' `: format `v''
+    }
+    tempfile native_formats
+    save `native_formats', replace
+    capture cimport excel using "temp/audit_formats.xlsx", firstrow clear
+    local rc = _rc
+    local cfmts
+    if !`rc' {
+        foreach v of varlist _all {
+            local cfmts `cfmts' `: format `v''
+        }
+        capture cf _all using `native_formats', all
+        local rc = _rc
+    }
+    if !`rc' & "`nfmts'" == "`cfmts'" test_pass "excel bracketed number formats"
+    else test_fail "excel bracketed number formats" "rc=`rc', formats `cfmts' vs `nfmts'"
+}
+capture erase "temp/audit_formats.xlsx"
+
+* Wrappers (audit batch D). $ in a sheet or file name reaches the reader as
+* typed (no second expansion of the command line).
+* (benchmark_import itself would expand the $, so these are inline.)
+mata: __a_fh = fopen("temp/audit_two.csv", "w"); fwrite(__a_fh, "a,b" + char(10) + "1,2" + char(10)); fclose(__a_fh)
+mata: mata drop __a_fh
+copy "temp/audit_two.csv" "temp/audit_dol\$lar.csv", replace
+import delimited using "temp/audit_two.csv", clear encoding(utf-8)
+tempfile native_two
+save `native_two', replace
+foreach f in "temp/audit_dol\$lar.csv" "temp/audit_dol\$lar" {
+    capture cimport delimited using "`macval(f)'", clear encoding(utf-8)
+    local rc = _rc
+    if !`rc' {
+        capture cf _all using `native_two', all
+        local rc = _rc
+    }
+    if !`rc' test_pass "file name with a dollar sign: `macval(f)'"
+    else test_fail "file name with a dollar sign: `macval(f)'" "rc=`rc'"
+}
+capture erase "temp/audit_dol\$lar.csv"
+clear
+set obs 2
+gen y = _n
+capture erase "temp/audit_dollar.xlsx"
+export excel using "temp/audit_dollar.xlsx", sheet("Q1\$Rev") firstrow(variables)
+import excel using "temp/audit_dollar.xlsx", sheet("Q1\$Rev") firstrow clear
+tempfile native_dollar
+save `native_dollar', replace
+capture cimport excel using "temp/audit_dollar.xlsx", sheet("Q1\$Rev") firstrow clear
+local rc = _rc
+if !`rc' {
+    capture cf _all using `native_dollar', all
+    local rc = _rc
+}
+if !`rc' test_pass "excel sheet name with a dollar sign"
+else test_fail "excel sheet name with a dollar sign" "rc=`rc'"
+* .xlsm is an .xlsx with macros; native reads it
+capture erase "temp/audit_macros.xlsm"
+copy "temp/audit_dollar.xlsx" "temp/audit_macros.xlsm"
+import excel using "temp/audit_macros.xlsm", sheet("Q1\$Rev") firstrow clear
+save `native_dollar', replace
+capture cimport excel using "temp/audit_macros.xlsm", sheet("Q1\$Rev") firstrow clear
+local rc = _rc
+if !`rc' {
+    capture cf _all using `native_dollar', all
+    local rc = _rc
+}
+if !`rc' test_pass "excel .xlsm workbook"
+else test_fail "excel .xlsm workbook" "rc=`rc'"
+capture erase "temp/audit_macros.xlsm"
+capture erase "temp/audit_dollar.xlsx"
+
+* A failed import leaves no header or transfer globals behind
+capture cimport delimited a b c d e using "temp/audit_two.csv", clear
+local rc = _rc
+local left : all globals "_cimport_*"
+if `rc' == 103 & `"`left'"' == "" test_pass "no globals left after a failed import"
+else test_fail "no globals left after a failed import" `"rc=`rc', globals `left'"'
+
+* Option checks: return codes as native's (messages are native's too)
+foreach o in "maxquotedrows(abc)" "numericcols(0)" "numericcols(a)" "rowrange(5:2)" ///
+    "rowrange(x)" "colrange(2:1)" "delimiters(foo)" {
+    capture import delimited using "temp/audit_two.csv", clear `o'
+    local nrc = _rc
+    capture cimport delimited using "temp/audit_two.csv", clear `o'
+    if _rc == `nrc' test_pass "option error code: `o'"
+    else test_fail "option error code: `o'" "cimport rc=`=_rc', native rc=`nrc'"
+}
+* A negative maxquotedrows() sets no limit, as natively
+mata: __a_fh = fopen("temp/audit_mqr.csv", "w"); fwrite(__a_fh, "id,t" + char(10) + "1," + char(34) + 30 * ("x" + char(10)) + char(34) + char(10) + "2,y" + char(10)); fclose(__a_fh)
+mata: mata drop __a_fh
+benchmark_import using "temp/audit_mqr.csv", testname("maxquotedrows(-1) sets no limit") ///
+    importopts(bindquotes(strict) maxquotedrows(-1))
+
+* Audit batch E. Unmatched-quote notes name the file line, as native's do:
+* blank lines and the rows varnames(#) skips count.
+mata: __a_fh = fopen("temp/audit_quote_lines.csv", "w"); fwrite(__a_fh, "junk" + char(10) + "a,b" + char(10) + char(10) + char(10) + "1,y" + char(10) + "2," + char(34) + "x" + char(10) + "3,z" + char(10)); fclose(__a_fh)
+mata: mata drop __a_fh
+local quote_lines ""
+foreach w in import cimport {
+    capture log close audit_quotes
+    quietly log using "temp/audit_quotes_`w'.log", text replace name(audit_quotes)
+    noisily `w' delimited using "temp/audit_quote_lines.csv", clear varnames(2) encoding(utf-8)
+    quietly log close audit_quotes
+    * Only the row numbers are compared: the notes wrap differently.
+    mata: __a_t = cat("temp/audit_quotes_`w'.log"); __a_t = select(__a_t, strpos(__a_t, "Unmatched quote while processing row") :> 0); ///
+        __a_i = 0; for (__a_i = 1; __a_i <= rows(__a_t); __a_i++) __a_t[__a_i] =ustrregexm(__a_t[__a_i], "processing row ([0-9]+)") ? ustrregexs(1) : ""; ///
+        st_local("quote_`w'", invtokens(__a_t'))
+    mata: mata drop __a_t __a_i
+    capture erase "temp/audit_quotes_`w'.log"
+}
+if `"`quote_import'"' == `"`quote_cimport'"' & `"`quote_import'"' != "" test_pass "unmatched quote notes name the file line"
+else test_fail "unmatched quote notes name the file line" `"native [`quote_import'] cimport [`quote_cimport']"'
+
+* varnames(#) names the row on file line # also under bindquotes(strict), when
+* a quoted field above it spans lines (and a row spanning line # is the header)
+mata: __a_fh = fopen("temp/audit_header_line.csv", "w"); fwrite(__a_fh, "p," + char(34) + "q" + char(10) + "r" + char(34) + ",s" + char(10) + "h1,h2,h3" + char(10) + "1,2,3" + char(10) + "4,5,6" + char(10)); fclose(__a_fh)
+mata: mata drop __a_fh
+benchmark_import using "temp/audit_header_line.csv", testname("varnames(3), strict, a field spanning lines above") ///
+    importopts(varnames(3) bindquotes(strict))
+benchmark_import using "temp/audit_header_line.csv", testname("varnames(2), strict, the header row spans line 2") ///
+    importopts(varnames(2) bindquotes(strict))
+
+* .xls: formatted blank cells belong to the used range at every corner, for
+* the import and for describe
+capture noisily {
+    capture erase "temp/audit_blanks.xls"
+    putexcel set "temp/audit_blanks.xls", replace
+    putexcel C1 = "v" D1 = "w" C2 = 1 D2 = 2 C3 = 3 D3 = 4
+    putexcel A1, nformat("0.00")
+    putexcel F9, nformat("0.00")
+    putexcel clear
+}
+if _rc test_fail "xls formatted blanks" "putexcel setup rc=`=_rc'"
+else {
+    import excel using "temp/audit_blanks.xls", clear
+    tempfile native_blanks
+    save `native_blanks', replace
+    import excel using "temp/audit_blanks.xls", describe
+    local nrange `"`r(range_1)'"'
+    capture cimport excel using "temp/audit_blanks.xls", clear
+    local rc = _rc
+    if !`rc' {
+        capture cf _all using `native_blanks', all
+        local rc = _rc
+    }
+    if !`rc' test_pass "xls formatted blanks: import"
+    else test_fail "xls formatted blanks: import" "rc=`rc'"
+    capture cimport excel using "temp/audit_blanks.xls", describe
+    if !_rc & `"`r(range_1)'"' == `"`nrange'"' test_pass "xls formatted blanks: describe"
+    else test_fail "xls formatted blanks: describe" `"rc=`=_rc' range `r(range_1)' vs native `nrange'"'
+}
+capture erase "temp/audit_blanks.xls"
+
+* emptylines(): native accepts skip and include (fill is not an option), and
+* follows the caller's version: from version 17 include keeps empty lines as
+* observations, while the version 16 reader reads include as skip
+local f1_i 0
+foreach t in "a,b|1,2||3,4|" "a,b||1,2|3,4|" "a,b|1,2|||" "|a,b|1,2|" "a,b|1,2||3,4" "a|1||2|" {
+    local ++f1_i
+    capture erase "temp/audit_empty`f1_i'.csv"
+    mata: __a_fh = fopen("temp/audit_empty`f1_i'.csv", "w"); fwrite(__a_fh, subinstr(st_local("t"), "|", char(10))); fclose(__a_fh)
+    mata: mata drop __a_fh
+    foreach b in loose strict {
+        benchmark_import using "temp/audit_empty`f1_i'.csv", testname("emptylines(include) `f1_i' `b'") ///
+            importopts(emptylines(include) bindquotes(`b'))
+    }
+}
+version 16: import delimited using "temp/audit_empty1.csv", clear emptylines(include)
+local nn = _N
+version 16: cimport delimited using "temp/audit_empty1.csv", clear emptylines(include)
+if _N == `nn' test_pass "emptylines(include) under version 16"
+else test_fail "emptylines(include) under version 16" "cimport N=`=_N', native N=`nn'"
+capture import delimited using "temp/audit_empty1.csv", clear emptylines(fill)
+local nrc = _rc
+capture cimport delimited using "temp/audit_empty1.csv", clear emptylines(fill)
+if _rc == `nrc' & `nrc' == 198 test_pass "emptylines(fill) is not an option"
+else test_fail "emptylines(fill) is not an option" "cimport rc=`=_rc', native rc=`nrc'"
+
+* .xlsx text: a CR or CR LF written as such reads as LF (XML end-of-line
+* handling), as import excel reads a workbook from export excel
+clear
+set obs 5
+gen str20 s = "a" + char(13) + "b"
+replace s = "a" + char(13) + char(10) + "b" in 2
+replace s = "a" + char(10) + "b" in 3
+replace s = char(13) + "lead" in 4
+replace s = "tail" + char(13) + char(13) in 5
+capture erase "temp/audit_cr.xlsx"
+export excel using "temp/audit_cr.xlsx", firstrow(variables)
+import excel using "temp/audit_cr.xlsx", firstrow clear
+tempfile native_cr
+save `native_cr', replace
+capture cimport excel using "temp/audit_cr.xlsx", firstrow clear
+local rc = _rc
+if !`rc' {
+    capture cf _all using `native_cr', all
+    local rc = _rc
+}
+if !`rc' test_pass "xlsx text with carriage returns"
+else test_fail "xlsx text with carriage returns" "rc=`rc'"
+capture erase "temp/audit_cr.xlsx"
+
+* ~ is the home directory (checked on the name only: nothing is written there)
+local home : environment HOME
+if c(os) == "Windows" local home : environment USERPROFILE
+_ctools_home audit_name "~/data.csv"
+_ctools_home audit_other "a~/data.csv"
+if `"`audit_name'"' == `"`home'/data.csv"' & `"`audit_other'"' == "a~/data.csv" test_pass "~ names the home directory"
+else test_fail "~ names the home directory" `"got `audit_name' and `audit_other'"'
+
+* S3/S4 gaps (FUNCTIONALITY_GAPS IO-07, IO-10, IO-11, IO-12), each against
+* the native command.
+
+* IO-10: import excel takes all and allstri for allstring; only the full
+* allstring(format) carries a format (native reads all(format) as neither)
+clear
+set obs 3
+gen double price = _n * 1000.25
+gen str5 make = "m" + string(_n)
+capture erase "temp/gap_all.xlsx"
+export excel using "temp/gap_all.xlsx", firstrow(variables)
+foreach o in "all" "allstri" "all(%9.2f)" "allstr(%9.2f)" "allstring(%9.2f)" "all(%bad)" {
+    import excel using "temp/gap_all.xlsx", firstrow clear `o'
+    tempfile gap_native
+    save `gap_native', replace
+    capture cimport excel using "temp/gap_all.xlsx", firstrow clear `o'
+    local rc = _rc
+    if !`rc' {
+        capture cf _all using `gap_native', all
+        local rc = _rc
+    }
+    if !`rc' test_pass "IO-10 excel option `o'"
+    else test_fail "IO-10 excel option `o'" "rc=`rc'"
+}
+foreach o in "all allstring" "all allstring(%9.0g)" "al" "allstring(%bad)" {
+    capture import excel using "temp/gap_all.xlsx", firstrow clear `o'
+    local nrc = _rc
+    capture cimport excel using "temp/gap_all.xlsx", firstrow clear `o'
+    if _rc == `nrc' & `nrc' test_pass "IO-10 excel option `o': r(`nrc')"
+    else test_fail "IO-10 excel option `o'" "cimport rc=`=_rc', native rc=`nrc'"
+}
+
+* IO-11: the workbook kind comes from the file's content, whatever its name
+clear
+set obs 4
+gen double x = _n / 4
+gen str3 s = "s" + string(_n)
+capture erase "temp/gap_kind.xls"
+export excel using "temp/gap_kind.xls", firstrow(variables)
+foreach pair in "gap_all.xlsx gap_kind.xltx" "gap_all.xlsx gap_kind.xltm" "gap_all.xlsx gap_kind.dat" ///
+    "gap_kind.xls gap_kindxls.dat" "gap_kind.xls gap_kindxls.xlsx" "gap_all.xlsx gap_kindxlsx.xls" {
+    gettoken from to : pair
+    local to = strtrim("`to'")
+    copy "temp/`from'" "temp/`to'", replace
+    import excel using "temp/`to'", firstrow clear
+    tempfile gap_native
+    save `gap_native', replace
+    capture cimport excel using "temp/`to'", firstrow clear
+    local rc = _rc
+    if !`rc' {
+        capture cf _all using `gap_native', all
+        local rc = _rc
+    }
+    if !`rc' test_pass "IO-11 excel content of `from' named `to'"
+    else test_fail "IO-11 excel content of `from' named `to'" "rc=`rc'"
+    capture erase "temp/`to'"
+}
+mata: __a_fh = fopen("temp/gap_text.xlsx", "w"); fwrite(__a_fh, "a,b" + char(10)); fclose(__a_fh)
+mata: mata drop __a_fh
+copy "temp/gap_text.xlsx" "temp/gap_text.dat", replace
+foreach f in gap_text.xlsx gap_text.dat {
+    capture import excel using "temp/`f'", clear
+    local nrc = _rc
+    capture cimport excel using "temp/`f'", clear
+    if _rc == `nrc' & `nrc' test_pass "IO-11 excel text file named `f': r(`nrc')"
+    else test_fail "IO-11 excel text file named `f'" "cimport rc=`=_rc', native rc=`nrc'"
+    capture erase "temp/`f'"
+}
+capture erase "temp/gap_kind.xls"
+capture erase "temp/gap_all.xlsx"
+
+* IO-07: encoding() takes the names and aliases of Java's charsets, as
+* native import delimited does. Single-byte charsets decode as native does
+* for every byte (one byte a line, so an unmapped byte drops alone).
+capture erase "temp/gap_bytes.csv"
+mata: __a_b = J(1, 0, .); for (__a_i = 33; __a_i <= 255; __a_i++) if (__a_i != 34 & __a_i != 44) __a_b = __a_b, __a_i; ///
+    __a_fh = fopen("temp/gap_bytes.csv", "w"); for (__a_i = 1; __a_i <= cols(__a_b); __a_i++) fwrite(__a_fh, "X" + char(__a_b[__a_i]) + "X" + char(10)); fclose(__a_fh)
+mata: mata drop __a_b __a_i __a_fh
+foreach enc in latin1 l1 ISO8859_1 latin2 latin9 cyrillic greek hebrew arabic ISO-8859-13 ISO-8859-16 ///
+    x-iso-8859-11 TIS-620 KOI8-R csKOI8R KOI8-U x-MacRoman x-MacCyrillic MacCentralEurope x-MacGreek ///
+    x-MacThai x-MacUkraine windows-1250 cp1252 windows-1255 x-windows-874 IBM437 cp866 IBM864 x-IBM737 ///
+    IBM00858 IBM037 IBM273 IBM-Thai IBM1047 {
+    benchmark_import using "temp/gap_bytes.csv", testname("IO-07 encoding(`enc'), every byte") ///
+        importopts(encoding(`enc') varnames(nonames) stringcols(_all))
+}
+* Multi-byte charsets by a Java name (valid text: Japanese and Korean)
+capture erase "temp/gap_sjis.csv"
+mata: __a_fh = fopen("temp/gap_sjis.csv", "w"); fwrite(__a_fh, "a,b" + char(10) + char((147, 250)) + char((150, 123)) + ",1" + char(10)); fclose(__a_fh)
+mata: __a_fh = fopen("temp/gap_uhc.csv", "w"); fwrite(__a_fh, "a,b" + char(10) + char((199, 209)) + char((177, 219)) + ",2" + char(10)); fclose(__a_fh)
+mata: mata drop __a_fh
+foreach enc in windows-31j MS932 Shift_JIS sjis {
+    benchmark_import using "temp/gap_sjis.csv", testname("IO-07 encoding(`enc')") importopts(encoding(`enc'))
+}
+foreach enc in x-windows-949 ms949 EUC-KR {
+    benchmark_import using "temp/gap_uhc.csv", testname("IO-07 encoding(`enc')") importopts(encoding(`enc'))
+}
+foreach enc in nosuchenc ISO-8859-14 {
+    capture import delimited using "temp/gap_uhc.csv", clear encoding("`enc'")
+    local nrc = _rc
+    capture cimport delimited using "temp/gap_uhc.csv", clear encoding("`enc'")
+    if _rc == `nrc' & `nrc' test_pass "IO-07 encoding(`enc') refused: r(`nrc')"
+    else test_fail "IO-07 encoding(`enc') refused" "cimport rc=`=_rc', native rc=`nrc'"
+}
+capture erase "temp/gap_bytes.csv"
+capture erase "temp/gap_sjis.csv"
+capture erase "temp/gap_uhc.csv"
+
+* IO-12: import spss and sas apply the namelist and an in range while
+* reading. Native reads the namelist as exact, case-sensitive names (a
+* hyphen separates names), ignores names the file lacks, and applies if to
+* the selected variables.
+sysuse auto, clear
+keep make price mpg rep78 foreign
+capture erase "temp/gap_sel.sav"
+export spss using "temp/gap_sel.sav"
+capture erase "temp/gap_sel.sas7bdat"
+cexport sas using "temp/gap_sel.sas7bdat"
+local gap_sel `"price nosuch|make-mpg|mpg-rep78 price|price make|price in 2/3|price in 74|make price if price>10000|price mpg if mpg>30 in 1/40|in 5/9"'
+while `"`gap_sel'"' != "" {
+    gettoken sel gap_sel : gap_sel, parse("|")
+    if `"`sel'"' == "|" continue
+    foreach kind in spss sas {
+        local ext = cond("`kind'" == "spss", "sav", "sas7bdat")
+        capture import `kind' `sel' using "temp/gap_sel.`ext'", clear
+        local nrc = _rc
+        local ok 0
+        if !`nrc' {
+            tempfile gap_native
+            save `gap_native', replace
+            capture cimport `kind' `sel' using "temp/gap_sel.`ext'", clear
+            if !_rc {
+                capture cf _all using `gap_native', all
+                local ok = !_rc
+            }
+        }
+        if `ok' test_pass "IO-12 import `kind' `sel'"
+        else test_fail "IO-12 import `kind' `sel'" "native rc=`nrc', cimport rc=`=_rc'"
+    }
+}
+foreach sel in "Make" "price in 75" "price in 70/80" "price if mpg>30" "pri" {
+    foreach kind in spss sas {
+        local ext = cond("`kind'" == "spss", "sav", "sas7bdat")
+        capture import `kind' `sel' using "temp/gap_sel.`ext'", clear
+        local nrc = _rc
+        capture cimport `kind' `sel' using "temp/gap_sel.`ext'", clear
+        if _rc == `nrc' & `nrc' test_pass "IO-12 import `kind' `sel': r(`nrc')"
+        else test_fail "IO-12 import `kind' `sel'" "cimport rc=`=_rc', native rc=`nrc'"
+    }
+}
+capture erase "temp/gap_sel.sav"
+capture erase "temp/gap_sel.sas7bdat"
+clear
+
+* IO-14: without clear, import refuses data in memory even when unchanged
+* since last saved (r(4)), except import sasxport5, which checks c(changed)
+sysuse auto, clear
+keep make price foreign
+capture erase "temp/gap_clear.csv"
+capture erase "temp/gap_clear.xlsx"
+capture erase "temp/gap_clear.sav"
+capture erase "temp/gap_clear.xpt"
+capture erase "temp/gap_clear.v8xpt"
+capture erase "temp/gap_clear.dbf"
+export delimited using "temp/gap_clear.csv"
+export excel using "temp/gap_clear.xlsx"
+export spss using "temp/gap_clear.sav"
+export sasxport5 * using "temp/gap_clear.xpt", vallabfile(none)
+export sasxport8 using "temp/gap_clear.v8xpt"
+export dbase using "temp/gap_clear.dbf"
+foreach f in "delimited using temp/gap_clear.csv" "excel temp/gap_clear.xlsx" "spss using temp/gap_clear.sav" ///
+    "sasxport5 temp/gap_clear.xpt" "sasxport8 temp/gap_clear.v8xpt" "dbase using temp/gap_clear.dbf" {
+    foreach state in unchanged changed {
+        sysuse auto, clear
+        if "`state'" == "changed" replace price = price + 1 in 1
+        capture import `f'
+        local nrc = _rc
+        local nn = _N
+        sysuse auto, clear
+        if "`state'" == "changed" replace price = price + 1 in 1
+        capture cimport `f'
+        if _rc == `nrc' & _N == `nn' test_pass "IO-14 import `f' without clear, `state' data: r(`nrc')"
+        else test_fail "IO-14 import `f' without clear, `state' data" "cimport r(`=_rc'), native r(`nrc')"
+    }
+}
+* IO-13: sasxport5 describe of a file with several members, with and without
+* member(): r(N), r(k), r(size), r(n_members) and r(members) as native's
+sysuse auto, clear
+keep make price
+capture erase "temp/gap_m1.xpt"
+capture erase "temp/gap_m2.xpt"
+export sasxport5 * using "temp/gap_m1.xpt", vallabfile(none)
+keep in 1/3
+rename price cost
+export sasxport5 * using "temp/gap_m2.xpt", vallabfile(none)
+mata: __a_fh = fopen("temp/gap_m1.xpt", "r"); __a_one = fread(__a_fh, 1000000); fclose(__a_fh)
+mata: __a_fh = fopen("temp/gap_m2.xpt", "r"); __a_two = fread(__a_fh, 1000000); fclose(__a_fh)
+capture erase "temp/gap_multi.xpt"
+mata: __a_fh = fopen("temp/gap_multi.xpt", "w"); fwrite(__a_fh, __a_one + substr(__a_two, 241, .)); fclose(__a_fh)
+mata: mata drop __a_fh __a_one __a_two
+foreach m in "" "member(gap_m2)" "member(GAP_M1)" {
+    import sasxport5 "temp/gap_multi.xpt", describe `m'
+    local want `"`r(N)' `r(k)' `r(size)' [`r(n_members)'] [`r(members)']"'
+    capture cimport sasxport5 "temp/gap_multi.xpt", describe `m'
+    local got `"`r(N)' `r(k)' `r(size)' [`r(n_members)'] [`r(members)']"'
+    if !_rc & `"`got'"' == `"`want'"' test_pass "IO-13 sasxport5 describe `m'"
+    else test_fail "IO-13 sasxport5 describe `m'" `"rc=`=_rc' got `got', native `want'"'
+}
+foreach f in csv xlsx sav xpt v8xpt dbf {
+    capture erase "temp/gap_clear.`f'"
+}
+capture erase "temp/gap_m1.xpt"
+capture erase "temp/gap_m2.xpt"
+capture erase "temp/gap_multi.xpt"
+clear
 
 * Cleanup and summary
 

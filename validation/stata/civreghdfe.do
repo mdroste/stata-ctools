@@ -210,7 +210,7 @@ else test_fail "nofooter" "returned error `=_rc'"
 * Test nooutput - verify it runs and stores results
 sysuse auto, clear
 capture civreghdfe price (mpg = weight), absorb(foreign) nooutput
-if _rc == 0 & e(N) > 0 test_pass "nooutput option accepted and stores e(N)"
+if _rc == 0 & e(N) == _N test_pass "nooutput option accepted and stores e(N)"
 else test_fail "nooutput" "returned error or missing e(N)"
 
 * Test title() - verify it runs without error
@@ -225,11 +225,12 @@ civreghdfe price (mpg = weight), absorb(foreign) depname("outcome_var")
 if "`e(depvar)'" == "outcome_var" test_pass "depname() sets e(depvar) correctly"
 else test_fail "depname()" "e(depvar) = `e(depvar)' instead of outcome_var"
 
-* Test noid - verify underid test is suppressed but e(idstat) still stored
+* Test noid - as ivreg2, the identification statistics are neither shown
+* nor stored
 sysuse auto, clear
 civreghdfe price (mpg = weight length), absorb(foreign) noid
-if e(idstat) != . test_pass "noid suppresses display but e(idstat) still computed"
-else test_fail "noid" "e(idstat) not stored"
+if missing(e(idstat)) & missing(e(cdf)) & missing(e(widstat)) test_pass "noid: no identification statistics, as ivreg2"
+else test_fail "noid" "e(idstat) stored"
 
 * Test combined options
 sysuse auto, clear
@@ -454,16 +455,16 @@ gen y = 2*x_endog + 1.0*x_exog + rnormal()
 * Test savefirst option - verify main results match ivreghdfe (full comparison)
 benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(firm) testname("savefirst: main results match ivreghdfe")
 
-* Test savefirst stores estimates
+* Test savefirst stores the first stage under ivreg2's default name
 civreghdfe y (x_endog = z1 z2) x_exog, absorb(firm) savefirst
-capture estimates restore _civreghdfe_main
+capture estimates restore _ivreg2_x_endog
 if _rc == 0 test_pass "savefirst stores estimates correctly"
 else test_fail "savefirst storage" "could not restore saved estimates"
 
 * Test savefirst with custom prefix
 capture civreghdfe y (x_endog = z1 z2) x_exog, absorb(firm) savefirst savefprefix(test_)
 if _rc == 0 {
-    capture estimates restore test_main
+    capture estimates restore test_x_endog
     if _rc == 0 test_pass "savefprefix() with custom prefix"
     else test_fail "savefprefix()" "custom prefix not applied"
 }
@@ -720,6 +721,33 @@ benchmark_ivreghdfe y (x_endog1 x_endog2 = z1 z2 z3 z4) x_exog, absorb(firm) gmm
 
 * Multiple endogenous variables with CUE
 benchmark_ivreghdfe y (x_endog1 x_endog2 = z1 z2 z3 z4) x_exog, absorb(firm) cue testname("cue two endog")
+
+* Weakly identified CUE: from the 2SLS start the objective is not convex,
+* where civreghdfe's steepest-descent fallback used to stop at worse optima
+* (J 4.12 against ivreghdfe's 2.70 with seed 4, robust; 2.31 against 1.88
+* with seed 32, cluster). The absolute-eigenvalue Newton step finds
+* ivreghdfe's optimum. Six significant figures: on these flat objectives
+* ivreg2's optimize() stops at its own tolerance (b within 1e-7, with
+* civreghdfe's J lower by 1e-14), so the seventh digit is ivreg2's.
+foreach __cs in "4 vce(robust)" "32 vce(cluster id)" "14 vce(robust) bw(2)" {
+    gettoken __seed __opt : __cs
+    clear
+    set seed `__seed'
+    set obs 300
+    gen id = ceil(_n / 6)
+    gen t = mod(_n - 1, 6) + 1
+    gen fe = rnormal()
+    bysort id: replace fe = fe[1]
+    gen z1 = rnormal()
+    gen z2 = rnormal()
+    gen z3 = rnormal()
+    gen u = rnormal() * (1 + abs(z1))
+    gen x = .08 * z1 + .05 * z2 + .03 * z3 + .8 * u + rnormal() + fe
+    gen w = rnormal()
+    gen y = .5 * x + .3 * w + u + fe
+    if strpos("`__opt'", "bw(") tsset id t
+    benchmark_ivreghdfe y (x = z1 z2 z3) w, absorb(id) cue `__opt' minsf(6) testname("cue weak, nonconvex start (seed `__seed',`__opt')")
+}
 
 * SECTION 25: New Options (robust, cluster, display, dofminus, fwl)
 print_section "New Options"
@@ -1455,7 +1483,9 @@ benchmark_ivreghdfe y (x_endog = z) x_exog, absorb(id) testname("very large valu
 * Pathological: mixed tiny and huge
 * NOTE: ivreghdfe is buggy here — ivreg2 chokes on extreme scales, omitting
 * x_endog and x_tiny entirely (b=[0,0,8.52e-10], R2=0.01).
-* Validate civreghdfe independently against DGP truth instead.
+* Fit the equivalent, well-scaled model with ivreghdfe, then transform its
+* coefficients and covariance back to the original units. Sampling noise is
+* shared by both fits and cannot justify a 50% coefficient tolerance.
 clear
 set seed 383
 set obs 1000
@@ -1466,13 +1496,27 @@ gen x_tiny = runiform() / 1e9
 gen x_huge = runiform() * 1e9
 gen y = 2*x_endog + x_tiny * 1e9 + x_huge / 1e9 + rnormal()
 
-civreghdfe y (x_endog = z) x_tiny x_huge, absorb(id)
-local b_endog = _b[x_endog]
-local b_tiny  = _b[x_tiny]
-local b_huge  = _b[x_huge]
-* DGP truth: b_endog=2, b_tiny=1e9, b_huge=1e-9; check within 50% (IV is noisy)
-if abs(`b_endog' - 2) / 2 < 0.5 & abs(`b_tiny' - 1e9) / 1e9 < 0.5 & abs(`b_huge' - 1e-9) / 1e-9 < 0.5 test_pass "mixed scale (tiny and huge)"
-else test_fail "mixed scale (tiny and huge)" "b_endog=`b_endog' b_tiny=`b_tiny' b_huge=`b_huge'"
+gen double tiny_unit = x_tiny * 1e9
+gen double huge_unit = x_huge / 1e9
+ivreghdfe y (x_endog = z) tiny_unit huge_unit, absorb(id) tolerance(1e-12)
+tempname mixed_b mixed_V mixed_D
+matrix `mixed_b' = e(b)
+matrix `mixed_V' = e(V)
+matrix `mixed_D' = I(colsof(`mixed_b'))
+local j = colnumb(`mixed_b', "tiny_unit")
+matrix `mixed_D'[`j',`j'] = 1e9
+local j = colnumb(`mixed_b', "huge_unit")
+matrix `mixed_D'[`j',`j'] = 1e-9
+matrix `mixed_b' = `mixed_b' * `mixed_D'
+matrix `mixed_V' = `mixed_D' * `mixed_V' * `mixed_D'
+local mixed_N = e(N)
+local mixed_df = e(df_r)
+gen byte mixed_sample = e(sample)
+civreghdfe y (x_endog = z) x_tiny x_huge, absorb(id) tolerance(1e-12)
+assert e(N) == `mixed_N' & e(df_r) == `mixed_df'
+assert e(sample) == mixed_sample
+assert_matrix_equal `mixed_b' e(b) $DEFAULT_SIGFIGS "mixed scale: b against rescaled ivreghdfe"
+assert_matrix_equal `mixed_V' e(V) $DEFAULT_SIGFIGS "mixed scale: V against rescaled ivreghdfe"
 
 * SECTION 39: Many Instruments / Many Endogenous
 print_section "Many Instruments / Many Endogenous"
@@ -1958,6 +2002,7 @@ program define _civreghdfe_cmp
     foreach s of local scalars {
         local r_`s' = e(`s')
     }
+    ereturn clear
     capture quietly `ct'
     if _rc {
         test_fail "`testname'" "civreghdfe failed rc=`=_rc'"
@@ -2003,7 +2048,7 @@ _civreghdfe_cmp, ref(ivreghdfe y x (d=z), absorb(w f) iterate(16000)) ct(civregh
     scalars(`ivstats') testname("iterate()")
 
 * A time-series operator on the dependent variable
-webuse grunfeld, clear
+ctools_fixture grunfeld, clear
 foreach op in L D {
     _civreghdfe_cmp, ref(ivreghdfe `op'.invest kstock (mvalue=L.mvalue), absorb(company)) ///
         ct(civreghdfe `op'.invest kstock (mvalue=L.mvalue), absorb(company)) ///
@@ -2050,7 +2095,8 @@ foreach s of local diag {
 quietly civreghdfe y w (x x3 = z1 z2 z3 z4), absorb(id) vce(cluster id) orthog(z4) endogtest(x3) redundant(z4) nofooter
 local diffs
 foreach s of local diag {
-    if missing(e(`s')) | e(`s') != `f_`s'' local diffs "`diffs' `s'"
+    * (the first fit after other commands can differ in the last bits)
+    if missing(e(`s')) | reldif(e(`s'), `f_`s'') > 1e-12 local diffs "`diffs' `s'"
 }
 if "`diffs'" == "" test_pass "nofooter stores the diagnostics"
 else test_fail "nofooter stores the diagnostics" "`diffs'"
@@ -2070,7 +2116,7 @@ if _rc test_fail "pweights with rf first savefirst" "rc=`=_rc'"
 else {
     if missing(e(widstat)) | missing(e(sargan)) test_fail "pweights with rf first savefirst" "diagnostics missing"
     else test_pass "pweights with rf first savefirst"
-    capture estimates restore _civreghdfe_x
+    capture estimates restore _ivreg2_x
     if _rc test_fail "pweights: saved first stage" "rc=`=_rc'"
     else {
         matrix pw_ctV = e(V)
@@ -2410,10 +2456,11 @@ foreach o in "cue" "gmm2s" "liml" "kclass(.5)" "fuller(1)" {
 }
 capture matrix drop cb0 cb1
 * sfirst (ivreg2's system of first-stage and reduced-form equations, with
-* its Sanderson-Windmeijer and Anderson-Rubin statistics) is refused
-capture civreghdfe y w (x = z1 z2 z3), absorb(id) sfirst
-if _rc == 198 test_pass "sfirst refused"
-else test_fail "sfirst refused" "rc=`=_rc'"
+* its Sanderson-Windmeijer and Anderson-Rubin statistics; compared with
+* ivreg2 and ivreghdfe in case s2_iv)
+capture quietly civreghdfe y w (x = z1 z2 z3), absorb(id) sfirst
+if _rc == 0 & "`e(sfirsteq)'" == "" & !missing(e(arf)) test_pass "sfirst"
+else test_fail "sfirst" "rc=`=_rc'"
 
 * nocollin: ivreg2's collinearity rules are skipped; what remains is
 * ivreghdfe's invsym() of the partialled cross-products
@@ -2497,7 +2544,7 @@ foreach o in "absorb(id) cluster(f)" "cluster(f)" "absorb(id t) cluster(f)" {
     local sf_r "`=e(df_r)' `=e(rmse)' `=e(N_clust)'"
     matrix sf_rV = e(V)
     quietly civreghdfe y w (x = z1 z2 z3), `o' savefirst
-    quietly estimates restore _civreghdfe_x
+    quietly estimates restore _ivreg2_x
     matrix sf_cV = e(V)
     matrix_min_sigfigs sf_rV sf_cV
     local sf_sf = r(min_sigfigs)

@@ -11,6 +11,7 @@
 /* Private numerical phases. Column-major sample arrays and HDFE workspaces
  * belong to the caller. Options are immutable and never read from Stata here. */
 double ppml_quad_dot(const double *x, const double *y, const double *w, int n);
+void ppml_uncenter_vce(double *V, const double *means, int K);
 int ppml_qrsolve(const double *X, const double *y, const double *w, int N, int K, double *b,
                  double *resid);
 int ppml_joint_slope(const HDFE_State *S, int g);
@@ -28,12 +29,22 @@ HDFE_SolveResult ppml_map_options(const PPML_Options *options, HDFE_State *S, do
 HDFE_SolveResult ppml_partial(const PPML_Options *options, HDFE_State *S, double *data, int N,
                               int K, int threads);
 int ppml_simplex_tableau(double *X, int n, int k, int maxiter, int *separated);
+/* w_pos: the weights of the positive rows in the positive-sample
+ * projection, or NULL for the fit's rule (w_user with fweights, else 1) */
 int ppml_simplex(const PPML_Options *options, HDFE_State *S, const double *y, const double *X,
-                 const double *w_user, int weight_type, int N, int K, int *separated);
+                 const double *w_user, int weight_type, const double *w_pos, int N, int K,
+                 int *separated);
 int ppml_relu_basis(HDFE_State *S, const double *X, int N, int K, double *q, int nthreads);
 ST_int ppml_relu_ex(const PPML_Options *options, HDFE_State *S, const ST_double *y,
                     const ST_double *X, ST_int N, ST_int K, ST_int *separated, ST_int nthreads,
                     ST_double *certificate);
+/* ppml_relu_ex, also returning the number of ReLU iterations run (the one
+ * that found the separated observations counted) in *iterations */
+ST_int ppml_relu_ex2(const PPML_Options *options, HDFE_State *S, const ST_double *y,
+                     const ST_double *X, ST_int N, ST_int K, ST_int *separated, ST_int nthreads,
+                     ST_double *certificate, ST_int *iterations);
+/* ppmlhdfe's messages (Mata %g of a small positive number: d.dddde-XX) */
+void ppml_format_small_g(char *buffer, size_t size, double value);
 ST_int ppml_relu(const PPML_Options *options, HDFE_State *S, const double *y, const double *X,
                  int N, int K, int *mask, int threads);
 void ppml_update_fe_weights(HDFE_State *S, const ST_double *irls_w, ST_int N);

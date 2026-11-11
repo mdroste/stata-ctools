@@ -20,6 +20,11 @@ Where `merge_type` is one of:
 
 As with `merge`, `1:n`, `n:1`, `n:n`, `n:m` and `m:n` are accepted for these types.
 Use `cmerge 1:1 _n using filename` to merge by observation number.
+The pre-Stata 11 syntax without a match type (`cmerge [varlist] using f1 [f2 ...] [, unique ...]`)
+is passed to Stata's `merge`, which runs it as it always has; an invalid match type such as `2:2`
+exits with `merge`'s message and r(198). As `merge` does, `cmerge` notes each master variable whose
+storage type it widens ("variable x was byte, now int to accommodate using data's values") and, with
+`force`, each using variable whose string or numeric values it discards.
 
 Rows come out in `merge`'s order: the master observations in key order (the first
 output row of each), then every other row, that is the using-only rows and the
@@ -47,8 +52,10 @@ keys have ties, `merge`'s order within the ties depends on `set sortseed`;
 | `replace` | Replace conflicting nonmissing values; requires `update` |
 | `preserve_order(#)` | Preserve master observation order when set to 1 |
 | `threads(#)` | Maximum threads; zero uses the ctools thread setting |
+| `debug` | Show the command that performs the merge (`merge`'s undocumented option) |
 | `snapshot` | Restore the master after a failure from a `preserve` snapshot (written to disk above `c(max_preservemem)`) |
 | `fast` | Keep no copy of the master; a failure or Break can leave the data partly merged |
+| `tempdta` | Merge data with `strL` variables in the plugin, through a temporary `.dta` file, instead of `merge` |
 
 ## Examples
 
@@ -158,7 +165,7 @@ Memory use depends on the dataset, options, and number of threads.
 
 ## Validation and failure behavior
 
-Shared numeric and fixed-string variables are widened before updates or using-only rows are written. A long/float combination uses double to preserve both inputs. Key variables must have matching string/numeric types even with force. For incompatible non-key types, force retains the master type and treats the using-side values as missing. String writes retain the shared plugin limit of str2045; strL output is unsupported. If `assert()` fails, the merged result stays in memory, as with `merge`; any other failed or interrupted merge (including Break) restores the master dataset.
+Shared numeric and fixed-string variables are widened before updates or using-only rows are written. A long/float combination uses double to preserve both inputs. Key variables must have matching string/numeric types even with force. For incompatible non-key types, force retains the master type and treats the using-side values as missing. String writes retain the shared plugin limit of str2045. When either dataset has a strL variable the merge keeps, `merge` itself runs it, so strL storage types and values (long text, binary values, updates and using-only rows) are exactly `merge`'s; `verbose` notes it. With `tempdta` the plugin runs such merges instead: it writes the merged dataset to a temporary `.dta`, about the size of the merged data, which `use` loads, then puts back formats, labels, value labels, notes and characteristics as `merge` leaves them. On 10 million master observations this took about half the time of `merge`; on 2 million it was about 10% slower. The file may reach the disk, so the option is not the default. A failure or Break before the merged data are loaded restores the master; after that point there is nothing to undo. The option has no effect without strL variables, and is not used when the master has frame alias variables. If `assert()` fails, the merged result stays in memory, as with `merge`; any other failed or interrupted merge (including Break) restores the master dataset.
 
 By default, `cmerge` keeps an in-memory copy of the master observations until the merge succeeds. If the command fails or is interrupted, it restores the observations and reverses changes to variables and dataset attributes. Merges involving `strL`, and certain merges with empty datasets, keep a separate copy in a Stata frame. If that copy does not fit in memory, the merge fails before changing the dataset. On Stata 15 and earlier, those merges use `preserve`.
 

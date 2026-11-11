@@ -15,6 +15,7 @@
 #include "civreghdfe_matrix.h"
 #include "civreghdfe_vce.h"
 #include "civreghdfe_tests.h"
+#include "civreghdfe_ffirst.h"
 #include "../ctools_config.h"
 #include "../ctools_spi.h"  /* Error-checking SPI wrappers */
 
@@ -66,13 +67,13 @@ ST_retcode ivest_compute_gmm2s(
     /* Invert Z'ΩZ */
     memcpy(ZOmegaZ_inv, ZOmegaZ, K_iv * K_iv * sizeof(ST_double));
     if (ctools_cholesky(ZOmegaZ_inv, K_iv) != 0) {
-        SF_error("civreghdfe: GMM2S optimal weighting matrix is singular\n");
+        if (ctx->report) SF_error("civreghdfe: GMM2S optimal weighting matrix is singular\n");
         free(ZOmegaZ); free(ZOmegaZ_inv);
         return 198;
     }
     stata_retcode inverse_status_0 = ctools_invert_from_cholesky(ZOmegaZ_inv, K_iv, ZOmegaZ_inv);
     if (inverse_status_0 != STATA_OK) {
-        SF_error("civreghdfe: Failed to invert GMM2S weighting matrix\n");
+        if (ctx->report) SF_error("civreghdfe: Failed to invert GMM2S weighting matrix\n");
         free(ZOmegaZ); free(ZOmegaZ_inv);
         return ctools_stata_rc(inverse_status_0);
     }
@@ -125,7 +126,7 @@ ST_retcode ivest_compute_gmm2s(
     memcpy(XZWZX_L, XZWZX, K_total * K_total * sizeof(ST_double));
 
     if (ctools_cholesky(XZWZX_L, K_total) != 0) {
-        SF_error("civreghdfe: GMM2S X'ZWZ'X matrix is singular\n");
+        if (ctx->report) SF_error("civreghdfe: GMM2S X'ZWZ'X matrix is singular\n");
         free(ZOmegaZ); free(ZOmegaZ_inv);
         free(XZW); free(XZWZX); free(XZWZy);
         free(XZWZX_L); free(beta_temp);
@@ -272,6 +273,113 @@ static ST_double cue_objective(
 }
 
 /*
+    Eigenvalues (into w) and eigenvectors (columns of V) of the symmetric
+    K x K matrix A (column-major, overwritten) by cyclic Jacobi sweeps until
+    the off-diagonal mass is below 1e-15 of the matrix's. Returns 0, or -1
+    when the sweeps do not converge or a value is not finite.
+*/
+static int cue_sym_eigen(ST_int K, ST_double *A, ST_double *V, ST_double *w)
+{
+    ST_double total = 0.0;
+    for (ST_int j = 0; j < K; j++) {
+        for (ST_int i = 0; i < K; i++) {
+            V[(size_t)j * K + i] = (i == j) ? 1.0 : 0.0;
+            total += A[(size_t)j * K + i] * A[(size_t)j * K + i];
+        }
+    }
+    if (!isfinite(total)) return -1;
+    int done = 0;
+    for (int sweep = 0; sweep < 100 && !done; sweep++) {
+        ST_double off = 0.0;
+        for (ST_int j = 0; j < K; j++)
+            for (ST_int i = 0; i < j; i++)
+                off += A[(size_t)j * K + i] * A[(size_t)j * K + i];
+        if (off <= 1e-30 * total) {
+            done = 1;
+            break;
+        }
+        for (ST_int p = 0; p < K - 1; p++) {
+            for (ST_int q = p + 1; q < K; q++) {
+                const ST_double apq = A[(size_t)q * K + p];
+                if (apq == 0.0) continue;
+                const ST_double app = A[(size_t)p * K + p], aqq = A[(size_t)q * K + q];
+                const ST_double theta = 0.5 * atan2(2.0 * apq, aqq - app);
+                const ST_double c = cos(theta), s = sin(theta);
+                for (ST_int i = 0; i < K; i++) {
+                    const ST_double aip = A[(size_t)p * K + i], aiq = A[(size_t)q * K + i];
+                    A[(size_t)p * K + i] = c * aip - s * aiq;
+                    A[(size_t)q * K + i] = s * aip + c * aiq;
+                }
+                for (ST_int i = 0; i < K; i++) {
+                    const ST_double api = A[(size_t)i * K + p], aqi = A[(size_t)i * K + q];
+                    A[(size_t)i * K + p] = c * api - s * aqi;
+                    A[(size_t)i * K + q] = s * api + c * aqi;
+                }
+                for (ST_int i = 0; i < K; i++) {
+                    const ST_double vip = V[(size_t)p * K + i], viq = V[(size_t)q * K + i];
+                    V[(size_t)p * K + i] = c * vip - s * viq;
+                    V[(size_t)q * K + i] = s * vip + c * viq;
+                }
+            }
+        }
+    }
+    for (ST_int i = 0; i < K; i++) {
+        w[i] = A[(size_t)i * K + i];
+        if (!isfinite(w[i])) return -1;
+    }
+    return done ? 0 : -1;
+}
+
+/*
+    The CUE step where the Hessian H is not positive definite (a nonconvex
+    region, typical at the 2SLS start of a weakly identified model): the
+    Newton step on H with its eigenvalues replaced by their absolute values
+    (floored at 1e-8 of the largest), in the coefficients' units u, so that
+    directions of negative curvature are descended at their own scale
+    instead of by a normalized steepest-descent step. Returns 1 with the
+    direction in d, or 0 (H zero, the eigensystem failed, or no memory).
+*/
+static int cue_modified_newton(ST_int K, const ST_double *H, const ST_double *g,
+                               const ST_double *u, ST_double *d)
+{
+    ST_double *A = (ST_double *)malloc((size_t)K * K * sizeof(ST_double));
+    ST_double *V = (ST_double *)malloc((size_t)K * K * sizeof(ST_double));
+    ST_double *w = (ST_double *)malloc((size_t)K * 2 * sizeof(ST_double));
+    int ok = 0;
+    if (A && V && w) {
+        for (ST_int j = 0; j < K; j++)
+            for (ST_int i = 0; i < K; i++)
+                A[(size_t)j * K + i] = u[i] * H[(size_t)j * K + i] * u[j];
+        if (cue_sym_eigen(K, A, V, w) == 0) {
+            ST_double lmax = 0.0;
+            for (ST_int i = 0; i < K; i++)
+                if (fabs(w[i]) > lmax) lmax = fabs(w[i]);
+            if (lmax > 0.0 && isfinite(lmax)) {
+                ST_double *dt = w + K;
+                for (ST_int i = 0; i < K; i++) dt[i] = 0.0;
+                for (ST_int e = 0; e < K; e++) {
+                    const ST_double *ve = V + (size_t)e * K;
+                    ST_double c = 0.0;
+                    for (ST_int i = 0; i < K; i++) c += ve[i] * u[i] * g[i];
+                    ST_double lam = fabs(w[e]);
+                    if (lam < 1e-8 * lmax) lam = 1e-8 * lmax;
+                    for (ST_int i = 0; i < K; i++) dt[i] -= ve[i] * c / lam;
+                }
+                ok = 1;
+                for (ST_int i = 0; i < K; i++) {
+                    d[i] = u[i] * dt[i];
+                    if (!isfinite(d[i])) ok = 0;
+                }
+            }
+        }
+    }
+    free(A);
+    free(V);
+    free(w);
+    return ok;
+}
+
+/*
     Compute CUE (Continuously Updated Estimator).
 
     CUE minimizes: Q(β) = g(β)' S(β)^-1 g(β)
@@ -337,7 +445,10 @@ ST_retcode ivest_compute_cue(
        cue_objective modifies work_resid. */
     int cue_nthreads = 1;
 #ifdef _OPENMP
-    cue_nthreads = ctools_get_max_threads();
+    /* A bootstrap replicate (its moment covariance carries the draw counts)
+       runs on a worker of the replicate scheduler: one thread, so that it
+       opens no nested team and allocates one set of buffers */
+    cue_nthreads = (ctx->om && ctx->om->mult) ? 1 : ctools_get_max_threads();
     if (cue_nthreads > K_total) cue_nthreads = K_total;
     if (cue_nthreads < 1) cue_nthreads = 1;
 #endif
@@ -529,8 +640,15 @@ ST_retcode ivest_compute_cue(
         }
         free(H_copy);
 
+        ST_int modified = 0;
+        if (!newton_ok && cue_modified_newton(K_total, hessian, gradient, unit, direction)) {
+            /* Hessian not positive definite: the absolute-eigenvalue
+               Newton step */
+            newton_ok = 1;
+            modified = 1;
+        }
         if (!newton_ok) {
-            /* Hessian not positive definite; use steepest descent with scaling */
+            /* No usable curvature at all: steepest descent with scaling */
             ST_double inv_grad_norm = 1.0 / (grad_norm + 1e-30);
             for (k = 0; k < K_total; k++) {
                 direction[k] = -gradient[k] * unit[k] * unit[k] * inv_grad_norm;
@@ -601,7 +719,8 @@ ST_retcode ivest_compute_cue(
         if (ctx->verbose) {
             char buf[256];
             snprintf(buf, sizeof(buf), "civreghdfe: CUE iter %d: Q=%.8e grad=%.2e step=%.4f %s\n",
-                     iter, Q_current, grad_norm, step, newton_ok ? "newton" : "gradient");
+                     iter, Q_current, grad_norm, step,
+                     modified ? "modified newton" : newton_ok ? "newton" : "gradient");
             SF_display(buf);
         }
     }
@@ -756,120 +875,61 @@ static ST_retcode civ_first_stage_robust_wald(
     - kclass: the k value (1.0 for 2SLS, lambda for LIML, etc.)
     - est_method: 0=2SLS, 1=LIML, 2=Fuller, 3=kclass, 4=GMM2S, 5=CUE
 */
-ST_retcode ivest_compute_2sls(
-    const ST_double *y,
-    const ST_double *X_exog,
-    const ST_double *X_endog,
-    const ST_double *Z,
-    const ST_double *weights,
-    ST_int weight_type,
-    ST_int N,
-    ST_double N_eff,  /* Effective sample size: sum(fw) for fweights (may exceed INT_MAX), N otherwise */
-    ST_int K_exog,
-    ST_int K_endog,
-    ST_int K_iv,
-    ST_double *beta,
-    ST_double *V,
-    ST_double *first_stage_F,
-    ST_int vce_type,
-    const ST_int *cluster_ids,
-    ST_int num_clusters,
-    const ST_int *cluster2_ids,
-    ST_int num_clusters2,
-    ST_int df_a,
-    ST_int nested_adj,
-    ST_int verbose,
-    ST_int est_method,
-    ST_double kclass_user,
-    ST_double fuller_alpha,
-    ST_double *lambda_out,
-    ST_int kernel_type,
-    ST_double bw,
-    ST_int kiefer,
-    const civreghdfe_ts *ts,
-    ST_int sdofminus,
-    ST_int center,
-    const civreghdfe_test_cols *test_cols,
-    ST_int n_absorbed_x,
-    ST_int n_absorbed_iv,
-    ST_int n_absorbed_iv_all,
-    ST_int dofminus, ST_int small,
-    const ST_double *b0, ST_int n_excl_dropped
-)
+/*
+ * The coefficient phase of ivest_compute_2sls, without the Stata SPI (plan
+ * 9.2): the k of the k-class family (LIML's lambda), the k-class solve, the
+ * wmatrix() estimator, the moment covariance S of the chosen VCE, and the
+ * GMM2S and CUE re-estimation. The full fit and the bootstrap replicates
+ * both call it. Messages only with io->report; the arrays it allocates are
+ * handed back in io, also on failure, for the caller to free.
+ */
+ST_retcode ivest_fit_core(civ_fit_io *io)
 {
-    /* Heap state released at est_cleanup; every error path after the first
-       allocation leaves through it */
+    const int report = io->report;
+    const ST_double *y = io->y, *X_exog = io->X_exog, *X_endog = io->X_endog, *Z = io->Z;
+    const ST_double *weights = io->weights;
+    ST_int weight_type = io->weight_type, N = io->N;
+    ST_double N_eff = io->N_eff;
+    ST_int K_exog = io->K_exog, K_endog = io->K_endog, K_iv = io->K_iv, K_total = io->K_total;
+    ST_double *beta = io->beta, *lambda_out = io->lambda_out;
+    ST_int verbose = io->verbose, est_method = io->est_method;
+    ST_double kclass_user = io->kclass_user, fuller_alpha = io->fuller_alpha;
+    ST_int s_kind = io->s_kind, s_kernel = io->s_kernel, s_noniid = io->s_noniid;
+    ST_double s_bw = io->s_bw;
+    ST_int center = io->center;
+    const ST_int *cluster_ids = io->cluster_ids, *cluster2_ids = io->cluster2_ids;
+    ST_int num_clusters = io->num_clusters, num_clusters2 = io->num_clusters2;
+    const civreghdfe_ts *ts = io->ts;
+    const civreghdfe_extra *extra = io->extra;
+    const ST_double *S0 = io->S0, *W0 = io->W0, *b0 = io->b0;
+    ST_int dofminus = io->dofminus;
     ST_retcode est_rc = STATA_OK;
-    ST_double *ZtZ = NULL, *ZtZ_inv = NULL, *ZtX = NULL, *Zty = NULL;
-    ST_double *XtPzX = NULL, *XtPzy = NULL, *temp1 = NULL, *X_all = NULL, *resid = NULL;
-    ST_double *X_hat = NULL, *ZtZ_inv_Zty = NULL;
-    ST_double *XtX = NULL, *Xty = NULL, *XkX = NULL, *Xky = NULL;
-    ST_double *XkX_copy = NULL, *beta_temp = NULL, *S_main = NULL;
-    ST_double *gmm_hessian_inv = NULL, *XkX_inv = NULL, *coviv_bread = NULL;
+    ST_double *ZtZ = NULL;
+    ST_double *ZtZ_inv = NULL;
+    ST_double *ZtX = NULL;
+    ST_double *Zty = NULL;
+    ST_double *XtPzX = NULL;
+    ST_double *XtPzy = NULL;
+    ST_double *temp1 = NULL;
+    ST_double *X_all = NULL;
+    ST_double *resid = NULL;
+    ST_double *X_hat = NULL;
+    ST_double *ZtZ_inv_Zty = NULL;
+    ST_double *XtX = NULL;
+    ST_double *Xty = NULL;
+    ST_double *XkX = NULL;
+    ST_double *Xky = NULL;
+    ST_double *XkX_copy = NULL;
+    ST_double *beta_temp = NULL;
+    ST_double *S_main = NULL;
+    ST_double *gmm_hessian_inv = NULL;
+    ST_double *W_bread = NULL;
+    ST_double *W_zx = NULL;
     civ_omega om;
     memset(&om, 0, sizeof(om));
-
-    ST_int K_total = K_exog + K_endog;  /* Total regressors */
-    /* Regressor and instrument counts for the degrees of freedom: they
-       include the fixed-effect-absorbed columns that ivreghdfe keeps in its
-       rank counts (see civreghdfe_impl.c), which are not estimated here */
-    ST_int K_dof = K_total + n_absorbed_x;
-    ST_int Kiv_dof = K_iv + n_absorbed_iv;
     ST_int i, j, k;
-
-    /* Suppress unused variable warnings for not-yet-implemented features */
-    /* TODO: center is for centering HAC score vectors before outer product */
-    (void)center;
-
-    /* sdofminus is the FULL df_a (including all absorbed FE), used for test statistics DOF.
-       This differs from the df_a parameter which is df_a_for_vce (excluding nested FE).
-       For VCE computation, use df_a. For test statistics, use sdofminus. */
-    ST_int df_a_full = (sdofminus > 0) ? sdofminus : df_a;
-
-    /* Structure of the moment covariance S (ivreg2's m_omega), shared by the
-       VCE, GMM2S/CUE, the J and C statistics: bw()/kernel() alone is AC,
-       with robust HAC; dkraay() clusters on time with a kernel; kiefer is AC
-       with the truncated kernel over every within-panel lag. */
-    ST_int s_kind = CIV_OMEGA_IID, s_kernel = 0;
-    ST_double s_bw = bw;
-    if (kiefer) {
-        /* heteroskedastic too with pweights (ivreg2 sets robust after its
-           kiefer checks) */
-        if (vce_type == CIVREGHDFE_VCE_ROBUST) s_kind = CIV_OMEGA_ROBUST;
-        s_kernel = CIVREGHDFE_KERNEL_TRUNCATED;
-        s_bw = ts ? ts->tmax_idx : 0;
-    } else if (vce_type == CIVREGHDFE_VCE_DKRAAY) {
-        s_kind = CIV_OMEGA_DKRAAY;
-        s_kernel = (kernel_type > 0) ? kernel_type : CIVREGHDFE_KERNEL_BARTLETT;
-    } else if (vce_type == CIVREGHDFE_VCE_CLUSTER2) {
-        /* with a kernel: clusters on panel and time, Driscoll-Kraay over time */
-        s_kind = CIV_OMEGA_TWOWAY;
-        s_kernel = (bw > 0) ? kernel_type : 0;
-    } else if (vce_type == CIVREGHDFE_VCE_CLUSTER) {
-        s_kind = CIV_OMEGA_CLUSTER;
-    } else {
-        s_kind = (vce_type == CIVREGHDFE_VCE_ROBUST) ? CIV_OMEGA_ROBUST : CIV_OMEGA_IID;
-        s_kernel = (bw > 0) ? kernel_type : 0;
-    }
-    /* Non-iid S: 2SLS/k-class are then inefficient and GMM2S/CUE reweight */
-    ST_int s_noniid = (s_kind != CIV_OMEGA_IID) || (s_kernel > 0);
-    ST_int s_cluster = (s_kind == CIV_OMEGA_CLUSTER || s_kind == CIV_OMEGA_TWOWAY ||
-                        s_kind == CIV_OMEGA_DKRAAY);
-    /* Clusters for the small-sample factor G/(G-1): time periods for
-       Driscoll-Kraay, min(G1, G2) for two-way clustering */
-    ST_int s_nclust = num_clusters;
-    if (s_kind == CIV_OMEGA_TWOWAY && num_clusters2 < num_clusters) s_nclust = num_clusters2;
-    if ((s_kernel > 0 || s_kind == CIV_OMEGA_DKRAAY) && !ts) {
-        SF_error("civreghdfe: kernel-based VCE requires the tsset time variable\n");
-        return 198;
-    }
-
-    if (verbose) {
-        char buf[256];
-        snprintf(buf, sizeof(buf), "civreghdfe: df_a=%d, sdofminus=%d, df_a_full=%d\n",
-                 (int)df_a, (int)sdofminus, (int)df_a_full);
-        SF_display(buf);
-    }
+    ST_int effic1s = 0, gmmw_ineff = 0, s_fullrank = 1;
+    (void)j;
 
     /* Determine k value based on estimation method */
     ST_double kclass = 1.0;  /* Default: 2SLS */
@@ -881,13 +941,13 @@ ST_retcode ivest_compute_2sls(
         lambda = compute_liml_lambda(y, X_endog, X_exog, Z, weights, weight_type, N, K_exog, K_endog, K_iv);
         if (isnan(lambda)) {
             /* never 2SLS under the LIML label */
-            SF_error("civreghdfe: Memory allocation failed for the LIML eigenvalue\n");
+            if (report) SF_error("civreghdfe: Memory allocation failed for the LIML eigenvalue\n");
             return 920;
         }
         if (lambda < 0.0 && K_iv != K_total) {
             /* a singular cross-product matrix: no LIML root, never 2SLS
                under the LIML label */
-            SF_error("civreghdfe: the LIML eigenvalue cannot be computed (singular cross-product matrix)\n");
+            if (report) SF_error("civreghdfe: the LIML eigenvalue cannot be computed (singular cross-product matrix)\n");
             return 498;
         }
 
@@ -903,7 +963,7 @@ ST_retcode ivest_compute_2sls(
             /* Fuller: k = lambda - alpha/(N_eff - K_iv)
                Use N_eff (sum of fweights for fweights, N otherwise) to match ivreg2 */
             if (fuller_alpha > (N_eff - K_iv)) {
-                SF_error("civreghdfe: Invalid Fuller parameter\n");
+                if (report) SF_error("civreghdfe: Invalid Fuller parameter\n");
                 return 198;
             }
             kclass = lambda - fuller_alpha / (ST_double)(N_eff - K_iv);
@@ -920,7 +980,8 @@ ST_retcode ivest_compute_2sls(
        est_method 5 with a non-iid S: CUE by minimizing the GMM objective */
 
     /* the k of the k-class estimator, ivreg2's e(kclass) */
-    ctools_scal_save("__civreghdfe_k", kclass);
+    io->kclass = kclass;
+    io->kclass_set = 1;
 
     const char *method_name = "2SLS";
     if (est_method == 1) method_name = "LIML";
@@ -932,22 +993,22 @@ ST_retcode ivest_compute_2sls(
     if (verbose) {
         char buf[256];
         snprintf(buf, sizeof(buf), "civreghdfe: Computing %s estimation\n", method_name);
-        SF_display(buf);
+        if (report) SF_display(buf);
         snprintf(buf, sizeof(buf), "  N=%d, K_exog=%d, K_endog=%d, K_iv=%d\n",
                  (int)N, (int)K_exog, (int)K_endog, (int)K_iv);
-        SF_display(buf);
+        if (report) SF_display(buf);
         if (est_method == 1 || est_method == 2) {
             snprintf(buf, sizeof(buf), "  lambda=%.6f, k=%.6f\n", lambda, kclass);
-            SF_display(buf);
+            if (report) SF_display(buf);
         } else if (est_method == 3) {
             snprintf(buf, sizeof(buf), "  k=%.6f\n", kclass);
-            SF_display(buf);
+            if (report) SF_display(buf);
         }
     }
 
     /* Check identification */
     if (K_iv < K_total) {
-        SF_error("civreghdfe: Model is underidentified\n");
+        if (report) SF_error("civreghdfe: Model is underidentified\n");
         return 198;
     }
 
@@ -964,7 +1025,7 @@ ST_retcode ivest_compute_2sls(
 
     if (!ZtZ || !ZtZ_inv || !ZtX || !Zty || !XtPzX || !XtPzy ||
         !temp1 || !X_all || !resid) {
-        SF_error("civreghdfe: Memory allocation failed\n");
+        if (report) SF_error("civreghdfe: Memory allocation failed\n");
         est_rc = 920;
         goto est_cleanup;
     }
@@ -974,7 +1035,7 @@ ST_retcode ivest_compute_2sls(
     if (K_exog > 0 && X_exog) {
         size_t exog_size;
         if (ctools_safe_alloc_size((size_t)N, (size_t)K_exog, sizeof(ST_double), &exog_size) != 0) {
-            SF_error("civreghdfe: Size overflow in memcpy\n");
+            if (report) SF_error("civreghdfe: Size overflow in memcpy\n");
             est_rc = 920;
             goto est_cleanup;
         }
@@ -983,7 +1044,7 @@ ST_retcode ivest_compute_2sls(
     if (K_endog > 0 && X_endog) {
         size_t endog_size;
         if (ctools_safe_alloc_size((size_t)N, (size_t)K_endog, sizeof(ST_double), &endog_size) != 0) {
-            SF_error("civreghdfe: Size overflow in memcpy\n");
+            if (report) SF_error("civreghdfe: Size overflow in memcpy\n");
             est_rc = 920;
             goto est_cleanup;
         }
@@ -1004,13 +1065,13 @@ ST_retcode ivest_compute_2sls(
         memcpy(ZtZ_inv, ZtZ, ztz_size);
     }
     if (ctools_cholesky(ZtZ_inv, K_iv) != 0) {
-        SF_error("civreghdfe: Z'Z is singular (instruments may be collinear)\n");
+        if (report) SF_error("civreghdfe: Z'Z is singular (instruments may be collinear)\n");
         est_rc = 198;
         goto est_cleanup;
     }
     stata_retcode inverse_status_1 = ctools_invert_from_cholesky(ZtZ_inv, K_iv, ZtZ_inv);
     if (inverse_status_1 != STATA_OK) {
-        SF_error("civreghdfe: Failed to invert Z'Z\n");
+        if (report) SF_error("civreghdfe: Failed to invert Z'Z\n");
         est_rc = ctools_stata_rc(inverse_status_1);
         goto est_cleanup;
     }
@@ -1056,7 +1117,7 @@ ST_retcode ivest_compute_2sls(
      * leaving ~11 sigfigs after inversion. */
     X_hat = (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)K_total, sizeof(ST_double));
     if (!X_hat) {
-        SF_error("civreghdfe: Memory allocation failed for X_hat\n");
+        if (report) SF_error("civreghdfe: Memory allocation failed for X_hat\n");
         est_rc = 920;
         goto est_cleanup;
     }
@@ -1088,7 +1149,7 @@ ST_retcode ivest_compute_2sls(
     /* Step 6: Compute (Z'Z)^-1 * Z'y */
     ZtZ_inv_Zty = (ST_double *)calloc(K_iv, sizeof(ST_double));
     if (!ZtZ_inv_Zty) {
-        SF_error("civreghdfe: Memory allocation failed for ZtZ_inv_Zty\n");
+        if (report) SF_error("civreghdfe: Memory allocation failed for ZtZ_inv_Zty\n");
         est_rc = 920;
         goto est_cleanup;
     }
@@ -1126,7 +1187,7 @@ ST_retcode ivest_compute_2sls(
     Xky = (ST_double *)calloc(K_total, sizeof(ST_double));
 
     if (!XkX || !Xky) {
-        SF_error("civreghdfe: Memory allocation failed for XkX/Xky\n");
+        if (report) SF_error("civreghdfe: Memory allocation failed for XkX/Xky\n");
         est_rc = 920;
         goto est_cleanup;
     }
@@ -1135,7 +1196,7 @@ ST_retcode ivest_compute_2sls(
         XtX = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
         Xty = (ST_double *)calloc(K_total, sizeof(ST_double));
         if (!XtX || !Xty) {
-            SF_error("civreghdfe: Memory allocation failed for X'X/X'y\n");
+            if (report) SF_error("civreghdfe: Memory allocation failed for X'X/X'y\n");
             est_rc = 920;
             goto est_cleanup;
         }
@@ -1187,7 +1248,7 @@ ST_retcode ivest_compute_2sls(
     /* Step 7: Solve XkX * beta = Xky */
     XkX_copy = (ST_double *)malloc(K_total * K_total * sizeof(ST_double));
     if (!XkX_copy) {
-        SF_error("civreghdfe: Memory allocation failed for XkX_copy\n");
+        if (report) SF_error("civreghdfe: Memory allocation failed for XkX_copy\n");
         est_rc = 920;
         goto est_cleanup;
     }
@@ -1195,7 +1256,7 @@ ST_retcode ivest_compute_2sls(
 
     /* Use Cholesky solve */
     if (ctools_cholesky(XkX_copy, K_total) != 0) {
-        SF_error("civreghdfe: XkX matrix is singular\n");
+        if (report) SF_error("civreghdfe: XkX matrix is singular\n");
         est_rc = 198;
         goto est_cleanup;
     }
@@ -1203,7 +1264,7 @@ ST_retcode ivest_compute_2sls(
     /* Forward substitution */
     beta_temp = (ST_double *)calloc(K_total, sizeof(ST_double));
     if (!beta_temp) {
-        SF_error("civreghdfe: Memory allocation failed for beta_temp\n");
+        if (report) SF_error("civreghdfe: Memory allocation failed for beta_temp\n");
         est_rc = 920;
         goto est_cleanup;
     }
@@ -1228,7 +1289,7 @@ ST_retcode ivest_compute_2sls(
         char buf[256];
         for (i = 0; i < K_total; i++) {
             snprintf(buf, sizeof(buf), "  beta[%d] = %g\n", (int)i, beta[i]);
-            SF_display(buf);
+            if (report) SF_display(buf);
         }
     }
 
@@ -1236,6 +1297,55 @@ ST_retcode ivest_compute_2sls(
        (s_gmmcue with b0): they replace the estimate, and S, J and the
        efficient GMM VCE (X'Z S^-1 Z'X)^-1 are taken at their residuals */
     if (b0) memcpy(beta, b0, (size_t)K_total * sizeof(ST_double));
+
+    /* ivreg2's first-step GMM: efficient (IV, or efficient GMM with a
+       given S) unless the S is not iid or gmm2s is requested, and with a
+       given S but no W. Otherwise a given W gives the inefficient
+       first-step estimate (Z'X)'W(Z'X) b = (Z'X)'W Z'y, whose residuals
+       give S (ivreg2's s_gmm1s); without W it is 2SLS. */
+    effic1s = (!(est_method == 4) && !s_noniid) || (S0 && !W0);
+    gmmw_ineff = W0 && !effic1s;
+    if (gmmw_ineff) {
+        /* W_zx = W Z'X (K_iv x K_total), W_bread = (X'Z W Z'X)^-1 */
+        W_zx = (ST_double *)calloc((size_t)K_iv * K_total, sizeof(ST_double));
+        W_bread = (ST_double *)calloc((size_t)K_total * K_total, sizeof(ST_double));
+        ST_double *H = (ST_double *)calloc((size_t)K_total * K_total, sizeof(ST_double));
+        ST_double *g = (ST_double *)calloc((size_t)K_total, sizeof(ST_double));
+        ST_retcode wrc = (W_zx && W_bread && H && g) ? 0 : 920;
+        if (!wrc) {
+            ctools_matmul_ab(W0, ZtX, K_iv, K_iv, K_total, W_zx);
+            for (ST_int c = 0; c < K_total; c++)
+                for (ST_int r = 0; r < K_total; r++) {
+                    ST_double sum = 0.0;
+                    for (k = 0; k < K_iv; k++) sum += ZtX[(size_t)r * K_iv + k] * W_zx[(size_t)c * K_iv + k];
+                    H[(size_t)c * K_total + r] = sum;
+                }
+            for (ST_int c = 0; c < K_total; c++)
+                for (ST_int r = c + 1; r < K_total; r++) {
+                    ST_double m = 0.5 * (H[(size_t)c * K_total + r] + H[(size_t)r * K_total + c]);
+                    H[(size_t)c * K_total + r] = H[(size_t)r * K_total + c] = m;
+                }
+            for (ST_int r = 0; r < K_total; r++) {
+                ST_double sum = 0.0;
+                for (k = 0; k < K_iv; k++) sum += W_zx[(size_t)r * K_iv + k] * Zty[k];
+                g[r] = sum;
+            }
+            if (civ_sym_inverse(H, K_total, W_bread) != 0) wrc = 920;
+        }
+        if (!wrc) {
+            for (ST_int r = 0; r < K_total; r++) {
+                ST_double sum = 0.0;
+                for (ST_int c = 0; c < K_total; c++) sum += W_bread[(size_t)c * K_total + r] * g[c];
+                beta[r] = sum;
+            }
+        }
+        free(H); free(g);
+        if (wrc) {
+            if (report) SF_error("civreghdfe: Memory allocation failed for the wmatrix() estimator\n");
+            est_rc = wrc;
+            goto est_cleanup;
+        }
+    }
 
     /* Step 8: Compute residuals using original X (not projected) */
     /* resid = y - X * beta */
@@ -1254,29 +1364,57 @@ ST_retcode ivest_compute_2sls(
        the S behind the reported J and C statistics: from the 2SLS residuals
        for GMM2S (its first step), at the estimate for CUE, from the model's
        residuals otherwise, and sigma^2 Z'WZ when iid (set after the RSS). */
+    /* bw(auto): Newey and West's (1994) bandwidth from the first-step
+       residuals, as ivreg2's abw selects it */
+    if (s_kernel > 0 && s_bw < 0 && extra && extra->abw_z && ts) {
+        s_bw = civ_auto_bandwidth(resid, extra->abw_z, N, ts, extra->abw_tobs, s_kernel);
+        if (!(s_bw > 0)) {
+            if (report) SF_error("civreghdfe: automatic bandwidth selection failed\n");
+            est_rc = 498;
+            goto est_cleanup;
+        }
+        io->bw_auto = s_bw;
+        io->bw_auto_set = 1;
+    }
+
     S_main = (ST_double *)ctools_safe_calloc3((size_t)K_iv, (size_t)K_iv, sizeof(ST_double));
     ST_retcode om_rc = civ_omega_init(&om, s_kind, s_kernel, s_bw, N, (ST_double)N_eff,
                                       weights, weight_type, cluster_ids, num_clusters,
                                       cluster2_ids, num_clusters2, ts);
+    om.center = center;
+    om.psd = extra ? extra->psd : 0;   /* psd0 / psda */
+    om.mult = io->mult;
+    om.mult_groups = io->mult_groups;
     if (!om_rc && !S_main) om_rc = 920;
-    if (!om_rc && s_noniid) om_rc = civ_omega_build(&om, resid, 1, Z, K_iv, S_main);
-    if (om_rc) SF_error("civreghdfe: Cannot compute the moment covariance matrix\n");
+    if (!om_rc && S0) {
+        /* the given S, in the raw scale (N times ivreg2's) */
+        for (i = 0; i < K_iv * K_iv; i++) S_main[i] = S0[i] * (ST_double)N_eff;
+    } else if (!om_rc && s_noniid) {
+        om_rc = civ_omega_build(&om, resid, 1, Z, K_iv, S_main);
+    } else if (!om_rc && W0 && est_method == 4) {
+        /* gmm2s after a given W with iid errors: sigma^2 Z'WZ from the
+           first-step residuals */
+        ST_double ssr = 0.0;
+        for (i = 0; i < N; i++) ssr += (weights && weight_type != 0 ? weights[i] : 1.0) * resid[i] * resid[i];
+        for (i = 0; i < K_iv * K_iv; i++) S_main[i] = ssr / (ST_double)(N_eff - dofminus) * ZtZ[i];
+    }
+    if (om_rc) if (report) SF_error("civreghdfe: Cannot compute the moment covariance matrix\n");
 
     /* As ivreg2, a non-iid S must have full rank (Stata's invsym rank, too
        few clusters being the usual cause): efficient GMM (GMM2S, CUE) stops
        with r(506); the other estimators do not report the J, C and
        endogeneity statistics */
-    ST_int s_fullrank = 1;
-    if (!om_rc && s_noniid) {
+    s_fullrank = 1;
+    if (!om_rc && (s_noniid || S0)) {
         ST_int s_rank = civ_sym_rank(S_main, K_iv, 1.0 / (ST_double)N_eff);
         if (s_rank < 0) {
-            SF_error("civreghdfe: Memory allocation failed for the moment covariance rank\n");
+            if (report) SF_error("civreghdfe: Memory allocation failed for the moment covariance rank\n");
             om_rc = 920;
         }
         s_fullrank = (s_rank == K_iv);
-        if (!om_rc && !s_fullrank && (est_method == 4 || est_method == 5 || b0)) {
-            SF_error("civreghdfe: estimated covariance matrix of moment conditions not of full rank,\n");
-            SF_error("            and optimal GMM weighting matrix not unique\n");
+        if (!om_rc && !s_fullrank && !(S0 && effic1s) && (est_method == 4 || est_method == 5 || b0)) {
+            if (report) SF_error("civreghdfe: estimated covariance matrix of moment conditions not of full rank,\n");
+            if (report) SF_error("            and optimal GMM weighting matrix not unique\n");
             om_rc = 506;
         }
     }
@@ -1287,8 +1425,10 @@ ST_retcode ivest_compute_2sls(
 
     /* Allocate GMM/CUE Hessian inverse for VCE computation */
 
-    /* Step 8b: For GMM2S, re-estimate with optimal weighting matrix */
-    if (est_method == 4 && s_noniid) {
+    /* Step 8b: For GMM2S, re-estimate with optimal weighting matrix (also
+       the efficient GMM estimator of a given S, and two-step GMM after a
+       given W) */
+    if ((est_method == 4 && (s_noniid || W0 || S0)) || (S0 && effic1s)) {
         /*
             Two-step efficient GMM (ivreg2's s_egmm)
             Step 1: 2SLS residuals give S_main (built above with the chosen
@@ -1299,7 +1439,7 @@ ST_retcode ivest_compute_2sls(
         /* Allocate storage for GMM Hessian inverse */
         gmm_hessian_inv = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
         if (!gmm_hessian_inv) {
-            SF_error("civreghdfe: Memory allocation failed for the GMM Hessian\n");
+            if (report) SF_error("civreghdfe: Memory allocation failed for the GMM Hessian\n");
             est_rc = 920;
             goto est_cleanup;
         }
@@ -1324,7 +1464,8 @@ ST_retcode ivest_compute_2sls(
         gmm_ctx.temp_kiv_ktotal = temp1;
         gmm_ctx.X_all = X_all;
         gmm_ctx.om = &om;
-        gmm_ctx.verbose = verbose;
+        gmm_ctx.verbose = report ? verbose : 0;
+        gmm_ctx.report = report;
         gmm_ctx.alloc_failed = 0;
 
         ST_retcode gmm_rc = ivest_compute_gmm2s(
@@ -1334,7 +1475,12 @@ ST_retcode ivest_compute_2sls(
         if (gmm_rc == 920) {
             /* beta may already be the GMM estimate: never post it with the
                2SLS VCE */
-            SF_error("civreghdfe: Memory allocation failed in GMM2S\n");
+            if (report) SF_error("civreghdfe: Memory allocation failed in GMM2S\n");
+            est_rc = gmm_rc;
+            goto est_cleanup;
+        } else if (gmm_rc != STATA_OK && !report) {
+            /* A bootstrap replicate: its GMM2S estimate does not exist, so
+               the replicate fails rather than counting 2SLS as GMM2S */
             est_rc = gmm_rc;
             goto est_cleanup;
         } else if (gmm_rc != STATA_OK) {
@@ -1343,10 +1489,10 @@ ST_retcode ivest_compute_2sls(
         } else {
             if (verbose) {
                 char buf[256];
-                SF_display("civreghdfe: GMM2S estimates:\n");
+                if (report) SF_display("civreghdfe: GMM2S estimates:\n");
                 for (i = 0; i < K_total; i++) {
                     snprintf(buf, sizeof(buf), "  beta[%d] = %g\n", (int)i, beta[i]);
-                    SF_display(buf);
+                    if (report) SF_display(buf);
                 }
             }
         }
@@ -1365,7 +1511,7 @@ ST_retcode ivest_compute_2sls(
         /* Allocate storage for CUE Hessian inverse */
         gmm_hessian_inv = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
         if (!gmm_hessian_inv) {
-            SF_error("civreghdfe: Memory allocation failed for the CUE Hessian\n");
+            if (report) SF_error("civreghdfe: Memory allocation failed for the CUE Hessian\n");
             est_rc = 920;
             goto est_cleanup;
         }
@@ -1390,7 +1536,8 @@ ST_retcode ivest_compute_2sls(
         cue_ctx.temp_kiv_ktotal = temp1;
         cue_ctx.X_all = X_all;
         cue_ctx.om = &om;
-        cue_ctx.verbose = verbose;
+        cue_ctx.verbose = report ? verbose : 0;
+        cue_ctx.report = report;
         cue_ctx.alloc_failed = 0;
 
         const ST_int max_cue_iter = 100;
@@ -1404,16 +1551,16 @@ ST_retcode ivest_compute_2sls(
         if (cue_rc != STATA_OK) {
             /* beta may already hold a Newton iterate: never post it with the
                2SLS VCE (ivest_compute_cue fails only when memory runs out) */
-            SF_error("civreghdfe: Memory allocation failed in CUE estimation\n");
+            if (report) SF_error("civreghdfe: Memory allocation failed in CUE estimation\n");
             est_rc = cue_rc;
             goto est_cleanup;
         } else {
             if (verbose) {
                 char buf[256];
-                SF_display("civreghdfe: CUE final estimates:\n");
+                if (report) SF_display("civreghdfe: CUE final estimates:\n");
                 for (i = 0; i < K_total; i++) {
                     snprintf(buf, sizeof(buf), "  beta[%d] = %g\n", (int)i, beta[i]);
-                    SF_display(buf);
+                    if (report) SF_display(buf);
                 }
             }
             /* S at the CUE estimate: the J statistic is the CUE objective
@@ -1429,10 +1576,272 @@ ST_retcode ivest_compute_2sls(
         /* Note: cue_ctx uses pointers to existing arrays, no need to free context members */
     }
     if (om_rc) {
-        SF_error("civreghdfe: Cannot compute the moment covariance matrix\n");
+        if (report) SF_error("civreghdfe: Cannot compute the moment covariance matrix\n");
         est_rc = om_rc;
         goto est_cleanup;
     }
+
+est_cleanup:
+    io->ZtZ = ZtZ;
+    io->ZtZ_inv = ZtZ_inv;
+    io->ZtX = ZtX;
+    io->Zty = Zty;
+    io->XtPzX = XtPzX;
+    io->XtPzy = XtPzy;
+    io->temp1 = temp1;
+    io->X_all = X_all;
+    io->resid = resid;
+    io->X_hat = X_hat;
+    io->ZtZ_inv_Zty = ZtZ_inv_Zty;
+    io->XtX = XtX;
+    io->Xty = Xty;
+    io->XkX = XkX;
+    io->Xky = Xky;
+    io->XkX_copy = XkX_copy;
+    io->beta_temp = beta_temp;
+    io->S_main = S_main;
+    io->gmm_hessian_inv = gmm_hessian_inv;
+    io->W_bread = W_bread;
+    io->W_zx = W_zx;
+    io->om = om;
+    io->effic1s = effic1s;
+    io->gmmw_ineff = gmmw_ineff;
+    io->s_fullrank = s_fullrank;
+    io->s_bw = s_bw;
+    return est_rc;
+}
+
+/*
+    ivreg2's e(S), e(W), e(condzz) and e(condxx) of the main fit, into
+    __civreghdfe_S and __civreghdfe_W (top-left K_iv x K_iv; created by the
+    caller over the instruments before collinearity) and two scalars.
+    S = S_main / N. W: none for LIML and k-class (est_method 1-3); the given
+    W0 for GMM with wmatrix(); for 2SLS (iv_w) (1/sigma^2) (Z'WZ/N)^-1 with
+    sigma^2 = e'We/(N - dofminus), the first-step weighting matrix ivreg2
+    posts also with a non-iid S; the given W0 with wmatrix() (also for
+    two-step GMM, as ivreg2 posts it); otherwise (GMM2S, CUE, b0(),
+    smatrix()) the efficient W = (S/N)^-1. cond() is the ratio of the largest to the
+    smallest eigenvalue (missing when singular), as Mata's cond().
+*/
+static ST_double civ_cond_sym(const ST_double *A, ST_int n)
+{
+    if (n <= 0) return SV_missval;
+    ST_double *ev = (ST_double *)malloc((size_t)n * sizeof(ST_double));
+    ST_double *Q = (ST_double *)malloc((size_t)n * n * sizeof(ST_double));
+    if (!ev || !Q || civ_sym_eigvec(A, n, ev, Q) != 0) { free(ev); free(Q); return SV_missval; }
+    free(Q);
+    ST_double lo = fabs(ev[0]), hi = fabs(ev[0]);
+    for (ST_int i = 1; i < n; i++) {
+        if (fabs(ev[i]) < lo) lo = fabs(ev[i]);
+        if (fabs(ev[i]) > hi) hi = fabs(ev[i]);
+    }
+    free(ev);
+    return (lo > 0.0 && isfinite(hi / lo)) ? hi / lo : SV_missval;
+}
+
+static ST_retcode civ_store_sw(const ST_double *S_main, const ST_double *ZtZ, const ST_double *ZtZ_inv,
+                               const ST_double *X_all, const ST_double *weights, ST_int weight_type,
+                               ST_int N, ST_double N_eff, ST_int K_iv, ST_int K_total,
+                               ST_int est_method, const ST_double *W0, ST_int iv_w,
+                               ST_double rss, ST_int dofminus)
+{
+    ST_retcode rc = 0;
+    if (!S_main || K_iv <= 0) return 0;
+    if (SF_row("__civreghdfe_S") < K_iv || SF_col("__civreghdfe_S") < K_iv) return 0;
+    for (ST_int j = 0; j < K_iv && !rc; j++)
+        for (ST_int i = 0; i < K_iv && !rc; i++)
+            rc = ctools_mat_store("__civreghdfe_S", i + 1, j + 1, S_main[(size_t)j * K_iv + i] / N_eff);
+    if (!rc && !(est_method >= 1 && est_method <= 3) &&
+        SF_row("__civreghdfe_W") >= K_iv && SF_col("__civreghdfe_W") >= K_iv) {
+        ST_double *W = (ST_double *)malloc((size_t)K_iv * K_iv * sizeof(ST_double));
+        if (!W) return 920;
+        if (W0) memcpy(W, W0, (size_t)K_iv * K_iv * sizeof(ST_double));
+        else if (iv_w && ZtZ_inv) {
+            ST_double f = (rss > 0.0) ? N_eff * (N_eff - (ST_double)dofminus) / rss : SV_missval;
+            for (size_t k = 0; k < (size_t)K_iv * K_iv; k++) W[k] = f * ZtZ_inv[k];
+        } else {
+            if (civ_sym_inverse(S_main, K_iv, W) != 0) { free(W); return 920; }
+            for (size_t k = 0; k < (size_t)K_iv * K_iv; k++) W[k] *= N_eff;
+        }
+        for (ST_int j = 0; j < K_iv && !rc; j++)
+            for (ST_int i = 0; i < K_iv && !rc; i++)
+                rc = ctools_mat_store("__civreghdfe_W", i + 1, j + 1, W[(size_t)j * K_iv + i]);
+        free(W);
+    }
+    if (!rc && ZtZ) rc = ctools_scal_save("__civreghdfe_condzz", civ_cond_sym(ZtZ, K_iv));
+    if (!rc && X_all && K_total > 0) {
+        ST_double *XX = (ST_double *)calloc((size_t)K_total * K_total, sizeof(ST_double));
+        if (!XX) return 920;
+        if (weights && weight_type != 0) ctools_matmul_atdb(X_all, X_all, weights, N, K_total, K_total, XX);
+        else ctools_matmul_ata(X_all, N, K_total, XX);
+        rc = ctools_scal_save("__civreghdfe_condxx", civ_cond_sym(XX, K_total));
+        free(XX);
+    }
+    return rc;
+}
+
+ST_retcode ivest_compute_2sls(
+    const ST_double *y,
+    const ST_double *X_exog,
+    const ST_double *X_endog,
+    const ST_double *Z,
+    const ST_double *weights,
+    ST_int weight_type,
+    ST_int N,
+    ST_double N_eff,  /* Effective sample size: sum(fw) for fweights (may exceed INT_MAX), N otherwise */
+    ST_int K_exog,
+    ST_int K_endog,
+    ST_int K_iv,
+    ST_double *beta,
+    ST_double *V,
+    ST_double *first_stage_F,
+    ST_int vce_type,
+    const ST_int *cluster_ids,
+    ST_int num_clusters,
+    const ST_int *cluster2_ids,
+    ST_int num_clusters2,
+    ST_int df_a,
+    ST_int nested_adj,
+    ST_int verbose,
+    ST_int est_method,
+    ST_double kclass_user,
+    ST_double fuller_alpha,
+    ST_double *lambda_out,
+    ST_int kernel_type,
+    ST_double bw,
+    ST_int kiefer,
+    const civreghdfe_ts *ts,
+    ST_int sdofminus,
+    ST_int center,
+    const civreghdfe_test_cols *test_cols,
+    ST_int n_absorbed_x,
+    ST_int n_absorbed_iv,
+    ST_int n_absorbed_iv_all,
+    ST_int dofminus, ST_int small,
+    const ST_double *b0, ST_int n_excl_dropped,
+    const civreghdfe_extra *extra
+)
+{
+    /* Heap state released at est_cleanup; every error path after the first
+       allocation leaves through it */
+    ST_retcode est_rc = STATA_OK;
+    ST_double *ZtZ = NULL, *ZtZ_inv = NULL, *ZtX = NULL, *Zty = NULL;
+    ST_double *XtPzX = NULL, *XtPzy = NULL, *temp1 = NULL, *X_all = NULL, *resid = NULL;
+    ST_double *X_hat = NULL, *ZtZ_inv_Zty = NULL;
+    ST_double *XtX = NULL, *Xty = NULL, *XkX = NULL, *Xky = NULL;
+    ST_double *XkX_copy = NULL, *beta_temp = NULL, *S_main = NULL;
+    ST_double *gmm_hessian_inv = NULL, *XkX_inv = NULL, *coviv_bread = NULL;
+    civ_omega om;
+    memset(&om, 0, sizeof(om));
+
+    ST_int K_total = K_exog + K_endog;  /* Total regressors */
+    /* Regressor and instrument counts for the degrees of freedom: they
+       include the fixed-effect-absorbed columns that ivreghdfe keeps in its
+       rank counts (see civreghdfe_impl.c), which are not estimated here */
+    ST_int K_dof = K_total + n_absorbed_x;
+    ST_int Kiv_dof = K_iv + n_absorbed_iv;
+    ST_int i, j, k;
+
+    /* smatrix()/wmatrix() (ivreg2's S0 and W0): they apply to IV and
+       two-step GMM; LIML, k-class and CUE ignore them, as ivreg2 does */
+    const ST_double *S0 = (extra && (est_method == 0 || est_method == 4) && !b0) ? extra->S0 : NULL;
+    const ST_double *W0 = (extra && (est_method == 0 || est_method == 4) && !b0) ? extra->W0 : NULL;
+    ST_double *W_bread = NULL, *W_zx = NULL;
+
+    /* sdofminus is the FULL df_a (including all absorbed FE), used for test statistics DOF.
+       This differs from the df_a parameter which is df_a_for_vce (excluding nested FE).
+       For VCE computation, use df_a. For test statistics, use sdofminus. */
+    ST_int df_a_full = (sdofminus > 0) ? sdofminus : df_a;
+
+    /* Structure of the moment covariance S (ivreg2's m_omega), shared by the
+       VCE, GMM2S/CUE, the J and C statistics: bw()/kernel() alone is AC,
+       with robust HAC; dkraay() clusters on time with a kernel; kiefer is AC
+       with the truncated kernel over every within-panel lag. */
+    ST_int s_kind = CIV_OMEGA_IID, s_kernel = 0;
+    ST_double s_bw = bw;
+    if (kiefer) {
+        /* heteroskedastic too with pweights (ivreg2 sets robust after its
+           kiefer checks) */
+        if (vce_type == CIVREGHDFE_VCE_ROBUST) s_kind = CIV_OMEGA_ROBUST;
+        s_kernel = CIVREGHDFE_KERNEL_TRUNCATED;
+        s_bw = ts ? ts->tmax_idx : 0;
+    } else if (vce_type == CIVREGHDFE_VCE_DKRAAY) {
+        s_kind = CIV_OMEGA_DKRAAY;
+        s_kernel = (kernel_type > 0) ? kernel_type : CIVREGHDFE_KERNEL_BARTLETT;
+    } else if (vce_type == CIVREGHDFE_VCE_CLUSTER2) {
+        /* with a kernel: clusters on panel and time, Driscoll-Kraay over time */
+        s_kind = CIV_OMEGA_TWOWAY;
+        s_kernel = (bw != 0) ? kernel_type : 0;
+    } else if (vce_type == CIVREGHDFE_VCE_CLUSTER) {
+        s_kind = CIV_OMEGA_CLUSTER;
+    } else {
+        s_kind = (vce_type == CIVREGHDFE_VCE_ROBUST) ? CIV_OMEGA_ROBUST : CIV_OMEGA_IID;
+        s_kernel = (bw != 0) ? kernel_type : 0;
+    }
+    /* Non-iid S: 2SLS/k-class are then inefficient and GMM2S/CUE reweight */
+    ST_int s_noniid = (s_kind != CIV_OMEGA_IID) || (s_kernel > 0);
+    ST_int s_cluster = (s_kind == CIV_OMEGA_CLUSTER || s_kind == CIV_OMEGA_TWOWAY ||
+                        s_kind == CIV_OMEGA_DKRAAY);
+    /* Clusters for the small-sample factor G/(G-1): time periods for
+       Driscoll-Kraay, min(G1, G2) for two-way clustering */
+    ST_int s_nclust = num_clusters;
+    if (s_kind == CIV_OMEGA_TWOWAY && num_clusters2 < num_clusters) s_nclust = num_clusters2;
+    if ((s_kernel > 0 || s_kind == CIV_OMEGA_DKRAAY) && !ts) {
+        SF_error("civreghdfe: kernel-based VCE requires the tsset time variable\n");
+        return 198;
+    }
+
+    if (verbose) {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "civreghdfe: df_a=%d, sdofminus=%d, df_a_full=%d\n",
+                 (int)df_a, (int)sdofminus, (int)df_a_full);
+        SF_display(buf);
+    }
+
+    /* The coefficient phase (ivest_fit_core): k, the k-class solve, the
+       wmatrix() estimator, S, GMM2S and CUE */
+    civ_fit_io fio;
+    memset(&fio, 0, sizeof(fio));
+    fio.report = 1;
+    fio.y = y; fio.X_exog = X_exog; fio.X_endog = X_endog; fio.Z = Z;
+    fio.weights = weights; fio.weight_type = weight_type; fio.N = N; fio.N_eff = N_eff;
+    fio.K_exog = K_exog; fio.K_endog = K_endog; fio.K_iv = K_iv; fio.K_total = K_total;
+    fio.beta = beta; fio.lambda_out = lambda_out; fio.verbose = verbose;
+    fio.est_method = est_method; fio.kclass_user = kclass_user; fio.fuller_alpha = fuller_alpha;
+    fio.s_kind = s_kind; fio.s_kernel = s_kernel; fio.s_noniid = s_noniid; fio.s_bw = s_bw;
+    fio.center = center;
+    fio.cluster_ids = cluster_ids; fio.num_clusters = num_clusters;
+    fio.cluster2_ids = cluster2_ids; fio.num_clusters2 = num_clusters2;
+    fio.ts = ts; fio.extra = extra; fio.S0 = S0; fio.W0 = W0; fio.b0 = b0;
+    fio.dofminus = dofminus;
+    est_rc = ivest_fit_core(&fio);
+    ZtZ = fio.ZtZ;
+    ZtZ_inv = fio.ZtZ_inv;
+    ZtX = fio.ZtX;
+    Zty = fio.Zty;
+    XtPzX = fio.XtPzX;
+    XtPzy = fio.XtPzy;
+    temp1 = fio.temp1;
+    X_all = fio.X_all;
+    resid = fio.resid;
+    X_hat = fio.X_hat;
+    ZtZ_inv_Zty = fio.ZtZ_inv_Zty;
+    XtX = fio.XtX;
+    Xty = fio.Xty;
+    XkX = fio.XkX;
+    Xky = fio.Xky;
+    XkX_copy = fio.XkX_copy;
+    beta_temp = fio.beta_temp;
+    S_main = fio.S_main;
+    gmm_hessian_inv = fio.gmm_hessian_inv;
+    W_bread = fio.W_bread;
+    W_zx = fio.W_zx;
+    om = fio.om;
+    if (fio.kclass_set) ctools_scal_save("__civreghdfe_k", fio.kclass);
+    if (fio.bw_auto_set) ctools_scal_save("__civreghdfe_bw_auto", fio.bw_auto);
+    if (est_rc) goto est_cleanup;
+    s_bw = fio.s_bw;
+    ST_int effic1s = fio.effic1s, gmmw_ineff = fio.gmmw_ineff, s_fullrank = fio.s_fullrank;
 
     /* Step 9: Compute VCE */
     /* For k-class estimators, the VCE is: sigma^2 * (XkX)^-1 */
@@ -1464,7 +1873,7 @@ ST_retcode ivest_compute_2sls(
 
     /* iid S = sigma^2 Z'WZ with sigma^2 = e'We/(N-dofminus) from the model's
        residuals */
-    if (!s_noniid) {
+    if (!s_noniid && !S0 && !(W0 && est_method == 4)) {
         ST_double sigma2_s = rss / (ST_double)(N_eff - dofminus);
         for (i = 0; i < K_iv * K_iv; i++) S_main[i] = sigma2_s * ZtZ[i];
     }
@@ -1540,7 +1949,23 @@ ST_retcode ivest_compute_2sls(
         }
     }
 
-    if (gmm_hessian_inv != NULL) {
+    if (gmm_hessian_inv == NULL && gmmw_ineff) {
+        /* inefficient GMM with a given W (ivreg2's s_iegmm):
+           V = B (X'Z) W S W (Z'X) B, B = (X'Z W Z'X)^-1 */
+        ST_retcode vce_rc = ivvce_compute_sandwich(W_zx, S_main, W_bread, K_total, K_iv, dof_adj_s, V);
+        if (vce_rc) {
+            est_rc = vce_rc;
+            goto est_cleanup;
+        }
+    } else if (gmm_hessian_inv == NULL && center && s_noniid && est_method >= 1 && est_method <= 3) {
+        /* center: the k-class sandwich with the centered S (the 2SLS VCE
+           does not change: its moments are orthogonal to the mean) */
+        ST_retcode vce_rc = ivvce_compute_sandwich(temp1, S_main, vce_bread_k, K_total, K_iv, dof_adj_s, V);
+        if (vce_rc) {
+            est_rc = vce_rc;
+            goto est_cleanup;
+        }
+    } else if (gmm_hessian_inv != NULL) {
         /*
            Efficient GMM2S / CUE VCE (ivreg2's s_egmm, s_gmmcue): with the
            optimal weights W = S^-1 (S of the first step for GMM2S, at the
@@ -1649,7 +2074,7 @@ ST_retcode ivest_compute_2sls(
 
     /* dofminus rescales the nonclustered moment covariance by N/(N-d).
      * This is independent of small and applies to HC, HAC and GMM alike. */
-    if (s_noniid && !s_cluster && dofminus != 0) {
+    if (s_noniid && !s_cluster && dofminus != 0 && !S0) {
         ST_double adjustment = N_eff / (N_eff - dofminus);
         for (i=0; i<K_total*K_total; i++) V[i] *= adjustment;
         for (i=0; i<K_iv*K_iv; i++) S_main[i] *= adjustment;
@@ -1834,11 +2259,32 @@ ST_retcode ivest_compute_2sls(
         }
     }
 
+    /* ivreg2's first-stage statistics (e(first), Anderson-Rubin, Stock-Wright
+       and the system of first-stage and reduced-form equations) */
+    if (extra && extra->ffirst && K_endog > 0 && K_iv > K_exog) {
+        civ_ffirst_dof fd;
+        fd.N = N_eff;
+        fd.dofminus = dofminus;
+        fd.sdofminus = (s_cluster && df_a == 0 && nested_adj == 1) ? 1 : df_a;
+        fd.L_dof = Kiv_dof;
+        fd.cluster = s_cluster;
+        fd.nclust = s_nclust;
+        fd.robust = s_noniid;
+        est_rc = civ_ffirst(y, X_endog, K_endog, Z, K_iv, K_exog,
+                            (weights && weight_type != 0) ? weights : NULL, N, &om, &fd);
+        if (est_rc) {
+            SF_error("civreghdfe: Memory allocation failed for the first-stage statistics\n");
+            goto est_cleanup;
+        }
+    }
+
     /* ranktest's S, for the identification and redundancy statistics and the
        endogtest re-estimation: ivreghdfe passes bw() but never kernel() to
        ranktest and to the re-estimated model, so a kernel becomes Bartlett;
        kiefer passes neither bw() nor robust, so iid */
     civ_omega rk_om = civ_omega_with_kernel(&om, (!kiefer && s_kernel > 0) ? CIVREGHDFE_KERNEL_BARTLETT : 0);
+    rk_om.center = 0;   /* ivreg2 does not pass center to ranktest */
+    rk_om.psd = 0;      /* nor psd0 / psda */
     ST_int rk_cluster = s_cluster && !kiefer;
 
     /* Step 10b: Compute underidentification test and weak instrument stats */
@@ -1892,7 +2338,7 @@ ST_retcode ivest_compute_2sls(
 
     /* ivreg2's rankS: the rank of S as invsym() counts it (K_iv when iid) */
     {
-        ST_int rank_s = s_noniid ? civ_sym_rank(S_main, K_iv, 1.0 / (ST_double)N_eff) : K_iv;
+        ST_int rank_s = (s_noniid || S0) ? civ_sym_rank(S_main, K_iv, 1.0 / (ST_double)N_eff) : K_iv;
         if (rank_s < 0) {
             SF_error("civreghdfe: Memory allocation failed for the moment covariance rank\n");
             est_rc = 920;
@@ -1906,7 +2352,7 @@ ST_retcode ivest_compute_2sls(
     est_rc = civreghdfe_compute_hansen_j(
         y, X_all, b0 ? 0 : K_total, Z, K_iv,
         weights, weight_type, N, S_main,
-        (s_noniid && est_method != 4 && est_method != 5 && !b0) ? NULL : resid,
+        ((s_noniid || gmmw_ineff) && est_method != 4 && est_method != 5 && !b0 && !(S0 && effic1s)) ? NULL : resid,
         &sargan_stat, &overid_df
     );
     if (b0) overid_df = K_iv - K_total;
@@ -1945,15 +2391,16 @@ ST_retcode ivest_compute_2sls(
 
     /* Step 13: Compute optional diagnostic tests (orthog, endogtest, redundant)
        on the columns selected in test_cols (already mapped to the final Z/X) */
-    if (test_cols && test_cols->n_orthog > 0) {
+    if (test_cols && test_cols->n_orthog + test_cols->n_orthog_x > 0) {
         ST_double cstat = 0.0;
-        ST_int cstat_df = test_cols->n_orthog;
+        ST_int cstat_df = test_cols->n_orthog + test_cols->n_orthog_x;
 
         /* C = J - J_r with the S behind J (ivreg2's smatrix()) */
         est_rc = civreghdfe_compute_cstat(
             y, X_all, K_total, Z, K_iv, K_exog,
             weights, weight_type, N, S_main, sargan_stat,
             test_cols->orthog, test_cols->n_orthog,
+            test_cols->orthog_x, test_cols->n_orthog_x,
             &cstat, &cstat_df
         );
         if (est_rc) {
@@ -2006,6 +2453,15 @@ ST_retcode ivest_compute_2sls(
         ctools_scal_save("__civreghdfe_redund_df", (ST_double)redund_df);
     }
 
+    /* ivreg2's e(S) and e(W) (its scale: divided by N) and the condition
+       numbers e(condzz), e(condxx) of Z'WZ and X'WX, for the main fit */
+    if (extra && extra->store_sw) {
+        est_rc = civ_store_sw(S_main, ZtZ, ZtZ_inv, X_all, weights, weight_type, N, N_eff,
+                              K_iv, K_total, est_method, (W0 && !b0) ? W0 : NULL,
+                              (est_method == 0 && !S0 && !W0 && !b0), rss, dofminus);
+        if (est_rc) goto est_cleanup;
+    }
+
 est_cleanup:
     /* Single exit: releases whatever the stage reached had allocated */
     civ_omega_free(&om);
@@ -2015,6 +2471,7 @@ est_cleanup:
     free(X_hat); free(ZtZ_inv_Zty);
     free(XkX_copy); free(beta_temp); free(XkX_inv); free(gmm_hessian_inv); free(coviv_bread);
     free(XtX); free(Xty); free(XkX); free(Xky);
+    free(W_bread); free(W_zx);
 
     return est_rc;
 }

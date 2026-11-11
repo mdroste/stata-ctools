@@ -12,6 +12,8 @@
 #include "creghdfe_impl.h"
 #include "creghdfe_hdfe.h"
 #include "creghdfe_regress.h"
+#include "creghdfe_boot.h"
+#include "../ctools_parse.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -48,9 +50,34 @@ ST_retcode creghdfe_main(const char *args)
     }
     subcommand = args_copy;
 
+    /* vce(bootstrap) is linked here, not into the fit (creghdfe_hdfe.h) */
+    creghdfe_boot_install();
+
     /* Dispatch to appropriate handler */
     if (strcmp(subcommand, "full_regression") == 0) {
-        rc = do_full_regression(0, NULL);
+        /* retain keeps the model for vce(bootstrap) (ctools_runtime.c
+         * holds the command in phase 1 until boot_finish) */
+        rc = creghdfe_full_regression(ctools_parse_bool_option(args, "retain"));
+    }
+    else if (strcmp(subcommand, "boot_chunk") == 0) {
+        rc = creghdfe_boot_chunk(args);
+    }
+    else if (strcmp(subcommand, "boot_finish") == 0) {
+        rc = creghdfe_boot_finish(args);
+    }
+    else if (strcmp(subcommand, "wild_setup") == 0) {
+        rc = creghdfe_wild_setup(args);
+    }
+    else if (strcmp(subcommand, "wild_chunk") == 0) {
+        rc = creghdfe_wild_chunk(args);
+    }
+    else if (strcmp(subcommand, "wild_finish") == 0) {
+        rc = creghdfe_wild_finish(args);
+    }
+    else if (strcmp(subcommand, "boot_release") == 0) {
+        /* The phase reset at the start of this call freed the model */
+        creghdfe_boot_release();
+        rc = 0;
     }
     else {
         char msg[256];

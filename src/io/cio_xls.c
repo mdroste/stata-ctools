@@ -11,6 +11,38 @@ int cio_xls_nonempty(const xlsCell *c)
     return c && (c->id == 0x203 || c->id == 0x27e || c->id == 0xbd || c->id == 0x6 ||
                  c->id == 0x206 || (c->str && *c->str && c->id != 0x201));
 }
+/* A cell record of any kind, BLANK and MULBLANK (formatted blanks) included.
+   libxls marks the cells it never read BLANK too, but with format 0, a style
+   format that cell records do not use. */
+static int cio_xls_present(const xlsCell *c)
+{
+    return cio_xls_nonempty(c) || (c && c->id == 0x201 && c->xf != 0);
+}
+/* The worksheet's used range, as native import excel takes it for both the
+   import and describe: from the first row and column holding a cell record,
+   formatted blanks included, through libxls's last row and column (which
+   count ROW records too). *r1 is -1 for a worksheet without cell records. */
+void cio_xls_used_range(xlsWorkSheet *ws, int *r0, int *c0, int *r1, int *c1)
+{
+    *r0 = 65536;
+    *c0 = 256;
+    *r1 = *c1 = -1;
+    for (int r = 0; r <= ws->rows.lastrow; r++)
+        for (int c = 0; c <= ws->rows.lastcol; c++)
+            if (cio_xls_present(xls_cell(ws, (XLSWORD)r, (XLSWORD)c)))
+            {
+                if (r < *r0)
+                    *r0 = r;
+                if (c < *c0)
+                    *c0 = c;
+                *r1 = r;
+            }
+    if (*r1 >= 0)
+    {
+        *r1 = ws->rows.lastrow;
+        *c1 = ws->rows.lastcol;
+    }
+}
 /* libxls reports a non-numeric formula result only as text ("bool", "error",
    "" or the string), which cannot be told from a string result with the
    same text. Record each result type from the FORMULA record as it parses. */
@@ -208,27 +240,9 @@ int cio_scan_xls(cio_dataset *dataset, const char *path)
     if (xls_results.count)
         qsort(xls_results.items, xls_results.count, sizeof(xls_formula_result),
               cio_xls_result_order);
-    int r0 = 65536, c0 = 256, r1 = -1, c1 = -1;
-    for (int r = 0; r <= ws->rows.lastrow; r++)
-        for (int c = 0; c <= ws->rows.lastcol; c++)
-            if (cio_xls_nonempty(xls_cell(ws, (XLSWORD)r, (XLSWORD)c)))
-            {
-                if (r < r0)
-                    r0 = r;
-                if (r > r1)
-                    r1 = r;
-                if (c < c0)
-                    c0 = c;
-                if (c > c1)
-                    c1 = c;
-            }
-    /* Explicit blank cells and ROW records also belong to the used range. */
+    int r0, c0, r1, c1;
+    cio_xls_used_range(ws, &r0, &c0, &r1, &c1);
     int used_r1 = r1;
-    if (r1 >= 0)
-    {
-        r1 = ws->rows.lastrow;
-        c1 = ws->rows.lastcol;
-    }
     if (*range)
     {
         const char *end;

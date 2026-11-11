@@ -6,12 +6,12 @@ Quantile regression.
 
 `cqreg` estimates quantile regressions using an interior-point solver written in C. See the [published benchmarks](../benchmarks/readme_profile/results.md) for timing comparisons with `qreg`. `absorb()` is currently unsupported; use explicit factor-variable indicators to estimate fixed effects jointly with the slopes.
 
-Weight expressions are not supported. Solver and VCE differences are described in the [compatibility table](../COMPATIBILITY.md).
+`fweight`s, `iweight`s and `pweight`s are accepted as in `qreg` (see [Weights](#weights)). Solver and VCE differences are described in the [compatibility table](../COMPATIBILITY.md).
 
 ## Syntax
 
 ```stata
-cqreg depvar [indepvars] [if] [in] [, options]
+cqreg depvar [indepvars] [if] [in] [weight] [, options]
 cqreg [, level(#) display_options]
 ```
 
@@ -29,9 +29,9 @@ Without `indepvars` the constant-only model is fitted. Typed without a variable 
 ### Variance/Standard Error Options
 | Option | Description |
 |--------|-------------|
-| `vce(vcetype)` | Variance estimation method: `iid` (default), `robust`, or `cluster clustvar` |
-| `denmethod(method)` | Density estimation: `fitted` (default), `residual` (with `vce(iid)` only), or `kernel[(kernel)]`, as `qreg`'s `vce(vcetype, method)` |
-| `bwmethod(method)` | Bandwidth selection: `hsheather` (default), `bofinger`, or `chamberlain` |
+| `vce([vcetype] [, vceopts])` | Variance estimation method: `iid` (default; `robust` with `pweight`s), `robust` (or `r`), or `cluster clustvar` (or `qreg`'s `excluster clustvar`). `vceopts` are `qreg`'s density and bandwidth suboptions, e.g. `vce(robust, kernel(gaussian) bofinger)`, `vce(iid, res)`, `vce(, residual)` |
+| `denmethod(method)` | Density estimation: `fitted` (default), `residual` or `residuals` (with `vce(iid)` only), or `kernel[(kernel)]`, with `qreg`'s abbreviations (`fit`, `res`, `ker()`); the same as the `vce()` suboptions, with which it must agree |
+| `bwmethod(method)` | Bandwidth selection: `hsheather` (default), `bofinger`, or `chamberlain`, or `qreg`'s `hs`, `bo`, `ch` |
 
 ### Optimization Options
 | Option | Description |
@@ -39,6 +39,10 @@ Without `indepvars` the constant-only model is fitted. Typed without a variable 
 | `tolerance(#)` | Convergence tolerance (default: 1e-12) |
 | `maxiter(#)` | Maximum IPM iterations (default: 200) |
 | `nopreprocess(#)` | Accepted for backward compatibility; has no effect (`nopreprocess(-1)` returns error 198) |
+| `wlsiter(#)`, `iterate(#)`, `trace` | `qreg`'s options for its simplex solver (WLS starting iterations, its iteration limit, a coefficient trace), checked as `qreg` checks them (error 198 unless # is a positive integer). The interior-point solver uses neither starting values nor `iterate()`; `trace` shows the log line and the solution's coefficients |
+
+Under `version 12` or earlier, `qreg` reports its old standard errors; `cqreg` reports those of
+`qreg` 13 and later and says so in a note.
 
 If the solver reaches its iteration limit before converging, encounters a numerical failure, or produces nonfinite results, the command returns error 430 and does not store new estimates.
 
@@ -47,7 +51,7 @@ If the solver reaches its iteration limit before converging, encounters a numeri
 |--------|-------------|
 | `level(#)` | Confidence level (default 95); as in `qreg`, alpha = 1 - #/100 also enters the Hall-Sheather and Chamberlain bandwidths |
 | display options | `qreg`'s estimation display options, such as `cformat()` |
-| `nolog` | Accepted for compatibility; `cqreg` prints no iteration log |
+| `nolog` | Hides the iteration log line, `Iteration N:  Sum of abs. weighted deviations = ...` (the interior-point iteration count and the minimized sum, as `qreg`'s last log line); `log` shows it, and `set iterlog off` hides it as in `qreg` |
 | `verbose` | Display progress information |
 | `threads(#)` | Maximum threads; zero uses the ctools thread setting |
 
@@ -134,6 +138,26 @@ The sparsity 1/f(0) (or, for robust standard errors, the per-observation densiti
 | `residual` | Difference quotient of residual percentiles at q±h after dropping the K observations of the linear programming basis; `vce(iid)` only (error 184 otherwise) |
 | `kernel[(kernel)]` | Kernel estimate from the residuals with bandwidth min(sd, IQR/1.34)·(Φ⁻¹(q+h) − Φ⁻¹(q−h)); kernels `epanechnikov` (default), `epan2`, `biweight`, `cosine`, `gaussian`, `parzen`, `rectangle`, `triangle` |
 
+### Weights
+As in `qreg`, `fweight`s, `iweight`s and `pweight`s are allowed, and the coefficients minimize
+the weighted check loss Σᵢ wᵢ ρ_q(rᵢ). Because ρ_q(w·r) = w·ρ_q(r) for w > 0, the solver fits
+the rows of y and X scaled by the weights. `e(sum_adev)`, `e(sum_rdev)` and `e(q_v)` are
+weighted (`e(q_v)` is the first value in sort order whose cumulative weight reaches q times the
+total), `e(sum_w)` is the sum of the weights, and `e(wtype)` and `e(wexp)` are stored.
+
+- `fweight`: `e(N)`, `e(df_r)` and the bandwidth use the sum of the weights; X'X is
+  Σ wᵢ xᵢxᵢ'. The residual method removes one copy of each basis observation.
+- `iweight`: `e(N)` and the bandwidth count observations; X'X is Σ wᵢ² xᵢxᵢ'. The residual
+  method drops the basis observations.
+- `pweight`: fitted as `iweight`s; imply `vce(robust)`. `vce(iid)` and `denmethod(residual)`
+  return error 404, as `qreg`'s `vce(iid)` and `vce(, residual)`.
+
+The robust Hessian weights each fitted density or kernel value by wᵢ, the fitted iid sparsity
+uses the weighted mean of X, the kernel method uses the weighted mean, standard deviation and
+interquartile range of the residuals, and the cluster scores are weighted by wᵢ. Observations
+with zero weight are excluded. `qreg` also accepts negative `iweight`s, for which the weighted
+check loss is not convex and has no well-defined minimum; `cqreg` rejects them with error 402.
+
 ### Clustered
 Cluster-robust standard errors clustered on the specified variable. With a single cluster the
 covariance is undefined; as `qreg`, `cqreg` then posts a zero `e(V)` with `e(rank)` 0, so
@@ -192,6 +216,12 @@ solution, so a value of 0 does not establish uniqueness.
 | `e(bwmethod)` | Bandwidth selection method |
 | `e(clustvar)` | Cluster variable (if clustered) |
 | `e(predict)` | Program used for `predict` |
+| `e(basis)` | Hidden, as in `qreg`: observation numbers of the linear programming basis (empty if the solver identified none) |
+
+`e(tolerance)` (hidden) is the solver's `tolerance()`; `qreg`'s simplex posts its own, 1e-10. As
+`qreg`, `cqreg` sets the legacy globals `$S_E_mdf`, `$S_E_tdf`, `$S_E_rd`, `$S_E_nobs`, `$S_E_q`,
+`$S_E_rq`, `$S_E_rsd`, `$S_E_msd`, `$S_E_vl`, `$S_E_frc` and `$S_E_cmd` (`cqreg`); `$S_E_vl` lists
+the coefficients' names, where `qreg` uses `_rmcoll`'s compact form for factor variables.
 
 ### Matrices
 | Result | Description |

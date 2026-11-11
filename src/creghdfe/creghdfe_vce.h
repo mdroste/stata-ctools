@@ -72,4 +72,36 @@ ST_retcode compute_vce_cluster(
     ST_double df_a_nested          /* Degrees of freedom nested within cluster (for adjustment) */
 );
 
+/*
+ * Multi-way clustered VCE (reghdfe_vce_cluster with Q > 1 cluster
+ * variables): the sum over every intersection of the cluster variables of
+ * its clustered sandwich, with sign + for an odd and - for an even number of
+ * variables, one small-sample factor with the fewest clusters, and
+ * reghdfe_fix_psd() (*psd_fixed tells whether it changed V). cluster_ids
+ * holds Q columns of N dense 0-based IDs, num_clusters their counts. When
+ * reghdfe's corrected V is indefinite beyond rounding, V_psd (K_with_cons
+ * square, may be NULL) gets a positive semidefinite version with the same
+ * coefficient block and *psd_made is 1 (see fix_psd in creghdfe_vce.c).
+ */
+ST_retcode compute_vce_multicluster(
+    const ST_double *data, const ST_double *resid, const ST_double *inv_xx,
+    const ST_double *weights, ST_int weight_type, const ST_int *cluster_ids,
+    const ST_int *num_clusters, ST_int Q, ST_int N, ST_double N_eff, ST_int K_with_cons,
+    ST_double *V, ST_int df_m, ST_double df_a, ST_double df_a_nested, ST_int *psd_fixed,
+    ST_double *V_psd, ST_int *psd_made);
+
+/*
+ * Driscoll-Kraay VCE (reghdfe_vce_dkraay): the moments summed within each
+ * time period (time_ids: dense 0-based in time order, T periods), a Bartlett
+ * kernel over bandwidth - 1 lags (bandwidth 0: reghdfe's default; at most T
+ * - 1 lags, *bandwidth_used = lags + 1), the factor (N-1)/(N-df_m-df_a) *
+ * T/(T-1) with df_a net of nested effects, and reghdfe_fix_psd() (V_psd and
+ * *psd_made as for compute_vce_multicluster).
+ */
+ST_retcode compute_vce_dkraay(
+    const ST_double *data, const ST_double *resid, const ST_double *inv_xx,
+    const ST_double *weights, ST_int weight_type, const ST_int *time_ids, ST_int T,
+    ST_int bandwidth, ST_int N, ST_double N_eff, ST_int K_with_cons, ST_double *V,
+    ST_int df_m, ST_double df_a, ST_int *bandwidth_used, ST_double *V_psd, ST_int *psd_made);
+
 #endif /* CREGHDFE_VCE_H */

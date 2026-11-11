@@ -1,5 +1,5 @@
-/* Differential option tests. A case passes only after both commands succeed
-   and their observable results agree; errors never count as successful parity. */
+/* Success-path option tests compare the commands' observable results.
+   Error compatibility is tested separately by exact return-code equality. */
 capture program drop coverage_fixture
 program define coverage_fixture
     args variant
@@ -111,6 +111,15 @@ real scalar coverage_prediction_equal(real colvector a, real colvector b) {
     scale=max(abs(select(a,present))\abs(select(b,present)))
     return(all((!present) :| (abs(a-b):<=1e-7*scale)))
 }
+string scalar coverage_read_bytes(string scalar path) {
+    real scalar fh
+    string scalar text, chunk
+    fh=fopen(path,"r")
+    text=""
+    while ((chunk=fread(fh,1048576)) != J(0,0,"")) text=text+chunk
+    fclose(fh)
+    return(text)
+}
 void coverage_compare_data(struct coverage_snapshot scalar ref) {
     struct coverage_snapshot scalar got
     real scalar same, j
@@ -180,6 +189,7 @@ program define coverage_estimate
     tempfile original
     quietly save `original'
     local before = $TESTS_FAILED
+    ereturn clear
     capture quietly `reference'
     local nr = _rc
     if `nr' {
@@ -211,6 +221,7 @@ program define coverage_estimate
         if !`prc_`item'' mata: coverage_pred_`item'=st_data(.,st_local("p"))
     }
     quietly use `original', clear
+    ereturn clear
     capture quietly `candidate'
     local cr = _rc
     if `cr' {
@@ -418,7 +429,7 @@ mata:
 void coverage_csv_rawfields(string scalar path) {
     real scalar fh, p, quoted
     string scalar text, out, q
-    fh=fopen(path,"r"); text=fread(fh,100000000); fclose(fh)
+    text=coverage_read_bytes(path)
     q=char(34); out=""; quoted=0
     // Outside a field's quotes every quote opens one; inside, a doubled quote
     // is a literal quote and a single quote closes the field.
@@ -445,6 +456,7 @@ program define coverage_bins
     quietly save `original'
     coverage_prepare_bins_reference
     local precise_reference : subinstr local reference "binscatter " "coverage_binscatter ", all
+    ereturn clear
     capture quietly `precise_reference'
     local nr=_rc
     if !`nr' {
@@ -454,6 +466,7 @@ program define coverage_bins
         mata: coverage_bins_ref=sort(coverage_bins_ref,(1,2))
     }
     quietly use `original', clear
+    ereturn clear
     capture quietly `candidate'
     local cr=_rc
     local same=0
@@ -487,11 +500,13 @@ capture program drop coverage_graph
 program define coverage_graph
     syntax, REFerence(string asis) CANDidate(string asis) NAME(string) [TEXT(string)]
     tempfile native_svg candidate_svg
+    capture graph drop _all
     capture quietly {
         `reference'
         graph export "`native_svg'.svg", as(svg) replace
     }
     local nr=_rc
+    capture graph drop _all
     capture quietly {
         `candidate'
         graph export "`candidate_svg'.svg", as(svg) replace
@@ -499,14 +514,11 @@ program define coverage_graph
     local cr=_rc
     local same=0
     if !`nr' & !`cr' {
-        mata: fh=fopen(st_local("native_svg")+".svg","r"); coverage_svg_ref=fread(fh,10000000); fclose(fh)
-        mata: fh=fopen(st_local("candidate_svg")+".svg","r"); coverage_svg_got=fread(fh,10000000); fclose(fh)
-        local same=1
-        foreach tag in circle polygon {
-            mata: st_local("ns",strofreal((strlen(coverage_svg_ref)-strlen(subinstr(coverage_svg_ref,"<"+st_local("tag"),"")))/(strlen(st_local("tag"))+1)))
-            mata: st_local("cs",strofreal((strlen(coverage_svg_got)-strlen(subinstr(coverage_svg_got,"<"+st_local("tag"),"")))/(strlen(st_local("tag"))+1)))
-            if `ns'!=`cs' local same=0
-        }
+        mata: coverage_svg_ref=coverage_read_bytes(st_local("native_svg")+".svg")
+        mata: coverage_svg_got=coverage_read_bytes(st_local("candidate_svg")+".svg")
+        * Equal marker counts cannot prove coordinates, labels, lines, or
+        * styles. Stata's deterministic SVG export permits exact comparison.
+        mata: st_local("same",strofreal(coverage_svg_ref==coverage_svg_got))
         foreach token of local text {
             mata: st_local("present",strofreal(strpos(coverage_svg_ref,st_local("token"))>0 & strpos(coverage_svg_got,st_local("token"))>0))
             if !`present' local same=0
@@ -606,8 +618,8 @@ program define coverage_display
     capture noisily `candidate'
     local cr=_rc
     log close `candidate_handle'
-    mata: fh=fopen(st_local("reference_log")+".log","r"); ref_display=fread(fh,10000000); fclose(fh)
-    mata: fh=fopen(st_local("candidate_log")+".log","r"); got_display=fread(fh,10000000); fclose(fh)
+    mata: ref_display=coverage_read_bytes(st_local("reference_log")+".log")
+    mata: got_display=coverage_read_bytes(st_local("candidate_log")+".log")
     mata: st_local("logs_present",strofreal(length(ref_display)==1 & length(got_display)==1))
     if !`logs_present' {
         capture erase "`reference_log'.log"
@@ -668,8 +680,8 @@ program define coverage_export_bytes
     local cr=_rc
     local same=0
     if !`nr' & !`cr' {
-        mata: fh=fopen(st_local("refcsv"),"r"); ref_bytes=fread(fh,10000000); fclose(fh)
-        mata: fh=fopen(st_local("gotcsv"),"r"); got_bytes=fread(fh,10000000); fclose(fh)
+        mata: ref_bytes=coverage_read_bytes(st_local("refcsv"))
+        mata: got_bytes=coverage_read_bytes(st_local("gotcsv"))
         if "`crlf'"!="" {
             mata: ref_bytes=subinstr(ref_bytes,char(13)+char(10),char(10)); ref_bytes=subinstr(ref_bytes,char(10),char(13)+char(10))
         }

@@ -60,6 +60,9 @@ static void vce_debug_close(void) {
  * Helper Functions
  * ============================================================================ */
 
+static void cqreg_xtdx_lanes(ST_double *out, const ST_double *X, const ST_double *d,
+                             ST_int N, ST_int K);
+
 /* Compute X'X (K x K, full symmetric)
  * Each element is one unrolled dot product (cqreg_dot, cqreg_dot_self on the
  * diagonal); the rows of the upper triangle are independent, write disjoint
@@ -94,8 +97,10 @@ static void cqreg_compute_xtx(ST_double *XtX, const ST_double *X,
     }
 }
 
+/* (X' diag(d) X)^{-1}; d == NULL gives (X'X)^{-1} */
 static ST_int cqreg_compute_xtx_inv(ST_double *XtX_inv,
                                     const ST_double *X,
+                                    const ST_double *d,
                                     ST_int N, ST_int K)
 {
     ST_double *XtX = NULL;
@@ -122,7 +127,8 @@ static ST_int cqreg_compute_xtx_inv(ST_double *XtX_inv,
     }
 
     vce_debug_log("  Computing X'X...\n");
-    cqreg_compute_xtx(XtX, X, N, K);
+    if (d != NULL) cqreg_xtdx_lanes(XtX, X, d, N, K);
+    else cqreg_compute_xtx(XtX, X, N, K);
     vce_debug_log("  X'X computed, diagonal[0]=%.4f\n", XtX[0]);
 
     /* Cholesky decomposition */
@@ -224,6 +230,7 @@ static ST_int cqreg_map_clusters(const ST_int *cluster_ids,
 
 static ST_int cqreg_vce_iid(ST_double *V,
                             const ST_double *X,
+                            const ST_double *jw,
                             const ST_double *residuals,
                             ST_int N, ST_int K,
                             ST_double q,
@@ -256,7 +263,7 @@ static ST_int cqreg_vce_iid(ST_double *V,
 
     vce_debug_log("  Calling cqreg_compute_xtx_inv...\n");
     /* Compute (X'X)^{-1} */
-    if (cqreg_compute_xtx_inv(XtX_inv, X, N, K) != 0) {
+    if (cqreg_compute_xtx_inv(XtX_inv, X, jw, N, K) != 0) {
         vce_debug_log("  ERROR: cqreg_compute_xtx_inv failed\n");
         ctools_aligned_free(XtX_inv);
         vce_debug_close();
@@ -372,11 +379,12 @@ static ST_int cqreg_kernel_hessian_inv(ST_double *H, const ST_double *X,
 }
 
 /*
- * qreg vce(robust, kernel): V = tau(1-tau) * H * X'X * H with the kernel
- * Hessian H above.
+ * qreg vce(robust, kernel): V = tau(1-tau) * H * J * H with the kernel
+ * Hessian H above and J = X' diag(jw) X (X'X when jw is NULL).
  */
 static ST_int cqreg_vce_robust_kernel(ST_double *V,
                                       const ST_double *X,
+                                      const ST_double *jw,
                                       const ST_double *kval,
                                       ST_int N, ST_int K,
                                       ST_double q,
@@ -392,7 +400,8 @@ static ST_int cqreg_vce_robust_kernel(ST_double *V,
 
     if (H == NULL || XtX == NULL) goto cleanup;
     if (cqreg_kernel_hessian_inv(H, X, kval, N, K, kbwidth) != 0) goto cleanup;
-    cqreg_compute_xtx(XtX, X, N, K);
+    if (jw != NULL) cqreg_xtdx_lanes(XtX, X, jw, N, K);
+    else cqreg_compute_xtx(XtX, X, N, K);
 
     if (cqreg_sandwich_product(V, H, XtX, K) != 0) {
         rc = 920;
@@ -413,11 +422,13 @@ cleanup:
  * qreg vce(excluster, kernel) (GetVCE): _robust with scores
  * -tau (r > 0) or 1-tau (r < 0), omitting |r| < 1e-10, and the kernel
  * Hessian H as the bread: V = G/(G-1) * H * (sum_g u_g u_g') * H, where
- * u_g sums score_i * x_i within cluster g and G counts the clusters with a
- * used observation (stored in *num_clusters).
+ * u_g sums score_i * x_i (times sw_i, the weight, when sw is not NULL)
+ * within cluster g and G counts the clusters with a used observation
+ * (stored in *num_clusters).
  */
 static ST_int cqreg_vce_cluster_kernel(ST_double *V,
                                        const ST_double *X,
+                                       const ST_double *sw,
                                        const ST_double *residuals,
                                        const ST_double *kval,
                                        const ST_int *cluster_ids,
@@ -454,6 +465,7 @@ static ST_int cqreg_vce_cluster_kernel(ST_double *V,
     for (i = 0; i < N; i++) {
         if (fabs(residuals[i]) < 1e-10) continue;
         ST_double score = (residuals[i] > 0) ? -q : 1.0 - q;
+        if (sw != NULL) score *= sw[i];
         g = cluster_map[i];
         used[g] = 1;
         for (j = 0; j < K; j++) {
@@ -567,6 +579,7 @@ static void cqreg_xtdx_lanes(ST_double *out, const ST_double *X, const ST_double
 
 static ST_int cqreg_vce_robust_fitted(ST_double *V,
                                       const ST_double *X,
+                                      const ST_double *jw,
                                       const ST_double *obs_density,
                                       ST_int N, ST_int K,
                                       ST_double q)
@@ -616,8 +629,8 @@ static ST_int cqreg_vce_robust_fitted(ST_double *V,
 
     vce_debug_log("  XDX[0,0] = %.6e\n", XDX[0]);
 
-    /* Compute X'X */
-    cqreg_xtdx_lanes(XtX, X, NULL, N, K);
+    /* Compute X'X (X' diag(jw) X for a weighted fit) */
+    cqreg_xtdx_lanes(XtX, X, jw, N, K);
 
     vce_debug_log("  XtX[0,0] = %.6e\n", XtX[0]);
 
@@ -736,7 +749,7 @@ static ST_int cqreg_vce_cluster(ST_double *V,
     }
 
     /* Compute (X'X)^{-1} */
-    if (cqreg_compute_xtx_inv(XtX_inv, X, N, K) != 0) {
+    if (cqreg_compute_xtx_inv(XtX_inv, X, NULL, N, K) != 0) {
         rc = -1;
         goto cleanup;
     }
@@ -835,6 +848,31 @@ ST_int cqreg_compute_vce(cqreg_state *state, const ST_double *X)
 
     ST_int rc;
 
+    /*
+     * Weighted fits, as qreg's GetVCE: J = X' diag(w) X for fweights and
+     * X' diag(w^2) X for iweights (and pweights, which qreg fits as
+     * iweights); the Hessian weights each density or kernel value by w; the
+     * cluster scores are weighted by w. hd holds w_i * obs_density_i.
+     */
+    const ST_double *obs_h = state->obs_density;
+    ST_double *jw = NULL, *hd = NULL;
+    if (state->weights != NULL) {
+        size_t n_size = (size_t)state->N * sizeof(ST_double);
+        jw = (ST_double *)malloc(n_size);
+        hd = (ST_double *)malloc(n_size);
+        if (jw == NULL || hd == NULL) {
+            free(jw);
+            free(hd);
+            return 920;
+        }
+        for (ST_int i = 0; i < state->N; i++) {
+            ST_double w = state->weights[i];
+            jw[i] = (state->weight_type == 1) ? w : w * w;
+            hd[i] = w * state->obs_density[i];
+        }
+        obs_h = hd;
+    }
+
     switch (state->vce_type) {
         case CQREG_VCE_IID:
             /*
@@ -844,7 +882,7 @@ ST_int cqreg_compute_vce(cqreg_state *state, const ST_double *X)
              * - Kernel: kband / mean(K(r/kband)) (qreg vce(iid, kernel()))
              * All use the simple IID formula: V = q(1-q) * s^2 * (X'X)^{-1}
              */
-            rc = cqreg_vce_iid(state->V, X, state->residuals,
+            rc = cqreg_vce_iid(state->V, X, jw, state->residuals,
                               state->N, state->K,
                               state->quantile, state->sparsity);
             break;
@@ -857,12 +895,12 @@ ST_int cqreg_compute_vce(cqreg_state *state, const ST_double *X)
              */
             if (state->density_method == CQREG_DENSITY_FITTED) {
                 /* Fitted method: use per-observation densities */
-                rc = cqreg_vce_robust_fitted(state->V, X, state->obs_density,
+                rc = cqreg_vce_robust_fitted(state->V, X, jw, obs_h,
                                             state->N, state->K,
                                             state->quantile);
             } else if (state->density_method == CQREG_DENSITY_KERNEL) {
                 /* Kernel method: obs_density holds the kernel weights */
-                rc = cqreg_vce_robust_kernel(state->V, X, state->obs_density,
+                rc = cqreg_vce_robust_kernel(state->V, X, jw, obs_h,
                                             state->N, state->K,
                                             state->quantile, state->kbwidth);
             } else {
@@ -872,12 +910,13 @@ ST_int cqreg_compute_vce(cqreg_state *state, const ST_double *X)
 
         case CQREG_VCE_CLUSTER:
             if (state->cluster_ids == NULL) {
-                return -1;
+                rc = -1;
+                break;
             }
             if (state->density_method == CQREG_DENSITY_KERNEL || state->density_method == CQREG_DENSITY_FITTED) {
                 /* qreg's cluster VCE with the kernel Hessian */
-                rc = cqreg_vce_cluster_kernel(state->V, X, state->residuals,
-                                             state->obs_density,
+                rc = cqreg_vce_cluster_kernel(state->V, X, state->weights,
+                                             state->residuals, obs_h,
                                              state->cluster_ids,
                                              &state->num_clusters,
                                              state->N, state->K,
@@ -895,5 +934,7 @@ ST_int cqreg_compute_vce(cqreg_state *state, const ST_double *X)
             rc = -1;
     }
 
+    free(jw);
+    free(hd);
     return rc;
 }

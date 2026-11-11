@@ -22,7 +22,7 @@ minimum of five. `by:` is supported.
 `cdistinct` counts sorted values in one pass. For other data, it records
 distinct values in a table and switches to sorting if that table fills.
 Counts are exact, and values and observation order are preserved.
-strL text is limited to 2,045 bytes; longer values cause an error.
+strL values of any length, and binary ones, are counted exactly: values the plugin cannot read (over 2,045 bytes, or binary) are counted through their ranks in Stata's sort order.
 `threads()` sets the thread limit. `verbose` reports load and count times above
 the table.
 

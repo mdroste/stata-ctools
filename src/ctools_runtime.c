@@ -209,9 +209,56 @@ int ctools_command_begin(const ctools_command_descriptor *cmd, const char *args)
         break;
     case CTOOLS_CMD_CIMPORT:
         if (!strcmp(op, "scan")) next_phase = 1;
-        else if (!strcmp(op, "blob") || !strcmp(op, "blobfile")) { required = 1; next_phase = 1; }
+        else if (!strcmp(op, "blob") || !strcmp(op, "blobs") || !strcmp(op, "strldta") ||
+                 !strcmp(op, "fulldta") || !strcmp(op, "blobmem") ||
+                 !strcmp(op, "blobfill") || !strcmp(op, "blobtext")) { required = 1; next_phase = 1; }
         /* A direct load may parse its file without a preceding scan. */
         else if (!strcmp(op, "load")) preserve = 1;
+        break;
+    case CTOOLS_CMD_CREGHDFE:
+        /* vce(bootstrap): full_regression retain keeps the model through
+         * boot_chunk calls until boot_finish (or any other call) frees it */
+        if (!strcmp(op, "full_regression") && args && strstr(args, " retain")) next_phase = 1;
+        else if (!strcmp(op, "boot_chunk")) { required = 1; next_phase = 1; }
+        else if (!strcmp(op, "boot_finish")) required = 1;
+        /* wildbootstrap(): wild_finish keep leaves the fit for fevce() */
+        else if (!strcmp(op, "wild_setup") || !strcmp(op, "wild_chunk")) { required = 1; next_phase = 1; }
+        else if (!strcmp(op, "wild_finish")) {
+            required = 1;
+            if (args && strstr(args, " keep")) next_phase = 1;
+        }
+        break;
+    case CTOOLS_CMD_CPPMLHDFE:
+        /* vce(bootstrap): full_regression retain keeps the fit through
+         * boot_chunk calls until boot_finish (or any other call) frees it */
+        if (!strcmp(op, "full_regression") && args && strstr(args, " retain")) next_phase = 1;
+        else if (!strcmp(op, "boot_chunk")) { required = 1; next_phase = 1; }
+        else if (!strcmp(op, "boot_finish")) required = 1;
+        /* wildbootstrap(): wild_finish keep leaves the fit for fevce() */
+        else if (!strcmp(op, "wild_setup") || !strcmp(op, "wild_chunk")) { required = 1; next_phase = 1; }
+        else if (!strcmp(op, "wild_finish")) {
+            required = 1;
+            if (args && strstr(args, " keep")) next_phase = 1;
+        }
+        break;
+    case CTOOLS_CMD_CIVREGHDFE:
+        /* vce(bootstrap), fevce(bootstrap): iv_regression retain keeps the
+         * model through boot_chunk calls until boot_finish (or any other
+         * call) frees it */
+        if (!strcmp(op, "iv_regression") && args && strstr(args, " retain")) next_phase = 1;
+        else if (!strcmp(op, "boot_chunk")) { required = 1; next_phase = 1; }
+        else if (!strcmp(op, "boot_finish")) required = 1;
+        /* wildbootstrap(): wild_finish keep leaves the fit for fevce() */
+        else if (!strcmp(op, "wild_setup") || !strcmp(op, "wild_chunk")) { required = 1; next_phase = 1; }
+        else if (!strcmp(op, "wild_finish")) {
+            required = 1;
+            if (args && strstr(args, " keep")) next_phase = 1;
+        }
+        break;
+    case CTOOLS_CMD_CPARQUET:
+        /* scan keeps the decoded columns for load and blobfile */
+        if (!strcmp(op, "scan")) next_phase = 1;
+        else if (!strcmp(op, "load") || !strcmp(op, "blobfile") || !strcmp(op, "dictfile")) { required = 1; next_phase = 1; }
         break;
     case CTOOLS_CMD_CIO:
         if (!strcmp(op, "scan")) next_phase = 1;

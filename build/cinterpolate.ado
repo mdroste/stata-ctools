@@ -1,4 +1,4 @@
-*! version 1.2.4 20261103 github.com/mdroste/stata-ctools
+*! version 1.2.6 20261111 github.com/mdroste/stata-ctools
 *! C-accelerated linear and cubic interpolation (ctools)
 program define cinterpolate, byable(onecall)
     version 14.1
@@ -62,6 +62,17 @@ program define cinterpolate, byable(onecall)
         _ctools_load
         capture program ctools_plugin, plugin using("`__ctools_plugin'")
         if _rc != 0 & _rc != 110 exit 601
+        * strL by() values the plugin cannot read (binary, or over 2,045
+        * bytes) are grouped through stand-in ranks
+        if "`by'" != "" {
+            local stubs
+            foreach v of local by {
+                tempvar stub
+                local stubs `stubs' `stub'
+            }
+            _ctools_strlkey `by', generate(`stubs')
+            local by `__ctools_keys'
+        }
         local nby : word count `by'
         local ext = "`epolate'" != ""
         local timing = "`verbose'" != ""
@@ -75,5 +86,15 @@ program define cinterpolate, byable(onecall)
     }
     label variable `result' "Interpolation of `y' on `x'"
     rename `result' `generate'
-    if `cinterpolate_nmissing' di as text "(`cinterpolate_nmissing' missing values generated)"
+    * As ipolate: r(N) is the number of missing values generated, and the
+    * message is shown when there are any
+    _cinterpolate_count `cinterpolate_nmissing'
+    if `cinterpolate_nmissing' {
+        di as text "(`cinterpolate_nmissing' missing " ///
+            plural(`cinterpolate_nmissing', "value") " generated)"
+    }
+end
+
+program define _cinterpolate_count, rclass
+    return scalar N = `0'
 end

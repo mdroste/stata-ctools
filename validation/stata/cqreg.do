@@ -77,6 +77,7 @@ program define benchmark_qreg_altopt
     tempvar touse
     quietly gen byte `touse' = e(sample)
 
+    ereturn clear
     capture quietly cqreg `depvar' `indepvars' `if' `in', quantile(`quantile') `vceopt'
     if _rc != 0 {
         local rc = _rc
@@ -562,7 +563,7 @@ benchmark_qreg y x1 x2, testname("high correlation (r~0.99)")
 print_section "Extreme Quantiles"
 
 * Very low/high quantiles on auto (N=74) - qreg may fail with 498
-* (insufficient observations in tails). If both fail or cqreg is more robust, that's OK.
+* Matching errors pass; successful fits must also agree numerically.
 foreach q in 0.01 0.05 0.95 0.99 {
     sysuse auto, clear
     quietly capture qreg price mpg weight, quantile(`q')
@@ -576,9 +577,6 @@ foreach q in 0.01 0.05 0.95 0.99 {
     }
     else if `qreg_rc' == `cqreg_rc' {
         test_pass "auto: q=`q' (both return rc=`qreg_rc')"
-    }
-    else if `cqreg_rc' == 0 & `qreg_rc' != 0 {
-        test_pass "auto: q=`q' (cqreg succeeds, qreg fails with rc=`qreg_rc' - more robust)"
     }
     else {
         test_fail "auto: q=`q'" "unexpected: qreg rc=`qreg_rc', cqreg rc=`cqreg_rc'"
@@ -976,9 +974,7 @@ clear
 set obs 50
 gen x = 5
 gen y = rnormal()
-capture cqreg y x
-if _rc == 0 test_pass "constant x - handled gracefully (collinear var dropped)"
-else test_fail "constant x" "failed with rc=`=_rc' (should succeed like qreg)"
+benchmark_qreg y x, testname("constant x: collinear coefficient and full results")
 
 * SECTION 30: Option Combinations
 print_section "Option Combinations"
@@ -1090,9 +1086,11 @@ sysuse auto, clear
 benchmark_qreg price mpg weight i.foreign, testname("i.foreign: median")
 
 * Factor variable with multiple levels (i.rep78)
-* Note: factor variables can produce alternate optima in LP
+* This median model has alternate optima: the rep78 effects and intercept
+* can shift together at the same minimum. Check coefficients by independently
+* recomputing their loss, while retaining all scalar and covariance checks.
 sysuse auto, clear
-benchmark_qreg price mpg weight i.rep78, testname("i.rep78: median")
+benchmark_qreg_altopt price mpg weight i.rep78, testname("i.rep78: median")
 
 * i.rep78 at q=0.25
 sysuse auto, clear
@@ -1152,18 +1150,17 @@ sysuse auto, clear
 benchmark_qreg price i.foreign##c.mpg weight, testname("i.foreign##c.mpg: median")
 
 * Factor variables at extreme quantiles
-* Note: qreg fails with error 498 at extreme quantiles (insufficient obs per cell)
-* cqreg is more robust and may succeed where qreg fails - this is acceptable
+* Match qreg's error code, or compare full results when both fits succeed.
 sysuse auto, clear
 quietly capture qreg price mpg i.rep78, quantile(0.01)
 local qreg_rc = _rc
 quietly capture cqreg price mpg i.rep78, quantile(0.01)
 local cqreg_rc = _rc
-if `qreg_rc' == `cqreg_rc' {
-    test_pass "i.rep78: q=0.01 (both return rc=`qreg_rc')"
+if `qreg_rc' == 0 & `cqreg_rc' == 0 {
+    benchmark_qreg_altopt price mpg i.rep78, quantile(0.01) testname("i.rep78: q=0.01")
 }
-else if `cqreg_rc' == 0 & `qreg_rc' != 0 {
-    test_pass "i.rep78: q=0.01 (cqreg succeeds, qreg fails - more robust)"
+else if `qreg_rc' == `cqreg_rc' {
+    test_pass "i.rep78: q=0.01 (both return rc=`qreg_rc')"
 }
 else {
     test_fail "i.rep78: q=0.01" "unexpected: qreg=`qreg_rc', cqreg=`cqreg_rc'"
@@ -1174,11 +1171,11 @@ quietly capture qreg price mpg i.rep78, quantile(0.99)
 local qreg_rc = _rc
 quietly capture cqreg price mpg i.rep78, quantile(0.99)
 local cqreg_rc = _rc
-if `qreg_rc' == `cqreg_rc' {
-    test_pass "i.rep78: q=0.99 (both return rc=`qreg_rc')"
+if `qreg_rc' == 0 & `cqreg_rc' == 0 {
+    benchmark_qreg_altopt price mpg i.rep78, quantile(0.99) testname("i.rep78: q=0.99")
 }
-else if `cqreg_rc' == 0 & `qreg_rc' != 0 {
-    test_pass "i.rep78: q=0.99 (cqreg succeeds, qreg fails - more robust)"
+else if `qreg_rc' == `cqreg_rc' {
+    test_pass "i.rep78: q=0.99 (both return rc=`qreg_rc')"
 }
 else {
     test_fail "i.rep78: q=0.99" "unexpected: qreg=`qreg_rc', cqreg=`cqreg_rc'"

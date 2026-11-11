@@ -1007,7 +1007,7 @@ static void check(const char *attrs, const char *body, int type,
         const char *end=input+length;
         const char *gt=length ? xlsx_markup_end(input,end) : NULL;
         int prev=-1;
-        const char *after=gt ? xlsx_scan_cell(&x,&loc,input+2,gt,end,1,&prev,false) : NULL;
+        const char *after=gt ? xlsx_scan_cell(&x,&loc,input+2,gt,end,1,false,&prev,false) : NULL;
         if (length==n) {
             assert(after==end && !loc.failed && !loc.invalid);
             assert(x.cm_types[0][0]==type);

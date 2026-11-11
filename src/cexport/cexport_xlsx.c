@@ -80,9 +80,6 @@ typedef struct {
     size_t num_shared_strings;
     size_t shared_strings_capacity;
 
-    /* Preserved styles from existing file (for keepcellfmt) */
-    char *preserved_styles;
-    size_t preserved_styles_len;
 
     /* Error message buffer */
     char error_message[512];
@@ -336,7 +333,10 @@ static size_t xlsx_escape_xml(const char *src, char *dst, size_t dst_size) {
                 di += 6;
                 break;
             default:
-                if ((unsigned char)src[si] < 32 && src[si] != '\t' && src[si] != '\n') {
+                /* Tab, LF and CR are written as they are, as native export
+                 * excel writes them; XML readers (native import excel and
+                 * Excel itself) read a CR, or CR LF, as LF. */
+                if ((unsigned char)src[si] < 32 && src[si] != '\t' && src[si] != '\n' && src[si] != '\r') {
                     snprintf(dst+di, 8, "_x%04X_", (unsigned char)src[si]);
                     di += 7;
                 } else if (src[si] == '_' && src_len-si >= 7 && src[si+1] == 'x' && src[si+6] == '_' &&
@@ -398,7 +398,6 @@ static void xlsx_context_free(XLSXExportContext *ctx) {
     free(ctx->vartypes);
     free(ctx->date_cols);
     free(ctx->missing_value);
-    free(ctx->preserved_styles);
     ctools_str_hash_free(&ctx->shared_map);
 
     if (ctx->shared_strings) {
@@ -476,11 +475,17 @@ static ST_retcode xlsx_parse_args(XLSXExportContext *ctx, const char *args) {
         }
     }
 
+    /* missing() is written as a number when it is a decimal number, spaces
+     * around it allowed, as native writes it: hex ("0x1A"), inf, nan, NA
+     * and "1,5" stay text. The plugin's parser does not follow the C locale
+     * (strtod would read "1,5" as a number under a comma-decimal locale). */
     if (ctx->missing_value) {
-        char *end;
-        ctx->missing_number=strtod(ctx->missing_value,&end);
-        while (*end && isspace((unsigned char)*end)) end++;
-        ctx->missing_numeric=end!=ctx->missing_value && !*end && isfinite(ctx->missing_number);
+        size_t n = strlen(ctx->missing_value);
+        double x = 0;
+        ctx->missing_numeric = n <= INT_MAX &&
+            ctools_parse_double_fast(ctx->missing_value, (int)n, &x, SV_missval) &&
+            x < SV_missval && isfinite(x);
+        ctx->missing_number = ctx->missing_numeric ? x : 0;
     }
     return 0;
 }
@@ -1108,7 +1113,7 @@ static int xlsx_collect_string(XLSXExportContext *ctx, const char *text)
     if (!text || !*text) return 0;
     bool special = strstr(text,"_x") != NULL;
     for (const unsigned char *p=(const unsigned char *)text; *p && !special;p++)
-        special = *p<32 && *p!='\t' && *p!='\n';
+        special = *p<32 && *p!='\t' && *p!='\n' && *p!='\r';
     if (!special) return 0;
     if (!ctx->shared_map.capacity && ctools_str_hash_init(&ctx->shared_map,64)) return 920;
     int existing;
@@ -1342,6 +1347,8 @@ static bool xlsx_gen_worksheet_segments(XLSXExportContext *ctx,
         memcpy(col_prefix[j], "      <c r=\"", 12);
         memcpy(col_prefix[j] + 12, col_letters_arr[j], col_letters_len[j]);
         col_prefix_len[j] = 12 + col_letters_len[j];
+        /* xlsx_shared_cell prints the prefix with %s */
+        col_prefix[j][col_prefix_len[j]] = '\0';
     }
 
     /* Prepare escaped missing value */
@@ -1622,13 +1629,11 @@ static ST_retcode xlsx_write_file(XLSXExportContext *ctx, ctools_filtered_data *
         return 603;
     }
 
-    /* Add xl/styles.xml - use preserved styles if keepcellfmt is enabled */
+    /* Add xl/styles.xml. A new workbook (replace included) keeps no styles
+     * of an old one, as with native export excel; keepcellfmt applies only
+     * when a worksheet is modified (see xlsx_edit_file). */
     const char *styles_to_write = STYLES_XML;
     size_t styles_len = strlen(STYLES_XML);
-    if (ctx->keepcellfmt && ctx->preserved_styles) {
-        styles_to_write = ctx->preserved_styles;
-        styles_len = ctx->preserved_styles_len;
-    }
     if (!mz_zip_writer_add_mem(&zip, "xl/styles.xml",
                                styles_to_write, styles_len,
                                MZ_DEFAULT_COMPRESSION)) {
@@ -1806,8 +1811,10 @@ ST_retcode cexport_xlsx_main(const char *args) {
         }
     }
 
+    /* Past column XFD or row 1,048,576, with the message native gives */
     if ((size_t)ctx.start_col+(size_t)ctx.nvars-1>16384 ||
         (size_t)ctx.start_row+filtered.data.nobs+(ctx.firstrow?1:0)-1>1048576) {
+        SF_error("invalid range in option cell()\n");
         ctools_filtered_data_free(&filtered);xlsx_context_free(&ctx);return 198;
     }
     if (ctx.invalid_sheet && !ctx.input_filename[0]) {

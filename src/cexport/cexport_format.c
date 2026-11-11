@@ -177,6 +177,14 @@ static int cexport_double_to_str(double val, char *buf, int buf_size,
     const int width = vtype == VARTYPE_FLOAT ? 14 : 18;
     double magnitude = fabs(val);
     int exponent = (int)floor(log10(magnitude));
+    /* log10 rounds to the nearest double, so just below a power of ten it
+     * can return that power: 99.99999999999999 gave 2 and was written "100"
+     * with a digit lost (native writes it in full). Powers of ten through
+     * 1e19 are exact, so the decimal exponent is checked against them. */
+    if (exponent >= 1 && exponent <= 19 && magnitude < (double)cexport_pow10[exponent])
+        exponent--;
+    else if (exponent >= -1 && exponent <= 18 && magnitude >= (double)cexport_pow10[exponent + 1])
+        exponent++;
     if (magnitude >= 1e-5 && exponent < digits) {
         int decimals = digits - 1 - exponent;
         if (decimals > 16) decimals = 16;

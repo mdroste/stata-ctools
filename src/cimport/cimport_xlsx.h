@@ -54,7 +54,9 @@ typedef enum {
 typedef struct {
     char name[XLSX_MAX_SHEET_NAME];
     int sheet_id;
-    char rel_id[32];  /* Relationship ID (rId1, rId2, etc.) */
+    /* Relationship ID (rId1, or a long GUID-style id), compared whole with
+     * the ids of workbook.xml.rels, which are read into as many bytes. */
+    char rel_id[256];
     int sheet_index;  /* 1-based position, used only when relationships are absent */
     char path[XLSX_MAX_PART_PATH]; /* part resolved through workbook.xml.rels */
     int kind;         /* XLSXSheetKind */

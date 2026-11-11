@@ -145,6 +145,72 @@ ST_retcode creghdfe_read_input(creghdfe_input *input)
         touse = val != 0;
     }
 
+    ST_int bs_unit_idx = 0, bs_strata_idx = 0;
+    if (SF_scal_use("__creghdfe_bs_unit_idx", &val) == 0)
+        bs_unit_idx = (ST_int)val;
+    if (SF_scal_use("__creghdfe_bs_strata_idx", &val) == 0)
+        bs_strata_idx = (ST_int)val;
+    input->bs_retain = 0;
+    input->bs_unit_idx = bs_unit_idx;
+    input->bs_strata_idx = bs_strata_idx;
+
+    /* One cluster variable unless the wrapper says otherwise */
+    input->num_cluster = 1;
+    if (SF_scal_use("__creghdfe_num_cluster", &val) == 0 && val >= 1)
+        input->num_cluster = (ST_int)val;
+    input->dkraay_bw = 0;
+    if (SF_scal_use("__creghdfe_dkraay_bw", &val) == 0 && val >= 1 && val < 2e9)
+        input->dkraay_bw = (ST_int)val;
+    input->dof_continuous = dof_adjust_type == 0;
+    if (SF_scal_use("__creghdfe_dof_continuous", &val) == 0)
+        input->dof_continuous = val != 0;
+    input->num_slopes = 0;
+    for (ST_int g = 0; g < 10; g++)
+    {
+        char name[48];
+        input->slope_idx[g] = 0;
+        input->fe_absvar[g] = g + 1;
+        if (g >= G)
+            continue;
+        snprintf(name, sizeof(name), "__creghdfe_slope_%d", (int)g + 1);
+        if (SF_scal_use(name, &val) == 0 && val > 0)
+            input->slope_idx[g] = (ST_int)val;
+        snprintf(name, sizeof(name), "__creghdfe_absvar_%d", (int)g + 1);
+        if (SF_scal_use(name, &val) == 0 && val >= 1)
+            input->fe_absvar[g] = (ST_int)val;
+        input->num_slopes += input->slope_idx[g] > 0;
+    }
+
+    input->indiv = 0;
+    input->indiv_mean = 1;
+    input->indiv_gidx = input->indiv_iidx = input->indiv_tidx = 0;
+    if (SF_scal_use("__creghdfe_indiv", &val) == 0 && val != 0)
+    {
+        ST_double gi = 0, ii = 0, ti = 0, mv = 1;
+        if (SF_scal_use("__creghdfe_indiv_gidx", &gi) || SF_scal_use("__creghdfe_indiv_iidx", &ii) ||
+            SF_scal_use("__creghdfe_indiv_tidx", &ti) || SF_scal_use("__creghdfe_indiv_mean", &mv) ||
+            gi < 1 || ii < 1 || ti < 1)
+        {
+            SF_error("creghdfe: the individual-effect variables are not set\n");
+            return 198;
+        }
+        input->indiv = 1;
+        input->indiv_mean = mv != 0;
+        input->indiv_gidx = (ST_int)gi;
+        input->indiv_iidx = (ST_int)ii;
+        input->indiv_tidx = (ST_int)ti;
+    }
+
+    input->transform = 0;
+    input->acceleration = 1;
+    input->abort_nonconv = 1;
+    if (SF_scal_use("__creghdfe_transform", &val) == 0 && val >= 0 && val <= 2)
+        input->transform = (ST_int)val;
+    if (SF_scal_use("__creghdfe_acceleration", &val) == 0 && val >= 0 && val <= 3)
+        input->acceleration = (ST_int)val;
+    if (SF_scal_use("__creghdfe_abort", &val) == 0)
+        input->abort_nonconv = val != 0;
+
     input->K = K;
     input->G = G;
     input->drop_singletons = drop_singletons;

@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.4 20261103}{...}
+{* *! version 1.2.6 20261111}{...}
 {viewerjumpto "Syntax" "cbsample##syntax"}{...}
 {viewerjumpto "Description" "cbsample##description"}{...}
 {viewerjumpto "Options" "cbsample##options"}{...}
@@ -61,6 +61,12 @@ Use {help set seed} to reproduce a draw with the same data, observation order,
 and options. {cmd:cbsample} and {cmd:bsample} need not produce the same sample
 from the same seed.
 
+{pstd}
+Under {help version} 7 or earlier, {cmd:bsample} uses its old algorithm
+({cmd:bsample_7}), so that old scripts reproduce their resamples.
+{cmd:cbsample} then calls that program, and the draw, messages and return codes
+are {cmd:bsample}'s; {opt threads()} and {opt verbose} are ignored.
+
 
 {marker options}{...}
 {title:Options}
@@ -104,6 +110,8 @@ requires {opt cluster()} and may not be combined with {opt weight()} (r(198)).
 {opt strata(varlist)} specifies variables identifying strata. Resampling is
 performed independently within each stratum. Missing strata are excluded.
 Cluster labels reused across strata identify separate sampling units.
+{cmd:strata()} and {cmd:cluster()} variables may be {cmd:strL}, with text of
+any length and binary values.
 
 {phang}
 {opt weight(varname)} overwrites an existing numeric variable with bootstrap

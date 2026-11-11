@@ -4,7 +4,8 @@ macro shift
 if "`__case'" == "" local __case "oracle_tests"
 
 if "`__case'" == "coverage_helpers" {
-/* Mutations must be rejected even at small scales or when both calls error. */
+/* Output oracles reject corruptions and require actual reference output.
+   Matching-error compatibility is covered by test_error_match controls. */
 do validation/support/validate_setup.do
 do validation/support/coverage_helpers.do
 coverage_fixture 1
@@ -123,6 +124,10 @@ foreach mutation in split merge {
     coverage_sampling, reference(bsample, cluster(g) idcluster(newid)) candidate(coverage_bad_idcluster `mutation' idcluster(newid)) name("idcluster `mutation'")
     assert $TESTS_FAILED==`before'+1
 }
+* All failures above were deliberate and individually asserted. Do not let
+* them escape as real failures, or teach the runner to ignore failed counters.
+reset_counters
+test_pass "coverage helpers reject every injected mutation"
 di "COVERAGE_HELPERS_MUTATIONS_PASS"
     global CTOOLS_CASE_COMPLETE "coverage_helpers"
     exit
@@ -159,8 +164,7 @@ foreach cmd in sample csample bsample cbsample {
    proves rejection, not output equivalence or feature implementation. */
 coverage_fixture 1
 foreach command in "cqreg y x, absorb(g)" ///
-    "civreghdfe y x (endog=z z2), center" ///
-    "cbinscatter y x, genxq(unimplemented) nograph" {
+    "civreghdfe y x (endog=z z2), sw" {
     tempfile before
     save `before', replace
     capture `command'

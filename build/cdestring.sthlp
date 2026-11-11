@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.4 20261103}{...}
+{* *! version 1.2.6 20261111}{...}
 {viewerjumpto "Syntax" "cdestring##syntax"}{...}
 {viewerjumpto "Description" "cdestring##description"}{...}
 {viewerjumpto "Options" "cdestring##options"}{...}
@@ -29,7 +29,7 @@
 {synopt:{opt replace}}replace string variables with numeric versions{p_end}
 
 {syntab:Options}
-{synopt:{opth ig:nore(chars)}}remove specified characters before converting{p_end}
+{synopt:{opth i:gnore(chars)}}remove specified characters before converting{p_end}
 {synopt:{opt force}}convert nonnumeric strings to missing{p_end}
 {synopt:{opt float}}generate numeric variables as type {cmd:float}{p_end}
 {synopt:{opt percent}}convert percentages to fractional form{p_end}
@@ -47,8 +47,16 @@
 
 
 {pstd}
-If {it:varlist} is not specified, {cmd:cdestring} attempts to convert all string
-variables in the dataset to numeric.
+If {it:varlist} is not specified, {cmd:cdestring}, like {cmd:destring}, works on
+all variables in the dataset: string variables are converted, and numeric ones
+are reported as already numeric and left alone. {opt generate()} must then
+name a new variable for every variable in the dataset.
+
+{pstd}
+{cmd:cdestring} reports each variable as {cmd:destring} does, in the same
+words: the characters removed, the storage type, nonnumeric values, and
+"({it:#} missing values generated)". Errors have {cmd:destring}'s messages and
+return codes.
 
 {pstd}
 {cmd:cdestring} creates new numeric variables (when using {opt generate()}) or
@@ -76,8 +84,9 @@ variable unless {opt force} is specified; see {opt force}.
 
 {phang}
 {opth generate(newvarlist)} creates new numeric variables. The number of names
-in {it:newvarlist} must equal the number of variables in {it:varlist}. This
-option may not be combined with {opt replace}.
+in {it:newvarlist} must equal the number of variables in {it:varlist}; ranges
+such as {cmd:n1-n3} are allowed. This option may not be combined with
+{opt replace}.
 
 {phang}
 {opt replace} replaces string variables with numeric variables of the same name,
@@ -97,6 +106,14 @@ removes dollar signs and commas, so "$1,234.56" becomes "1234.56".
 {pmore}
 Common characters to ignore include currency symbols ({cmd:$}, {cmd:€}, {cmd:£}),
 thousands separators ({cmd:,}), and whitespace.
+
+{pmore}
+As in {cmd:destring}, {cmd:ignore("}{it:chars}{cmd:",} {it:ignoreopts}{cmd:)}
+takes the suboptions {opt aschars} (the default: {it:chars} are Unicode
+characters), {opt asbytes} ({it:chars} are bytes, removed one by one) and
+{opt illegal} (also remove invalid Unicode, every byte outside well-formed
+UTF-8). {opt asbytes} cannot be combined with {opt aschars} or {opt illegal}.
+The string must be quoted when it contains a comma or suboptions are given.
 
 {phang}
 {opt force} forces conversion of strings that contain nonnumeric characters not
@@ -139,6 +156,9 @@ The default follows the {help ctools##threads:ctools thread setting}.
 
 {pstd}
 Both fixed-width strings ({cmd:str#}) and long strings ({cmd:strL}) are supported.
+The plugin reads {cmd:strL} text of at most 2,045 bytes; a {cmd:strL} variable
+holding longer text or binary values is converted in Stata, by the steps
+{cmd:destring} takes, with the same results.
 Only observations selected by {cmd:if}/{cmd:in} are converted. Generated
 variables are missing outside that sample. With {opt replace}, unselected
 observations also become numeric missing because the source variable changes
@@ -151,6 +171,7 @@ from string to numeric. Already numeric variables are skipped.
 {p 8 12 2}- Integers: "123", "-456", "+789"{p_end}
 {p 8 12 2}- Decimals: "123.456", "-0.123", ".5"{p_end}
 {p 8 12 2}- Scientific notation: "1.23e4", "1.23E-4", "1e10" (the exponent needs a digit: "1e+" is nonnumeric){p_end}
+{p 8 12 2}- Stata's hexadecimal format ({help format:%21x}), as {help real()} reads it: "1.8X+004" is 24, "-1.0x-1" is -.5{p_end}
 {p 8 12 2}- Decimal comma (with {opt dpcomma}): "1234,56"; with {cmd:ignore(".")} also "1.234,56"{p_end}
 
 {pstd}

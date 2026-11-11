@@ -1,6 +1,35 @@
 # Run timing comparisons
 
 Complete the [test setup](../../validation/README.md#before-you-start) first.
+
+## Run from Stata
+
+To run the README comparisons and print the timings and speedups, run this in
+Stata from the ctools folder. Start with the quick 10,000-observation run:
+
+```stata
+do validation/performance/readme_benchmarks.do quick
+do validation/performance/readme_benchmarks.do
+```
+
+The second command runs the README sizes: 1M, 10M and 25M observations.
+Results go to `temp/readme_benchmarks/`. Comparisons whose SSC reference
+command is not installed are skipped and listed. The top of the do-file lists
+its options (`sizes()`, `pairs()`, `processors()`, `output()`).
+
+Each comparison times only the command. Making the test data, reloading it
+before each command and checking each result are not timed but still take
+time. To show where a run spends its time, the profiler writes the seconds of
+every step to `steps.csv` and prints a `PROFILE_STEP` line after each step.
+The report lists every step and ranks the comparisons by total run time. Press
+Break to stop a run; the report then covers the steps that finished.
+
+An older ctools release installed its own linear `cipolate.ado`. The profiler
+stops if `cipolate` is that copy, and `readme_benchmarks.do` skips the
+comparison. Delete the old file and run `ssc install cipolate`.
+
+## Run from a terminal
+
 Run the following commands in a terminal from the ctools folder.
 
 ## Start with a small dataset
@@ -60,9 +89,10 @@ Check `temp/hdfe_datasets/validation.log` for failures.
 ## View published results
 
 Published timings describe the builds and settings recorded with each run.
-They are not a fresh measurement of the current checkout. Interpolation timings
-in the README profile measure linear interpolation against `ipolate`; they do
-not measure `cinterpolate, cubic` against SSC `cipolate`.
+They are not a fresh measurement of the current checkout. The README profile
+measures linear `cinterpolate` against `ipolate`, `cinterpolate, cubic`
+against SSC `cipolate`, and `chdfe` against SSC `hdfe`. The published results
+do not yet include the `cipolate` and `hdfe` comparisons.
 
 - [Times and speedups](../benchmarks/readme_profile/results.md)
 - [Individual timings](../benchmarks/readme_profile/timings.csv)

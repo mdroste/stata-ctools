@@ -10,6 +10,7 @@ by the package and validation inventories.
 | `cmerge` | `CTOOLS_CMD_CMERGE` | `cmerge_main` | `cmerge_cleanup_cache` |
 | `cimport` | `CTOOLS_CMD_CIMPORT` | `cimport_main` | `cimport_cleanup_cache` |
 | `cio` | `CTOOLS_CMD_CIO` | `cio_main` | `cio_cleanup` |
+| `cparquet` | `CTOOLS_CMD_CPARQUET` | `cparquet_main` | `cparquet_cleanup` |
 | `cexport` | `CTOOLS_CMD_CEXPORT` | `cexport_main` | `cexport_cleanup_state` |
 | `creghdfe` | `CTOOLS_CMD_CREGHDFE` | `creghdfe_main` | `creghdfe_cleanup_state` |
 | `civreghdfe` | `CTOOLS_CMD_CIVREGHDFE` | `civreghdfe_main` | `civreghdfe_cleanup_state` |
@@ -31,5 +32,7 @@ by the package and validation inventories.
 | `cexport_xlsx` | `CTOOLS_CMD_CEXPORT` | `cexport_xlsx_main` | `cexport_cleanup_state` |
 | `cdecode_scan` | `CTOOLS_CMD_CDECODE` | `cdecode_scan_main` | `NULL` |
 | `group` | `CTOOLS_CMD_OTHER` | `cgroup_main` | `NULL` |
+| `strlcheck` | `CTOOLS_CMD_OTHER` | `cgroup_strlcheck_main` | `NULL` |
 | `cdistinct` | `CTOOLS_CMD_CDISTINCT` | `cdistinct_main` | `NULL` |
 | `chdfe` | `CTOOLS_CMD_CHDFE` | `chdfe_main` | `NULL` |
+| `dta` | `CTOOLS_CMD_OTHER` | `ctools_dta_main` | `NULL` |

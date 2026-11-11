@@ -49,8 +49,8 @@ cexport delimited [varlist] using filename [if] [in] [, options]
 ### Formatting Options
 | Option | Description |
 |--------|-------------|
-| `novarnames` | Do not write variable names as header row |
-| `quote` | Quote all string fields |
+| `novarnames` | Do not write variable names as header row (`novar`, as with `export delimited`) |
+| `quote` | Quote all string fields (`q`) |
 | `noquoteif` | Never quote strings, even if they contain delimiters |
 | `datafmt` | Apply numeric and date/time display formats |
 | `nolabel` | Write numeric codes instead of value-label text |
@@ -105,7 +105,7 @@ cexport delimited using output.csv, quote replace
 - **Optional write-through**: `direct` opens the file with `FILE_FLAG_WRITE_THROUGH` on Windows; it does not bypass the page cache, because unbuffered writes would need sector-aligned rows. macOS and Linux builds ignore it
 - **SIMD-accelerated data loading**: AVX2/SSE2/NEON bulk load from Stata with 16x loop unrolling in `ctools_data_io`
 - **Parallel formatting**: Multiple OpenMP threads convert numeric values to text concurrently
-- **Automatic quoting**: Quotes fields containing delimiters, quotation marks, or newlines
+- **Automatic quoting**: Quotes fields containing the delimiter or a quotation mark, as `export delimited` does (embedded line breaks and padding are written unquoted)
 
 ### Timing Breakdown
 
@@ -134,7 +134,7 @@ With `verbose`, you'll see:
 
 | Mode | Behavior |
 |------|----------|
-| Default | Quote strings containing delimiter, quotes, or newlines |
+| Default | Quote strings containing the delimiter or a quotation mark; as with `export delimited`, a line break or leading or trailing spaces alone do not quote a field |
 | `quote` | Quote all string fields unconditionally |
 | `noquoteif` | Never quote fields. Delimiters or newlines within a value may then be read as field or row boundaries |
 
@@ -169,7 +169,9 @@ Embedded quotes within strings are escaped by doubling them (`"` becomes `""`).
 ## Excel and output fidelity
 
 `cexport excel using "output file.xlsx", firstrow(variables) replace` writes an
-XLSX workbook. `sheet("A sheet")` and filenames may contain spaces. Text resembling an option, such as `threads(2)`, is exported as text. `threads(#)` also limits Excel export workers.
+XLSX workbook. As with `export excel`, a file name without an extension gets `.xlsx`, a name ending in
+`.xls` gets a binary workbook, and any other name (`.xlsm`, `.xltx`, `.dat`, `.csv`...) is kept and holds an
+XLSX workbook. `sheet("A sheet")` and filenames may contain spaces; `sh()`, `date()` and `miss()` abbreviate `sheet()`, `datestring()` and `missing()`, and `val()` abbreviates XPORT5's `vallabfile()`, as natively. Text resembling an option, such as `threads(2)`, is exported as text. `threads(#)` also limits Excel export workers.
 
 Delimited and Excel exports check variable attributes, then write a temporary file
 in the destination directory and move it to the requested filename after writing

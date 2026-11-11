@@ -130,6 +130,8 @@ stata_retcode csort_stream_sort(
 
     This avoids the read-after-write hazard of block-based streaming.
     csort_stream_sort performs the same allocation before it writes the keys.
+    An SPI error may occur after earlier variables have been permuted. The
+    caller must restore its recovery snapshot; the public ado wrapper owns it.
 
     @param perm              [in] Permutation array (sorted_idx -> original_idx)
     @param nobs              [in] Number of observations

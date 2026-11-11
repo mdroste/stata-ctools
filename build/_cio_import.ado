@@ -1,4 +1,4 @@
-*! version 1.2.4 20261103 github.com/mdroste/stata-ctools
+*! version 1.2.6 20261111 github.com/mdroste/stata-ctools
 *! Binary statistical readers; parsing and values are provided by C.
 program define _cio_import, rclass
     version 14.1
@@ -17,39 +17,72 @@ program define _cio_import, rclass
         di as error "options snapshot and fast may not be combined"
         exit 198
     }
-    local rest `"`anything'"'
+    local rest `"`macval(anything)'"'
     local prefix ""
     local found 0
-    while `"`rest'"'!="" {
+    while `"`macval(rest)'"'!="" {
         gettoken token rest : rest, bind quotes
-        if `"`token'"'=="using" {
+        if `"`macval(token)'"'=="using" {
             local found 1
             continue, break
         }
-        local prefix `"`prefix' `token'"'
+        local prefix `"`macval(prefix)' `macval(token)'"'
     }
     if `found' {
         gettoken using extra : rest
-        local selection `"`prefix' `extra'"'
+        local selection `"`macval(prefix)' `macval(extra)'"'
     }
     else {
         gettoken using selection : anything
     }
-    if `"`using'"'=="" exit 198
-    local rest = strtrim(`"`selection'"')
+    if `"`macval(using)'"'=="" exit 198
+    local rest = strtrim(`"`macval(selection)'"')
     local wanted ""
     local selectors ""
-    while `"`rest'"'!="" {
+    while `"`macval(rest)'"'!="" {
         gettoken token rest : rest, bind quotes
-        if inlist(`"`token'"',"if","in") {
-            local selectors `"`token' `rest'"'
+        if inlist(`"`macval(token)'"',"if","in") {
+            local selectors `"`macval(token)' `macval(rest)'"'
             continue, break
         }
-        local wanted `"`wanted' `token'"'
+        local wanted `"`macval(wanted)' `macval(token)'"'
     }
     local wanted = strtrim(`"`wanted'"')
     if !inlist("`kind'","sas","spss","xls","xlsx") & `"`wanted'"'!="" exit 198
     if !inlist("`kind'","sas","spss") & `"`selectors'"'!="" exit 198
+    * SAS/SPSS: the reader applies the namelist and a plain in range while it
+    * reads, as native does, so only the selection is ever held in memory.
+    * Native reads the namelist as exact (case-sensitive) names, with a
+    * hyphen separating names as a blank does; names the file lacks are
+    * ignored. The if is applied after the read, to the selected variables.
+    local __cio_select ""
+    local __cio_rowfirst 0
+    local __cio_rowlast 0
+    if inlist("`kind'","sas","spss") {
+        local __cio_select : subinstr local wanted "-" " ", all
+        local rest `"`macval(selectors)'"'
+        local kept ""
+        while `"`macval(rest)'"' != "" {
+            gettoken token rest : rest, bind quotes
+            if `"`token'"' == "in" & !`__cio_rowlast' {
+                gettoken range after : rest, bind
+                if regexm(`"`range'"', "^([fF]|[0-9]+)(/([0-9]+))?$") {
+                    local first = regexs(1)
+                    local last = regexs(3)
+                    if inlist("`first'","f","F") local first 1
+                    if "`last'" == "" local last `first'
+                    if `first' >= 1 & `last' >= `first' {
+                        local __cio_rowfirst `first'
+                        local __cio_rowlast `last'
+                        local rest `"`macval(after)'"'
+                        continue
+                    }
+                }
+            }
+            local kept `"`macval(kept)' `macval(token)'"'
+        }
+        local selectors = strtrim(`"`macval(kept)'"')
+    }
     local ext ".sas7bdat"
     if "`kind'" == "xls" local ext ".xls"
     if "`kind'" == "xlsx" local ext ".xlsx"
@@ -59,9 +92,13 @@ program define _cio_import, rclass
     if "`kind'" == "spss" & "`zsav'" != "" local ext ".zsav"
     if "`kind'" == "sasxport5" local ext ".xpt"
     if "`kind'" == "sasxport8" local ext ".v8xpt"
+    * ~ is the home directory, as for Stata's own file commands
+    _ctools_home using `"`macval(using)'"'
     mata: st_local("base",pathbasename(st_local("using")))
-    if !strpos(`"`base'"',".") local using `"`using'`ext'"'
-    confirm file `"`using'"'
+    if !strpos(`"`macval(base)'"',".") {
+        local using `"`macval(using)'`ext'"'
+    }
+    confirm file `"`macval(using)'"'
     if "`case'" == "" local case = cond("`kind'"=="sasxport5","lower","preserve")
     if "`case'"!="" {
         if substr("lower",1,strlen("`case'"))=="`case'" local case "lower"
@@ -74,11 +111,12 @@ program define _cio_import, rclass
         if "`case'" == "pre" local case "preserve"
     }
     if !inlist("`case'","preserve","lower","upper") exit 198
+    * error 4 shows Stata's own message ("no; data in memory would be lost")
     if "`clear'" == "" & "`describe'" == "" {
         if "`kind'"=="sasxport5" {
-            if c(changed) exit 4
+            if c(changed) error 4
         }
-        else if (_N | c(k)) exit 4
+        else if (_N | c(k)) error 4
     }
     if `"`bcat'"' != "" {
         mata: st_local("base",pathbasename(st_local("bcat")))
@@ -106,14 +144,14 @@ program define _cio_import, rclass
     * when parsing fails. Excel validates its container before replacing data.
     if "`describe'"=="" & !inlist("`kind'","xls","xlsx") quietly clear
     local __cio_member "`member'"
-    local __cio_sheet `"`sheet'"'
+    local __cio_sheet `"`macval(sheet)'"'
     local __cio_cellrange "`cellrange'"
     local __cio_firstrow = ("`firstrow'" != "")
     local __cio_maxvar = c(maxvar)
     local __cio_maxmemory = c(max_memory)
     local __cio_allstring = ("`allstring'" != "")
     local __cio_allstringfmt `"`allstringfmt'"'
-    local __cio_filename `"`using'"'
+    local __cio_filename `"`macval(using)'"'
     local __cio_encoding `"`encoding'"'
     local __cio_bcat `"`bcat'"'
     local __cio_xpf ""
@@ -180,7 +218,7 @@ program define _cio_import, rclass
             exit 4
         }
         local __cio_rawstorage 0
-        local __cio_filename `"`using'"'
+        local __cio_filename `"`macval(using)'"'
     }
     capture noisily plugin call ctools_plugin, "cio scan `kind'"
     local rc = _rc
@@ -262,14 +300,13 @@ program define _cio_import, rclass
     }
     local loadcase "`case'"
     if inlist("`kind'","sas","spss") | (inlist("`kind'","xls","xlsx") & "`firstrow'"=="") local loadcase preserve
-    capture noisily _cio_import_load `kind' `nobs' `nvar' `nlabels', case(`loadcase') wanted(`"`wanted'"') allstringfmt(`"`allstringfmt'"') `novallabels' `allstring' filename(`"`using'"')
+    capture noisily _cio_import_load `kind' `nobs' `nvar' `nlabels', case(`loadcase') wanted(`"`wanted'"') allstringfmt(`"`allstringfmt'"') `novallabels' `allstring' filename(`"`macval(using)'"')
     local rc = _rc
     capture plugin call ctools_plugin, "cio clear"
     macro drop CTOOLS_CIO_*
     if !`rc' {
         capture noisily {
             if `"`selectors'"' != "" quietly keep `selectors'
-            if `"`wanted'"' != "" & !inlist("`kind'","xls","xlsx") keep `wanted'
             if inlist("`kind'","sas","spss") {
                 if "`case'" != "preserve" rename _all, `case'
                 quietly compress
@@ -294,7 +331,7 @@ program define _cio_import, rclass
     return scalar changed = 1
     local datalabel : data label
     return local datalabel : copy local datalabel
-    return local filename `"`using'"'
+    return local filename `"`macval(using)'"'
 end
 
 program define _cio_import_load

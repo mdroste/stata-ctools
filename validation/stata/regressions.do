@@ -97,7 +97,7 @@ program p1_matching
         assert r(att) == 80
         assert _weight[2] == 1 & _weight[3] == 1
         assert _support == 1
-        assert _id[3] == 2
+        assert _n1[3] == _id[2]
     }
     clear
     set obs 4
@@ -105,7 +105,7 @@ program p1_matching
     gen double ps = cond(_n==1,.1,cond(_n==2,.51,cond(_n==3,.11,.5)))
     gen double y = cond(_n==1,10,cond(_n==2,20,cond(_n==3,100,200)))
     cpsmatch treat, pscore(ps) outcome(y) noreplacement
-    assert _id[3] == 1 & _id[4] == 2
+    assert _n1[3] == _id[1] & _n1[4] == _id[2]
     assert _weight == 1
     assert r(att) == 135
     cpsmatch treat, pscore(ps) outcome(y) noreplacement caliper(.001)
@@ -114,14 +114,15 @@ program p1_matching
     assert _rc == 198
     capture cpsmatch treat, pscore(ps) noreplacement kernel
     assert _rc == 198
+    * psmatch2 accepts radius with noreplacement and ignores noreplacement
     capture cpsmatch treat, pscore(ps) noreplacement radius
-    assert _rc == 198
+    assert _rc == 0
     clear
     set obs 5
     gen byte treat = _n>2
     gen double ps = cond(_n==1,.25,cond(_n==2,.75,.5))
     cpsmatch treat, pscore(ps) noreplacement
-    assert _id[3]==1 & _id[4]==2
+    assert _n1[3]==_id[1] & _n1[4]==_id[2]
     assert _support[5]==0
     assert r(n_matched)==2
     clear
@@ -269,12 +270,12 @@ program p1_iv
     estimates restore iv_saved
     predict double restored, residuals
     assert restored == savedres
-    gen _civreghdfe_resid = 999
+    gen _reghdfe_resid = 999
     civreghdfe y (x=z), absorb(group) residuals2
     count if e(sample)
     assert r(N) == e(N) & r(N) == 398
-    assert !missing(_civreghdfe_resid) if e(sample)
-    assert _civreghdfe_resid != 999 if e(sample)
+    assert !missing(_reghdfe_resid) if e(sample)
+    assert _reghdfe_resid != 999 if e(sample)
 end
 
 program p1_variance
@@ -422,8 +423,13 @@ program p2_center
     gen x = cos(t)
     gen z = t^2
     tsset t
-    capture civreghdfe y (x=z), robust bw(3) center
-    assert _rc == 198
+    * center is supported since 4 Nov 2026: as ivreg2's
+    quietly ivreg2 y (x=z), robust bw(3) center
+    tempname b V
+    matrix `b' = e(b)
+    matrix `V' = e(V)
+    quietly civreghdfe y (x=z), robust bw(3) center
+    assert mreldif(e(b), `b') < 1e-7 & mreldif(e(V), `V') < 1e-7
 end
 
 program p2_import
@@ -485,13 +491,20 @@ program p2_sort
     gen key = mod(600-_n,17)
     gen double nonkey = _n^2
     gen str20 text = "row"+string(_n)
-    foreach qualifier in "if id<=2" "in 1/2" {
-        capture csort key `qualifier'
-        assert _rc == 101
-        assert id == _n & nonkey == _n^2
-    }
-    tempfile source expected
+    capture csort key if id<=2
+    assert _rc == 101
+    assert id == _n & nonkey == _n^2
+    tempfile source expected in_expected
     save `source'
+    * in ranges are sorted as sort sorts them (SORT-01)
+    sort key in 1/5, stable
+    gen rank = _n
+    save `in_expected'
+    use `source', clear
+    csort key in 1/5
+    gen rank = _n
+    cf _all using `in_expected'
+    use `source', clear
     sort key, stable
     gen rank = _n
     save `expected'
@@ -535,11 +548,10 @@ program p2_io
     assert decoded == text
     drop encoded decoded
     label drop encoded
-    capture csort id, stream(1) nosortedby
-    assert _rc != 0
+    * csort sorts data with strL variables through sort itself
+    csort id, stream(1) nosortedby
     assert text == "long string" & id == _n
-    capture csort id, nosortedby
-    assert _rc != 0
+    csort id, nosortedby
     assert text == "long string" & id == _n
     mata: st_sstore(., "text", J(3,1,invtokens(J(1,3000,"x"),"")))
     * Text over 2,045 bytes is handed to encode, which encodes it
@@ -1005,7 +1017,7 @@ assert missing(r(att))
 replace t=2*t
 cpsmatch t, pscore(p) outcome(y)
 assert missing(r(att))
-assert missing(_nn)
+assert _nn == 0
 * psmatch2 leaves the controls' _weight missing
 assert missing(_weight) if t==0
 noi di "OCT22_REGRESSIONS_COMPLETE"
@@ -1130,7 +1142,7 @@ capture noisily {
     assert "`e(vcetype)'" == "Robust"
     * The first-stage regressions run by creghdfe carry the label as well
     civreghdfe price (weight = length), absorb(rep78) vce(robust) savefirst
-    estimates restore _civreghdfe_weight
+    estimates restore _ivreg2_weight
     assert "`e(vcetype)'" == "Robust"
     capture which reghdfe
     if !_rc {
@@ -1186,22 +1198,48 @@ else test_pass "string, i. and # absorbed effects"
 
 capture noisily {
     sysuse auto, clear
-    foreach bad in "c.length#i.rep78" "rep78##foreign" "L.rep78" "fe=rep78" {
-        capture creghdfe price weight, absorb(`bad')
-        assert _rc == 198
-        capture civreghdfe price (weight = length), absorb(`bad')
-        assert _rc == 198
+    foreach bad in "c.turn#i.rep78" "rep78##foreign" "L.rep78" "fe=rep78" {
+        * creghdfe takes the absorb() terms reghdfe takes (slopes and newvar=
+        * targets since 4 Nov 2026), with the same estimates
+        capture drop fe
+        capture quietly reghdfe price weight, absorb(`bad')
+        local rc_ref = _rc
+        tempname bref
+        if !`rc_ref' matrix `bref' = e(b)
+        capture drop fe
+        capture quietly creghdfe price weight, absorb(`bad')
+        if `rc_ref' assert _rc != 0
+        else {
+            assert !_rc
+            assert mreldif(e(b), `bref') < 1e-7
+        }
+        capture drop fe
+        * civreghdfe as ivreghdfe, slopes included (IV-02)
+        capture quietly ivreghdfe price (weight = length), absorb(`bad')
+        local rc_ref = _rc
+        if !`rc_ref' matrix `bref' = e(b)
+        capture drop fe
+        capture quietly civreghdfe price (weight = length), absorb(`bad')
+        if `rc_ref' assert _rc != 0
+        else {
+            assert !_rc
+            assert mreldif(e(b), `bref') < 1e-7
+        }
+        capture drop fe
     }
-    * savefe is reghdfe's only absorb() suboption; civreghdfe takes none
+    * savefe is reghdfe's only absorb() suboption
     capture creghdfe price weight, absorb(rep78, keepsingletons)
     assert _rc == 198
-    capture civreghdfe price (weight = length), absorb(rep78, savefe)
+    capture civreghdfe price (weight = length), absorb(rep78, keepsingletons)
     assert _rc == 198
+    civreghdfe price (weight = length), absorb(rep78, savefe)
+    confirm numeric variable __hdfe1__
+    drop __hdfe1__
     creghdfe price weight, absorb(rep78, savefe)
     confirm numeric variable __hdfe1__
 }
-if _rc test_fail "unsupported absorb() terms and suboptions" "r(`=_rc')"
-else test_pass "unsupported absorb() terms and suboptions"
+if _rc test_fail "absorb() terms and suboptions as reghdfe and ivreghdfe" "r(`=_rc')"
+else test_pass "absorb() terms and suboptions as reghdfe and ivreghdfe"
 
 capture noisily {
     sysuse auto, clear
@@ -1215,20 +1253,21 @@ capture noisily {
 if _rc test_fail "civreghdfe e(cmdline) keeps if, weights and options" "r(`=_rc')"
 else test_pass "civreghdfe e(cmdline) keeps if, weights and options"
 
+* The auxiliary regressions are civreghdfe fits since 4 Nov 2026, so they
+* take two-way clustering too (their values are checked against ivreg2 in
+* case nov04); the main results are restored after them.
 capture noisily {
     sysuse auto, clear
     gen byte cl2 = mod(_n, 7)
-    creghdfe price weight, absorb(rep78)
     foreach option in first rf savefirst saverf {
-        capture civreghdfe price (weight = length), absorb(rep78) vce(cluster turn cl2) `option'
-        assert _rc == 198
-        assert "`e(cmd)'" == "creghdfe"
+        civreghdfe price (weight = length), absorb(rep78) vce(cluster turn cl2) `option'
+        assert "`e(cmd)'" == "civreghdfe" & "`e(vcetype)'" == "Two-way Cluster"
+        assert "`e(model)'" != "first" & "`e(model)'" != "rf"
     }
-    civreghdfe price (weight = length), absorb(rep78) vce(cluster turn cl2)
-    assert "`e(vcetype)'" == "Two-way Cluster"
+    estimates clear
 }
-if _rc test_fail "two-way clustering refuses auxiliary regressions up front" "r(`=_rc')"
-else test_pass "two-way clustering refuses auxiliary regressions up front"
+if _rc test_fail "two-way clustering with the auxiliary regressions" "r(`=_rc')"
+else test_pass "two-way clustering with the auxiliary regressions"
 
 capture noisily {
     sysuse auto, clear
@@ -1321,7 +1360,8 @@ capture noisily {
     matrix t = e(dof_table)
     assert rowsof(t) == 2 & colsof(t) == 5
     assert e(df_a_initial) == t[1,1] + t[2,1] & e(df_a_redundant) == t[1,2] + t[2,2]
-    assert t[2,5] == 1 & missing(t[1,4])
+    * the Inexact column is 0/1, as reghdfe's (since 4 Nov 2026)
+    assert t[2,5] == 1 & t[1,4] == 0
     local c_initial = e(df_a_initial)
     local c_redundant = e(df_a_redundant)
     local c_df_a = e(df_a)
@@ -1662,7 +1702,7 @@ capture noisily {
     end
     cpsmatch treat, pscore(ps) outcome(y) ties
     assert _nn == 2 if treat
-    assert missing(_nn) if !treat
+    assert _nn == 0 if !treat
     cpsmatch treat, pscore(ps) outcome(y) neighbor(5)
     assert _nn == 2 if treat
     cpsmatch treat, pscore(ps) outcome(y) radius caliper(.1)
@@ -1695,14 +1735,14 @@ capture noisily {
         local typ : type text
         assert "`typ'" == "str10"
     }
+    * genxq() is supported since 4 Nov 2026: binscatter's bin variable
     sysuse auto, clear
-    capture cbinscatter price mpg, genxq(q) nograph
-    assert _rc == 198
-    capture confirm variable q
-    assert _rc == 111
+    quietly binscatter price mpg, genxq(q_ref)
+    quietly cbinscatter price mpg, genxq(q) nograph
+    assert q == q_ref
 }
-if _rc test_fail "S12/S15 empty-side filtering and unsupported option" "r(`=_rc')"
-else test_pass "S12/S15 empty-side filtering and unsupported option"
+if _rc test_fail "S12/S15 empty-side filtering and genxq()" "r(`=_rc')"
+else test_pass "S12/S15 empty-side filtering and genxq()"
 
 print_summary sep22
 if $TESTS_FAILED > 0 exit 9
@@ -2011,6 +2051,648 @@ print_summary sep24
 if $TESTS_FAILED > 0 exit 9
 global CTOOLS_COMPONENT_COMPLETE "sep24"
     global CTOOLS_CASE_COMPLETE "sep24"
+    exit
+}
+
+if "`__case'" == "nov04" {
+/* Regression contracts for the silently wrong (S1) functionality gaps fixed on
+   4 Nov 2026; see docs/development/FUNCTIONALITY_GAPS.md, section 1. Each
+   check compares with the command ctools replaces where it can. No fixtures:
+   auto.dta and generated data only. */
+do validation/support/validate_setup.do
+set seed 20261104
+
+* nov04_log <file> : <command> runs the command with its output also written
+* to a text log, and returns the command's return code
+program nov04_log
+    gettoken file 0 : 0
+    gettoken colon 0 : 0
+    quietly log using `"`file'"', text replace name(nov04)
+    capture noisily `0'
+    local rc = _rc
+    quietly log close nov04
+    exit `rc'
+end
+
+* nov04_grep <file> <text>: r(n) lines of the log containing text, and
+* r(lines) those lines (trimmed, joined by |)
+program nov04_grep, rclass
+    args file text
+    tempname fh
+    local n = 0
+    local lines
+    file open `fh' using `"`file'"', read text
+    file read `fh' line
+    while r(eof) == 0 {
+        if strpos(`"`macval(line)'"', `"`text'"') {
+            local ++n
+            local trimmed = strtrim(`"`macval(line)'"')
+            local lines `"`macval(lines)'|`macval(trimmed)'"'
+        }
+        file read `fh' line
+    }
+    file close `fh'
+    return scalar n = `n'
+    return local lines `"`macval(lines)'"'
+end
+
+* nov04_ivdata: a panel with five instruments, clusters and weights
+program nov04_ivdata
+    clear
+    set obs 400
+    gen id = ceil(_n / 20)
+    bysort id: gen t = _n
+    xtset id t
+    gen cl = mod(id, 7)
+    gen cl2 = mod(t, 5)
+    forvalues j = 1/5 {
+        gen z`j' = rnormal()
+    }
+    gen w = rnormal()
+    gen u = rnormal()
+    gen x = z1 + .5*z2 + .3*z3 + .2*z4 + .1*z5 + u + rnormal()
+    gen x2 = z2 - z3 + .5*z5 + rnormal()
+    gen y = 1 + x + .5*w + 2*u + rnormal() + id / 10
+    gen wt = runiform() + .5
+end
+
+tempfile out1 out2
+
+* -------------------------------------------------------------------------
+* DESTR-01: ignore("chars", illegal|asbytes|aschars) as destring parses it
+* -------------------------------------------------------------------------
+capture noisily {
+    clear
+    set obs 6
+    gen str20 s = ""
+    replace s = "1e5" in 1
+    replace s = "$1,234" in 2
+    replace s = "7" + char(255) + "8" in 3
+    replace s = "12" in 4
+    replace s = "€5€" in 5
+    replace s = "9" + char(226) + char(130) + "1" in 6
+    foreach opt in `"ignore("$,", illegal)"' `"ignore("$,")"' `"ignore("$,", asbytes)"' ///
+        `"ignore("$,", aschars illegal)"' `"ignore("€", asbytes)"' `"ignore("€")"' ///
+        `"ignore("$,€", illegal) "' `"ignore("1", asbytes)"' {
+        capture drop n_ref n_ct
+        quietly destring s, generate(n_ref) `opt' force
+        quietly cdestring s, generate(n_ct) `opt' force
+        assert n_ref == n_ct | (missing(n_ref) & missing(n_ct))
+        local c_ref : char n_ref[destring]
+        local c_ct : char n_ct[destring]
+        assert `"`c_ref'"' == `"`c_ct'"'
+    }
+    * the suboptions are not characters to remove: "1e5" stays 100000
+    capture drop n_ct
+    quietly cdestring s, generate(n_ct) ignore("$,", illegal) force
+    assert n_ct[1] == 100000 & n_ct[2] == 1234 & n_ct[3] == 78
+    * destring's errors: unquoted comma, asbytes with illegal or aschars
+    foreach opt in "ignore($,)" `"ignore("$", asbytes illegal)"' `"ignore("$", asbytes aschars)"' {
+        capture destring s, generate(n_bad) `opt'
+        local rc_ref = _rc
+        capture cdestring s, generate(n_bad) `opt'
+        assert _rc == `rc_ref' & `rc_ref' == 198
+    }
+}
+if _rc test_fail "DESTR-01 cdestring ignore() suboptions match destring" "r(`=_rc')"
+else test_pass "DESTR-01 cdestring ignore() suboptions match destring"
+
+* -------------------------------------------------------------------------
+* HDFE-10: group() is reghdfe's group fixed effects, not groupvar()
+* -------------------------------------------------------------------------
+capture noisily {
+    sysuse auto, clear
+    * group() is reghdfe's (HDFE-05): its variables must be constant
+    * within the groups, its variable must exist, individual() needs it,
+    * and aggregation() alone is ignored, as in reghdfe
+    foreach c in "498|group(rep78)" "111|group(newgroupvar)" "198|individual(rep78)" "0|aggregation(sum)" {
+        gettoken r opt : c, parse("|")
+        local opt : subinstr local opt "|" ""
+        capture creghdfe price weight, absorb(rep78) `opt'
+        assert _rc == `r'
+    }
+    capture confirm variable newgroupvar
+    assert _rc == 111
+    quietly creghdfe price weight, absorb(rep78 foreign) groupvar(mobility)
+    confirm numeric variable mobility
+}
+if _rc test_fail "HDFE-10 creghdfe group() is not groupvar()" "r(`=_rc')"
+else test_pass "HDFE-10 creghdfe group() is not groupvar()"
+
+* -------------------------------------------------------------------------
+* HDFE-17: creghdfe verbose(-1) hides the notes, as reghdfe's does
+* -------------------------------------------------------------------------
+capture noisily {
+    sysuse auto, clear
+    replace rep78 = 6 in 1
+    nov04_log `"`out1'"' : creghdfe price weight, absorb(rep78)
+    tempname b0
+    matrix `b0' = e(b)
+    nov04_grep `"`out1'"' "converged in"
+    assert r(n) == 1
+    nov04_grep `"`out1'"' "singleton"
+    assert r(n) == 1
+    nov04_log `"`out2'"' : creghdfe price weight, absorb(rep78) verbose(-1)
+    assert mreldif(e(b), `b0') == 0
+    foreach text in "converged in" "singleton" {
+        nov04_grep `"`out2'"' "`text'"
+        assert r(n) == 0
+    }
+    nov04_log `"`out2'"' : reghdfe price weight, absorb(rep78) verbose(-1)
+    foreach text in "converged in" "singleton" {
+        nov04_grep `"`out2'"' "`text'"
+        assert r(n) == 0
+    }
+}
+if _rc test_fail "HDFE-17 creghdfe verbose(-1) is quiet" "r(`=_rc')"
+else test_pass "HDFE-17 creghdfe verbose(-1) is quiet"
+
+* -------------------------------------------------------------------------
+* PPML-01, PPML-02: cppmlhdfe's iteration log, nolog and verbose(-1)
+* -------------------------------------------------------------------------
+capture noisily {
+    sysuse auto, clear
+    nov04_log `"`out1'"' : cppmlhdfe price weight, absorb(rep78)
+    tempname b0
+    matrix `b0' = e(b)
+    local ic = e(ic)
+    nov04_grep `"`out1'"' "Iteration "
+    assert r(n) == `ic'
+    nov04_grep `"`out1'"' "Converged in"
+    assert r(n) == 1
+    * the logged deviance is in the units of price, as ppmlhdfe logs it
+    nov04_log `"`out2'"' : ppmlhdfe price weight, absorb(rep78)
+    nov04_grep `"`out2'"' "Iteration 1:"
+    local ref = substr(`"`r(lines)'"', strpos(`"`r(lines)'"', "deviance = ") + 11, 10)
+    nov04_grep `"`out1'"' "Iteration 1:"
+    local ct = substr(`"`r(lines)'"', strpos(`"`r(lines)'"', "deviance = ") + 11, 10)
+    assert `"`ref'"' == `"`ct'"'
+    nov04_log `"`out1'"' : cppmlhdfe price weight, absorb(rep78) nolog
+    assert mreldif(e(b), `b0') == 0
+    nov04_grep `"`out1'"' "Iteration "
+    assert r(n) == 0
+    nov04_grep `"`out1'"' "Converged in"
+    assert r(n) == 1
+    nov04_log `"`out1'"' : cppmlhdfe price weight, absorb(rep78) verbose(-1)
+    assert mreldif(e(b), `b0') == 0
+    foreach text in "Iteration" "iter " "Converged" "converged" "dropped" {
+        nov04_grep `"`out1'"' "`text'"
+        assert r(n) == 0
+    }
+}
+if _rc test_fail "PPML-01/02 cppmlhdfe log, nolog and verbose(-1)" "r(`=_rc')"
+else test_pass "PPML-01/02 cppmlhdfe log, nolog and verbose(-1)"
+
+* -------------------------------------------------------------------------
+* QREG-09: cqreg's log and nolog
+* -------------------------------------------------------------------------
+capture noisily {
+    sysuse auto, clear
+    nov04_log `"`out1'"' : cqreg price weight
+    local adev = e(sum_adev)
+    nov04_grep `"`out1'"' "Sum of abs. weighted deviations"
+    assert r(n) == 1
+    nov04_log `"`out1'"' : cqreg price weight, nolog
+    assert e(sum_adev) == `adev'
+    nov04_grep `"`out1'"' "Sum of abs. weighted deviations"
+    assert r(n) == 0
+    if c(stata_version) >= 16 {
+        set iterlog off
+        nov04_log `"`out1'"' : cqreg price weight
+        set iterlog on
+        nov04_grep `"`out1'"' "Sum of abs. weighted deviations"
+        assert r(n) == 0
+        nov04_log `"`out1'"' : cqreg price weight, log
+        nov04_grep `"`out1'"' "Sum of abs. weighted deviations"
+        assert r(n) == 1
+    }
+}
+local rc = _rc
+capture set iterlog on
+if `rc' test_fail "QREG-09 cqreg log and nolog" "r(`rc')"
+else test_pass "QREG-09 cqreg log and nolog"
+
+* -------------------------------------------------------------------------
+* IV-17: savefprefix()/saverfprefix() imply savefirst/saverf
+* -------------------------------------------------------------------------
+capture noisily {
+    nov04_ivdata
+    estimates clear
+    quietly civreghdfe y w (x = z1 z2 z3), absorb(id) savefprefix(fs_) saverfprefix(rf_)
+    estimates restore fs_x
+    assert "`e(depvar)'" == "x" & "`e(model)'" == "first"
+    estimates restore rf_y
+    assert "`e(depvar)'" == "y" & "`e(model)'" == "rf"
+    estimates clear
+}
+if _rc test_fail "IV-17 save prefixes imply savefirst and saverf" "r(`=_rc')"
+else test_pass "IV-17 save prefixes imply savefirst and saverf"
+
+* -------------------------------------------------------------------------
+* IV-19, IV-20: stored first stage and reduced form use the main fit's VCE
+* (kernels included), partial() and noconstant, as ivreg2 stores them
+* -------------------------------------------------------------------------
+local fails
+foreach o in "" "robust" "cluster(cl)" "cluster(cl cl2)" "bw(2)" "bw(3) kernel(parzen) robust" ///
+    "dkraay(2)" "kiefer" "small" "absorb(id)" "absorb(id) robust" "absorb(id) cluster(cl)" ///
+    "absorb(id) bw(2)" "absorb(id) dkraay(2)" "absorb(id) kiefer" "absorb(id) partial(w)" ///
+    "noconstant" "noconstant robust" "absorb(id) bw(2) partial(w)" {
+    capture noisily {
+        nov04_ivdata
+        estimates clear
+        quietly ivreghdfe y w (x = z1 z2 z3), `o' savefirst saverf
+        foreach eq in x y {
+            quietly estimates restore _ivreg2_`eq'
+            tempname rb_`eq' rV_`eq'
+            matrix `rb_`eq'' = e(b)
+            matrix `rV_`eq'' = e(V)
+            local rdf_`eq' = e(df_r)
+        }
+        quietly civreghdfe y w (x = z1 z2 z3), `o' savefirst saverf
+        foreach eq in x y {
+            quietly estimates restore _ivreg2_`eq'
+            assert mreldif(e(b), `rb_`eq'') < 1e-7
+            assert mreldif(e(V), `rV_`eq'') < 1e-7
+            assert e(df_r) == `rdf_`eq''
+            * the stored equations carry their estimation sample
+            quietly count if e(sample)
+            assert r(N) > 0
+        }
+        estimates clear
+    }
+    if _rc local fails `"`fails' [`o']"'
+}
+if `"`fails'"' != "" test_fail "IV-19/20 stored first stage and reduced form match ivreg2" `"`fails'"'
+else test_pass "IV-19/20 stored first stage and reduced form match ivreg2"
+
+* -------------------------------------------------------------------------
+* IV-19, IV-36: displayed first stage and reduced form match ivreg2's
+* tables (kernel VCE, level(), the reduced form ahead of the main table)
+* -------------------------------------------------------------------------
+capture noisily {
+    nov04_ivdata
+    nov04_log `"`out1'"' : ivreghdfe y w (x = z1 z2 z3), bw(2) first rf level(90)
+    nov04_log `"`out2'"' : civreghdfe y w (x = z1 z2 z3), bw(2) first rf level(90)
+    foreach text in "Reduced-form regression: y" "First-stage regression of x" ///
+        "Statistics robust to" "[90% conf. interval]" "       z1 |" "       z2 |" "        w |" {
+        nov04_grep `"`out1'"' `"`text'"'
+        local ref `"`r(lines)'"'
+        nov04_grep `"`out2'"' `"`text'"'
+        assert `"`r(lines)'"' == `"`ref'"' & `"`ref'"' != ""
+    }
+}
+if _rc test_fail "IV-19/36 first-stage and reduced-form tables match ivreg2" "r(`=_rc')"
+else test_pass "IV-19/36 first-stage and reduced-form tables match ivreg2"
+
+* -------------------------------------------------------------------------
+* IV-33, IV-34: Stock-Yogo critical values and the estimator title
+* -------------------------------------------------------------------------
+local fails
+foreach m in "(x = z1)" "(x = z1 z2)" "(x = z1 z2 z3)" "(x = z1 z2 z3 z4)" "(x = z1 z2 z3 z4 z5)" ///
+    "(x = z1 z2 z3 z4), liml" "(x = z1 z2 z3 z4), fuller(1)" "(x = z1 z2 z3 z4), gmm2s robust" ///
+    "(x = z1 z2 z3 z4), cue" "(x = z1 z2 z3 z4), kclass(.5)" "(x x2 = z1 z2 z3)" ///
+    "(x x2 = z1 z2 z3 z4 z5)" "(x x2 = z1 z2 z3 z4 z5), liml" {
+    capture noisily {
+        nov04_ivdata
+        nov04_log `"`out1'"' : ivreg2 y w `m'
+        nov04_log `"`out2'"' : civreghdfe y w `m'
+        foreach text in "maximal" "Fuller" "<not available>" "estimation" "k               =" ///
+            "lambda          =" {
+            nov04_grep `"`out1'"' `"`text'"'
+            local ref `"`r(lines)'"'
+            nov04_grep `"`out2'"' `"`text'"'
+            assert `"`r(lines)'"' == `"`ref'"'
+        }
+    }
+    if _rc local fails `"`fails' [`m']"'
+}
+if `"`fails'"' != "" test_fail "IV-33/34 Stock-Yogo values and titles match ivreg2" `"`fails'"'
+else test_pass "IV-33/34 Stock-Yogo values and titles match ivreg2"
+
+* -------------------------------------------------------------------------
+* IV-32: footer variable lists and ivreg2's total sums of squares
+* -------------------------------------------------------------------------
+local fails
+local opts `" "" "absorb(id)" "partial(w)" "partial(w) nopartialsmall" "absorb(id) partial(w)" "noconstant" "" "" "noconstant" "absorb(id)" "'
+local wgts `" "" "" "" "" "" "" "[aw=wt]" "[fw=fwt]" "[aw=wt]" "[aw=wt]" "'
+forvalues i = 1/10 {
+    local opt : word `i' of `opts'
+    local wgt : word `i' of `wgts'
+    local o "`opt' `wgt'"
+    capture noisily {
+        nov04_ivdata
+        gen fwt = round(5*wt)
+        local ref_cmd = cond(strpos(`"`opt'"', "absorb("), "ivreghdfe", "ivreg2")
+        nov04_log `"`out1'"' : `ref_cmd' y w (x = z1 z2 z3) `wgt', `opt'
+        foreach s in yy yyc r2u r2c {
+            local ref_`s' = e(`s')
+        }
+        nov04_log `"`out2'"' : civreghdfe y w (x = z1 z2 z3) `wgt', `opt'
+        foreach s in yy yyc r2u r2c {
+            assert reldif(e(`s'), `ref_`s'') < 1e-8
+        }
+        foreach text in "Instrumented:" "Included instruments:" "Excluded instruments:" ///
+            "Partialled-out:" "small-sample adjustments" "regressor count K" ///
+            "Total (uncentered) SS" "Total (centered) SS" {
+            nov04_grep `"`out1'"' `"`text'"'
+            local ref `"`r(lines)'"'
+            nov04_grep `"`out2'"' `"`text'"'
+            assert `"`r(lines)'"' == `"`ref'"'
+        }
+    }
+    if _rc local fails `"`fails' [`o']"'
+}
+if `"`fails'"' != "" test_fail "IV-32 footer lists and sums of squares match ivreg2" `"`fails'"'
+else test_pass "IV-32 footer lists and sums of squares match ivreg2"
+
+* -------------------------------------------------------------------------
+* IV-31: nooutput shows nothing and still stores the results
+* -------------------------------------------------------------------------
+capture noisily {
+    nov04_ivdata
+    nov04_log `"`out1'"' : civreghdfe y w (x = z1 z2 z3), absorb(id) nooutput first ffirst rf savefirst
+    foreach text in "estimation" "Coefficient" "First-stage" "Reduced-form" "Stock-Yogo" ///
+        "Instrumented" "Absorbed" "stored as" {
+        nov04_grep `"`out1'"' `"`text'"'
+        assert r(n) == 0
+    }
+    assert e(N) == 400 & !missing(e(partial_r2_1)) & !missing(e(widstat))
+    estimates restore _ivreg2_x
+    estimates clear
+}
+if _rc test_fail "IV-31 civreghdfe nooutput" "r(`=_rc')"
+else test_pass "IV-31 civreghdfe nooutput"
+
+* -------------------------------------------------------------------------
+* BIN-05: savedata() does not overwrite a file without replace
+* -------------------------------------------------------------------------
+capture noisily {
+    sysuse auto, clear
+    * a name without an extension, to which save adds .dta
+    tempfile anchor
+    local bins = substr(`"`anchor'"', 1, strlen(`"`anchor'"') - 4) + "_bins"
+    capture erase `"`bins'.dta"'
+    quietly cbinscatter mpg price, nograph savedata(`"`bins'"')
+    confirm file `"`bins'.dta"'
+    capture cbinscatter mpg price, nograph nquantiles(5) savedata(`"`bins'"')
+    assert _rc == 602
+    preserve
+    use `"`bins'"', clear
+    assert _N == 20
+    restore
+    quietly cbinscatter mpg price, nograph nquantiles(5) savedata(`"`bins'"') replace
+    preserve
+    use `"`bins'"', clear
+    assert _N == 5
+    restore
+    * a file name with its extension is checked as given
+    capture cbinscatter mpg price, nograph savedata(`"`bins'.dta"')
+    assert _rc == 602
+    erase `"`bins'.dta"'
+}
+if _rc test_fail "BIN-05 cbinscatter savedata() honors replace" "r(`=_rc')"
+else test_pass "BIN-05 cbinscatter savedata() honors replace"
+
+* -------------------------------------------------------------------------
+* IO-08, IO-09, IO-17: locale() and detail. ctools reads and writes Unicode
+* directly, so text needs no locale; detail's r(N) and r(k) are always set.
+* -------------------------------------------------------------------------
+capture noisily {
+    sysuse auto, clear
+    keep make price mpg
+    replace make = "Citroën ÉÈ ü" in 1
+    tempfile xl
+    foreach ext in xlsx xls {
+        cexport excel using `"`xl'.`ext'"', firstrow(variables) replace locale("ja_JP")
+        cimport excel using `"`xl'.`ext'"', firstrow clear locale("ja_JP") detail
+        assert r(N) == 74 & r(k) == 3
+        assert make[1] == "Citroën ÉÈ ü"
+        import excel using `"`xl'.`ext'"', firstrow clear
+        assert make[1] == "Citroën ÉÈ ü"
+        sysuse auto, clear
+        keep make price mpg
+        replace make = "Citroën ÉÈ ü" in 1
+    }
+    * Stata refuses detail with describe, as cimport does
+    capture import excel using `"`xl'.xlsx"', describe detail
+    local rc_ref = _rc
+    capture cimport excel using `"`xl'.xlsx"', describe detail
+    assert _rc == `rc_ref' & _rc == 198
+}
+if _rc test_fail "IO-08/09/17 excel locale() and detail" "r(`=_rc')"
+else test_pass "IO-08/09/17 excel locale() and detail"
+
+print_summary nov04
+if $TESTS_FAILED > 0 exit 9
+global CTOOLS_COMPONENT_COMPLETE "nov04"
+    global CTOOLS_CASE_COMPLETE "nov04"
+    exit
+}
+
+if "`__case'" == "nov04_s2" {
+/* Regression contracts for the S2 functionality gaps closed on 4 Nov 2026;
+   see docs/development/FUNCTIONALITY_GAPS.md. Each check compares with the
+   command ctools replaces. */
+do validation/support/validate_setup.do
+set seed 20261105
+
+* -------------------------------------------------------------------------
+* civreghdfe: omitted factor interactions keep their base parts
+* (3o.race#0b.union), which matrix colnames accepts
+* -------------------------------------------------------------------------
+capture noisily {
+    ctools_fixture nlswork, clear
+    quietly ivreghdfe ln_wage (tenure = age) i.race#i.union, absorb(idcode)
+    local ref : colnames e(b)
+    tempname rb
+    matrix `rb' = e(b)
+    quietly civreghdfe ln_wage (tenure = age) i.race#i.union, absorb(idcode)
+    assert mreldif(e(b), `rb') < 1e-7
+    assert "`: colnames e(b)'" != ""
+}
+if _rc test_fail "civreghdfe omitted interaction names" "r(`=_rc')"
+else test_pass "civreghdfe omitted interaction names"
+
+* -------------------------------------------------------------------------
+* QREG-03, QREG-04, QREG-06: by:, statsby, stepwise, nestreg, mi estimate
+* and quantile() as a percentage, as with qreg
+* -------------------------------------------------------------------------
+capture noisily {
+    sysuse auto, clear
+    tempfile ref
+    preserve
+    statsby _b, by(foreign) saving(`ref') nodots: qreg price weight
+    statsby _b, by(foreign) clear nodots: cqreg price weight
+    rename _b_* c_*
+    merge 1:1 foreign using `ref', nogenerate
+    assert reldif(c_weight, _b_weight) < 1e-6 & reldif(c_cons, _b_cons) < 1e-6
+    restore
+    by foreign, sort: cqreg price weight
+    assert e(N) == 22
+    capture by foreign: cqreg
+    assert _rc == 190
+    tempname b
+    quietly stepwise, pr(.2): qreg price weight mpg length turn
+    matrix `b' = e(b)
+    quietly stepwise, pr(.2): cqreg price weight mpg length turn
+    assert mreldif(e(b), `b') < 1e-6
+    quietly nestreg: cqreg price (weight) (mpg length)
+    quietly cqreg price weight, quantile(25)
+    assert e(q) == .25
+    mi set wide
+    replace mpg = . in 1/10
+    mi register imputed mpg
+    quietly mi impute regress mpg = weight price, add(3) rseed(2)
+    quietly mi estimate: qreg price weight mpg
+    matrix `b' = e(b_mi)
+    quietly mi estimate: cqreg price weight mpg
+    assert mreldif(e(b_mi), `b') < 1e-6
+}
+if _rc test_fail "QREG-03/04/06 cqreg by:, stepwise, nestreg, mi, percent quantile" "r(`=_rc')"
+else test_pass "QREG-03/04/06 cqreg by:, stepwise, nestreg, mi, percent quantile"
+
+* -------------------------------------------------------------------------
+* RSTAT-01/02/03: variable interval bounds, (cov), (corr), (reg) and a
+* user-written Mata function, against rangestat
+* -------------------------------------------------------------------------
+capture mata: mata drop nov04_colsum()
+mata: real rowvector nov04_colsum(real matrix X) return((colsum(X), rows(X)))
+capture program drop nov04_rs
+program nov04_rs
+    syntax anything(equalok), opts(string) [ifin(string)]
+    preserve
+    rangestat `anything' `ifin', `opts' local(rvars)
+    rename (`rvars') r_=
+    quietly crangestat `anything' `ifin', `opts'
+    foreach v of local rvars {
+        assert `v' == r_`v' | (missing(`v') & missing(r_`v')) | reldif(`v', r_`v') < 1e-9
+    }
+    restore
+end
+local fails
+ctools_fixture nlswork, clear
+keep in 1/3000
+keep idcode year ln_wage tenure hours age
+gen lo = year - 2 + mod(_n, 3)
+gen hi = year + cond(mod(_n, 7) == 0, ., 1)
+replace lo = . if mod(_n, 11) == 0
+gen hi2 = year - 5
+foreach spec in ///
+    `"(mean) ln_wage (count) tenure (median) hours (sd) age|interval(year lo hi) by(idcode)|"' ///
+    `"(mean) ln_wage (max) hours|interval(year lo 0) by(idcode)|"' ///
+    `"(sum) hours (min) age|interval(year . hi)|"' ///
+    `"(mean) ln_wage|interval(year lo hi2) by(idcode)|"' ///
+    `"(median) ln_wage (last) tenure (firstnm) hours|interval(year lo hi) by(idcode) excludeself|"' ///
+    `"(cov) ln_wage tenure|interval(year -2 0) by(idcode)|"' ///
+    `"(corr) ln_wage hours|interval(year -3 0) by(idcode) excludeself|"' ///
+    `"(reg) ln_wage tenure hours|interval(year -4 0) by(idcode)|"' ///
+    `"(reg) ln_wage tenure hours (mean) age|interval(year lo hi) by(idcode)|"' ///
+    `"(nov04_colsum) ln_wage hours|interval(year -2 0) by(idcode)|"' ///
+    `"(nov04_colsum) ln_wage hours|interval(year -2 0) by(idcode) casewise|"' ///
+    `"(nov04_colsum) ln_wage hours|interval(year lo hi)|if age > 25"' {
+    gettoken stats spec : spec, parse("|")
+    gettoken bar spec : spec, parse("|")
+    gettoken opts spec : spec, parse("|")
+    gettoken bar ifin : spec, parse("|")
+    capture noisily nov04_rs `stats', opts(`opts') ifin(`ifin')
+    if _rc local fails `"`fails' [`stats' | `opts']"'
+}
+if `"`fails'"' != "" test_fail "RSTAT-01/02/03 crangestat bounds and flexible statistics" `"`fails'"'
+else test_pass "RSTAT-01/02/03 crangestat bounds and flexible statistics"
+capture mata: mata drop nov04_colsum()
+
+* -------------------------------------------------------------------------
+* PSM-01: several outcomes share one match, as in psmatch2
+* -------------------------------------------------------------------------
+capture noisily {
+    ctools_fixture nlswork, clear
+    keep if year == 88
+    gen byte treat = union
+    replace hours = . in 5
+    gen u = runiform()
+    sort u
+    quietly psmatch2 treat age tenure grade, outcome(ln_wage hours) neighbor(2)
+    foreach s in att_ln_wage seatt_ln_wage att_hours seatt_hours att seatt {
+        local r_`s' = r(`s')
+    }
+    local r_depvar "`r(depvar)'"
+    local r_exog "`r(exog)'"
+    quietly cpsmatch treat age tenure grade, outcome(ln_wage hours) neighbor(2)
+    foreach s in att_ln_wage seatt_ln_wage att_hours seatt_hours att seatt {
+        assert reldif(r(`s'), `r_`s'') < 1e-9
+    }
+    assert "`r(depvar)'" == "`r_depvar'" & "`r(exog)'" == "`r_exog'"
+}
+if _rc test_fail "PSM-01 cpsmatch several outcomes" "r(`=_rc')"
+else test_pass "PSM-01 cpsmatch several outcomes"
+
+* -------------------------------------------------------------------------
+* BIN-01: several y variables, as binscatter y1 y2 x: each y's bins equal
+* binscatter's on the common sample, and the series share one graph
+* -------------------------------------------------------------------------
+local fails
+tempfile anchor
+local bsbase = substr(`"`anchor'"', 1, strlen(`"`anchor'"') - 4) + "_bs"
+foreach o in "" "controls(length)" "absorb(rep78)" "linetype(qfit)" {
+    capture noisily {
+        sysuse auto, clear
+        replace weight = . in 3
+        quietly cbinscatter price weight mpg, nograph nquantiles(10) `o'
+        assert e(num_depvars) == 2 & "`e(depvar)'" == "price weight"
+        forvalues k = 1/2 {
+            tempname cb`k'
+            matrix `cb`k'' = e(bindata_y`k')
+        }
+        forvalues k = 1/2 {
+            local y : word `k' of price weight
+            quietly binscatter `y' mpg if !missing(price, weight), nquantiles(10) `o' ///
+                savedata(`"`bsbase'"') replace
+            preserve
+            quietly import delimited using `"`bsbase'.csv"', clear
+            * binscatter's columns: x, then y
+            quietly ds
+            local bsx : word 1 of `r(varlist)'
+            local bsy : word 2 of `r(varlist)'
+            local nbins = _N
+            local same = (_N == rowsof(`cb`k''))
+            forvalues r = 1/`nbins' {
+                if `same' local same = reldif(`cb`k''[`r', 3], `bsx'[`r']) < 1e-6 & ///
+                    reldif(`cb`k''[`r', 4], `bsy'[`r']) < 1e-6
+            }
+            restore
+            assert `same'
+        }
+    }
+    if _rc local fails `"`fails' [`o']"'
+}
+capture erase `"`bsbase'.csv"'
+capture erase `"`bsbase'.do"'
+capture noisily {
+    sysuse auto, clear
+    quietly cbinscatter price weight mpg, nquantiles(10) by(foreign)
+    assert strpos(`"`e(graphcmd)'"', "label(1 price: foreign=Domestic)")
+    assert strpos(`"`e(graphcmd)'"', "label(4 weight: foreign=Foreign)")
+    assert strpos(`"`e(graphcmd)'"', "ytitle(price and weight)")
+    local cbbase = substr(`"`anchor'"', 1, strlen(`"`anchor'"') - 4) + "_cb"
+    capture erase `"`cbbase'.dta"'
+    quietly cbinscatter price weight mpg, nograph nquantiles(5) savedata(`"`cbbase'"')
+    capture cbinscatter price weight mpg, nograph nquantiles(5) savedata(`"`cbbase'"')
+    assert _rc == 602
+    preserve
+    use `"`cbbase'"', clear
+    assert _N == 10
+    confirm variable y_index depvar by_group bin_id x_mean y_mean n_obs
+    restore
+    erase `"`cbbase'.dta"'
+}
+if _rc local fails `"`fails' [graph/savedata r(`=_rc')]"'
+if `"`fails'"' != "" test_fail "BIN-01 cbinscatter several y" `"`fails'"'
+else test_pass "BIN-01 cbinscatter several y"
+
+print_summary nov04_s2
+if $TESTS_FAILED > 0 exit 9
+global CTOOLS_COMPONENT_COMPLETE "nov04_s2"
+    global CTOOLS_CASE_COMPLETE "nov04_s2"
     exit
 }
 

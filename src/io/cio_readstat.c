@@ -1,5 +1,6 @@
 #include "ctools_file.h"
 #include "cio_internal.h"
+#include "cimport/cimport_encoding.h"
 
 int cio_metadata_cb(readstat_metadata_t *m, void *ctx)
 {
@@ -193,6 +194,74 @@ int cio_variable_cb(int index, readstat_variable_t *v, const char *set, void *ct
     return READSTAT_HANDLER_OK;
 }
 
+/* Native import sas/spss reads a namelist as a set of exact names
+ * (case-sensitive; a hyphen separates names as a blank does, so a-b is a and
+ * b): file variables not named are skipped, names the file lacks are
+ * ignored, and with no match at all the import fails. */
+void cio_select_resolve(cio_dataset *d)
+{
+    if (d->select_done)
+        return;
+    d->select_done = 1;
+    if (!d->select)
+        return;
+    for (int j = 0; j < d->nvar; j++)
+    {
+        cio_column *c = &d->cols[j];
+        int found = 0;
+        size_t n = strlen(c->name);
+        for (const char *p = d->select; *p && !found;)
+        {
+            while (*p == ' ')
+                p++;
+            const char *e = p;
+            while (*e && *e != ' ')
+                e++;
+            found = e > p && (size_t)(e - p) == n && !memcmp(p, c->name, n);
+            p = e;
+        }
+        c->skip = !found;
+        d->select_matched += found;
+    }
+}
+
+/* After the read: refuse a namelist that matched nothing and an in range
+ * past the file's observations (both as native), then drop the skipped
+ * columns, which hold no values. */
+int cio_select_finish(cio_dataset *d)
+{
+    cio_select_resolve(d);
+    if (d->select && !d->select_matched)
+    {
+        SF_error("no matching names found in data\n");
+        return 111;
+    }
+    if (d->row_last && d->rows_seen < d->row_last)
+    {
+        SF_error("observation numbers out of range\n");
+        return 198;
+    }
+    if (!d->select)
+        return 0;
+    int kept = 0;
+    for (int j = 0; j < d->nvar; j++)
+    {
+        cio_column *c = &d->cols[j];
+        if (c->skip)
+        {
+            free(c->strings);
+            free(c->numbers);
+            free(c->lengths);
+            continue;
+        }
+        if (kept != j)
+            d->cols[kept] = *c;
+        kept++;
+    }
+    d->nvar = kept;
+    return 0;
+}
+
 int cio_value_cb(int row, readstat_variable_t *v, readstat_value_t value, void *ctx)
 {
     cio_dataset *d = ctx;
@@ -202,6 +271,18 @@ int cio_value_cb(int row, readstat_variable_t *v, readstat_value_t value, void *
         d->error = 610;
         return READSTAT_HANDLER_ABORT;
     }
+    /* Every variable is known before the first value. */
+    cio_select_resolve(d);
+    if ((size_t)row + 1 > d->rows_seen)
+        d->rows_seen = (size_t)row + 1;
+    if (d->row_last)
+    {
+        if ((size_t)row + 1 < d->row_first || (size_t)row + 1 > d->row_last)
+            return READSTAT_HANDLER_OK;
+        row -= (int)(d->row_first - 1);
+    }
+    if (d->cols[j].skip)
+        return READSTAT_HANDLER_OK;
     int rc = cio_reserve_rows(d, (size_t)row + 1);
     if (rc)
     {
@@ -373,6 +454,30 @@ int cio_read_xpf(cio_dataset *dataset, const char *path)
     return rc;
 }
 
+/* The namelist from local __cio_select, read at its full length. */
+static int cio_select_locals(cio_dataset *d)
+{
+    enum { CAP = 1 << 20 };
+    char *text = malloc(CAP);
+    if (!text)
+        return 909;
+    text[0] = 0;
+    if (SF_macro_use("___cio_select", text, CAP - 1))
+        text[0] = 0;
+    text[CAP - 1] = 0;
+    const char *p = text;
+    while (*p == ' ')
+        p++;
+    if (!*p)
+    {
+        free(text);
+        return 0;
+    }
+    d->select = strdup(text);
+    free(text);
+    return d->select ? 0 : 909;
+}
+
 int cio_scan(cio_dataset *dataset, const char *kind)
 {
     char path[4096], encoding[128], catalog[4096], xpf[4096], raw_storage[16];
@@ -384,6 +489,20 @@ int cio_scan(cio_dataset *dataset, const char *kind)
     cio_dataset_free(dataset);
     cio_copy_text(dataset->kind, sizeof(dataset->kind), kind);
     dataset->raw_storage = !strcmp(kind, "sasxport8") && atoi(raw_storage) != 0;
+    if (!strcmp(kind, "sas") || !strcmp(kind, "spss"))
+    {
+        /* The namelist and in range the ado passes (both optional). */
+        char number[32];
+        int rc = cio_select_locals(dataset);
+        if (rc)
+            return rc;
+        cio_local_text("__cio_rowfirst", number, sizeof(number));
+        dataset->row_first = (size_t)strtoull(number, NULL, 10);
+        cio_local_text("__cio_rowlast", number, sizeof(number));
+        dataset->row_last = (size_t)strtoull(number, NULL, 10);
+        if (!dataset->row_first || dataset->row_last < dataset->row_first)
+            dataset->row_first = dataset->row_last = 0;
+    }
     if (!strcmp(kind, "dbase") || !strcmp(kind, "xls") || !strcmp(kind, "xlsx") ||
         !strcmp(kind, "shp"))
     {
@@ -413,8 +532,10 @@ int cio_scan(cio_dataset *dataset, const char *kind)
     readstat_set_value_label_handler(p, cio_label_cb);
     readstat_set_error_handler(p, cio_error_cb);
     readstat_set_progress_handler(p, cio_progress_cb);
+    /* Java charset names and aliases (latin1, x-MacCyrillic...) as for
+       import delimited go to the converter by its own name. */
     if (*encoding)
-        readstat_set_file_character_encoding(p, encoding);
+        readstat_set_file_character_encoding(p, cimport_charset_converter(encoding));
     readstat_set_handler_character_encoding(p, "UTF-8");
     readstat_error_t err;
     cio_xport_view view;
@@ -445,6 +566,15 @@ int cio_scan(cio_dataset *dataset, const char *kind)
         err = readstat_parse_sas7bcat(p, catalog, dataset);
     }
     readstat_parser_free(p);
+    if (err == READSTAT_OK && (!strcmp(kind, "sas") || !strcmp(kind, "spss")))
+    {
+        int rc = cio_select_finish(dataset);
+        if (rc)
+        {
+            cio_dataset_free(dataset);
+            return rc;
+        }
+    }
     if (err != READSTAT_OK)
     {
         int rc = dataset->error ? dataset->error : !strcmp(kind, "sasxport5") ? 459 : 692;

@@ -26,6 +26,8 @@ typedef struct
 {
     char name[301], label[1025], source_format[257], format[80], labelset[301], excel_column[16];
     int is_string, width, date_kind, binary, force_double, format_numbers;
+    /* Not in the SAS/SPSS namelist: its values are never stored. */
+    int skip;
     size_t *lengths;
     double *numbers;
     char **strings;
@@ -49,6 +51,13 @@ typedef struct
     int error;
     int shp_blob, shp_z, shp_m, shp_order;
     int raw_storage;
+    /* SAS/SPSS selection, applied while reading as native does: select holds
+     * the namelist (names separated by blanks), resolved once every variable
+     * is known; row_first..row_last (1-based, 0 for all) is the in range,
+     * rows_seen the file's observations. */
+    char *select;
+    int select_done, select_matched;
+    size_t row_first, row_last, rows_seen;
 } cio_dataset;
 typedef struct
 {
@@ -101,6 +110,7 @@ static inline int cio_xls_is_worksheet(const xlsWorkBook *w, unsigned j)
     return (w->sheets.sheet[j].visibility & 0x0f) == 0;
 }
 int cio_xls_nonempty(const xlsCell *c);
+void cio_xls_used_range(xlsWorkSheet *ws, int *r0, int *c0, int *r1, int *c1);
 void cio_xls_formula_record(XLSWORD id, XLSWORD len, XLSBYTE *record);
 int cio_xls_result_order(const void *a, const void *b);
 void cio_xls_results_reset(void);
@@ -164,4 +174,6 @@ const char *cio_storage(cio_dataset *dataset, cio_column *c, char *out, size_t l
 int cio_column_info(cio_dataset *dataset, int index);
 int cio_label_info(cio_dataset *dataset, int index);
 int cio_load(cio_dataset *dataset);
+void cio_select_resolve(cio_dataset *d);
+int cio_select_finish(cio_dataset *d);
 #endif

@@ -25,10 +25,14 @@
     j = lag index
 
     Kernels are classified as:
-    - "lag" windows (Bartlett, Parzen, Truncated, Tukey-Hanning): truncated at bw
-    - "spectral" windows (Quadratic Spectral): weights computed for all lags
+    - "lag" windows (Bartlett, Parzen, Truncated, Tukey-Hanning,
+      Tukey-Hamming): truncated at bw
+    - "spectral" windows (Quadratic Spectral, Daniell, Tent): weights
+      computed for all lags
 
-    Following ivreg2/livreg2's m_calckw() function exactly.
+    The weights are those ivreg2 applies (verified against its e(S)); the
+    Tent window is ivreg2's 2(1 - cos(j x))/x^2 with x = j/bw, which is not
+    bounded by 1 and can leave S indefinite, as in ivreg2.
 */
 ST_double civreghdfe_kernel_weight(ST_int kernel_type, ST_int j, ST_double bw)
 {
@@ -73,6 +77,22 @@ ST_double civreghdfe_kernel_weight(ST_int kernel_type, ST_int j, ST_double bw)
                 ST_double pi = 3.14159265358979323846;
                 return 0.5 + 0.5 * cos(pi * x);
             }
+
+        case 6:  /* Tukey-Hamming - lag window, truncate at bw */
+            if (j > bw) return 0.0;
+            {
+                ST_double pi = 3.14159265358979323846;
+                return 0.54 + 0.46 * cos(pi * x);
+            }
+
+        case 7:  /* Daniell - spectral window */
+            {
+                ST_double pi = 3.14159265358979323846;
+                return sin(pi * x) / (pi * x);
+            }
+
+        case 8:  /* Tent - spectral window */
+            return 2.0 * (1.0 - cos((ST_double)j * x)) / (x * x);
 
         default:
             return 0.0;

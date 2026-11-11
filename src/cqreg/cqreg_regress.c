@@ -381,10 +381,16 @@ static ST_retcode cqreg_auxiliary_fits(const ST_double *y, const ST_double *X,
  * compared with the main fit's default 1e-12. The VCE comparisons in
  * validation/stata/cqreg.do check seven significant figures of accuracy.
  *
+ * For a weighted fit y and X are the rows scaled by the weights (the fits
+ * minimize the weighted check loss) and sum_w is the sum of the weights, so
+ * the column sums of X over sum_w are qreg's weighted means of the design.
+ * Unweighted, sum_w is N.
+ *
  * Reference: Hendricks and Koenker (1992), Koenker (2005, sec. 3.4)
  */
 static ST_retcode estimate_siddiqui_sparsity(const ST_double *y,
                                              const ST_double *X,
+                                             ST_double sum_w,
                                              ST_int N, ST_int K,
                                              ST_double quantile,
                                              cqreg_bw_method bw_method,
@@ -436,7 +442,7 @@ static ST_retcode estimate_siddiqui_sparsity(const ST_double *y,
         return 920;
     }
 
-    ST_double inv_N = 1.0 / (ST_double)N;
+    ST_double inv_N = 1.0 / sum_w;
     ST_int N8 = N - (N & 7);
 
     #pragma omp parallel for if(K >= 4 && N > 10000)
@@ -506,8 +512,9 @@ static ST_retcode estimate_siddiqui_sparsity(const ST_double *y,
  *
  * Parameters:
  *   obs_density  - Output: per-observation density estimates (N)
- *   y            - Response variable (N)
- *   X            - Design matrix (N x K, column-major)
+ *   y            - Response variable (N), rows scaled by the weights if any
+ *   X            - Design matrix (N x K, column-major), likewise scaled
+ *   X_pred       - Unscaled design for the fitted quantiles x_i'beta
  *   N            - Number of observations
  *   K            - Number of regressors
  *   quantile     - Target quantile (0 < τ < 1)
@@ -522,6 +529,7 @@ static ST_retcode estimate_siddiqui_sparsity(const ST_double *y,
 static ST_retcode estimate_fitted_per_obs_density(ST_double *obs_density,
                                                   const ST_double *y,
                                                   const ST_double *X,
+                                                  const ST_double *X_pred,
                                                   ST_int N, ST_int K,
                                                   ST_double quantile,
                                                   cqreg_bw_method bw_method,
@@ -583,15 +591,15 @@ static ST_retcode estimate_fitted_per_obs_density(ST_double *obs_density,
         ST_int K4 = K - (K & 3);
         ST_int k;
         for (k = 0; k < K4; k += 4) {
-            ST_double x0 = X[(size_t)k * N + i];
-            ST_double x1 = X[(size_t)(k + 1) * N + i];
-            ST_double x2 = X[(size_t)(k + 2) * N + i];
-            ST_double x3 = X[(size_t)(k + 3) * N + i];
+            ST_double x0 = X_pred[(size_t)k * N + i];
+            ST_double x1 = X_pred[(size_t)(k + 1) * N + i];
+            ST_double x2 = X_pred[(size_t)(k + 2) * N + i];
+            ST_double x3 = X_pred[(size_t)(k + 3) * N + i];
             xb_lo += x0 * beta_lo[k] + x1 * beta_lo[k + 1] + x2 * beta_lo[k + 2] + x3 * beta_lo[k + 3];
             xb_hi += x0 * beta_hi[k] + x1 * beta_hi[k + 1] + x2 * beta_hi[k + 2] + x3 * beta_hi[k + 3];
         }
         for (; k < K; k++) {
-            ST_double x_ik = X[(size_t)k * N + i];
+            ST_double x_ik = X_pred[(size_t)k * N + i];
             xb_lo += x_ik * beta_lo[k];
             xb_hi += x_ik * beta_hi[k];
         }
@@ -843,7 +851,19 @@ ST_retcode cqreg_full_regression(const char *args)
     ST_double kfactor = read_scalar("__cqreg_kfactor", -1.0);
     /* The sample marker follows every other variable in place of an if */
     ST_int touse = read_scalar_int("__cqreg_touse", 0);
+    /* Weights, a variable after the cluster variable: 0 none, 1 fweight,
+     * 2 iweight (qreg fits pweights as iweights) */
+    ST_int weight_type = read_scalar_int("__cqreg_wtype", 0);
+    if (weight_type < 0 || weight_type > 2) {
+        ctools_error("cqreg", "invalid weight type");
+        return 198;
+    }
 
+    if (!isfinite(tolerance) || tolerance <= 0.0 || tolerance > 1.0) {
+        ctools_error("cqreg", "tolerance must be greater than zero and at most one");
+        main_debug_close();
+        return 198;
+    }
     if (G > 0 || maxiter < 1) {
         ctools_error("cqreg", "absorb() is unsupported and maxiter must be positive");
         main_debug_close();
@@ -881,7 +901,8 @@ ST_retcode cqreg_full_regression(const char *args)
     ST_int K = K_x + 1;  /* Including constant */
 
     ST_int has_cluster = (vce_type == CQREG_VCE_CLUSTER) ? 1 : 0;
-    ST_int nvars_to_load = 1 + K_x + has_cluster;
+    ST_int has_weight = (weight_type != 0) ? 1 : 0;
+    ST_int nvars_to_load = 1 + K_x + has_cluster + has_weight;
     int *var_indices = (int *)malloc((size_t)nvars_to_load * sizeof(int));
     if (var_indices == NULL) {
         ctools_error("cqreg", "Memory allocation failed for var_indices");
@@ -893,6 +914,9 @@ ST_retcode cqreg_full_regression(const char *args)
     }
     if (has_cluster) {
         var_indices[1 + K_x] = K_total + 1;  /* Cluster variable */
+    }
+    if (has_weight) {
+        var_indices[1 + K_x + has_cluster] = K_total + 1 + has_cluster;
     }
 
     /* Load data with if/in filtering using ctools_data_load.
@@ -945,6 +969,7 @@ ST_retcode cqreg_full_regression(const char *args)
 
 
     state->quantile = quantile;
+    state->weight_type = weight_type;
     state->vce_type = (cqreg_vce_type)vce_type;
     state->bw_method = (cqreg_bw_method)bw_method;
     state->density_method = (cqreg_density_method)density_method;
@@ -999,8 +1024,36 @@ ST_retcode cqreg_full_regression(const char *args)
     for (ST_int i = 0; i < N; i++)
         state->y[i] = scalbn(state->y[i] - response_shift, -response_exponent);
 
+    /* Weights, copied before the loaded columns are released. The ado
+     * passes only positive weights (marksample drops zero weights and
+     * cqreg rejects negative iweights). */
+    if (has_weight) {
+        const ST_double *wsrc = filtered.data.vars[1 + K_x + has_cluster].data.dbl;
+        state->weights = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
+        if (state->weights == NULL) {
+            ctools_error_alloc("cqreg");
+            cqreg_state_free(state);
+            ctools_filtered_data_free(&filtered);
+            main_debug_close();
+            return 920;
+        }
+        for (ST_int i = 0; i < N; i++) {
+            if (!(wsrc[i] > 0.0) || !isfinite(wsrc[i]) || SF_is_missing(wsrc[i])) {
+                ctools_error("cqreg", "weights must be positive");
+                cqreg_state_free(state);
+                ctools_filtered_data_free(&filtered);
+                main_debug_close();
+                return 402;
+            }
+            state->weights[i] = wsrc[i];
+        }
+    }
+
     /* Compute sample quantile and raw sum of deviations for pseudo R^2 */
-    state->q_v = cqreg_compute_quantile(state->y, N, quantile);
+    if (state->weights != NULL)
+        state->q_v = cqreg_compute_quantile_w(state->y, state->weights, N, quantile);
+    else
+        state->q_v = cqreg_compute_quantile(state->y, N, quantile);
     if (isnan(state->q_v)) {
         ctools_error_alloc("cqreg");
         cqreg_state_free(state);
@@ -1008,7 +1061,9 @@ ST_retcode cqreg_full_regression(const char *args)
         main_debug_close();
         return 920;
     }
-    state->sum_rdev = cqreg_sum_raw_deviations(state->y, N, state->q_v, quantile);
+    state->sum_rdev = (state->weights != NULL)
+        ? cqreg_sum_raw_deviations_w(state->y, state->weights, N, state->q_v, quantile)
+        : cqreg_sum_raw_deviations(state->y, N, state->q_v, quantile);
     main_debug_log("Computed q_v=%.6f, sum_rdev=%.4f\n", state->q_v, state->sum_rdev);
 
     /* Load cluster variable from pre-loaded data (no SPI re-read) */
@@ -1022,7 +1077,10 @@ ST_retcode cqreg_full_regression(const char *args)
     }
 
     /* y, X and the cluster ids are copied into the state: release the loaded
-     * columns before the solver allocates its N-sized workspace */
+     * columns before the solver allocates its N-sized workspace. The
+     * observation map stays with the state, for the basis (e(basis)). */
+    state->obs_map = filtered.obs_map;
+    filtered.obs_map = NULL;
     ctools_filtered_data_free(&filtered);
 
     /* ========================================================================
@@ -1030,6 +1088,13 @@ ST_retcode cqreg_full_regression(const char *args)
      * ======================================================================== */
 
     ST_int *is_collinear = NULL;
+    /* Weighted fits solve the problem with each row scaled by its weight:
+     * rho_q(w r) = w rho_q(r) for w > 0, so the scaled problem minimizes the
+     * weighted check loss. Ys and Xs are those rows (y and X themselves
+     * when unweighted); sum_w is the sum of the weights (N unweighted). */
+    ST_double *Ys_owned = NULL, *Xs_owned = NULL;
+    const ST_double *Ys = NULL, *Xs = NULL;
+    ST_double sum_w = (ST_double)N;
 
     if (K_x > 0) {
         /* Compute X'X for collinearity check */
@@ -1062,9 +1127,13 @@ ST_retcode cqreg_full_regression(const char *args)
         #pragma omp parallel for schedule(static) if(K_x > 1 && (size_t)N * (size_t)K_x > 200000)
         for (ci = 0; ci < K_x; ci++) {
             const ST_double *Xi = &state->X[(size_t)ci * N];
-            ST_double mean_i = 0.0;
-            for (ST_int row = 0; row < N; row++) mean_i += Xi[row] / N;
-            col_means[ci] = mean_i;
+            /* Anchor the sum so a constant column has exactly zero centred
+             * norm. Summing Xi/N can round its mean away from Xi, turning
+             * that zero norm into a spurious full-rank correlation column. */
+            long double centered_sum = 0.0L;
+            for (ST_int row = 0; row < N; row++)
+                centered_sum += (long double)Xi[row] - Xi[0];
+            col_means[ci] = Xi[0] + (ST_double)(centered_sum / N);
         }
         #pragma omp parallel for schedule(dynamic) if(K_x > 1 && (size_t)N * (size_t)K_x > 200000)
         for (ci = 0; ci < K_x; ci++) {
@@ -1159,10 +1228,48 @@ ST_retcode cqreg_full_regression(const char *args)
         }
     }
 
+    /* The sample must exceed the effective rank, after redundant columns go. */
+    if (N <= K) {
+        ctools_error("cqreg", "insufficient observations");
+        rc = 2001;
+        goto cleanup;
+    }
+
     /* ========================================================================
      * Step 4: Run IPM solver
      * ======================================================================== */
 
+
+    Ys = state->y;
+    Xs = state->X;
+    if (state->weights != NULL) {
+        size_t xs_size;
+        if (ctools_safe_alloc_size((size_t)N, (size_t)K, sizeof(ST_double), &xs_size) != 0) {
+            ctools_error_alloc("cqreg");
+            rc = 920;
+            goto cleanup;
+        }
+        Ys_owned = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
+        Xs_owned = (ST_double *)ctools_cacheline_alloc(xs_size);
+        if (Ys_owned == NULL || Xs_owned == NULL) {
+            ctools_error_alloc("cqreg");
+            rc = 920;
+            goto cleanup;
+        }
+        sum_w = 0.0;
+        for (ST_int i = 0; i < N; i++) {
+            Ys_owned[i] = state->weights[i] * state->y[i];
+            sum_w += state->weights[i];
+        }
+        #pragma omp parallel for if(K >= 2 && (size_t)N * (size_t)K > 200000)
+        for (ST_int k = 0; k < K; k++) {
+            const ST_double *src = &state->X[(size_t)k * N];
+            ST_double *dst = &Xs_owned[(size_t)k * N];
+            for (ST_int i = 0; i < N; i++) dst[i] = state->weights[i] * src[i];
+        }
+        Ys = Ys_owned;
+        Xs = Xs_owned;
+    }
 
     double ipm_start = ctools_timer_seconds();
 
@@ -1186,7 +1293,7 @@ ST_retcode cqreg_full_regression(const char *args)
     main_debug_log("IPM state created. Solving...\n");
 
     /* Solve quantile regression with the Frisch-Newton interior point method */
-    ST_int ipm_result = cqreg_fn_solve(state->ipm, state->y, state->X, quantile, state->beta);
+    ST_int ipm_result = cqreg_fn_solve(state->ipm, Ys, Xs, quantile, state->beta);
 
     main_debug_log("Solver returned %d\n", ipm_result);
 
@@ -1210,11 +1317,28 @@ ST_retcode cqreg_full_regression(const char *args)
     cqreg_ipm_get_residuals(state->ipm, state->residuals);
 
     main_debug_log("IPM phase complete. sum_adev=%.4f\n", state->sum_adev);
+    /* The basis as Stata observation numbers (qreg's hidden e(basis)) */
+    if (state->ipm->basis_ok && state->ipm->basis != NULL) {
+        const perm_idx_t *map = (const perm_idx_t *)state->obs_map;
+        ST_int stored = 0;
+        for (ST_int j = 0; j < K; j++) {
+            ST_int row = state->ipm->basis[j];
+            if (row < 0 || row >= N) { stored = 0; break; }
+            ST_double obs = map ? (ST_double)map[row] : (ST_double)(row + 1);
+            if (SF_mat_store("__cqreg_basis", 1, j + 1, obs)) { stored = 0; break; }
+            stored++;
+        }
+        store_scalar("__cqreg_basis_n", (ST_double)stored);
+    }
     /* Before the auxiliary fits reuse the IPM state and its basis */
     store_scalar("__cqreg_nonunique", state->ipm->basis_ok ?
-                 (ST_double)cqreg_optimum_not_unique(state->y, state->X, state->beta,
+                 (ST_double)cqreg_optimum_not_unique(Ys, Xs, state->beta,
                                                      state->residuals, N, K, quantile,
                                                      state->ipm->basis) : -1.0);
+    /* The solver's residuals are those of the scaled rows, w_i r_i */
+    if (state->weights != NULL) {
+        for (ST_int i = 0; i < N; i++) state->residuals[i] /= state->weights[i];
+    }
     state->time_ipm = ctools_timer_seconds() - ipm_start;
 
     /* Save IPM sub-timers now, before aux solves can overwrite them */
@@ -1241,6 +1365,11 @@ ST_retcode cqreg_full_regression(const char *args)
         rc = 920;
         goto cleanup;
     }
+    /* qreg's bandwidth counts the frequency weights: the ado computes the
+     * full-sample bandwidth for sum_w then */
+    state->sparsity_state->weights = state->weights;
+    state->sparsity_state->fweights = (weight_type == 1);
+    state->sparsity_state->bw_n = (weight_type == 1) ? sum_w : (ST_double)N;
 
     main_debug_log("Estimating sparsity/density (method=%d, vce=%d)...\n",
                    state->density_method, state->vce_type);
@@ -1265,7 +1394,7 @@ ST_retcode cqreg_full_regression(const char *args)
          * f_i = (2h) / (Q̂(τ+h|x_i) - Q̂(τ-h|x_i))
          */
         rc = estimate_fitted_per_obs_density(state->obs_density,
-                                             state->y, state->X,
+                                             Ys, Xs, state->X,
                                              N, K, quantile,
                                              state->bw_method,
                                              state->ipm,
@@ -1280,7 +1409,7 @@ ST_retcode cqreg_full_regression(const char *args)
          * Reuses main IPM state workspace (avoids ~2.8 GB allocation for N=5M).
          * Matches Stata's default vce(iid) "fitted" method exactly.
          */
-        rc = estimate_siddiqui_sparsity(state->y, state->X,
+        rc = estimate_siddiqui_sparsity(Ys, Xs, sum_w,
                                         N, K, quantile,
                                         state->bw_method,
                                         state->ipm,
@@ -1441,6 +1570,8 @@ ST_retcode cqreg_full_regression(const char *args)
      * ======================================================================== */
 
 cleanup:
+    ctools_aligned_free(Ys_owned);
+    ctools_aligned_free(Xs_owned);
     main_debug_log("Cleanup: freeing state...\n");
     cqreg_state_free(state);
     main_debug_log("State freed\n");

@@ -41,15 +41,16 @@ int cpsmatch_match_radius(const sorted_control_t *controls, size_t n_controls,
                           const size_t *control_idx, const perm_idx_t *obs_map, double radius,
                           int common, double common_min, double common_max, double *out_weight,
                           double *out_match, double *out_nn, double *out_support, int *n_matched,
-                          int *n_off)
+                          int *n_off, perm_idx_t *out_start)
 {
     /* One start position per treated row; its existing _nn result gives length.
-     * The endpoint array is in sorted-control order, not filtered-row order. */
-    perm_idx_t *starts = ctools_safe_malloc2(n_treated, sizeof(*starts));
+     * The endpoint array is in sorted-control order, not filtered-row order.
+     * The caller may keep the starts (out_start, n_treated entries). */
+    perm_idx_t *starts = out_start ? out_start : ctools_safe_malloc2(n_treated, sizeof(*starts));
     cpsmatch_radius_sum *endpoints = ctools_safe_calloc2(n_controls + 1, sizeof(*endpoints));
     if (!starts || !endpoints)
     {
-        free(starts);
+        if (!out_start) free(starts);
         free(endpoints);
         return 920;
     }
@@ -107,7 +108,7 @@ int cpsmatch_match_radius(const sorted_control_t *controls, size_t n_controls,
     }
     *n_matched += matched;
     *n_off += off;
-    free(starts);
+    if (!out_start) free(starts);
     free(endpoints);
     return 0;
 }

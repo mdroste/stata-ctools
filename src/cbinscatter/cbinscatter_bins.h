@@ -109,6 +109,10 @@ ST_retcode compute_pooled_cutpoints(
  */
 ST_retcode densify_bin_ids(ST_int *bin_ids, ST_int N, const ByGroupResult *result);
 
+/* Keep external xq() labels as doubles while internal ids stay dense. */
+void set_external_bin_ids(const ST_double *keys, const ST_int *bin_ids,
+                         ST_int N, ByGroupResult *result);
+
 /* ========================================================================
  * Discrete Mode
  * ======================================================================== */
@@ -139,6 +143,56 @@ ST_retcode compute_bins_discrete(
     ST_int max_bins,
     ByGroupResult *result,
     ST_int *bin_ids_out
+);
+
+/*
+ * Bins given by the values of key (binscatter's xq()): one bin per distinct
+ * non-missing key, in ascending order of key, with the bin means of x and y.
+ * bin ids (result and bin_ids_out) are 1..number of bins; compute_bins_discrete
+ * is this with key = x.
+ */
+ST_retcode compute_bins_by_key(
+    const ST_double *y,
+    const ST_double *x,
+    const ST_double *key,
+    const ST_double *weights,
+    ST_int N,
+    ST_int compute_se,
+    ST_int max_bins,
+    ByGroupResult *result,
+    ST_int *bin_ids_out
+);
+
+/*
+ * Replace the bin means of y (and of x when x_too) by bin medians, as
+ * binscatter's medians option takes them from _pctile, percentiles(50):
+ * weighted by weights when not NULL. bin_ids[i] is row i's bin as
+ * result->bins[].bin_id numbers it (0 = no bin).
+ */
+ST_retcode apply_bin_medians(
+    const ST_double *y,
+    const ST_double *x,
+    const ST_double *weights,
+    ST_int N,
+    const ST_int *bin_ids,
+    int x_too,
+    ByGroupResult *result
+);
+
+/*
+ * Quantile cutpoints (nq + 1 values) of the x where sel[i] is nonzero, as
+ * binscatter's fastxtile takes them from a random subsample: _pctile of the
+ * m sampled values, also when m is nq - 1 (the fewest fastxtile accepts).
+ * Returns CBINSCATTER_OK, CBINSCATTER_ERR_MEMORY, or CBINSCATTER_ERR_SYNTAX
+ * (after the error message) when nq > m + 1.
+ */
+ST_retcode compute_sampled_cutpoints(
+    const ST_double *x,
+    const ST_double *weights,
+    const unsigned char *sel,
+    ST_int N,
+    ST_int nq,
+    ST_double **cutpoints_out
 );
 
 #endif /* CBINSCATTER_BINS_H */

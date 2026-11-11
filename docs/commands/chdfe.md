@@ -8,7 +8,7 @@ freedom; it does not fit a regression.
 ## Syntax
 
 ```stata
-chdfe varlist [if] [in] [aw fw pw], absorb(absvars) generate(prefix) [sample(newvar) options]
+chdfe varlist [if] [in] [aw fw pw], absorb(absvars) generate(prefix) [sample(newvar) options]   (g() as in hdfe)
 chdfe varlist [if] [in] [aw fw pw], absorb(absvars) clear [keepvars(varlist) keepids options]
 ```
 
@@ -21,8 +21,9 @@ Expanded terms use the `hdfe` naming convention: names start with `__`, dots
 become `__`, and `#` becomes `_X_`. The original data and row order are
 preserved. `sample()` creates an indicator equal to 1 for observations used in the transformation and 0 otherwise.
 
-`clear` keeps the selected rows and transformed variables. It also retains the
-source variables needed for expanded terms and simple weight variables. `keepvars()`
+`clear` keeps the selected rows and transformed variables. As `hdfe`, it also retains the
+source variables needed for expanded terms and simple weight variables, but not the absorbed
+or cluster variables. `keepvars()`
 retains additional variables; `keepids` retains category IDs as `__ID1__`,
 `__ID2__`, etc., and cluster IDs as `__CL1__`, etc. Failed calls restore the
 original data.
@@ -34,7 +35,8 @@ original data.
 slopes, while `firm##c.time` removes intercepts and slopes.
 `firm##c.(time age)` allows several slopes. Categorical keys may be strings;
 `strL` keys are limited to 2,045 bytes per value.
-Fixed-effect coefficient output is not available.
+Fixed-effect coefficient output is not available. As in `hdfe`, slope variables
+cannot carry time-series operators (`firm#c.L.x` is r(101)); generate the lag first.
 
 Rows with missing inputs or categories, or missing or zero weights, are
 excluded. Negative weights are rejected. Singleton rows are removed
@@ -53,12 +55,14 @@ error 2000.
 | `tolerance(#)` | Convergence tolerance; default `1e-8` |
 | `maxiterations(#)` | Iteration limit; default 10,000; `.` removes the practical limit |
 | `poolsize(#)` | Number of variables from which fixed effects are removed together; default 10 |
-| `transform(str)` | `symmetric_kaczmarz` (default), `kaczmarz`, or `cimmino` |
-| `acceleration(str)` | `conjugate_gradient`/`cg` (default), `steepest_descent`/`sd`, `aitken`, or `none` |
+| `transform(str)`, `tra()` | `symmetric_kaczmarz` (default), `kaczmarz`, `cimmino`, or hdfe's experimental `random_kaczmarz`/`rand_kaczmarz` (a symmetric sweep in a random order drawn once per variable from a fixed generator; Stata's random-number state is untouched) |
+| `acceleration(str)` | `conjugate_gradient`/`cg` (default), `steepest_descent`/`sd`, `aitken`, `none`, or hdfe's experimental `hybrid` (three plain sweeps, then conjugate gradient) |
 | `threads(#)` | Maximum threads; zero uses the ctools setting |
-| `verbose`, `verbose(#)`, `timeit` | Report time by computation stage; `verbose(0)` is quiet |
+| `verbose`, `verbose(#)`, `timeit` | Report time by computation stage |
 
-Conjugate gradient requires a symmetric transform. Intermediate estimates and iteration counts
+As `hdfe`, `chdfe` reports the singleton observations it drops and the iterations used.
+`kaczmarz` with conjugate gradient runs with hdfe's warning that it is unlikely to converge
+(it stops by reghdfe's Hestenes rule and is less accurate than the other choices). Intermediate estimates and iteration counts
 may differ from `hdfe`, even when the final estimates agree. Nonconvergence produces error 430. `groupvar()`
 requires pairwise or first-pair adjustments; no output is created without an
 eligible pair. With more than two categorical effects, the degrees-of-freedom

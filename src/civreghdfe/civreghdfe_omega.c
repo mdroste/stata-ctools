@@ -20,11 +20,17 @@
     as ivreg2 pairs t with L(tau).t: a gap or a dropped observation breaks
     the pair and an empty period contributes nothing. Lag windows use lags
     1..bw, spectral windows every lag up to T/tdelta - 1 (T = time span).
+    With center (ivreg2's option), the contributions are centered at
+    m = sum_i c_i u_i / N (c_i = w_i^2 for aw/pw, w_i for fw): the
+    heteroskedastic and kernel sums use w_i (u_i - m), the cluster and
+    period sums add w_i u_i - m per observation, as ivreg2's S does; the
+    homoskedastic forms are unchanged.
 */
 
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <stdio.h>
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -38,11 +44,12 @@
 #include "../ctools_hdfe_utils.h"
 
 /* Lags summed by a kernel: bw for lag windows; every lag up to
-   T/tdelta - 1 for the spectral Quadratic Spectral window (m_omega's TAU) */
+   T/tdelta - 1 for the spectral windows (Quadratic Spectral, Daniell,
+   Tent; m_omega's TAU) */
 static ST_int omega_max_lag(ST_int kernel, ST_double bw, ST_int tmax_idx, ST_double tdelta)
 {
     if (kernel <= 0) return 0;
-    if (kernel == CIVREGHDFE_KERNEL_QS) {
+    if (CIVREGHDFE_KERNEL_SPECTRAL(kernel)) {
         if (tdelta <= 0.0) tdelta = 1.0;
         ST_double tau = floor((ST_double)tmax_idx - 1.0 + 1.0 / tdelta + 1e-9);
         /* clamped in double: 1/tdelta can push it past INT_MAX */
@@ -164,14 +171,39 @@ static void add_kron(ST_double *S, const ST_double *A, ST_int K, const ST_double
                 }
 }
 
-/* u = e_i (x) z_i (length K*L) */
+/* u = e_i (x) z_i (length K*L), less the centering vector mc (NULL = none) */
 static inline void moment_row(const ST_double *E, ST_int K, const ST_double *Z, ST_int L,
-                              ST_int N, ST_int i, ST_double *u)
+                              ST_int N, ST_int i, const ST_double *mc, ST_double *u)
 {
     for (ST_int k = 0; k < K; k++) {
         ST_double e = E[(size_t)k * N + i];
         for (ST_int l = 0; l < L; l++) u[k * L + l] = e * Z[(size_t)l * N + i];
     }
+    if (mc)
+        for (ST_int d = 0; d < K * L; d++) u[d] -= mc[d];
+}
+
+/* center: m = sum_i c_i u_i / N_eff, c = w^2 (aw/pw), w (fw), 1 */
+static ST_retcode omega_center(const civ_omega *om, const ST_double *E, ST_int K,
+                               const ST_double *Z, ST_int L, ST_double **mc)
+{
+    ST_int D = K * L, N = om->N;
+    const ST_double *w = om->w;
+    *mc = (ST_double *)calloc((size_t)D, sizeof(ST_double));
+    if (!*mc) return 920;
+    for (ST_int d = 0; d < D; d++) {
+        const ST_double *e = E + (size_t)(d / L) * N;
+        const ST_double *z = Z + (size_t)(d % L) * N;
+        ST_double acc = 0.0;
+        for (ST_int i = 0; i < N; i++) {
+            ST_double c = 1.0;
+            if (w) c = (om->wtype == 2) ? w[i] : w[i] * w[i];
+            if (om->mult && w && om->wtype != 2) c /= om->mult[i];
+            acc += c * (e[i] * z[i]);
+        }
+        (*mc)[d] = acc / om->N_eff;
+    }
+    return 0;
 }
 
 /* Iterator over the pairs (now, lag) of observations in the same panel
@@ -218,7 +250,8 @@ static int pair_next(pair_iter *it, ST_int *now, ST_int *lagobs)
    kernel lags when kernel > 0). */
 static ST_retcode omega_groups(const civ_omega *om, const ST_double *E, ST_int K,
                                const ST_double *Z, ST_int L, const ST_int *gid, ST_int G,
-                               ST_int use_kernel, ST_double sign, ST_double *S)
+                               ST_int use_kernel, ST_double sign, const ST_double *mc,
+                               ST_double *S)
 {
     ST_int D = K * L, N = om->N;
     /* h is stored by moment: h[d * G + g] is component d of group g's sum */
@@ -233,11 +266,28 @@ static ST_retcode omega_groups(const civ_omega *om, const ST_double *E, ST_int K
         const ST_double *e = E + (size_t)(d / L) * N;
         const ST_double *z = Z + (size_t)(d % L) * N;
         ST_double *hd = h + (size_t)d * G;
+        ST_double md = mc ? mc[d] : 0.0;
         for (ST_int i = 0; i < N; i++) {
             ST_int g = gid ? gid[i] - 1 : om->tidx[i];
             if (g < 0 || g >= G) continue;
             ST_double wi = om->w ? om->w[i] : 1.0;
-            hd[g] += wi * (e[i] * z[i]);
+            /* A bootstrap replicate's row stands for mult copies (om->w
+               already carries the multiplicity), and each copy is centered */
+            ST_double copies = om->mult ? om->mult[i] : 1.0;
+            hd[g] += wi * (e[i] * z[i]) - copies * md;
+        }
+    }
+
+    /* Bootstrap replicates resampling the clusters: each group's count
+       (its rows share it); the lag-0 products are divided by it */
+    ST_double *gm = NULL;
+    if (om->mult && om->mult_groups && gid) {
+        gm = (ST_double *)malloc((size_t)G * sizeof(ST_double));
+        if (!gm) { free(h); return 920; }
+        for (ST_int g = 0; g < G; g++) gm[g] = 1.0;
+        for (ST_int i = 0; i < N; i++) {
+            ST_int g = gid[i] - 1;
+            if (g >= 0 && g < G) gm[g] = om->mult[i];
         }
     }
 
@@ -257,7 +307,9 @@ static ST_retcode omega_groups(const civ_omega *om, const ST_double *E, ST_int K
             for (ST_int r = 0; r < D; r++) {
                 const ST_double *hr = h + (size_t)r * G;
                 ST_double acc = Sc[r];
-                if (tau == 0) {
+                if (tau == 0 && gm) {
+                    for (ST_int g = 0; g < G; g++) acc += f * hr[g] * hc[g] / gm[g];
+                } else if (tau == 0) {
                     for (ST_int g = 0; g < G; g++) acc += f * hr[g] * hc[g];
                 } else {
                     for (ST_int g = tau; g < G; g++)
@@ -268,6 +320,7 @@ static ST_retcode omega_groups(const civ_omega *om, const ST_double *E, ST_int K
         }
     }
     free(h);
+    free(gm);
     return 0;
 }
 
@@ -275,12 +328,17 @@ static ST_retcode omega_groups(const civ_omega *om, const ST_double *E, ST_int K
    sign: lag 0 = sum c_i u_i u_i', c = w^2 (aw/pw) or w (fw), and for each
    kernel lag kw(tau) * sum w_t w_s (u_t u_s' + u_s u_t') */
 static ST_retcode omega_hetero(const civ_omega *om, const ST_double *E, ST_int K,
-                               const ST_double *Z, ST_int L, ST_double sign, ST_double *S)
+                               const ST_double *Z, ST_int L, ST_double sign,
+                               const ST_double *mc, ST_double *S)
 {
     ST_int N = om->N, D = K * L;
     const ST_double *w = om->w;
     size_t DD = (size_t)D * D;
-    int nt = ctools_get_openmp_threads();
+    /* Threads' partial sums are added in thread order, so the last bits
+       depend on their number. A bootstrap replicate (om->mult) already runs
+       on a worker of the replicate scheduler: it sums serially, so that its
+       S does not depend on the scheduling (and opens no nested team). */
+    int nt = om->mult ? 1 : ctools_get_openmp_threads();
     if (nt < 1) nt = 1;
     ST_int maxlag = om->kernel > 0 ? om->max_lag : 0;
 
@@ -298,7 +356,8 @@ static ST_retcode omega_hetero(const civ_omega *om, const ST_double *E, ST_int K
         for (ST_int i = 0; i < N; i++) {
             ST_double c = 1.0;
             if (w) c = (om->wtype == 2) ? w[i] : w[i] * w[i];
-            moment_row(E, K, Z, L, N, i, u);
+            if (om->mult && w && om->wtype != 2) c /= om->mult[i];
+            moment_row(E, K, Z, L, N, i, mc, u);
             for (ST_int b = 0; b < D; b++) {
                 ST_double cb = c * u[b];
                 ST_double *Sb = Sl + (size_t)b * D;
@@ -325,8 +384,8 @@ static ST_retcode omega_hetero(const civ_omega *om, const ST_double *E, ST_int K
             pair_begin(&it, om, tau);
             while (pair_next(&it, &now, &lagobs)) {
                 ST_double wv = kw * (w ? w[now] * w[lagobs] : 1.0);
-                moment_row(E, K, Z, L, N, now, u);
-                moment_row(E, K, Z, L, N, lagobs, v);
+                moment_row(E, K, Z, L, N, now, mc, u);
+                moment_row(E, K, Z, L, N, lagobs, mc, v);
                 for (ST_int b = 0; b < D; b++) {
                     ST_double *Sb = Sl + (size_t)b * D;
                     ST_double vb = wv * v[b], ub = wv * u[b];
@@ -343,33 +402,126 @@ static ST_retcode omega_hetero(const civ_omega *om, const ST_double *E, ST_int K
     return 0;
 }
 
+/* Eigen-decomposition of the symmetric n x n A (column-major) by cyclic
+   Jacobi sweeps: eigenvalues in ev, eigenvectors in the columns of Q.
+   Returns 0, or -1 on allocation failure. */
+ST_int civ_sym_eigvec(const ST_double *A, ST_int n, ST_double *ev, ST_double *Q)
+{
+    ST_double *D = (ST_double *)malloc((size_t)n * n * sizeof(ST_double));
+    if (!D) return -1;
+    memcpy(D, A, (size_t)n * n * sizeof(ST_double));
+    memset(Q, 0, (size_t)n * n * sizeof(ST_double));
+    for (ST_int i = 0; i < n; i++) Q[(size_t)i * n + i] = 1.0;
+    for (ST_int sweep = 0; sweep < 100; sweep++) {
+        ST_double off = 0.0, diag = 0.0;
+        for (ST_int j = 0; j < n; j++)
+            for (ST_int i = 0; i < n; i++) {
+                ST_double a = D[(size_t)j * n + i];
+                if (i == j) diag += a * a; else off += a * a;
+            }
+        if (off <= 1e-30 * diag || off == 0.0) break;
+        for (ST_int p = 0; p < n - 1; p++) {
+            for (ST_int q = p + 1; q < n; q++) {
+                ST_double apq = D[(size_t)q * n + p];
+                if (apq == 0.0) continue;
+                ST_double app = D[(size_t)p * n + p], aqq = D[(size_t)q * n + q];
+                ST_double theta = (aqq - app) / (2.0 * apq);
+                ST_double t = (theta >= 0.0 ? 1.0 : -1.0) / (fabs(theta) + sqrt(theta * theta + 1.0));
+                ST_double c = 1.0 / sqrt(t * t + 1.0), s = t * c;
+                for (ST_int k = 0; k < n; k++) {
+                    ST_double dkp = D[(size_t)p * n + k], dkq = D[(size_t)q * n + k];
+                    D[(size_t)p * n + k] = c * dkp - s * dkq;
+                    D[(size_t)q * n + k] = s * dkp + c * dkq;
+                }
+                for (ST_int k = 0; k < n; k++) {
+                    ST_double dpk = D[(size_t)k * n + p], dqk = D[(size_t)k * n + q];
+                    D[(size_t)k * n + p] = c * dpk - s * dqk;
+                    D[(size_t)k * n + q] = s * dpk + c * dqk;
+                }
+                for (ST_int k = 0; k < n; k++) {
+                    ST_double vkp = Q[(size_t)p * n + k], vkq = Q[(size_t)q * n + k];
+                    Q[(size_t)p * n + k] = c * vkp - s * vkq;
+                    Q[(size_t)q * n + k] = s * vkp + c * vkq;
+                }
+            }
+        }
+    }
+    for (ST_int i = 0; i < n; i++) ev[i] = D[(size_t)i * n + i];
+    free(D);
+    return 0;
+}
+
+/* ivreg2's psd0 / psda: S = Q max(L, 0) Q' or Q |L| Q' (D x D) */
+static ST_retcode omega_make_psd(ST_double *S, ST_int D, ST_int psd)
+{
+    if (D <= 0) return 0;
+    ST_double *ev = (ST_double *)malloc((size_t)D * sizeof(ST_double));
+    ST_double *Q = (ST_double *)malloc((size_t)D * D * sizeof(ST_double));
+    if (!ev || !Q || civ_sym_eigvec(S, D, ev, Q) != 0) { free(ev); free(Q); return 920; }
+    for (ST_int k = 0; k < D; k++) {
+        if (ev[k] < 0.0) ev[k] = (psd == 2) ? -ev[k] : 0.0;
+    }
+    for (ST_int j = 0; j < D; j++)
+        for (ST_int i = 0; i <= j; i++) {
+            ST_double s = 0.0;
+            for (ST_int k = 0; k < D; k++) s += Q[(size_t)k * D + i] * ev[k] * Q[(size_t)k * D + j];
+            S[(size_t)j * D + i] = s;
+            S[(size_t)i * D + j] = s;
+        }
+    free(ev); free(Q);
+    return 0;
+}
+
+static ST_retcode omega_build_raw(const civ_omega *om, const ST_double *E, ST_int K,
+                                  const ST_double *Z, ST_int L, ST_double *S);
+
 ST_retcode civ_omega_build(const civ_omega *om, const ST_double *E, ST_int K,
                            const ST_double *Z, ST_int L, ST_double *S)
+{
+    ST_retcode rc = omega_build_raw(om, E, K, Z, L, S);
+    if (!rc && om->psd) rc = omega_make_psd(S, K * L, om->psd);
+    return rc;
+}
+
+static ST_retcode omega_build_raw(const civ_omega *om, const ST_double *E, ST_int K,
+                                  const ST_double *Z, ST_int L, ST_double *S)
 {
     ST_int N = om->N, D = K * L;
     const ST_double *w = om->w;
     size_t DD = (size_t)D * D;
     memset(S, 0, DD * sizeof(ST_double));
 
-    if (om->kind == CIV_OMEGA_CLUSTER)
-        return omega_groups(om, E, K, Z, L, om->cl1, om->ncl1, 0, 1.0, S);
+    /* centering applies to every non-homoskedastic form */
+    ST_double *mc = NULL;
+    if (om->center && om->kind != CIV_OMEGA_IID && omega_center(om, E, K, Z, L, &mc))
+        return 920;
+    if (om->kind == CIV_OMEGA_CLUSTER) {
+        ST_retcode rc = omega_groups(om, E, K, Z, L, om->cl1, om->ncl1, 0, 1.0, mc, S);
+        free(mc);
+        return rc;
+    }
     if (om->kind == CIV_OMEGA_TWOWAY) {
-        ST_retcode rc = omega_groups(om, E, K, Z, L, om->cl1, om->ncl1, 0, 1.0, S);
+        ST_retcode rc = omega_groups(om, E, K, Z, L, om->cl1, om->ncl1, 0, 1.0, mc, S);
         if (om->kernel > 0) {
             /* ivreg2's two-way clustering on panel and time with a kernel:
                panel clusters + Driscoll-Kraay over the periods - HAC */
-            if (!rc) rc = omega_groups(om, E, K, Z, L, NULL, om->tmax_idx + 1, 1, 1.0, S);
-            if (!rc) rc = omega_hetero(om, E, K, Z, L, -1.0, S);
+            if (!rc) rc = omega_groups(om, E, K, Z, L, NULL, om->tmax_idx + 1, 1, 1.0, mc, S);
+            if (!rc) rc = omega_hetero(om, E, K, Z, L, -1.0, mc, S);
         } else {
-            if (!rc) rc = omega_groups(om, E, K, Z, L, om->cl2, om->ncl2, 0, 1.0, S);
-            if (!rc) rc = omega_groups(om, E, K, Z, L, om->cl12, om->ncl12, 0, -1.0, S);
+            if (!rc) rc = omega_groups(om, E, K, Z, L, om->cl2, om->ncl2, 0, 1.0, mc, S);
+            if (!rc) rc = omega_groups(om, E, K, Z, L, om->cl12, om->ncl12, 0, -1.0, mc, S);
         }
+        free(mc);
         return rc;
     }
-    if (om->kind == CIV_OMEGA_DKRAAY)
-        return omega_groups(om, E, K, Z, L, NULL, om->tmax_idx + 1, om->kernel > 0, 1.0, S);
+    if (om->kind == CIV_OMEGA_DKRAAY) {
+        ST_retcode rc = omega_groups(om, E, K, Z, L, NULL, om->tmax_idx + 1, om->kernel > 0, 1.0, mc, S);
+        free(mc);
+        return rc;
+    }
 
-    int nt = ctools_get_openmp_threads();
+    /* serial in a bootstrap replicate, as in omega_hetero */
+    int nt = om->mult ? 1 : ctools_get_openmp_threads();
     if (nt < 1) nt = 1;
     ST_int maxlag = om->kernel > 0 ? om->max_lag : 0;
 
@@ -431,7 +583,9 @@ ST_retcode civ_omega_build(const civ_omega *om, const ST_double *E, ST_int K,
         return 0;
     }
 
-    return omega_hetero(om, E, K, Z, L, 1.0, S);
+    ST_retcode rc = omega_hetero(om, E, K, Z, L, 1.0, mc, S);
+    free(mc);
+    return rc;
 }
 
 ST_int civ_sym_inverse(const ST_double *A, ST_int n, ST_double *inv)
@@ -488,4 +642,63 @@ ST_int civ_sym_solve(const ST_double *A, ST_int n, const ST_double *b, ST_int nr
     memcpy(x, t, (size_t)n * nrhs * sizeof(ST_double));
     free(inv); free(t);
     return 0;
+}
+
+ST_double civ_auto_bandwidth(const ST_double *e, const ST_double *zsum, ST_int N,
+                             const civreghdfe_ts *ts, ST_double tobs, ST_int kernel)
+{
+    /* Newey and West (1994), with ivreg2's constants: the exponent of the
+       lag truncation mstar, the kernel's characteristic exponent q and
+       c_gamma (Bartlett 2/9, 1, 1.1447; Parzen 4/25, 2, 2.6614; Quadratic
+       Spectral 2/25, 2, 1.3221) */
+    ST_double expo = 2.0 / 9.0, q = 1.0, cgamma = 1.1447;
+    if (kernel == CIVREGHDFE_KERNEL_PARZEN) { expo = 4.0 / 25.0; q = 2.0; cgamma = 2.6614; }
+    else if (kernel == CIVREGHDFE_KERNEL_QS) { expo = 2.0 / 25.0; q = 2.0; cgamma = 1.3221; }
+    else if (kernel != CIVREGHDFE_KERNEL_BARTLETT) return -1.0;
+    if (!ts || !ts->tidx || N <= 0) return -1.0;
+    ST_int mstar = (ST_int)trunc(20.0 * pow(tobs / 100.0, expo));
+    if (mstar < 0) mstar = 0;
+
+    /* f_t = e_t * sum of the instruments; observation at each time index
+       (a single time series: ivreg2 refuses panel data) */
+    ST_int T = ts->tmax_idx + 1;
+    ST_int *at = (ST_int *)malloc((size_t)T * sizeof(ST_int));
+    ST_double *sig = (ST_double *)calloc((size_t)mstar + 1, sizeof(ST_double));
+    if (!at || !sig) { free(at); free(sig); return -1.0; }
+    for (ST_int t = 0; t < T; t++) at[t] = -1;
+    for (ST_int i = 0; i < N; i++) {
+        ST_int t = ts->tidx[i];
+        if (t >= 0 && t < T) at[t] = i;
+    }
+    /* autocovariances of f at lags 0..mstar over the observed pairs, / N */
+    for (ST_int j = 0; j <= mstar; j++) {
+        ST_double s = 0.0;
+        for (ST_int i = 0; i < N; i++) {
+            ST_int t = ts->tidx[i] - j;
+            if (t < 0) continue;
+            ST_int l = at[t];
+            if (l < 0) continue;
+            s += (e[i] * zsum[i]) * (e[l] * zsum[l]);
+        }
+        sig[j] = s / (ST_double)N;
+    }
+    ST_double shatq = 0.0, shat0 = sig[0];
+    for (ST_int j = 1; j <= mstar; j++) {
+        shatq += 2.0 * sig[j] * pow((ST_double)j, q);
+        shat0 += 2.0 * sig[j];
+    }
+    free(at); free(sig);
+    ST_double expon = 1.0 / (2.0 * q + 1.0);
+    ST_double ratio = shatq / shat0;
+    ST_double gammahat = cgamma * pow(ratio * ratio, expon);
+    ST_double m = gammahat * pow(tobs, expon);
+    ST_double optlag;
+    if (kernel == CIVREGHDFE_KERNEL_QS) optlag = m < mstar ? m : (ST_double)mstar;
+    else optlag = trunc(m) < mstar ? trunc(m) : (ST_double)mstar;
+    if (!isfinite(optlag)) return -1.0;
+    /* ivreg2's bandwidth is the lag plus one, passed on as a string with
+       Stata's default %9.0g format (7 significant digits) */
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%.7g", optlag + 1.0);
+    return strtod(buf, NULL);
 }

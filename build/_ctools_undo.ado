@@ -1,4 +1,4 @@
-*! version 1.2.4 20261103 github.com/mdroste/stata-ctools
+*! version 1.2.6 20261111 github.com/mdroste/stata-ctools
 *! Exact undo of a ctools wrapper's changes without a dataset snapshot.
 * The wrappers that use it only add observations and variables at the end of
 * the dataset, add value labels and _dta characteristics or notes, change
@@ -33,8 +33,11 @@ program define _ctools_undo_record
     global `p'k = c(k)
     global `p'sortedby : sortedby
     global `p'changed = c(changed)
+    tempname caller_r
+    _return hold `caller_r'
     quietly label dir
     global `p'labels `r(names)'
+    _return restore `caller_r'
     local names : char _dta[]
     global `p'dn `names'
     local i = 0

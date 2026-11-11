@@ -87,18 +87,17 @@ int cimport_convert_to_utf8(const char *data, size_t size, CImportEncoding encod
                             int bom_skip, char **out_data, size_t *out_size);
 /* Explicit charset conversion through system iconv/code pages. Returns Stata's
    unsupported-encoding code 198 or allocation code 920 on failure. */
+/* The Java charset a name or alias denotes (e.g. "ISO-8859-1" for latin1),
+   NULL if none; and the converter (iconv) name for it, else the name. */
+const char *cimport_java_charset(const char *name);
+const char *cimport_charset_converter(const char *name);
+
 int cimport_convert_named_to_utf8(const char *data, size_t size, const char *name,
                                  char **out_data, size_t *out_size);
 
-/*
- * SIMD-accelerated check if all bytes in data are ASCII (< 0x80).
- * Uses OR-reduction with SIMD vectors for high throughput.
- * Returns early on first non-ASCII byte found.
- *
- * @param data      Data buffer
- * @param size      Size of data buffer
- * @return          true if all bytes are ASCII, false otherwise
- */
-bool cimport_is_ascii_simd(const char *data, size_t size);
+/* True when data is well-formed UTF-8 (RFC 3629), which the UTF-8 converter
+   would return unchanged apart from a leading BOM; *has_high reports whether
+   a byte above 0x7f was seen before the scan ended. */
+bool cimport_scan_utf8(const char *data, size_t size, bool *has_high);
 
 #endif /* CIMPORT_ENCODING_H */

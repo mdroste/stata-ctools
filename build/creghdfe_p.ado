@@ -1,4 +1,4 @@
-*! version 1.2.4 20261103 github.com/mdroste/stata-ctools
+*! version 1.2.6 20261111 github.com/mdroste/stata-ctools
 
 program define creghdfe_p, rclass
     version 14.1
@@ -23,7 +23,9 @@ program define creghdfe_p, rclass
         local xb "xb"
     }
 
-    local fixed_effects "`e(absorb)'"
+    * As reghdfe labels d and xbd: the absorbed effects, or _cons without
+    * absorb()
+    local fixed_effects "`e(absvars)'"
 
     * Except for xb and stdp, we need the previously computed residuals
     if "`xb'" == "" & "`stdp'" == "" {
@@ -67,7 +69,6 @@ program define creghdfe_p, rclass
         tempvar xbvar
         PredictXB `xbvar' `if' `in', xb
         gen double `varlist' = `e(depvar)' - `xbvar' `if' `in'
-        label var `varlist' "d + e"
     }
     else {
         error 100

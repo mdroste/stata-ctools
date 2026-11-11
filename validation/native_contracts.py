@@ -27,6 +27,62 @@ from validation.native import (
 )
 
 
+def test_harness_guards_native():
+    """C assertions and recoverable UBSan findings must make tests fail."""
+    with tempfile.TemporaryDirectory(prefix="ctools-harness-guards-") as tmp:
+        folder = Path(tmp)
+        source = folder / "guard.c"
+        source.write_text(
+            '#include <assert.h>\n#include <limits.h>\n#include <stdio.h>\n'
+            'int main(int argc, char **argv) {\n'
+            '  if (argc > 1 && argv[1][0] == \'a\') assert(0);\n'
+            '  if (argc > 1 && argv[1][0] == \'u\') {\n'
+            '    volatile int top = INT_MAX, one = 1;\n'
+            '    volatile int overflow = top + one; (void)overflow;\n'
+            '  }\n  puts("REACHED_END"); return 0;\n}\n',
+            encoding="utf-8",
+        )
+        binary = folder / ("guard.exe" if os.name == "nt" else "guard")
+        compile_native(
+            [CC, "-std=c11", "-O1", "-DNDEBUG", "-fsanitize=undefined",
+             str(source), "-o", str(binary)],
+            check=True,
+        )
+        env = dict(os.environ, UBSAN_OPTIONS="halt_on_error=0")
+        good = subprocess.run([str(binary)], capture_output=True, text=True, env=env, timeout=30)
+        assert good.returncode == 0 and "REACHED_END" in good.stdout, good
+        for mutation in ("assert", "undefined"):
+            bad = subprocess.run(
+                [str(binary), mutation], capture_output=True, text=True, env=env, timeout=30
+            )
+            assert bad.returncode != 0 and "REACHED_END" not in bad.stdout, (mutation, bad)
+    print("PASS native assertion and sanitizer negative controls")
+
+
+def test_bootstrap_engine_native():
+    """Bootstrap draws (bsample fixtures from Stata), scheduling and summaries."""
+    with tempfile.TemporaryDirectory(prefix="ctools-boot-") as tmp:
+        run_test(Path(tmp), "boot_engine", harness("boot_engine"), ["hdfe/hdfe_boot.c"])
+        # The scheduler's parallel path, where OpenMP is available
+        if platform.system() != "Windows":
+            run_test(
+                Path(tmp), "boot_engine_omp", harness("boot_engine"), ["hdfe/hdfe_boot.c"],
+                openmp=True,
+            )
+
+
+def test_wild_engine_native():
+    """Wild-bootstrap statistics against a direct computation, enumeration, inversion."""
+    with tempfile.TemporaryDirectory(prefix="ctools-wild-") as tmp:
+        run_test(Path(tmp), "wild_engine", harness("wild_engine"), ["hdfe/hdfe_wild.c"])
+        # The replicate loops' parallel paths, where OpenMP is available
+        if platform.system() != "Windows":
+            run_test(
+                Path(tmp), "wild_engine_omp", harness("wild_engine"), ["hdfe/hdfe_wild.c"],
+                openmp=True,
+            )
+
+
 def test_bigdata_native():
     SOURCE = SPI + harness("bigdata_native_1.c")
     with tempfile.TemporaryDirectory(prefix="ctools-bigdata-native-") as tmp:
@@ -179,7 +235,7 @@ def test_cqreg_native(argv=()):
         sources = [unit(output.parent, "cqreg_native")]
         counted_types = output.with_suffix(".c")
         counted_types.write_text(
-            f"""#include <stdlib.h>\nextern int cqreg_record_alloc(void **, size_t, size_t);\n#define posix_memalign cqreg_record_alloc\n#include "{directory / 'cqreg_types.c'}"\n"""
+            f"""#include <stdlib.h>\nextern int cqreg_record_alloc(void **, size_t, size_t);\n#define posix_memalign cqreg_record_alloc\n#include "{(directory / 'cqreg_types.c').as_posix()}"\n"""
         )
         sources += [counted_types]
         sources += [directory / ("cqreg_" + s + ".c") for s in ("linalg", "blas", "sparsity")]
@@ -558,7 +614,7 @@ def test_refactor_boundaries_native():
         directory = Path(tmp)
         for header in headers:
             source = directory / "header.c"
-            source.write_text(f'#include "{header}"\nint main(void) {{ return 0; }}\n')
+            source.write_text(f'#include "{Path(header).as_posix()}"\nint main(void) {{ return 0; }}\n')
             system = "APPLEMAC" if platform.system() == "Darwin" else "STUNIX"
             subprocess.run(
                 [

@@ -34,6 +34,15 @@ typedef struct {
 
 #define CIMPORT_FIELD_QUOTED_FLAG 0x80000000u
 #define CIMPORT_FIELD_LENGTH(f) ((f).length & 0x7FFFFFFFu)
+/* Longest field the 31-bit length holds, with room for len + 1 in an int.
+ * cimport_parse_row_fast returns CIMPORT_FIELD_TOO_LONG for a longer one
+ * (an unclosed strict quote early in a large file, say), which no Stata
+ * string can hold anyway, rather than wrap the length into the quote flag.
+ * Settable at build time, as for differential tests. */
+#ifndef CIMPORT_FIELD_MAX_LENGTH
+#define CIMPORT_FIELD_MAX_LENGTH 0x7FFFFFF0u
+#endif
+#define CIMPORT_FIELD_TOO_LONG (-2)
 
 /* Parsed row. Fields are contiguous in the file (one delimiter apart), so
  * the row keeps the first field's offset and each field's length (with the
@@ -122,7 +131,7 @@ const char *cimport_find_next_row(const char *ptr, const char *end, char quote, 
  *                           STRICT: \n inside quotes is part of field)
  * @param next_row_out       If non-NULL, set to start of next row (past \n) or end
  * @param had_unmatched_quote If non-NULL, set to true if row ended inside quotes
- * @return                   Number of fields parsed
+ * @return                   Number of fields parsed, or CIMPORT_FIELD_TOO_LONG
  */
 int cimport_parse_row_fast(const char *start, const char *end, char delim, char quote,
                            CImportFieldRef *fields, int max_fields, const char *file_base,

@@ -1,9 +1,13 @@
-*! version 1.2.4 20261103 github.com/mdroste/stata-ctools
+*! version 1.2.6 20261111 github.com/mdroste/stata-ctools
 
 * Mata helpers for optimized operations
 capture mata: mata drop _cmerge_shared_flags()
 capture mata: mata drop _cmerge_chars_record()
 capture mata: mata drop _cmerge_chars_restore()
+capture mata: mata drop _cmerge_any_alias()
+capture mata: mata drop _cmerge_notes_append()
+capture mata: mata drop _cmerge_dta_meta_save()
+capture mata: mata drop _cmerge_dta_meta_restore()
 mata:
 void _cmerge_shared_flags(string rowvector keepusing, string rowvector master_vars)
 {
@@ -65,9 +69,134 @@ void _cmerge_chars_restore(string scalar ev, string scalar p)
         }
     }
 }
+
+/* Append the using notes of shared variable v, kept in locals <prefix>1 ..
+   <prefix>n, as merge does: a note whose text the master's own notes of v
+   already hold is left out (repeats among the using notes are kept) */
+void _cmerge_notes_append(string scalar v, string scalar prefix, real scalar n)
+{
+    real scalar n0, k, j, h
+    string colvector have
+    string scalar note
+
+    n0 = strtoreal(st_global(v + "[note0]"))
+    if (n0 >= . | n0 < 0 | n0 != trunc(n0)) n0 = 0
+    have = J(n0, 1, "")
+    for (h = 1; h <= n0; h++) have[h] = st_global(v + "[note" + strofreal(h) + "]")
+    k = n0
+    for (j = 1; j <= n; j++) {
+        note = st_local(prefix + strofreal(j))
+        if (anyof(have, note)) continue
+        k++
+        st_global(v + "[note" + strofreal(k) + "]", note)
+    }
+    if (k != n0) st_global(v + "[note0]", strofreal(k))
+}
+
+/* 1 in local __cm_alias when a variable is a frame alias (Stata 18), which a
+   .dta cannot hold */
+void _cmerge_any_alias()
+{
+    real scalar j, any
+
+    any = 0
+    for (j = 1; j <= st_nvar() & !any; j++) any = st_isalias(st_varname(j))
+    st_local("__cm_alias", strofreal(any))
+}
+
+/* Option tempdta: what use replaces besides the data. The display formats,
+   variable labels, value-label names, characteristics (notes included) and
+   value-label definitions of the dataset in memory, kept in externals for
+   _cmerge_dta_meta_restore */
+void _cmerge_dta_meta_save()
+{
+    real scalar k, j, i
+    string matrix V, C
+    string colvector cn, labs, text
+    string scalar owner
+    real colvector values
+    transmorphic A
+    pointer() scalar p
+
+    k = st_nvar()
+    V = J(k, 4, "")
+    for (j = 1; j <= k; j++) {
+        V[j, 1] = st_varname(j)
+        V[j, 2] = st_varformat(j)
+        V[j, 3] = st_varlabel(j)
+        V[j, 4] = st_varvaluelabel(j)
+    }
+    C = J(0, 3, "")
+    for (j = 0; j <= k; j++) {
+        owner = j ? V[j, 1] : "_dta"
+        cn = st_dir("char", owner, "*")
+        for (i = 1; i <= rows(cn); i++) {
+            C = C \ (owner, cn[i], st_global(owner + "[" + cn[i] + "]"))
+        }
+    }
+    stata("quietly label dir")
+    labs = tokens(st_global("r(names)"))'
+    A = asarray_create()
+    for (i = 1; i <= rows(labs); i++) {
+        st_vlload(labs[i], values, text)
+        asarray(A, labs[i], (strofreal(values, "%21.0g"), text))
+    }
+    rmexternal("__cmerge_meta_V")
+    rmexternal("__cmerge_meta_C")
+    rmexternal("__cmerge_meta_L")
+    rmexternal("__cmerge_meta_A")
+    p = crexternal("__cmerge_meta_V")
+    *p = V
+    p = crexternal("__cmerge_meta_C")
+    *p = C
+    p = crexternal("__cmerge_meta_L")
+    *p = labs
+    p = crexternal("__cmerge_meta_A")
+    *p = A
+}
+
+/* Put back what _cmerge_dta_meta_save kept, after use loaded the merged data
+   (the same variables, in the same order) */
+void _cmerge_dta_meta_restore()
+{
+    real scalar j, i
+    string matrix V, C, M
+    string colvector labs
+    transmorphic A
+
+    V = *findexternal("__cmerge_meta_V")
+    C = *findexternal("__cmerge_meta_C")
+    labs = *findexternal("__cmerge_meta_L")
+    A = *findexternal("__cmerge_meta_A")
+    if (rows(V) != st_nvar()) _error(3200, "cmerge: the merged data do not match")
+    for (i = 1; i <= rows(labs); i++) {
+        M = asarray(A, labs[i])
+        if (rows(M)) st_vlmodify(labs[i], strtoreal(M[., 1]), M[., 2])
+    }
+    for (j = 1; j <= rows(V); j++) {
+        if (st_varname(j) != V[j, 1]) _error(3200, "cmerge: the merged data do not match")
+        st_varformat(j, V[j, 2])
+        st_varlabel(j, V[j, 3])
+        if (V[j, 4] != "") st_varvaluelabel(j, V[j, 4])
+    }
+    for (i = 1; i <= rows(C); i++) st_global(C[i, 1] + "[" + C[i, 2] + "]", C[i, 3])
+    rmexternal("__cmerge_meta_V")
+    rmexternal("__cmerge_meta_C")
+    rmexternal("__cmerge_meta_L")
+    rmexternal("__cmerge_meta_A")
+}
 end
 
 program define cmerge, rclass
+    * The pre-11 syntax (merge [varlist] using f1 [f2 ...], unique ...) has no
+    * match type: merge hands it to merge_10, its own implementation of that
+    * syntax, and so does cmerge, through merge, unchanged.
+    gettoken __cm_mtype : 0, parse(" ,")
+    if !strpos(`"`__cm_mtype'"', ":") & `"`__cm_mtype'"' != "" {
+        version `=_caller()': merge `0'
+        return add
+        exit
+    }
     * merge's behavior depends on the caller's version (strL fallback below)
     global CTOOLS_cmerge_caller = _caller()
     global CTOOLS_cmerge_assert_failed
@@ -278,6 +407,7 @@ program define _cmerge_impl, rclass
 
     * Parse merge type and key variables
     gettoken merge_type 0 : 0, parse(" ")
+    local __cm_orig_type "`merge_type'"
     * merge's spellings with n for m
     if "`merge_type'" == "1:n" local merge_type "1:m"
     else if "`merge_type'" == "n:1" local merge_type "m:1"
@@ -298,9 +428,18 @@ program define _cmerge_impl, rclass
         local merge_code = 3
     }
     else {
-        di as error "cmerge: invalid merge type `merge_type'"
-        di as error "Must be one of: 1:1, m:1, 1:m, m:m"
-        exit 111
+        * merge's message and return code
+        di as smcl as error "{bf:merge `merge_type'}:  invalid merge type"
+        di as smcl as error "{p 4 4 2}"
+        if "`merge_type'" == "_n" {
+            di as smcl as error "for a sequential merge,specify {bf:1:1 _n}"
+        }
+        else {
+            di as smcl as error "merge types are {bf:1:1}, {bf:1:m},"
+            di as smcl as error "{bf:m:1}, or {bf:m:m}"
+        }
+        di as smcl as error "{p_end}"
+        exit 198
     }
 
     * Check for _n merge (merge by observation number)
@@ -309,7 +448,15 @@ program define _cmerge_impl, rclass
     if "`first_token'" == "_n" {
         * Validate: _n only valid with 1:1 merge
         if "`merge_type'" != "1:1" {
-            di as error "cmerge: _n may only be used with 1:1 merge"
+            * merge's message
+            local __cm_orig = cond("`__cm_orig_type'" != "", "`__cm_orig_type'", "`merge_type'")
+            di as smcl as err "{bf:`__cm_orig' _n} invalid"
+            di as smcl as err "{p 4 4 2}"
+            di as smcl as err ///
+            "the syntax for a sequential merge is {bf: merge 1:1 _n} ...{break}"
+            di as smcl as err "the syntax for a `__cm_orig' match merge is"
+            di as smcl as err "{bf:merge `__cm_orig'} {it:varlist} ..."
+            di as smcl as err "{p_end}"
             exit 198
         }
         local merge_by_n = 1
@@ -338,8 +485,15 @@ program define _cmerge_impl, rclass
             THReads(integer 0) ///
             SNAPshot ///
             FAST ///
+            TEMPdta ///
+            DEBUG ///
             ]
 
+        * As merge: a sequential merge needs a master with variables
+        if c(k) == 0 {
+            di as error "no dataset in use"
+            exit 3
+        }
         * No key variables for _n merge
         local nolabel = cond("`labels'" != "", "nolabel", "")
         local keyvars ""
@@ -365,6 +519,8 @@ program define _cmerge_impl, rclass
             THReads(integer 0) ///
             SNAPshot ///
             FAST ///
+            TEMPdta ///
+            DEBUG ///
             ]
 
         * Validate key variables exist in master
@@ -465,12 +621,24 @@ program define _cmerge_impl, rclass
         local master_storage_types `master_storage_types' `storage'
     }
 
-    * The plugin cannot write strL values: merges involving strL variables
-    * run through merge itself (checked before any data are changed).
+    * The plugin cannot write strL values through the SPI: merges involving
+    * strL variables run through merge itself (checked before any data are
+    * changed), or with option tempdta through a temporary .dta that the
+    * plugin writes and use loads. A frame alias variable (Stata 18) cannot go
+    * in a .dta.
+    local __dta 0
+    local __dta_ok = "`tempdta'" != ""
+    if `__dta_ok' & c(stata_version) >= 18 & c(k) > 0 {
+        mata: _cmerge_any_alias()
+        if `__cm_alias' local __dta_ok 0
+    }
     if `: list posof "strL" in master_storage_types' {
-        _cmerge_native `"`__cmdline'"'
-        return add
-        exit
+        if !`__dta_ok' {
+            _cmerge_native `"`__cmdline'"'
+            return add
+            exit
+        }
+        local __dta 1
     }
 
     * Allow empty master - will just add using-only observations
@@ -577,7 +745,7 @@ program define _cmerge_impl, rclass
     local __use_frames = 0
     tempname __using_frame
     local __master_frame ""
-    if c(stata_version) >= 16 {
+    if c(stata_version) >= 16 & "$CTOOLS_cmerge_noframes" != "1" {
         local __master_frame "`c(frame)'"
         capture frame create `__using_frame'
         if _rc == 0 {
@@ -669,7 +837,7 @@ program define _cmerge_impl, rclass
     foreach var of varlist _all {
         if "`: type `var''" == "strL" local __using_strl = 1
     }
-    if `__using_strl' {
+    if `__using_strl' & !`__dta_ok' {
         if `__use_frames' {
             frame change `__master_frame'
             frame drop `__using_frame'
@@ -679,6 +847,7 @@ program define _cmerge_impl, rclass
         return add
         exit
     }
+    if `__using_strl' local __dta 1
 
     * Build list of variables to keep: keys + keepusing (no keys for _n merge)
     local using_keep_vars "`keyvars'"
@@ -729,9 +898,16 @@ program define _cmerge_impl, rclass
     * while both input schemas are available. Recast master only after restore.
     local promote_names ""
     local promote_types ""
+    * merge's notes on the master's storage types, shown before the merge:
+    * first the force conversions, then the widened variables
+    local __cm_force_notes ""
+    local __cm_promote_notes ""
     local numeric_types "byte int long float double"
     local schema_vars `keyvars' `keepusing_names'
     local schema_vars : list uniq schema_vars
+    * In the using data's order, the order of merge's notes below
+    unab __cm_uorder : _all
+    local schema_vars : list __cm_uorder & schema_vars
     foreach var of local schema_vars {
         local master_pos : list posof "`var'" in master_varlist
         if `master_pos' {
@@ -767,6 +943,7 @@ program define _cmerge_impl, rclass
                 drop `var'
                 if `mstr' quietly generate `mt' `var' = ""
                 else quietly generate `mt' `var' = .
+                local __cm_force_notes `__cm_force_notes' `var' `ut' `mt'
                 local ut "`mt'"
             }
             local target "`mt'"
@@ -788,8 +965,21 @@ program define _cmerge_impl, rclass
             if "`target'" != "`mt'" {
                 local promote_names `promote_names' `var'
                 local promote_types `promote_types' `target'
+                local __cm_promote_notes `__cm_promote_notes' `var' `mt' `target'
             }
         }
+    }
+    while "`__cm_force_notes'" != "" {
+        gettoken __v __cm_force_notes : __cm_force_notes
+        gettoken __from __cm_force_notes : __cm_force_notes
+        gettoken __to __cm_force_notes : __cm_force_notes
+        di as txt "(note: variable `__v' was `__from' in the using data, but will be `__to' now)"
+    }
+    while "`__cm_promote_notes'" != "" {
+        gettoken __v __cm_promote_notes : __cm_promote_notes
+        gettoken __from __cm_promote_notes : __cm_promote_notes
+        gettoken __to __cm_promote_notes : __cm_promote_notes
+        di as txt "(variable `__v' was `__from', now `__to' to accommodate using data's values)"
     }
     * A force conversion may have changed the using-side storage metadata.
     local keepusing_types ""
@@ -1075,6 +1265,7 @@ program define _cmerge_impl, rclass
     if `merge_by_n' {
         local plugin_args "`plugin_args' merge_by_n"
     }
+    if `__dta' local plugin_args "`plugin_args' strl"
 
     * Build threads option string
     local threads_code ""
@@ -1094,6 +1285,11 @@ program define _cmerge_impl, rclass
     _ctools_strw `using_varlist'
 
     * Call plugin Phase 1 with reduced varlist (using_varlist already computed)
+    * debug, as merge: the command that performs the merge
+    if "`debug'" != "" {
+        di as txt _n "command is"
+        di `"plugin call ctools_plugin `using_varlist', "cmerge `threads_code' `plugin_args'""' _n
+    }
     capture noisily plugin call ctools_plugin `using_varlist', "cmerge `threads_code' `plugin_args'"
     local plugin_rc = _rc
 
@@ -1185,14 +1381,21 @@ program define _cmerge_impl, rclass
         * keepusing() loaded only the labels attached to the kept variables;
         * merge copies the using file's whole label set
         local __label_frame ""
+        local __label_reload 0
+        tempfile __label_subset
         if "`keepusing'" != "" & `__use_frames' {
             tempname __label_frame
             frame create `__label_frame'
-            capture frame `__label_frame': quietly use in 1 using `"`using'"', clear
+            capture frame `__label_frame': quietly use if 0 using `"`using'"', clear
             if _rc {
                 frame drop `__label_frame'
                 local __label_frame ""
             }
+        }
+        if "`keepusing'" != "" & !`__use_frames' {
+            quietly save `"`__label_subset'"'
+            quietly use if 0 using `"`using'"', clear
+            local __label_reload 1
         }
         if "`__label_frame'" != "" frame `__label_frame': quietly label dir
         else quietly label dir
@@ -1205,6 +1408,7 @@ program define _cmerge_impl, rclass
             else quietly label save `__new_labels' using `"`__using_labels'"', replace
         }
         if "`__label_frame'" != "" frame drop `__label_frame'
+        if `__label_reload' quietly use `"`__label_subset'"', clear
     }
     local __shared_i = 0
     local __shared_vars ""
@@ -1281,8 +1485,14 @@ program define _cmerge_impl, rclass
     if "`keep'" != "" local plan_args "`plan_args' hold_undo"
     if "`snapshot'`fast'" != "" local plan_args "`plan_args' nocopy"
     if `merge_by_n' local plan_args "`plan_args' merge_by_n"
+    if `__dta' local plan_args "`plan_args' nocopy"
     local __ctools_strw ""
     if `master_nvars' > 0 _ctools_strw `master_varlist'
+    * debug, as merge: the command that performs the merge
+    if "`debug'" != "" {
+        di as txt _n "command is"
+        di `"plugin call ctools_plugin `master_varlist', "cmerge `threads_code' `plan_args'""' _n
+    }
     capture noisily plugin call ctools_plugin `master_varlist', "cmerge `threads_code' `plan_args'"
     local plugin_rc = _rc
     if `plugin_rc' {
@@ -1326,14 +1536,7 @@ program define _cmerge_impl, rclass
             capture label values `v' `__sv_lbl_`i''
         }
         if `__sv_nn_`i'' > 0 {
-            local __n : char `v'[note0]
-            capture confirm integer number `__n'
-            if _rc local __n = 0
-            forvalues j = 1/`__sv_nn_`i'' {
-                local ++__n
-                char `v'[note`__n'] `"`macval(__sv_note_`i'_`j')'"'
-            }
-            char `v'[note0] `__n'
+            mata: _cmerge_notes_append("`v'", "__sv_note_`i'_", `__sv_nn_`i'')
         }
     }
 
@@ -1360,7 +1563,7 @@ program define _cmerge_impl, rclass
 
     * Expand the dataset to the planned output size
     local max_output = `__plan_N'
-    if `max_output' > _N {
+    if `max_output' > _N & !`__dta' {
         qui set obs `max_output'
     }
 
@@ -1406,6 +1609,24 @@ program define _cmerge_impl, rclass
     if `merge_by_n' {
         local plugin_args "`plugin_args' merge_by_n"
     }
+    * tempdta: the file, every variable's storage type and name, and where
+    * the sort variables are (an output in master order keeps the marker the
+    * data have now, as on the SPI path)
+    if `__dta' {
+        tempfile __cmerge_dta_path
+        local __cmerge_dta_types ""
+        local __cmerge_dta_names ""
+        foreach v of varlist _all {
+            local __cmerge_dta_types `__cmerge_dta_types' `: type `v''
+            local __cmerge_dta_names `__cmerge_dta_names' `v'
+        }
+        local __cmerge_dta_sort ""
+        local __cm_sortedby : sortedby
+        foreach v of local __cm_sortedby {
+            local __cmerge_dta_sort `__cmerge_dta_sort' `: list posof "`v'" in __cmerge_dta_names'
+        }
+        local plugin_args "`plugin_args' dta"
+    }
     if "$CTOOLS_cmerge_fault" == "schema" exit 1
     if "$CTOOLS_cmerge_fault" == "store" local plugin_args "`plugin_args' fault_store"
 
@@ -1422,6 +1643,11 @@ program define _cmerge_impl, rclass
     _ctools_strw `__all_phase2_vars'
 
     * Pass every current variable: SPI indices are relative to this varlist.
+    * debug, as merge: the command that performs the merge
+    if "`debug'" != "" {
+        di as txt _n "command is"
+        di `"plugin call ctools_plugin `__all_phase2_vars', "cmerge `threads_code' `plugin_args'""' _n
+    }
     capture noisily plugin call ctools_plugin `__all_phase2_vars', "cmerge `threads_code' `plugin_args'"
     local plugin_rc = _rc
 
@@ -1441,6 +1667,26 @@ program define _cmerge_impl, rclass
     * discards a Break pressed during a plugin call that returns 0, so a Break
     * can stop cmerge only between commands, as here.
     if "$CTOOLS_cmerge_fault" == "post" exit 1
+
+    * tempdta: the merged data replace the master in one step, use, with the
+    * formats, labels, characteristics and value labels put back as they are
+    * now. Until here a failure or Break leaves the master as it was; after
+    * it there is nothing to undo.
+    if `__dta' {
+        nobreak {
+            mata: _cmerge_dta_meta_save()
+            local __cm_dl : data label
+            mata: st_local("__cm_fn", st_global("S_FN")); st_local("__cm_fd", st_global("S_FNDATE"))
+            quietly use `"`__cmerge_dta_path'"', clear
+            capture erase `"`__cmerge_dta_path'"'
+            mata: _cmerge_dta_meta_restore()
+            if `"`__cm_dl'"' != "" label data `"`__cm_dl'"'
+            mata: st_global("S_FN", st_local("__cm_fn")); st_global("S_FNDATE", st_local("__cm_fd"))
+            macro drop CTOOLS_cmu_*
+        }
+    }
+    * Validation hook: an interruption after the merged data were used
+    if "$CTOOLS_cmerge_fault" == "dtaused" exit 1
 
     * Get merge results from scalars (with update, matched rows split into
     * 3 not updated, 4 missing updated, 5 nonmissing conflict)

@@ -303,6 +303,39 @@ esac
     print("PASS four platform builds abort on first compile failure and preserve old plugin")
 
 
+def build_depfile_paths():
+    """Drive-letter targets must not hide changed compiler prerequisites."""
+    from scripts.build_plugin import dependencies, dirty
+
+    with tempfile.TemporaryDirectory(prefix="ctools-depfile-") as tmp:
+        folder = Path(tmp)
+        depfile = folder / "unit.d"
+        source = folder / "unit.c"
+        fragment = folder / "commands.def"
+        obj = folder / "unit.o"
+        for path in (source, fragment, obj):
+            path.write_text("fixture")
+            os.utime(path, ns=(1_000_000_000, 1_000_000_000))
+        # GCC/Clang emit a drive colon in the -MT target on Windows. Test it
+        # on every host, together with continuations and escaped spaces.
+        for target in ("unit.o", r"G:\build\unit.o"):
+            paths = [source, fragment, folder / "header with spaces.h"]
+            paths[-1].write_text("fixture")
+            os.utime(paths[-1], ns=(1_000_000_000, 1_000_000_000))
+            words = [p.as_posix().replace(" ", r"\ ") for p in paths]
+            depfile.write_text(target + ": " + " \\\n ".join(words) + "\n")
+            assert dependencies(depfile) == paths
+            assert not dirty(obj, depfile, source)
+            os.utime(fragment, ns=(2_000_000_000, 2_000_000_000))
+            assert dirty(obj, depfile, source)
+            os.utime(fragment, ns=(1_000_000_000, 1_000_000_000))
+        fragment.unlink()
+        assert dirty(obj, depfile, source)
+        depfile.write_text("malformed depfile")
+        assert dirty(obj, depfile, source)
+    print("PASS depfile drive letters, spaces, continuations, changed/missing .def inputs")
+
+
 def build_incremental_builds():
     """Exercise real compiler depfiles, inventory changes, and atomic publication."""
     compiler = shutil.which(os.environ.get("CC", "clang"))

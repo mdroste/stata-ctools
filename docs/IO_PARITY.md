@@ -1,6 +1,6 @@
 # Import and export formats
 
-`cimport` and `cexport` read and write files entirely in C. They never call Stata's `import` or `export`, and they don't need Java. This page lists the supported formats, explains how each one is handled, and notes where ctools behaves differently from Stata.
+`cimport` and `cexport` read and write files entirely in C, and they don't need Java. The one exception is the online sources FRED and Haver, which `cimport` hands to Stata's own `import` commands. This page lists the supported formats, explains how each one is handled, and notes where ctools behaves differently from Stata.
 
 ## Supported formats
 
@@ -15,8 +15,10 @@
 | SAS XPORT v8 (`sasxport8`) | Yes | Yes |
 | SPSS (`spss`) | .sav and .zsav | .sav |
 | ESRI shapefiles (`shp`) | Yes | Yes |
+| Apache Parquet (`parquet`) | Yes | No |
+| FRED (`fred`), Haver (`haver`, `haverdirect`) | Through Stata's `import` | No |
 
-StataNow's `import parquet`, `import fred`, and `import haver` aren't supported. Commands like `odbc`, `jdbc`, `infile`, and `infix` are separate from `import` and have no ctools versions.
+Commands like `odbc`, `jdbc`, `infile`, and `infix` are separate from `import` and have no ctools versions. Stata has no `export parquet`.
 
 Metadata preservation depends on the file format and options. Statistical formats can carry variable and value labels and display formats; delimited text cannot preserve a Stata dataset's full metadata. Text longer than 2,045 bytes is stored as strL on import, and so are shapefile binary headers.
 
@@ -26,7 +28,7 @@ Metadata preservation depends on the file format and options. Statistical format
 
 - `delimiters()` with several characters, a multi-character string, or `collapse`
 - explicit variable names, row and column ranges, `favorstrfixed`, and `maxquotedrows()`
-- UTF-8, UTF-16, UTF-32, and named code pages
+- UTF-8, UTF-16, UTF-32, and every charset name and alias that Java gives `import delimited` (single-byte charsets are decoded from Java's tables, so each byte reads as natively; on Windows, Big5-HKSCS, x-EUC-TW, x-ISCII91, ISO-2022-JP-2 and the IBM EBCDIC CJK pages give r(198))
 - automatic encoding detection, using the same ICU detectors as Stata
 - `parselocale()` with 1,016 locale names and their conventions for digits, decimal and grouping separators, and signs
 
@@ -45,6 +47,8 @@ A column with non-integer values is stored as `float`, with or without `asfloat`
 ### Import
 
 `cimport excel` supports `sheet()`, `cellrange()`, `firstrow`, column lists (including renames like `identifier=A`), `allstring` with an optional numeric format, and `describe`, which reports on the workbook without touching the data in memory.
+
+As with `import excel`, the workbook kind comes from the file's content, so `.xlsm`, `.xltx` or any other name reads. `cexport excel` keeps any file name, adding `.xlsx` only when there is no extension; a name ending in `.xls` gets a binary workbook. Native abbreviations work: `sh()`, `all`, `date()`, `miss()`; delimited `decimals()`, `groups()`, `q`, `novar`; XPORT5 `val()`.
 
 Dates and numbers are handled as in `import excel`:
 
@@ -81,14 +85,45 @@ Some Excel output differs from `export excel`:
 - Fractional seconds: for a `%tc` format that shows seconds with `s` (such as `%tcHH:MM:SS.sss`), `export excel` writes empty text. `cexport` writes the datetime, formatted `yyyy-mm-dd hh:mm:ss.000` in .xlsx and `m/d/yy h:mm` in .xls. A `%-td` or `%-tc` value, which `cexport` writes as a date, has a date format; `export excel` writes the raw number formatted `0`.
 - Long text: an Excel cell holds at most 32,767 characters. `cexport excel` refuses longer strL text with error 109; `export excel` truncates it to 32,766 characters.
 
+## Parquet
+
+`cimport parquet` is a C reader for Apache Parquet files with the syntax of StataNow 19.5's `import parquet`: a column list, `describe` (with `r(N_rows)` and `r(n_columns)` and the same listing), `clear`, `rowrange()`, and `favormemory`, which is accepted and changes nothing. It doesn't need StataNow, Java, or the Arrow library. Stata's command is built on Arrow, so `cimport` reproduces how Arrow presents each Parquet type and how Stata then stores it. Its tests check that both commands create the same variables, types, display formats, variable and value labels, and values, and print the same messages, for every fixture listed below.
+
+The format support:
+
+- **Footer and schema.** The Thrift compact-protocol footer, all physical types, logical types and the older converted types. Nested columns (groups, lists, maps, repeated fields) are listed by `describe` as `struct`, `list` or `map` and skipped with a note, as in Stata.
+- **Pages.** All row groups, data pages version 1 and 2 (compressed or not), dictionary pages, and definition levels in the RLE/bit-packed hybrid or the old BIT_PACKED encoding. Arrow reads BIT_PACKED levels least significant bit first, though the format specifies the opposite order; `cimport` reads them as Arrow does.
+- **Encodings.** PLAIN, PLAIN_DICTIONARY, RLE_DICTIONARY, RLE (booleans), DELTA_BINARY_PACKED, DELTA_LENGTH_BYTE_ARRAY, DELTA_BYTE_ARRAY, and BYTE_STREAM_SPLIT.
+- **Compression.** Snappy and LZ4 (the Hadoop framing of the LZ4 codec, a bare block as Arrow accepts it, and LZ4_RAW) use decoders written for ctools; Gzip uses the bundled libdeflate; Zstandard and Brotli use decoders written for ctools from RFC 8878 and RFC 7932 (the Brotli static dictionary is embedded). A damaged Brotli page fails with error 691 and Arrow's message, leaving the data in memory unchanged. Neither command reads LZO; both fail with error 691.
+- **Arrow metadata.** Files written by Arrow-based tools (pandas, pyarrow, polars) store their Arrow schema in the footer. As in Stata, a dictionary (categorical) column over text becomes a labeled numeric variable, large string and binary types are listed as `large_utf8` and `large_binary`, and durations are skipped as unsupported. A stored schema that can't be read fails with error 3900, as in Stata.
+
+How values are stored follows `import parquet`, including its unusual choices:
+
+- Integer types start from `byte` (8-bit and boolean), `int` (16-bit) or `long` (32-bit) and widen by one step when the largest value *in the row range* exceeds the type's maximum. A value below the type's minimum, such as -128 in an int8 column, is stored as missing. A 64-bit integer column is `long`, unless a value in the row range doesn't fit in a `long`; then every value is stored as text, the value's 64 bits in lowercase hexadecimal (`str16`).
+- Float columns are `float`, or `double` when a value exceeds `c(maxfloat)`. NaN and infinities are missing. Doubles beyond Stata's largest value are stored unchanged.
+- Dates are `long` with `%td`. Times of day are `double` milliseconds with no date format. Timestamps, including INT96, are `double` milliseconds with `%tc`; finer units are truncated toward zero, and the UTC flag is ignored.
+- Decimals are text, as wide as the precision plus two, in Arrow's notation (`0.05`, `1E-10`).
+- Strings are as wide as the longest value *in the whole column*, whatever the row range; past 2,045 bytes they are strL. Binary, fixed-length and enum columns are always strL.
+- Dictionary columns are `byte`, `int` or `long` by the size of the column's dictionary (the dictionaries of all row groups, unified in order, including unused entries). Their value labels, named after the variable, modify any label of that name already in memory, and the display format is widened to the longest entry.
+- Variable names keep letters, digits and underscores, drop leading digits, and are cut to 32 characters; an empty name becomes `v#`, and if any two names would coincide, every variable is named `v0`, `v1`, .... A column whose name is a Stata reserved word, such as `in` or `byte`, fails with error 3598, as in Stata.
+- An empty file (no rows) fails with error 3900, as does a `rowrange()` whose end is not an integer.
+
+Only the selected columns are decoded, and only the row groups the row range needs (string and dictionary columns are measured over every row group, as Stata measures them). Columns are decoded in parallel. On a 2-million-row, 5-column test file, `cimport parquet` took about a third of the time `import parquet` took.
+
+Option `fast` skips the copy that restores the data in memory after an error, and `snapshot` makes it with `preserve`, as for the other formats. `import parquet` itself always restores.
+
+## FRED and Haver
+
+`cimport fred`, `cimport haver`, and `cimport haverdirect` (with the abbreviations `hav`, `have`, `haverd`, and so on) pass every argument unchanged to Stata's `import fred`, `import haver`, and `import haverdirect`. FRED is a web API that needs an API key, and Haver needs Haver Analytics' DLX library, which exists only on Windows; neither is a file format that a C reader could replace. Results, messages, stored results and the data left after an error are those of Stata's commands. Options `snapshot` and `fast` don't apply. Because the tests may not use the network, they only compare the errors both commands give before contacting FRED or opening a Haver database: missing series, conflicting options, data in memory, a missing series-list file, a missing database, and unknown options.
+
 ## dBase
 
 `cexport dbase` writes dBase IV by default and dBase III with `version(3)`. As with `export dbase`, the dataset and the exported variables are limited to 255 variables and the exported variables to an observation width (`c(width)`) of 4,000 bytes; the record written can be longer (4,001 bytes for 200 doubles). Numeric field widths match `export dbase`, with one exception. Stata cuts off the last digit of very negative integers: bytes from -100 to -127, ints from -10,000, and longs from -1,000,000,000. `cexport` widens those fields by one column so the values are written in full.
 
 ## SAS, SPSS, and SAS XPORT
 
-- **SAS:** reads .sas7bdat files with `bcat()` catalogs and `encoding()`, and accepts a variable list and `if`/`in`.
-- **SPSS:** reads .sav and .zsav files with `encoding()`, and accepts a variable list and `if`/`in`. User-defined missing values and ranges become Stata missing values.
+- **SAS:** reads .sas7bdat files with `bcat()` catalogs and `encoding()`, and accepts names and `if`/`in` before `using`, read as `import sas` reads them (exact, case-sensitive names; a hyphen separates names; unknown names ignored; r(111) without a match). The names and an `in` range are applied while reading.
+- **SPSS:** reads .sav and .zsav files with `encoding()`, and accepts names and `if`/`in` before `using`, read as `import spss` reads them (the same rules as SAS). The names and an `in` range are applied while reading. User-defined missing values and ranges become Stata missing values.
 - **XPORT v5:** supports `member()` for files with several datasets, `novallabels`, and `describe`. Value labels are written to and read from a companion `formats.xpf` file.
 - **XPORT v8:** like `import sasxport8`, a nonempty companion file isn't applied. The import stops with error 4 and leaves the companion's contents in memory.
 
@@ -114,8 +149,8 @@ Exports write to temporary files in the destination directory and move them to t
 
 ## Testing
 
-Tests compare with Stata's `import` and `export` where the reference command is available, checking values, variable names, storage types, display formats, labels, characteristics, sort order, and the data left in memory after an error. SAS export is tested by reading the generated files. The Stata installation used for testing does not provide SAS export. List the discovered cases with `python3 validation/run.py --list`; see the [testing guide](../validation/README.md).
+Tests compare with Stata's `import` and `export` where the reference command is available (for Parquet, the `s2_parquet` case and the files written by `validation/support/parquet_fixtures.py`), checking values, variable names, storage types, display formats, labels, characteristics, sort order, and the data left in memory after an error. SAS export is tested by reading the generated files. The Stata installation used for testing does not provide SAS export. List the discovered cases with `python3 validation/run.py --list`; see the [testing guide](../validation/README.md).
 
 ## Third-party code
 
-SAS and SPSS support builds on [ReadStat](https://github.com/WizardMac/ReadStat) 1.1.9, and XLS import uses [libxls](https://github.com/libxls/libxls) 1.6.3. Both are compiled into the plugin. See [THIRD_PARTY_NOTICES](licenses/THIRD_PARTY_NOTICES) for licenses.
+SAS and SPSS support builds on [ReadStat](https://github.com/WizardMac/ReadStat) 1.1.9, and XLS import uses [libxls](https://github.com/libxls/libxls) 1.6.3. Both are compiled into the plugin. The Parquet reader and its Snappy, LZ4 and Zstandard decoders are ctools' own; Gzip uses the bundled libdeflate. See [THIRD_PARTY_NOTICES](licenses/THIRD_PARTY_NOTICES) for licenses.

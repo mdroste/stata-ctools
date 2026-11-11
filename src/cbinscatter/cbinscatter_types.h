@@ -49,6 +49,24 @@ typedef struct {
     /* Validate the weights here (the ado passed the weight variable itself):
      * negative weights are an error, as are non-integer fweights */
     ST_int check_weights;
+    /* binscatter's options for the classic method */
+    ST_int addmean;          /* Add the sample means back to the residuals (not noaddmean) */
+    ST_int medians;          /* Bin coordinates are (weighted) medians, as _pctile's */
+    ST_int has_xq;           /* Bins are the values of a variable (xq()), after the weight */
+    ST_int n_rd;             /* rd(): break points; fits separately between them */
+    ST_double *rd;           /* n_rd ascending break points (owned) */
+    /*
+     * Quantile cutpoints from a random subsample (randvar/randcut/randn):
+     * 0 = none
+     * 1 = a 0/1 variable (after xq) marks the subsample
+     * 2 = that variable holds, in observations 1..n, the uniform draws that
+     *     binscatter gives the sample's observations in ascending order of x;
+     *     an observation is sampled when its draw is <= randcut
+     */
+    ST_int rand_mode;
+    ST_double randcut;
+    ST_int genxq;            /* Store each observation's bin in the last variable */
+    ST_int genxq_var;        /* That variable's index (set by load_data) */
 } BinscatterConfig;
 
 /* ========================================================================
@@ -56,7 +74,8 @@ typedef struct {
  * ======================================================================== */
 
 typedef struct {
-    ST_int bin_id;           /* Bin number (1 to nquantiles) */
+    ST_int bin_id;           /* Dense/internal bin number */
+    ST_double external_id;   /* Positive xq() label; zero for ordinary bins */
     ST_double x_mean;        /* Mean of x within bin */
     ST_double y_mean;        /* Mean of y within bin */
     ST_double x_se;          /* SE of x mean (optional) */
@@ -90,6 +109,10 @@ typedef struct {
     ST_int nquantiles;       /* Number of bins requested */
     ST_int total_obs;        /* Total observations used */
     ST_int obs_dropped;      /* Observations dropped (missing, etc.) */
+    /* With rd(): (num_by_groups * (n_rd + 1)) rows of 4 coefficients and of
+     * (r2, N), by-group major; missing where an interval has no observations */
+    ST_double *rd_coefs;
+    ST_double *rd_stats;
 } BinscatterResults;
 
 /* ========================================================================

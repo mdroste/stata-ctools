@@ -104,7 +104,8 @@ static int cdecode_map_parse(cdecode_map *m, size_t maplen, size_t width)
         else
         {
             long long parsed = strtoll(p, &stop, 10);
-            if (stop == p || stop >= end || *stop != ' ')
+            if (stop == p || stop >= end || *stop != ' ' ||
+                parsed < INT32_MIN || parsed > INT32_MAX)
                 goto malformed;
             value = (int64_t)parsed;
             p = stop;
@@ -118,9 +119,10 @@ static int cdecode_map_parse(cdecode_map *m, size_t maplen, size_t width)
         if ((size_t)(end - p) < (size_t)bytes + 1 || p[bytes] != ' ')
             goto malformed;
         p[bytes] = '\0';
-        if (missing_code)
+        if (missing_code) {
+            if (m->missing[missing_code]) goto malformed;
             m->missing[missing_code] = p;
-        else
+        } else
         {
             entries[count].value = value;
             entries[count].text = p;
@@ -129,6 +131,7 @@ static int cdecode_map_parse(cdecode_map *m, size_t maplen, size_t width)
         p += bytes + 1;
     }
 
+    if (end - p != 1 || *p != '|') goto malformed;
     qsort(entries, count, sizeof(*entries), cdecode_entry_compare);
     for (size_t i = 1; i < count; i++)
         if (entries[i].value == entries[i - 1].value)
@@ -338,9 +341,11 @@ ST_retcode cdecode_main(const char *args)
         return error == 1 ? 1 : 459;
     }
 
-    SF_scal_save("_cdecode_n_decoded", (double)n_written);
-    SF_scal_save("_cdecode_time_total", ctools_timer_seconds() - t_start);
-    CTOOLS_SAVE_THREAD_INFO("_cdecode");
+    if ((rc = SF_scal_save("_cdecode_n_decoded", (double)n_written)) ||
+        (rc = SF_scal_save("_cdecode_time_total", ctools_timer_seconds() - t_start)) ||
+        (rc = SF_scal_save("_cdecode_threads_max", (double)ctools_get_max_threads())) ||
+        (rc = SF_scal_save("_cdecode_openmp_enabled", (double)CTOOLS_OPENMP_ENABLED)))
+        return rc;
     return 0;
 }
 

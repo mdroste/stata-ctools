@@ -9,6 +9,7 @@
 #define CTOOLS_HDFE_SOLVER_H
 
 #include "hdfe_types.h"
+#include "../ctools_cancel.h"
 
 /* ========================================================================
  * Conjugate Gradient Solver
@@ -29,7 +30,8 @@ ST_int cg_solve_column_threaded(HDFE_State *S, ST_double *y, ST_int thread_id);
  *   K: Number of columns to partial out
  *   num_threads: Number of threads to use
  *
- * Returns: status (0, 198 for invalid configuration, or 430 for nonconvergence),
+ * Returns: status (0, 1 for cancellation, 198 for invalid configuration,
+ * 920 for allocation failure, or 430 for nonconvergence),
  * convergence flag, and maximum iterations used across columns.
  * ======================================================================== */
 typedef struct
@@ -42,8 +44,12 @@ typedef struct
 HDFE_SolveResult partial_out_columns(HDFE_State *S, ST_double *data, ST_int N, ST_int K,
                                      ST_int num_threads);
 
-/* Optional transforms: 0 symmetric Kaczmarz, 1 Kaczmarz, 2 Cimmino.
- * Acceleration: 0 none, 1 CG, 2 steepest descent, 3 Aitken.
+/* Optional transforms: 0 symmetric Kaczmarz, 1 Kaczmarz, 2 Cimmino, 3 random
+ * (symmetric) Kaczmarz, hdfe's experimental transform: a new factor order
+ * for every sweep, from a fixed per-column generator.
+ * Acceleration: 0 none, 1 CG, 2 steepest descent, 3 Aitken, 4 hybrid (hdfe's
+ * experimental acceleration: three plain sweeps, then CG). Every pair runs,
+ * Kaczmarz with CG included (CG may then fail to converge, as in hdfe).
  * Uses the same state/buffer and column-major ownership contract above. */
 HDFE_SolveResult partial_out_columns_options(HDFE_State *S, ST_double *data, ST_int N, ST_int K,
                                             int transform, int acceleration);

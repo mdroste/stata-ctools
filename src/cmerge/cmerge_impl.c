@@ -51,6 +51,7 @@
 #include "ctools_config.h"
 #include "ctools_rowstage.h"
 #include "ctools_parse.h"
+#include "ctools_file.h"
 #include "cmerge_impl.h"
 
 /* Helper modules */
@@ -116,6 +117,161 @@ static int cmerge_macro_ints(const char *local, int *out, size_t n)
  * ============================================================================ */
 
 cmerge_using_cache_t g_using_cache = {0};
+
+/* Release the keepusing columns and, with strl, their whole strL values. */
+static void cmerge_free_keepusing(void)
+{
+    if (g_using_cache.ku_spans || g_using_cache.ku_arena) {
+        for (int v = 0; v < g_using_cache.n_keepusing; v++) {
+            if (g_using_cache.ku_spans) free(g_using_cache.ku_spans[v]);
+            if (g_using_cache.ku_arena) free(g_using_cache.ku_arena[v]);
+        }
+    }
+    free(g_using_cache.ku_spans);
+    free(g_using_cache.ku_arena);
+    g_using_cache.ku_spans = NULL;
+    g_using_cache.ku_arena = NULL;
+    g_using_cache.has_strl = 0;
+    ctools_filtered_data_free(&g_using_cache.keepusing);
+}
+
+/* Observations obs1 .. obs1 + nobs - 1 of strL variable var_idx (one-based
+ * plugin index) as spans into one block: any length, binary values marked.
+ * The SPI reads strLs one value at a time, and only on the calling thread:
+ * reading rows of one strL variable from several threads corrupted Stata's
+ * heap. Each value is read into a probe-sized slot first; only a value that
+ * may be longer is measured and read again, so a short value costs one read
+ * and the binary flag. */
+#define CMERGE_STRL_PROBE 256
+static stata_retcode cmerge_read_strl(int var_idx, size_t obs1, size_t nobs,
+                                      ctools_dta_span **spans_out, char **arena_out)
+{
+    *spans_out = NULL;
+    *arena_out = NULL;
+    ctools_dta_span *spans = ctools_safe_calloc2(nobs ? nobs : 1, sizeof(*spans));
+    size_t *at = ctools_safe_malloc2(nobs ? nobs : 1, sizeof(size_t));
+    size_t cap = nobs * 32 + CMERGE_STRL_PROBE + 1, used = 0;
+    char *arena = spans && at ? malloc(cap) : NULL;
+    if (!spans || !at || !arena) {
+        free(spans);
+        free(at);
+        free(arena);
+        return STATA_ERR_MEMORY;
+    }
+    stata_retcode rc = STATA_OK;
+    for (size_t i = 0; i < nobs && rc == STATA_OK; i++) {
+        ST_int obs = (ST_int)(obs1 + i);
+        size_t want = CMERGE_STRL_PROBE;
+        for (int pass = 0; pass < 2; pass++) {
+            if (cap - used < want + 1) {
+                size_t grown = cap;
+                while (grown - used < want + 1) grown = grown > SIZE_MAX / 2 ? used + want + 1 : grown * 2;
+                char *p = realloc(arena, grown);
+                if (!p) {
+                    rc = STATA_ERR_MEMORY;
+                    break;
+                }
+                arena = p;
+                cap = grown;
+            }
+            int got = SF_strldata(var_idx, obs, arena + used, (int)want + 1);
+            if (got < 0) {
+                rc = STATA_ERR_STATA_READ;
+                break;
+            }
+            if ((size_t)got < want) { /* the whole value */
+                spans[i].len = (size_t)got;
+                break;
+            }
+            int len = SF_sdatalen(var_idx, obs);
+            if (len < 0) {
+                rc = STATA_ERR_STATA_READ;
+                break;
+            }
+            if ((size_t)len <= want) { /* it fit the slot */
+                if ((size_t)got != (size_t)len) rc = STATA_ERR_STATA_READ;
+                spans[i].len = (size_t)len;
+                break;
+            }
+            if (pass) {
+                rc = STATA_ERR_STATA_READ;
+                break;
+            }
+            want = (size_t)len; /* read it again whole */
+        }
+        if (rc != STATA_OK) break;
+        at[i] = used;
+        arena[used + spans[i].len] = '\0';
+        used += spans[i].len + 1;
+        spans[i].binary = spans[i].len && SF_var_is_binary(var_idx, obs) ? 1 : 0;
+    }
+    if (rc == STATA_OK)
+        for (size_t i = 0; i < nobs; i++) spans[i].ptr = arena + at[i];
+    free(at);
+    if (rc != STATA_OK) {
+        free(spans);
+        free(arena);
+        return rc;
+    }
+    *spans_out = spans;
+    *arena_out = arena;
+    return STATA_OK;
+}
+
+/* Load the keepusing columns (one-based plugin indices). With strl (option
+ * tempdta) a strL column is read whole into g_using_cache.ku_spans and its
+ * keepusing entry is an empty string column; the others load as usual. */
+static stata_retcode cmerge_load_keepusing(int *indices, int n, int strl)
+{
+    int any_strl = 0;
+    for (int v = 0; strl && v < n; v++) any_strl |= SF_var_is_strl(indices[v]) != 0;
+    if (!any_strl)
+        return ctools_data_load(&g_using_cache.keepusing, indices, (size_t)n, 0, 0, CTOOLS_LOAD_SKIP_IF);
+
+    const size_t nobs = (size_t)SF_nobs();
+    int *plain = ctools_safe_malloc2((size_t)n, sizeof(int));
+    int *where = ctools_safe_malloc2((size_t)n, sizeof(int));
+    ctools_filtered_data tmp;
+    ctools_filtered_data_init(&tmp);
+    ctools_filtered_data_init(&g_using_cache.keepusing);
+    g_using_cache.n_keepusing = n;
+    g_using_cache.ku_spans = calloc((size_t)n, sizeof(*g_using_cache.ku_spans));
+    g_using_cache.ku_arena = calloc((size_t)n, sizeof(*g_using_cache.ku_arena));
+    stata_data *data = &g_using_cache.keepusing.data;
+    data->vars = ctools_safe_aligned_alloc2(CACHE_LINE_SIZE, (size_t)n, sizeof(stata_variable));
+    stata_retcode rc = (plain && where && g_using_cache.ku_spans && g_using_cache.ku_arena && data->vars)
+                           ? STATA_OK : STATA_ERR_MEMORY;
+    if (rc == STATA_OK) {
+        memset(data->vars, 0, (size_t)n * sizeof(stata_variable));
+        data->nvars = (size_t)n;
+        data->nobs = nobs;
+        g_using_cache.has_strl = 1;
+    }
+    int nplain = 0;
+    for (int v = 0; v < n && rc == STATA_OK; v++) {
+        if (!SF_var_is_strl(indices[v])) {
+            where[nplain] = v;
+            plain[nplain++] = indices[v];
+            continue;
+        }
+        data->vars[v].type = STATA_TYPE_STRING;
+        data->vars[v].nobs = nobs;
+        rc = cmerge_read_strl(indices[v], 1, nobs, &g_using_cache.ku_spans[v], &g_using_cache.ku_arena[v]);
+    }
+    if (rc == STATA_OK && nplain) {
+        rc = ctools_data_load(&tmp, plain, (size_t)nplain, 0, 0, CTOOLS_LOAD_SKIP_IF);
+        if (rc == STATA_OK && (!tmp.data.vars || tmp.data.nobs != nobs)) rc = STATA_ERR_STATA_READ;
+        for (int p = 0; p < nplain && rc == STATA_OK; p++) {
+            data->vars[where[p]] = tmp.data.vars[p]; /* the cache owns the column now */
+            memset(&tmp.data.vars[p], 0, sizeof(stata_variable));
+        }
+    }
+    ctools_filtered_data_free(&tmp);
+    free(plain);
+    free(where);
+    if (rc != STATA_OK) cmerge_free_keepusing();
+    return rc;
+}
 
 /* Spinlock for protecting cache access during concurrent operations.
  * Prevents race conditions if Stata interrupts/restarts during execution. */
@@ -198,7 +354,7 @@ static void cache_cleanup_on_error(void)
     cache_lock_acquire();
     if (g_using_cache.loaded) {
         ctools_filtered_data_free(&g_using_cache.keys);
-        ctools_filtered_data_free(&g_using_cache.keepusing);
+        cmerge_free_keepusing();
         g_using_cache.loaded = 0;
     }
     g_cache_in_use = 0;
@@ -230,6 +386,7 @@ static ST_retcode cmerge_load_using(const char *args)
     int sorted = 0;
     int sorted_hint = 0;   /* Stata sort marker: trusted only if the check passes */
     int merge_by_n = 0;
+    int strl = 0;          /* option tempdta: read strL keepusing columns whole */
 
     char *token = strtok(args_copy, " ");
     int arg_idx = 0;
@@ -303,6 +460,9 @@ static ST_retcode cmerge_load_using(const char *args)
         else if (strcmp(token, "merge_by_n") == 0) {
             merge_by_n = 1;
         }
+        else if (strcmp(token, "strl") == 0) {
+            strl = 1;
+        }
         arg_idx++;
         token = strtok(NULL, " ");
     }
@@ -331,7 +491,7 @@ static ST_retcode cmerge_load_using(const char *args)
     /* Free any previous cache */
     if (g_using_cache.loaded) {
         ctools_filtered_data_free(&g_using_cache.keys);
-        ctools_filtered_data_free(&g_using_cache.keepusing);
+        cmerge_free_keepusing();
         g_using_cache.loaded = 0;
     }
 
@@ -351,16 +511,16 @@ static ST_retcode cmerge_load_using(const char *args)
         /* Load keepusing variables */
         if (n_keepusing > 0) {
             double t_load_keepusing_start = ctools_timer_ms();
-            rc = ctools_data_load(&g_using_cache.keepusing, keepusing_indices, n_keepusing, 0, 0, CTOOLS_LOAD_SKIP_IF);
+            rc = cmerge_load_keepusing(keepusing_indices, n_keepusing, strl);
             if (rc != STATA_OK) {
                 ctools_filtered_data_free(&g_using_cache.keys);
-                ctools_filtered_data_free(&g_using_cache.keepusing);
+                cmerge_free_keepusing();
                 SF_error("cmerge: Failed to load keepusing variables\n");
                 return ctools_stata_rc(rc);
             }
             if (g_using_cache.keepusing.data.vars == NULL) {
                 ctools_filtered_data_free(&g_using_cache.keys);
-                ctools_filtered_data_free(&g_using_cache.keepusing);
+                cmerge_free_keepusing();
                 SF_error("cmerge: FATAL - keepusing.vars is NULL after load\n");
                 return 920;
             }
@@ -389,17 +549,17 @@ static ST_retcode cmerge_load_using(const char *args)
         /* Load ONLY keepusing variables */
         if (n_keepusing > 0) {
             double t_load_keepusing_start = ctools_timer_ms();
-            rc = ctools_data_load(&g_using_cache.keepusing, keepusing_indices, n_keepusing, 0, 0, CTOOLS_LOAD_SKIP_IF);
+            rc = cmerge_load_keepusing(keepusing_indices, n_keepusing, strl);
             if (rc != STATA_OK) {
                 ctools_filtered_data_free(&g_using_cache.keys);
-                ctools_filtered_data_free(&g_using_cache.keepusing);
+                cmerge_free_keepusing();
                 SF_error("cmerge: Failed to load keepusing variables\n");
                 return ctools_stata_rc(rc);
             }
             /* Critical null check */
             if (g_using_cache.keepusing.data.vars == NULL) {
                 ctools_filtered_data_free(&g_using_cache.keys);
-                ctools_filtered_data_free(&g_using_cache.keepusing);
+                cmerge_free_keepusing();
                 SF_error("cmerge: FATAL - keepusing.vars is NULL after load\n");
                 return 920;
             }
@@ -427,7 +587,7 @@ static ST_retcode cmerge_load_using(const char *args)
         ok = ok && cmerge_keys_in_order(&g_using_cache.keys.data, key_cols, nkeys);
         if (!ok && sorted) {
             ctools_filtered_data_free(&g_using_cache.keys);
-            ctools_filtered_data_free(&g_using_cache.keepusing);
+            cmerge_free_keepusing();
             SF_error("cmerge: using data not sorted\n");
             return 5;
         }
@@ -441,7 +601,7 @@ static ST_retcode cmerge_load_using(const char *args)
         int *sort_vars = malloc(nkeys * sizeof(int));
         if (!sort_vars) {
             ctools_filtered_data_free(&g_using_cache.keys);
-            ctools_filtered_data_free(&g_using_cache.keepusing);
+            cmerge_free_keepusing();
             SF_error("cmerge: Memory allocation failed for sort_vars\n");
             return 920;
         }
@@ -455,7 +615,7 @@ static ST_retcode cmerge_load_using(const char *args)
         if (!perm) {
             free(sort_vars);
             ctools_filtered_data_free(&g_using_cache.keys);
-            ctools_filtered_data_free(&g_using_cache.keepusing);
+            cmerge_free_keepusing();
             SF_error("cmerge: Memory allocation failed for permutation\n");
             return 920;
         }
@@ -466,7 +626,7 @@ static ST_retcode cmerge_load_using(const char *args)
             free(perm);
             free(sort_vars);
             ctools_filtered_data_free(&g_using_cache.keys);
-            ctools_filtered_data_free(&g_using_cache.keepusing);
+            cmerge_free_keepusing();
             SF_error("cmerge: Failed to sort using data\n");
             return ctools_stata_rc(rc);
         }
@@ -480,7 +640,7 @@ static ST_retcode cmerge_load_using(const char *args)
                 free(perm);
                 free(sort_vars);
                 ctools_filtered_data_free(&g_using_cache.keys);
-                ctools_filtered_data_free(&g_using_cache.keepusing);
+                cmerge_free_keepusing();
                 SF_error("cmerge: Invalid permutation index\n");
                 return 459;
             }
@@ -504,7 +664,20 @@ static ST_retcode cmerge_load_using(const char *args)
                 if (local_failed) continue;
 
                 stata_variable *var = &g_using_cache.keepusing.data.vars[v];
-                if (var->type == STATA_TYPE_DOUBLE) {
+                if (g_using_cache.ku_spans && g_using_cache.ku_spans[v]) {
+                    ctools_dta_span *old = g_using_cache.ku_spans[v];
+                    ctools_dta_span *moved = ctools_safe_malloc2(nobs ? nobs : 1, sizeof(*moved));
+                    if (!moved) {
+                        #ifdef _OPENMP
+                        #pragma omp atomic write
+                        #endif
+                        perm_alloc_failed = 1;
+                        continue;
+                    }
+                    for (size_t i = 0; i < nobs; i++) moved[i] = old[perm[i]];
+                    g_using_cache.ku_spans[v] = moved;
+                    free(old);
+                } else if (var->type == STATA_TYPE_DOUBLE) {
                     double *new_data = ctools_safe_aligned_alloc2(CACHE_LINE_SIZE, nobs, sizeof(double));
                     if (!new_data) {
                         #ifdef _OPENMP
@@ -539,7 +712,7 @@ static ST_retcode cmerge_load_using(const char *args)
                 free(perm);
                 free(sort_vars);
                 ctools_filtered_data_free(&g_using_cache.keys);
-                ctools_filtered_data_free(&g_using_cache.keepusing);
+                cmerge_free_keepusing();
                 SF_error("cmerge: Memory allocation failed in permutation\n");
                 return 920;
             }
@@ -1146,6 +1319,406 @@ static ST_retcode cmerge_execute_failed(stata_retcode rc)
  * The varlist lists every current variable; the original master variables come
  * first, in the order plan saw them. fault_store is a validation hook: the
  * store fails after writing half of the output rows. */
+
+/* ============================================================================
+ * Option tempdta: the output as a .dta
+ *
+ * The SPI cannot write strL values, so with strL variables in the master or
+ * kept from the using data the ado has execute write the whole output to the
+ * .dta named by local __cmerge_dta_path and loads it with use. The plugin
+ * varlist is every current variable (the master's, then the appended new
+ * variables and _merge); local __cmerge_dta_types holds their storage types
+ * and __cmerge_dta_names their names, in order. Master columns are gathered
+ * through the output's master rows and new keepusing columns through its
+ * using rows; keys, shared variables and _merge are assembled first, by the
+ * rules the SPI writers apply. Stata is not modified, so no undo copy is
+ * needed: a failure leaves the master as it was. The ado restores the
+ * characteristics and value labels after use.
+ * ============================================================================ */
+
+enum { CM_DTA_MASTER = 0, CM_DTA_KEY, CM_DTA_SHARED, CM_DTA_NEW, CM_DTA_MERGE };
+
+/* A string cell of a loaded column: char ** or whole strL spans. */
+static inline void cm_dta_str(const stata_variable *var, const ctools_dta_span *spans, int64_t row,
+                              const char **p, size_t *n, int *binary)
+{
+    *binary = 0;
+    if (row < 0) {
+        *p = "";
+        *n = 0;
+    } else if (spans) {
+        *p = spans[row].ptr ? spans[row].ptr : "";
+        *n = spans[row].ptr ? spans[row].len : 0;
+        *binary = spans[row].binary;
+    } else {
+        const char *s = var->data.str[row];
+        *p = s ? s : "";
+        *n = s ? strlen(s) : 0;
+    }
+}
+
+static ctools_dta_type cm_dta_parse_type(const char *t, int *width)
+{
+    *width = 0;
+    if (!strcmp(t, "byte")) return CTOOLS_DTA_BYTE;
+    if (!strcmp(t, "int")) return CTOOLS_DTA_INT;
+    if (!strcmp(t, "long")) return CTOOLS_DTA_LONG;
+    if (!strcmp(t, "float")) return CTOOLS_DTA_FLOAT;
+    if (!strcmp(t, "double")) return CTOOLS_DTA_DOUBLE;
+    if (!strcmp(t, "strL")) return CTOOLS_DTA_STRL;
+    if (!strncmp(t, "str", 3) && ctools_safe_atoi(t + 3, width) && *width >= 1 && *width <= 2045)
+        return CTOOLS_DTA_STR;
+    return (ctools_dta_type)0;
+}
+
+/* A local into a malloc'd buffer (empty when undefined). */
+static char *cm_dta_local(const char *name)
+{
+    char macro[64];
+    snprintf(macro, sizeof(macro), "_%s", name);
+    for (size_t cap = (size_t)1 << 16; cap <= ((size_t)1 << 26); cap *= 4) {
+        char *buf = calloc(cap, 1);
+        if (!buf) return NULL;
+        if (SF_macro_use(macro, buf, (int)cap) != 0) buf[0] = 0;
+        if (strlen(buf) < cap - 1) return buf;
+        free(buf);
+    }
+    return NULL;
+}
+
+static size_t cm_dta_tokens(char *s, char **tok, size_t n)
+{
+    size_t k = 0;
+    for (char *p = s; *p;) {
+        while (*p == ' ') p++;
+        if (!*p) break;
+        char *e = p;
+        while (*e && *e != ' ') e++;
+        if (k < n) tok[k] = p;
+        k++;
+        if (*e) *e++ = 0;
+        p = e;
+    }
+    return k;
+}
+
+static ST_retcode cmerge_execute_dta(size_t K, const int *master_key_indices, int nkeys,
+                                     int n_keepusing, const int *placeholders, const int *shared_flags,
+                                     int merge_var_idx, int update_mode, int replace_mode, int fault_store,
+                                     double t_total_start)
+{
+    const size_t N = g_plan.output_nobs, master_nobs = g_plan.master_nobs, orig_nvars = g_plan.orig_nvars;
+    const cmerge_output_spec_t *specs = g_plan.specs;
+    const int32_t *orig_rows = g_plan.orig_rows;
+    const size_t using_nobs = g_using_cache.nobs;
+    const double miss = SV_missval;
+    ST_retcode rc = 0;
+    double t_start = ctools_timer_ms(), t_load = 0, t_write = 0;
+
+    char *path = cm_dta_local("__cmerge_dta_path"), *types = cm_dta_local("__cmerge_dta_types"),
+         *names = cm_dta_local("__cmerge_dta_names"), *sort = cm_dta_local("__cmerge_dta_sort");
+    char **ttok = calloc(K + 1, sizeof(char *)), **ntok = calloc(K + 1, sizeof(char *)),
+         **stok = calloc(K + 1, sizeof(char *));
+    int *role = calloc(K + 1, sizeof(int)), *which = calloc(K + 1, sizeof(int));
+    int *sortlist = calloc(K + 1, sizeof(int));
+    ctools_dta_column *cols = calloc(K + 1, sizeof(*cols));
+    const stata_variable **mvar = calloc(K + 1, sizeof(*mvar));
+    ctools_dta_span **mspans = calloc(K + 1, sizeof(*mspans));
+    char **marena = calloc(K + 1, sizeof(*marena));
+    void **built = calloc(K + 1, sizeof(void *)); /* columns assembled here */
+    int *plain = calloc(K + 1, sizeof(int)), *plain_at = calloc(K + 1, sizeof(int));
+    int64_t *mrow = ctools_safe_malloc2(N ? N : 1, sizeof(int64_t));
+    int64_t *urow = ctools_safe_malloc2(N ? N : 1, sizeof(int64_t));
+    uint8_t *row_flags = update_mode && N ? calloc(N, 1) : NULL;
+    ctools_filtered_data mcols;
+    ctools_filtered_data_init(&mcols);
+    if (!path || !types || !names || !sort || !ttok || !ntok || !stok || !role || !which || !sortlist ||
+        !cols || !mvar || !mspans || !marena || !built || !plain || !plain_at || !mrow || !urow ||
+        (update_mode && N && !row_flags)) {
+        rc = 920;
+        goto done;
+    }
+    if (!*path || cm_dta_tokens(types, ttok, K) != K || cm_dta_tokens(names, ntok, K) != K) {
+        SF_error("cmerge: invalid tempdta arguments\n");
+        rc = 198;
+        goto done;
+    }
+    size_t nsort = cm_dta_tokens(sort, stok, K);
+
+    /* What each variable is in the output */
+    for (int kv = 0; kv < n_keepusing && !rc; kv++) {
+        int d = placeholders[kv];
+        if (d < 1 || (size_t)d > K) rc = 198;
+        else {
+            role[d - 1] = shared_flags[kv] ? CM_DTA_SHARED : CM_DTA_NEW;
+            which[d - 1] = kv;
+        }
+    }
+    if (merge_var_idx > 0) role[merge_var_idx - 1] = CM_DTA_MERGE;
+    for (int k = 0; k < nkeys && !rc; k++) {
+        int d = master_key_indices[k];
+        if (d < 1 || (size_t)d > K) rc = 198;
+        else if (role[d - 1] == CM_DTA_MASTER) {
+            role[d - 1] = CM_DTA_KEY;
+            which[d - 1] = k;
+        }
+    }
+    for (size_t j = 0; j < K && !rc; j++) {
+        int from_master = role[j] == CM_DTA_MASTER || role[j] == CM_DTA_KEY || role[j] == CM_DTA_SHARED;
+        if (from_master != (j < orig_nvars)) rc = 198;
+    }
+    if (rc) {
+        SF_error("cmerge: invalid tempdta variable roles\n");
+        goto done;
+    }
+
+    /* The master columns in their original order: strL whole, the rest
+     * through the parallel loader */
+    size_t nplain = 0;
+    for (size_t j = 0; j < orig_nvars && !rc; j++) {
+        if (!SF_var_is_strl((int)j + 1)) {
+            plain_at[nplain] = (int)j;
+            plain[nplain++] = (int)j + 1;
+        } else if (role[j] == CM_DTA_KEY) {
+            rc = 109; /* merge refuses strL keys before this */
+        } else if (master_nobs) {
+            stata_retcode lrc = cmerge_read_strl((int)j + 1, 1, master_nobs, &mspans[j], &marena[j]);
+            if (lrc != STATA_OK) rc = ctools_stata_rc(lrc);
+        }
+    }
+    if (!rc && nplain && master_nobs) {
+        stata_retcode lrc = ctools_data_load(&mcols, plain, nplain, 1, master_nobs, CTOOLS_LOAD_SKIP_IF);
+        if (lrc != STATA_OK || !mcols.data.vars) rc = lrc != STATA_OK ? ctools_stata_rc(lrc) : 920;
+        for (size_t p = 0; p < nplain && !rc; p++) mvar[plain_at[p]] = &mcols.data.vars[p];
+    }
+    t_load = ctools_timer_ms() - t_start;
+    if (rc) goto done;
+
+    for (size_t i = 0; i < N; i++) {
+        mrow[i] = orig_rows[i];
+        int32_t u = specs[i].using_sorted_row;
+        urow[i] = specs[i].merge_result != MERGE_RESULT_MASTER_ONLY && u >= 0 && (size_t)u < using_nobs ? u : -1;
+    }
+
+    /* Columns assembled from master and using rows */
+    size_t values_changed = 0;
+    for (size_t j = 0; j < K && !rc; j++) {
+        int width;
+        ctools_dta_type type = cm_dta_parse_type(ttok[j], &width);
+        int string = type == CTOOLS_DTA_STR || type == CTOOLS_DTA_STRL;
+        if (!type) {
+            rc = 198;
+            break;
+        }
+        const stata_variable *mv = j < orig_nvars ? mvar[j] : NULL;
+        const ctools_dta_span *ms = j < orig_nvars ? mspans[j] : NULL;
+        if (j < orig_nvars && master_nobs && !mv && !ms) {
+            rc = 459;
+            break;
+        }
+        if (role[j] == CM_DTA_KEY) {
+            const stata_variable *uk = &g_using_cache.keys.data.vars[which[j]];
+            if (!string) {
+                double *v = ctools_safe_malloc2(N ? N : 1, sizeof(double));
+                if (!(built[j] = v)) { rc = 920; break; }
+                for (size_t i = 0; i < N; i++) {
+                    int32_t u = specs[i].using_sorted_row;
+                    v[i] = mrow[i] >= 0 ? mv->data.dbl[mrow[i]]
+                           : u >= 0 && (size_t)u < using_nobs ? uk->data.dbl[u] : miss;
+                }
+            } else {
+                const char **v = ctools_safe_malloc2(N ? N : 1, sizeof(char *));
+                if (!(built[j] = (void *)v)) { rc = 920; break; }
+                for (size_t i = 0; i < N; i++) {
+                    int32_t u = specs[i].using_sorted_row;
+                    const char *s = mrow[i] >= 0 ? mv->data.str[mrow[i]]
+                                    : u >= 0 && (size_t)u < using_nobs ? uk->data.str[u] : "";
+                    v[i] = s ? s : "";
+                }
+            }
+        } else if (role[j] == CM_DTA_SHARED) {
+            const int kv = which[j];
+            const stata_variable *uv = &g_using_cache.keepusing.data.vars[kv];
+            const ctools_dta_span *us = g_using_cache.ku_spans ? g_using_cache.ku_spans[kv] : NULL;
+            if (!string) {
+                double *v = ctools_safe_malloc2(N ? N : 1, sizeof(double));
+                if (!(built[j] = v)) { rc = 920; break; }
+                for (size_t i = 0; i < N; i++) {
+                    double cur = mrow[i] >= 0 ? mv->data.dbl[mrow[i]] : miss;
+                    int write = specs[i].merge_result == MERGE_RESULT_USING_ONLY;
+                    if (specs[i].merge_result == MERGE_RESULT_BOTH && (update_mode || replace_mode)) {
+                        double uval = urow[i] >= 0 ? uv->data.dbl[urow[i]] : miss;
+                        int mmiss = !(cur < miss), umiss = !(uval < miss);
+                        write = replace_mode ? (!umiss || mmiss) : mmiss;
+                        uint8_t flag = 0;
+                        if (mmiss) {
+                            if (uval != cur) flag = CMERGE_ROW_UPDATED;
+                        } else if (!umiss && cur != uval) {
+                            flag = CMERGE_ROW_CONFLICT;
+                        }
+                        if (row_flags) row_flags[i] |= flag;
+                    }
+                    v[i] = write && urow[i] >= 0 ? uv->data.dbl[urow[i]] : cur;
+                }
+            } else {
+                ctools_dta_span *v = ctools_safe_malloc2(N ? N : 1, sizeof(ctools_dta_span));
+                if (!(built[j] = v)) { rc = 920; break; }
+                for (size_t i = 0; i < N; i++) {
+                    const char *mp, *up;
+                    size_t mn, un;
+                    int mb, ub;
+                    cm_dta_str(mv, ms, mrow[i], &mp, &mn, &mb);
+                    int write = specs[i].merge_result == MERGE_RESULT_USING_ONLY;
+                    if (specs[i].merge_result == MERGE_RESULT_BOTH && (update_mode || replace_mode)) {
+                        cm_dta_str(uv, us, urow[i], &up, &un, &ub);
+                        int mmiss = mn == 0, umiss = un == 0;
+                        write = replace_mode ? (!umiss || mmiss) : mmiss;
+                        uint8_t flag = 0;
+                        if (mmiss && !umiss) flag = CMERGE_ROW_UPDATED;
+                        else if (!mmiss && !umiss && (mn != un || memcmp(mp, up, mn))) flag = CMERGE_ROW_CONFLICT;
+                        if (row_flags) row_flags[i] |= flag;
+                    }
+                    if (write && urow[i] >= 0) {
+                        cm_dta_str(uv, us, urow[i], &up, &un, &ub);
+                        v[i] = (ctools_dta_span){up, un, ub};
+                    } else {
+                        v[i] = (ctools_dta_span){mp, mn, mb};
+                    }
+                }
+            }
+        }
+    }
+    if (rc) goto done;
+
+    /* _merge, with update's codes 4 and 5 */
+    size_t n_updated = 0, n_conflict = 0;
+    if (row_flags) {
+        for (size_t i = 0; i < N; i++) {
+            if (specs[i].merge_result != MERGE_RESULT_BOTH) continue;
+            if (row_flags[i] & CMERGE_ROW_CONFLICT) n_conflict++;
+            else if (row_flags[i] & CMERGE_ROW_UPDATED) n_updated++;
+            if ((row_flags[i] & CMERGE_ROW_UPDATED) || (replace_mode && (row_flags[i] & CMERGE_ROW_CONFLICT)))
+                values_changed = 1;
+        }
+    }
+    for (size_t j = 0; j < K && !rc; j++) {
+        if (role[j] != CM_DTA_MERGE) continue;
+        double *v = ctools_safe_malloc2(N ? N : 1, sizeof(double));
+        if (!(built[j] = v)) { rc = 920; break; }
+        for (size_t i = 0; i < N; i++) {
+            double code = (double)specs[i].merge_result;
+            if (row_flags && specs[i].merge_result == MERGE_RESULT_BOTH) {
+                if (row_flags[i] & CMERGE_ROW_CONFLICT) code = 5.0;
+                else if (row_flags[i] & CMERGE_ROW_UPDATED) code = 4.0;
+            }
+            v[i] = code;
+        }
+    }
+    if (rc) goto done;
+
+    /* The file's columns */
+    for (size_t j = 0; j < K && !rc; j++) {
+        int width;
+        ctools_dta_type type = cm_dta_parse_type(ttok[j], &width);
+        int string = type == CTOOLS_DTA_STR || type == CTOOLS_DTA_STRL;
+        ctools_dta_column *c = &cols[j];
+        c->name = ntok[j];
+        c->type = type;
+        c->width = width;
+        if (built[j]) {
+            c->data = built[j];
+            c->source = !string ? CTOOLS_DTA_SRC_F64
+                        : role[j] == CM_DTA_KEY ? CTOOLS_DTA_SRC_CSTR : CTOOLS_DTA_SRC_SPAN;
+        } else if (role[j] == CM_DTA_NEW) {
+            const int kv = which[j];
+            const stata_variable *uv = &g_using_cache.keepusing.data.vars[kv];
+            const ctools_dta_span *us = g_using_cache.ku_spans ? g_using_cache.ku_spans[kv] : NULL;
+            c->rows = urow;
+            c->flags = CTOOLS_DTA_COL_SHARE; /* m:1 repeats using rows */
+            if (us) c->source = CTOOLS_DTA_SRC_SPAN, c->data = us;
+            else if (uv->type == STATA_TYPE_DOUBLE) c->source = CTOOLS_DTA_SRC_F64, c->data = uv->data.dbl;
+            else c->source = CTOOLS_DTA_SRC_CSTR, c->data = uv->data.str;
+        } else { /* a master column */
+            c->rows = mrow;
+            c->flags = CTOOLS_DTA_COL_SHARE; /* 1:m repeats master rows */
+            if (mspans[j]) c->source = CTOOLS_DTA_SRC_SPAN, c->data = mspans[j];
+            else if (mvar[j] && mvar[j]->type == STATA_TYPE_DOUBLE) c->source = CTOOLS_DTA_SRC_F64, c->data = mvar[j]->data.dbl;
+            else if (mvar[j]) c->source = CTOOLS_DTA_SRC_CSTR, c->data = mvar[j]->data.str;
+            else c->source = string ? CTOOLS_DTA_SRC_CSTR : CTOOLS_DTA_SRC_F64, c->data = NULL;
+        }
+        if (string != (c->source != CTOOLS_DTA_SRC_F64)) {
+            SF_error("cmerge: storage types do not match the merged data\n");
+            rc = 198;
+        }
+        if (!c->data && N) rc = 459;
+    }
+    if (rc) goto done;
+
+    int same_order = g_plan.identity && g_plan.n_using_only == 0 && N == master_nobs && !values_changed;
+    size_t ns = 0;
+    for (size_t s = 0; same_order && s < nsort && s < K; s++) {
+        int p;
+        if (!ctools_safe_atoi(stok[s], &p) || p < 1 || (size_t)p > K) break;
+        sortlist[ns++] = p;
+    }
+    ctools_dta_spec spec;
+    ctools_dta_spec_init(&spec);
+    spec.nobs = N;
+    spec.ncols = K;
+    spec.cols = cols;
+    spec.sortlist = ns ? sortlist : NULL;
+    spec.nsort = ns;
+    spec.threads = ctools_get_max_threads();
+    spec.temporary = 1;
+    ctools_dta_result res;
+    double t_w = ctools_timer_ms();
+    rc = ctools_dta_write(path, &spec, &res);
+    t_write = ctools_timer_ms() - t_w;
+    if (rc && res.message[0]) {
+        char line[320];
+        snprintf(line, sizeof(line), "cmerge: %s\n", res.message);
+        SF_error(line);
+    }
+    if (!rc && fault_store) { /* validation hook: the output could not be written */
+        ctools_remove(path);
+        rc = 920;
+    }
+    if (rc) goto done;
+
+    double t_total = g_plan.t_total + ctools_timer_ms() - t_total_start;
+    SF_scal_save("_cmerge_N", (double)N);
+    SF_scal_save("_cmerge_N_1", (double)g_plan.n_master_only);
+    SF_scal_save("_cmerge_N_2", (double)g_plan.n_using_only);
+    SF_scal_save("_cmerge_N_3", (double)(g_plan.n_matched - n_updated - n_conflict));
+    SF_scal_save("_cmerge_N_4", (double)n_updated);
+    SF_scal_save("_cmerge_N_5", (double)n_conflict);
+    SF_scal_save("_cmerge_same_order", (double)same_order);
+    SF_scal_save("_cmerge_p2_load_master", (g_plan.t_load + t_load) / 1000.0);
+    SF_scal_save("_cmerge_p2_sort_master", g_plan.t_sort / 1000.0);
+    SF_scal_save("_cmerge_p2_merge_join", g_plan.t_join / 1000.0);
+    SF_scal_save("_cmerge_p2_reorder", g_plan.t_reorder / 1000.0);
+    SF_scal_save("_cmerge_p2_permute", 0.0);
+    SF_scal_save("_cmerge_p2_stream", 0.0);
+    SF_scal_save("_cmerge_p2_store", t_write / 1000.0);
+    SF_scal_save("_cmerge_p2_write_meta", 0.0);
+    SF_scal_save("_cmerge_p2_cleanup", 0.0);
+    SF_scal_save("_cmerge_p2_total", t_total / 1000.0);
+    SF_scal_save("_cmerge_n_output_vars", (double)K);
+    CTOOLS_SAVE_THREAD_INFO("_cmerge");
+
+done:
+    for (size_t j = 0; built && j < K; j++) free(built[j]);
+    for (size_t j = 0; mspans && j < K; j++) free(mspans[j]);
+    for (size_t j = 0; marena && j < K; j++) free(marena[j]);
+    ctools_filtered_data_free(&mcols);
+    free(path), free(types), free(names), free(sort), free(ttok), free(ntok), free(stok);
+    free(role), free(which), free(sortlist), free(cols), free(mvar), free(mspans), free(marena);
+    free(built), free(plain), free(plain_at), free(mrow), free(urow), free(row_flags);
+    /* The output exists (or failed); nothing is held for an undo. */
+    cmerge_release_all();
+    return rc;
+}
+
 static ST_retcode cmerge_execute(const char *args)
 {
     double t_start, t_total_start;
@@ -1188,6 +1761,7 @@ static ST_retcode cmerge_execute(const char *args)
     int update_mode = 0;
     int replace_mode = 0;
     int fault_store = 0;
+    int dta = 0;           /* option tempdta: write the output as a .dta */
     int *shared_flags = NULL;
     char placeholders_local[32] = {0};
     char shared_local[32] = {0};
@@ -1265,6 +1839,9 @@ static ST_retcode cmerge_execute(const char *args)
         else if (strcmp(token, "fault_store") == 0) {
             fault_store = 1;
         }
+        else if (strcmp(token, "dta") == 0) {
+            dta = 1;
+        }
         else if (strcmp(token, "shared_flags") == 0) {
             bad = !shared_flags && n_keepusing > 0;
             for (int i = 0; i < n_keepusing && !bad; i++) {
@@ -1295,7 +1872,8 @@ static ST_retcode cmerge_execute(const char *args)
     /* The plan must describe this master. */
     int matches = !bad && merge_type == g_plan.merge_type && nkeys == g_plan.nkeys &&
                   master_nobs == g_plan.master_nobs && master_nobs <= (size_t)SF_nobs() &&
-                  g_plan.output_nobs <= (size_t)SF_nobs();
+                  (dta || g_plan.output_nobs <= (size_t)SF_nobs()) &&
+                  (dta || !g_using_cache.has_strl);
     for (int k = 0; matches && k < nkeys; k++) {
         matches = master_key_indices[k] == g_plan.key_idx[k];
     }
@@ -1310,6 +1888,12 @@ static ST_retcode cmerge_execute(const char *args)
         cmerge_release_all();
         SF_error("cmerge: invalid execute arguments\n");
         return 198;
+    }
+
+    if (dta) {
+        return cmerge_execute_dta(master_nvars, master_key_indices, nkeys, n_keepusing,
+                                  keepusing_placeholder_indices, shared_flags, merge_var_idx,
+                                  update_mode, replace_mode, fault_store, t_total_start);
     }
 
     const size_t output_nobs = g_plan.output_nobs;
@@ -1490,6 +2074,10 @@ static ST_retcode cmerge_execute(const char *args)
                 ku_args.row_flags = row_flags;
                 ku_args.success = 0;
                 cmerge_write_keepusing_var_thread(&ku_args);
+                if (!ku_args.success) {
+                    free(row_flags);
+                    return cmerge_execute_failed(ctools_spi_status(ku_args.error, STATA_ERR_STATA_WRITE));
+                }
             }
         } else {
             /* Prepare all args */
@@ -1526,7 +2114,16 @@ static ST_retcode cmerge_execute(const char *args)
                     cmerge_write_keepusing_var_thread(&ku_args_array[task]);
                 }
             }
+            stata_retcode keepusing_rc = STATA_OK;
+            for (size_t task = 0; task < ku_tasks; task++) {
+                if (!ku_args_array[task].success && keepusing_rc == STATA_OK)
+                    keepusing_rc = ctools_spi_status(ku_args_array[task].error, STATA_ERR_STATA_WRITE);
+            }
             free(ku_args_array);
+            if (keepusing_rc != STATA_OK) {
+                free(row_flags);
+                return cmerge_execute_failed(keepusing_rc);
+            }
         }
     }
 
@@ -1552,8 +2149,9 @@ static ST_retcode cmerge_execute(const char *args)
     }
     if (merge_var_idx > 0) {
         ST_int mvar = (ST_int)merge_var_idx;
+        int marker_error = 0;
         #ifdef _OPENMP
-        #pragma omp parallel for schedule(static) if(output_nobs >= MIN_OBS_PER_THREAD * 2)
+        #pragma omp parallel for schedule(static) if(output_nobs >= MIN_OBS_PER_THREAD * 2) reduction(max:marker_error)
         #endif
         for (size_t i = 0; i < output_nobs; i++) {
             double code = (double)output_specs[i].merge_result;
@@ -1561,7 +2159,12 @@ static ST_retcode cmerge_execute(const char *args)
                 if (row_flags[i] & CMERGE_ROW_CONFLICT) code = 5.0;
                 else if (row_flags[i] & CMERGE_ROW_UPDATED) code = 4.0;
             }
-            (_stata_)->safestore(mvar, (ST_int)(i + 1), code);  /* checked: concurrent */
+            int error = (_stata_)->safestore(mvar, (ST_int)(i + 1), code);
+            if (error > marker_error) marker_error = error;
+        }
+        if (marker_error) {
+            free(row_flags);
+            return cmerge_execute_failed(ctools_spi_status(marker_error, STATA_ERR_STATA_WRITE));
         }
     }
     free(row_flags);
@@ -1583,7 +2186,7 @@ static ST_retcode cmerge_execute(const char *args)
     /* Free using cache (protected by lock) */
     cache_lock_acquire();
     ctools_filtered_data_free(&g_using_cache.keys);
-    ctools_filtered_data_free(&g_using_cache.keepusing);
+    cmerge_free_keepusing();
     g_using_cache.loaded = 0;
     g_cache_in_use = 0;
     cache_lock_release();
@@ -1656,7 +2259,7 @@ static ST_retcode cmerge_clear(void)
 
     if (g_using_cache.loaded) {
         ctools_filtered_data_free(&g_using_cache.keys);
-        ctools_filtered_data_free(&g_using_cache.keepusing);
+        cmerge_free_keepusing();
         g_using_cache.loaded = 0;
     }
 
@@ -1726,7 +2329,7 @@ void cmerge_cleanup_cache(void)
     cache_lock_acquire();
     g_cache_in_use = 0;
     ctools_filtered_data_free(&g_using_cache.keys);
-    ctools_filtered_data_free(&g_using_cache.keepusing);
+    cmerge_free_keepusing();
     memset(&g_using_cache, 0, sizeof(g_using_cache));
     cache_lock_release();
     cmerge_plan_free();

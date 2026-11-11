@@ -232,3 +232,94 @@ ST_double cqreg_sum_raw_deviations(const ST_double *y, ST_int N, ST_double q, ST
 
     return sum;
 }
+
+/* ============================================================================
+ * Weighted order statistics
+ * ============================================================================ */
+
+typedef struct {
+    ST_double v;
+    ST_double w;
+} cqreg_vw_pair;
+
+static int compare_vw_pair(const void *a, const void *b)
+{
+    ST_double va = ((const cqreg_vw_pair *)a)->v;
+    ST_double vb = ((const cqreg_vw_pair *)b)->v;
+    return (va > vb) - (va < vb);
+}
+
+/* Copy of the (value, weight) pairs sorted by value, and the total weight.
+ * The order of tied values does not matter to either rule below: a
+ * cumulative weight inside a run of ties selects that tied value. */
+static cqreg_vw_pair *cqreg_sorted_pairs(const ST_double *values, const ST_double *weights,
+                                         ST_int N, ST_double *total)
+{
+    cqreg_vw_pair *pairs = (cqreg_vw_pair *)malloc((size_t)(N > 0 ? N : 1) * sizeof(cqreg_vw_pair));
+    if (pairs == NULL) return NULL;
+    ST_double W = 0.0;
+    for (ST_int i = 0; i < N; i++) {
+        pairs[i].v = values[i];
+        pairs[i].w = weights[i];
+        W += weights[i];
+    }
+    qsort(pairs, (size_t)N, sizeof(cqreg_vw_pair), compare_vw_pair);
+    *total = W;
+    return pairs;
+}
+
+ST_int cqreg_weighted_pctiles(const ST_double *values, const ST_double *weights,
+                              ST_int N, const ST_double *pct, ST_int np,
+                              ST_double *out)
+{
+    ST_double W = 0.0;
+    cqreg_vw_pair *pairs = cqreg_sorted_pairs(values, weights, N, &W);
+    if (pairs == NULL) return 920;
+
+    for (ST_int p = 0; p < np; p++) {
+        ST_double f = pct[p] / 100.0;
+        ST_double C = 0.0;
+        ST_int i = 0;
+        for (; i < N - 1; i++) {
+            C += pairs[i].w;
+            if (C / W >= f - CQREG_WPCTILE_TOL) break;
+        }
+        if (i < N - 1 && fabs(C / W - f) <= CQREG_WPCTILE_TOL) {
+            out[p] = (pairs[i].v + pairs[i + 1].v) / 2.0;
+        } else {
+            out[p] = pairs[i].v;
+        }
+    }
+    free(pairs);
+    return 0;
+}
+
+ST_double cqreg_compute_quantile_w(const ST_double *y, const ST_double *w,
+                                   ST_int N, ST_double tau)
+{
+    if (N <= 0) return 0.0;
+    ST_double W = 0.0;
+    cqreg_vw_pair *pairs = cqreg_sorted_pairs(y, w, N, &W);
+    if (pairs == NULL) return NAN;
+
+    ST_double C = 0.0;
+    ST_int i = 0;
+    for (; i < N - 1; i++) {
+        C += pairs[i].w;
+        if (C / W >= tau - CQREG_WPCTILE_TOL) break;
+    }
+    ST_double q = pairs[i].v;
+    free(pairs);
+    return q;
+}
+
+ST_double cqreg_sum_raw_deviations_w(const ST_double *y, const ST_double *w,
+                                     ST_int N, ST_double q, ST_double tau)
+{
+    ST_double sum = 0.0;
+    for (ST_int i = 0; i < N; i++) {
+        ST_double u = y[i] - q;
+        sum += w[i] * ((u >= 0.0) ? tau * u : (tau - 1.0) * u);
+    }
+    return sum;
+}

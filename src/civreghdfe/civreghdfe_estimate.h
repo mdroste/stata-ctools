@@ -65,6 +65,10 @@ typedef struct {
     /* Verbose output */
     ST_int verbose;
 
+    /* Messages allowed (0 in bootstrap replicates, which run on worker
+       threads and may not call the SPI) */
+    int report;
+
     /* Set by the CUE objective when memory runs out (stops the optimizer) */
     int alloc_failed;
 } IVEstContext;
@@ -135,7 +139,76 @@ typedef struct {
     const ST_int *orthog;     ST_int n_orthog;
     const ST_int *endogtest;  ST_int n_endogtest;
     const ST_int *redundant;  ST_int n_redundant;
+    const ST_int *orthog_x;   ST_int n_orthog_x;   /* included instruments (1-based among the kept exogenous regressors) */
 } civreghdfe_test_cols;
+
+
+/*
+    Options of ivreg2 that change the estimator or add statistics:
+    - S0, W0: smatrix() and wmatrix() (K_iv x K_iv in Z's column order,
+      ivreg2's scale: S divided by N), NULL = none
+    - abw_z: bw(auto): the row sums of the unpartialled excluded and
+      non-partialled included instruments (no constant), which ivreg2's
+      Newey-West (1994) bandwidth selection uses; abw_tobs its time span
+      T = tmax - tmin + 1; NULL unless bw(auto)
+    - ffirst: compute ivreg2's first-stage statistics (civreghdfe_ffirst.c)
+    - psd: ivreg2's psd0 (1) or psda (2) for the moment covariance S
+    - store_sw: store ivreg2's e(S), e(W), e(condzz) and e(condxx) of the
+      main fit (__civreghdfe_S, __civreghdfe_W, created by the caller)
+*/
+typedef struct {
+    const ST_double *S0;
+    const ST_double *W0;
+    const ST_double *abw_z;
+    ST_double abw_tobs;
+    ST_int ffirst;
+    ST_int psd;
+    ST_int store_sw;
+} civreghdfe_extra;
+
+/*
+    The coefficient phase of ivest_compute_2sls without the Stata SPI (plan
+    9.2), shared with the bootstrap replicates: inputs as for
+    ivest_compute_2sls, with the moment covariance's kind, kernel and
+    bandwidth (s_*) already chosen; beta receives the coefficients. The
+    arrays below are allocated here and returned also on failure, for the
+    caller to free (om with civ_omega_free). kclass: ivreg2's e(kclass);
+    bw_auto: the bandwidth bw(auto) chose.
+*/
+typedef struct {
+    int report;
+    const ST_double *y, *X_exog, *X_endog, *Z, *weights;
+    ST_int weight_type, N;
+    ST_double N_eff;
+    ST_int K_exog, K_endog, K_iv, K_total;
+    ST_double *beta, *lambda_out;
+    ST_int verbose, est_method;
+    ST_double kclass_user, fuller_alpha;
+    ST_int s_kind, s_kernel, s_noniid;
+    ST_double s_bw;
+    ST_int center;
+    const ST_int *cluster_ids, *cluster2_ids;
+    ST_int num_clusters, num_clusters2;
+    const civreghdfe_ts *ts;
+    const civreghdfe_extra *extra;
+    const ST_double *S0, *W0, *b0;
+    ST_int dofminus;
+    /* bootstrap replicates: the rows' draw counts and whether the clusters
+       are the resampled units (civ_omega's mult, mult_groups); NULL/0 for
+       the full fit */
+    const ST_double *mult;
+    ST_int mult_groups;
+    /* outputs */
+    ST_double *ZtZ, *ZtZ_inv, *ZtX, *Zty, *XtPzX, *XtPzy, *temp1, *X_all, *resid;
+    ST_double *X_hat, *ZtZ_inv_Zty, *XtX, *Xty, *XkX, *Xky, *XkX_copy, *beta_temp;
+    ST_double *S_main, *gmm_hessian_inv, *W_bread, *W_zx;
+    civ_omega om;
+    ST_double kclass, bw_auto;
+    int kclass_set, bw_auto_set;
+    ST_int effic1s, gmmw_ineff, s_fullrank;
+} civ_fit_io;
+
+ST_retcode ivest_fit_core(civ_fit_io *io);
 
 /*
     Full k-class IV estimation with VCE and diagnostics.
@@ -218,7 +291,8 @@ ST_retcode ivest_compute_2sls(
     ST_int n_absorbed_iv,
     ST_int n_absorbed_iv_all,
     ST_int dofminus, ST_int small,
-    const ST_double *b0, ST_int n_excl_dropped
+    const ST_double *b0, ST_int n_excl_dropped,
+    const civreghdfe_extra *extra
 );
 
 #endif /* CIVREGHDFE_ESTIMATE_H */

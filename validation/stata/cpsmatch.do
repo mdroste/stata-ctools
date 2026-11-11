@@ -929,11 +929,18 @@ program define _cpsm_parity
     quietly count if _treated == 0 & reldif(`wsf', `ref_w') > 10^-$DEFAULT_SIGFIGS
     if r(N) local bad `bad' _weight:`r(N)'
     if `has_nn' {
+        * Each row's first match as an observation number, from _id and _n1
+        * as both commands define them
+        tempvar ct_m
+        sort _id
+        quietly replace `byid' = `obs'
+        quietly gen long `ct_m' = `byid'[_n1] if _n1 < .
+        sort `obs'
         quietly count if _treated == 1 & cond(missing(_nn), 0, _nn) != `ref_nn'
         if r(N) local bad `bad' _nn:`r(N)'
-        quietly count if _treated == 1 & `ref_m' < . & _id != `ref_m'
+        quietly count if _treated == 1 & `ref_m' < . & `ct_m' != `ref_m'
         if r(N) local bad `bad' match:`r(N)'
-        quietly count if _treated == 1 & `ref_m' >= . & _id < .
+        quietly count if _treated == 1 & `ref_m' >= . & `ct_m' < .
         if r(N) local bad `bad' unmatched:`r(N)'
     }
     if "`bad'" == "" test_pass "`testname'"
@@ -1144,11 +1151,18 @@ program define _cpsm_codes
         if r(N) local bad `bad' `v':`r(N)'
     }
     if `has_nn' {
+        * Each row's first match as an observation number, from _id and _n1
+        * as both commands define them
+        tempvar ct_m
+        sort _id
+        quietly replace `byid' = `obs'
+        quietly gen long `ct_m' = `byid'[_n1] if _n1 < .
+        sort `obs'
         quietly count if _treated == 1 & cond(missing(_nn), 0, _nn) != `ref_nn'
         if r(N) local bad `bad' _nn:`r(N)'
-        quietly count if _treated == 1 & `ref_m' < . & _id != `ref_m'
+        quietly count if _treated == 1 & `ref_m' < . & `ct_m' != `ref_m'
         if r(N) local bad `bad' match:`r(N)'
-        quietly count if _treated == 1 & `ref_m' >= . & _id < .
+        quietly count if _treated == 1 & `ref_m' >= . & `ct_m' < .
         if r(N) local bad `bad' unmatched:`r(N)'
     }
     if "`bad'" == "" test_pass "`testname'"
@@ -1196,7 +1210,7 @@ foreach method in "" "kernel" "radius caliper(.2)" "noreplacement" {
 }
 capture drop _*
 cpsmatch t, pscore(ps) outcome(y)
-capture assert _support == 1 & _weight == -1 & missing(_nn) & missing(_id) if t == -1
+capture assert _support == 1 & _weight == -1 & _nn == 0 & missing(_n1) if t == -1
 if _rc test_fail "P3-10 negative code: generated variables" "rows coded -1"
 else test_pass "P3-10 negative code: generated variables"
 

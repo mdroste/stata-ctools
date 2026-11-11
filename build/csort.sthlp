@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.4 20261103}{...}
+{* *! version 1.2.6 20261111}{...}
 {viewerjumpto "Syntax" "csort##syntax"}{...}
 {viewerjumpto "Description" "csort##description"}{...}
 {viewerjumpto "Options" "csort##options"}{...}
@@ -19,7 +19,11 @@
 {p 8 17 2}
 {cmdab:csort}
 {varlist}
+{ifin}
 [{cmd:,} {it:options}]
+
+{pstd}
+({cmd:if} is not allowed, as with {cmd:sort}; only {cmd:in}.)
 
 {synoptset 24 tabbed}{...}
 {synopthdr}
@@ -31,6 +35,7 @@
 {synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
 {synopt:{opt nosort:edby}}do not set Stata's sortedby attribute{p_end}
 {synopt:{opt v:erbose}}display timing breakdown{p_end}
+{synopt:{opt stable}}accepted for compatibility with {cmd:sort}; {cmd:csort} is always stable{p_end}
 {synoptline}
 
 {pstd}
@@ -49,9 +54,14 @@ equal key values maintain their relative order.
 
 
 {pstd}
-Like native {cmd:sort}, {cmd:csort} rejects {cmd:if} and {cmd:in}. Fixed-width
-strings are supported. Datasets containing {cmd:strL} variables are rejected,
-including non-key columns and data that are already sorted.
+Like native {cmd:sort}, {cmd:csort} rejects {cmd:if} and accepts {cmd:in}:
+{cmd:csort} {varlist} {cmd:in} {it:range} orders only the observations in the
+range and leaves the others in place. This is done by {cmd:sort, stable} itself,
+which sets the sort marker only when the range covers the whole dataset. Fixed-width
+strings are supported. The plugin cannot write {cmd:strL} values, so a dataset
+containing a {cmd:strL} variable, as a key or not, is sorted by {cmd:sort, stable}
+itself: the same order, still stable. {opt nosortedby} then drops the sort
+marker; the timing results are missing.
 
 {marker options}{...}
 {title:Options}

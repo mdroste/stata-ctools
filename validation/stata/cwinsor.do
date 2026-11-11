@@ -357,27 +357,32 @@ capture cwinsor nonexistent, suffix(_w)
 if _rc != 0 test_pass "error: nonexistent variable"
 else test_fail "error: nonexistent variable" "should have failed"
 
-* Test 10.6: Both suffix and prefix
+* Test 10.6: Both suffix and prefix name prefix+var+suffix, as in gstats
+* winsor (winsor2 has no prefix())
 sysuse auto, clear
+gstats winsor price, suffix(_s) prefix(p_)
+rename p_price_s g_price_s
 capture cwinsor price, suffix(_s) prefix(p_)
-if _rc != 0 {
-    test_pass "error: both suffix and prefix"
-}
-else {
-    test_fail "error: both suffix and prefix" "should have failed"
-    capture drop price_s p_price
-}
+local rc = _rc
+capture assert p_price_s == g_price_s
+if !`rc' & !_rc test_pass "suffix() with prefix() as gstats winsor"
+else test_fail "suffix() with prefix() as gstats winsor" "rc=`rc'"
+capture drop p_price_s g_price_s
 
-* Test 10.7: Replace with suffix
+* Test 10.7: Replace with suffix overwrites an existing target, as in gstats
+* winsor (WINS-06)
 sysuse auto, clear
+gen price_w = -1
 capture cwinsor price, replace suffix(_w)
-if _rc != 0 {
-    test_pass "error: replace with suffix"
+local rc = _rc
+capture cwinsor price, suffix(_v)
+if `rc' == 0 & _rc == 0 {
+    quietly count if price_w != price_v
+    if r(N) == 0 test_pass "replace with suffix overwrites the target"
+    else test_fail "replace with suffix overwrites the target" "`=r(N)' values differ"
 }
-else {
-    test_fail "error: replace with suffix" "should have failed"
-    capture drop price_w
-}
+else test_fail "replace with suffix overwrites the target" "rc=`rc'"
+capture drop price_w price_v
 
 * Test 10.8: Variable already exists
 sysuse auto, clear
@@ -630,6 +635,120 @@ foreach v in x k {
         else test_pass "DATA-14 cuts(50 50) `v' `mode'"
         restore
     }
+}
+
+* WINS-02: the abbreviations of winsor2 (s() t l) and gstats winsor (p() s()
+* c() t l gen()) give the reference's variables, values, labels and formats
+capture program drop _cw_abbrev
+program define _cw_abbrev
+    syntax anything(name=cmds), testname(string)
+    gettoken ref cmds : cmds
+    gettoken ct cmds : cmds
+    sysuse auto, clear
+    `ref'
+    quietly ds
+    local refvars `r(varlist)'
+    foreach v of local refvars {
+        local lab_`v' : variable label `v'
+    }
+    tempfile reffile
+    quietly save `reffile'
+    sysuse auto, clear
+    capture `ct'
+    local rc = _rc
+    local bad
+    if !`rc' {
+        capture cf _all using `reffile', all
+        if _rc local bad cf
+        foreach v of local refvars {
+            capture local lab : variable label `v'
+            if `"`lab'"' != `"`lab_`v''"' local bad `bad' label:`v'
+        }
+    }
+    if `rc' | "`bad'" != "" test_fail "`testname'" "rc=`rc' `bad'"
+    else test_pass "`testname'"
+end
+_cw_abbrev "winsor2 price mpg, s(_q) t l" "cwinsor price mpg, s(_q) t l" , testname("WINS-02 winsor2 s() t l")
+_cw_abbrev "winsor2 price, s(_q) c(5 95)" "cwinsor price, s(_q) c(5 95)" , testname("WINS-02 winsor2 s() c()")
+_cw_abbrev "gstats winsor price mpg, p(g_) s(_x) c(5 95) t" "cwinsor price mpg, p(g_) s(_x) c(5 95) t" , testname("WINS-02 gstats p() s() c() t")
+_cw_abbrev "gstats winsor price mpg, gen(a1 a2) c(10 90)" "cwinsor price mpg, gen(a1 a2) c(10 90)" , testname("WINS-02 gstats gen()")
+* p(#) is still cwinsor's lower percentile
+sysuse auto, clear
+cwinsor price, p(5) q(95) suffix(_a)
+cwinsor price, cuts(5 95) suffix(_b)
+quietly count if price_a != price_b
+if r(N) == 0 test_pass "WINS-02 p(#) is the lower percentile"
+else test_fail "WINS-02 p(#) is the lower percentile" "`r(N)' values differ"
+
+* WINS-03: winsor2 stops with r(111) on reversed cuts; cwinsor refuses them
+* with r(198), as gstats winsor does
+sysuse auto, clear
+capture winsor2 price, cuts(99 1)
+local rc_w2 = _rc
+capture gstats winsor price, cuts(99 1)
+local rc_gs = _rc
+capture cwinsor price, cuts(99 1) suffix(_r)
+local rc_ct = _rc
+capture confirm variable price_r
+if `rc_w2' == 111 & `rc_gs' == 198 & `rc_ct' == 198 & _rc test_pass "WINS-03 reversed cuts: winsor2 r(111), gstats and cwinsor r(198)"
+else test_fail "WINS-03 reversed cuts" "winsor2 r(`rc_w2') gstats r(`rc_gs') cwinsor r(`rc_ct')"
+
+* WINS-09: prefix(), generate() and weights (gstats winsor's) keep the source
+* format, as gstats does; suffix() alone gives winsor2's default format
+foreach call in "prefix(w_)" "generate(w_price w_mpg)" "suffix(_w) [aw=weight]" "suffix(_w)" {
+    sysuse auto, clear
+    format price %9.2fc
+    format mpg %6.1f
+    local wt
+    local opts `call'
+    if strpos("`call'", "[") {
+        local wt = substr("`call'", strpos("`call'", "["), .)
+        local opts = substr("`call'", 1, strpos("`call'", "[") - 1)
+    }
+    if "`call'" == "suffix(_w)" winsor2 price mpg, suffix(_w)
+    else gstats winsor price mpg `wt', `opts'
+    local targets
+    foreach v in price mpg {
+        if strpos("`call'", "prefix") local targets `targets' w_`v'
+        else if strpos("`call'", "generate") local targets `targets' w_`v'
+        else local targets `targets' `v'_w
+    }
+    local ref_formats
+    foreach t of local targets {
+        local ref_formats `ref_formats' `: format `t''
+    }
+    drop `targets'
+    cwinsor price mpg `wt', `opts'
+    local ct_formats
+    foreach t of local targets {
+        local ct_formats `ct_formats' `: format `t''
+    }
+    if "`ref_formats'" == "`ct_formats'" test_pass "WINS-09 format with `call': `ct_formats'"
+    else test_fail "WINS-09 format with `call'" "reference `ref_formats', cwinsor `ct_formats'"
+}
+
+* WINS-10: gstats winsor's gtools options are accepted, as gstats accepts
+* them, and do not change the result; bad values exit as there
+foreach o in "compress" "forcestrl" "hash(1)" "hashmethod(spooky)" "oncollision(error)" ///
+    "bench" "benchmarklevel(2)" "compress forcestrl hash(biject) oncollision(fallback)" {
+    sysuse auto, clear
+    capture gstats winsor price mpg, gen(g1 g2) `o'
+    local rc_gs = _rc
+    capture noisily cwinsor price mpg, gen(c1 c2) `o'
+    local rc_ct = _rc
+    capture assert g1 == c1 & g2 == c2
+    if `rc_gs' == 0 & `rc_ct' == 0 & !_rc test_pass "WINS-10 gtools option `o'"
+    else test_fail "WINS-10 gtools option `o'" "gstats r(`rc_gs') cwinsor r(`rc_ct')"
+}
+foreach o in "oncollision(foo)" "hashmethod(foo)" {
+    sysuse auto, clear
+    capture gstats winsor price, gen(g1) `o'
+    local rc_gs = _rc
+    capture cwinsor price, gen(c1) `o'
+    local rc_ct = _rc
+    capture confirm variable c1
+    if `rc_gs' == `rc_ct' & _rc test_pass "WINS-10 `o' refused r(`rc_ct')"
+    else test_fail "WINS-10 `o' refused" "gstats r(`rc_gs') cwinsor r(`rc_ct')"
 }
 
 } /* end quietly */

@@ -174,6 +174,11 @@ typedef struct CImportContext {
     int col_first;
     int col_last;
     bool plain_numbers;          /* Default grammar: single-pass plain number parser applies */
+    bool quoted_rows_in_parse;   /* maxquotedrows() is checked by the chunk parse */
+    uint64_t strl_bytes;         /* Decoded text of the selected strL columns */
+    void *blobmem;               /* In-memory strL transfer (CImportBlobMem blocks) */
+    size_t nblobmem;
+    int nblobcols;
 
     /* Encoding support */
     CImportEncoding encoding;           /* Detected or specified encoding */
@@ -184,7 +189,7 @@ typedef struct CImportContext {
     double time_encoding;               /* Time spent on encoding detection/conversion */
 
     /* Warning tracking for unmatched quotes */
-    size_t unmatched_quote_rows[CIMPORT_MAX_WARNINGS];
+    size_t unmatched_quote_rows[CIMPORT_MAX_WARNINGS]; /* row start offsets, ascending */
     int num_unmatched_quote_warnings;
     pthread_mutex_t warning_mutex;
 #ifdef CIMPORT_WINDOWS

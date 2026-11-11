@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.4 20261103}{...}
+{* *! version 1.2.6 20261111}{...}
 {vieweralsosee "[R] qreg" "help qreg"}{...}
 {vieweralsosee "ctools" "help ctools"}{...}
 {viewerjumpto "Syntax" "cqreg##syntax"}{...}
@@ -23,6 +23,7 @@
 {depvar}
 [{indepvars}]
 {ifin}
+{weight}
 [{cmd:,} {it:options}]
 
 
@@ -33,23 +34,27 @@
 {synopt:{opt q:uantile(#)}}estimate {it:#} quantile; default is {cmd:quantile(0.5)}{p_end}
 
 {syntab:SE/Robust}
-{synopt:{opt vce(vcetype)}}variance estimation method; {it:vcetype} may be
-    {opt iid}, {opt robust}, or {opt cl:uster} {it:clustvar}{p_end}
+{synopt:{opt vce}{cmd:(}[{it:vcetype}] [{cmd:,} {it:vceopts}]{cmd:)}}variance estimation method; {it:vcetype} may be
+    {opt iid}, {opt r:obust}, or {opt cl:uster} {it:clustvar} (or {cmd:qreg}'s {opt excl:uster} {it:clustvar}); {it:vceopts} are {cmd:qreg}'s density and bandwidth methods{p_end}
 {synopt:{opt den:method(method)}}density estimation: {opt fitted}, {opt residual}, or {opt kernel}[{cmd:(}{it:kernel}{cmd:)}]{p_end}
 {synopt:{opt bwmethod(method)}}bandwidth selection: {opt hsheather}, {opt bofinger}, or {opt chamberlain}{p_end}
 
 {syntab:Reporting}
 {synopt:{opt l:evel(#)}}set confidence level; default is {cmd:level(95)}{p_end}
 {synopt:{it:display_options}}{help estimation options##display_options:display options} of {cmd:qreg}{p_end}
-{synopt:{opt nolog}}accepted for compatibility with {cmd:qreg}; {cmd:cqreg} prints no iteration log{p_end}
+{synopt:{opt nolog}}hide the iteration log line ({opt log} shows it); as in {cmd:qreg}, {cmd:set iterlog off} also hides it{p_end}
 {synopt:{opt v:erbose}}display progress and elapsed times{p_end}
 {synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
 
 {syntab:Optimization}
 {synopt:{opt tol:erance(#)}}convergence tolerance in normalized response units; default is {cmd:tolerance(1e-12)}{p_end}
 {synopt:{opt max:iter(#)}}maximum iterations; default is {cmd:maxiter(200)}{p_end}
+{synopt:{opt wls:iter(#)}, {opt iter:ate(#)}, {opt trace}}{cmd:qreg}'s options, checked as there; see {help cqreg##qregopts:below}{p_end}
 {synopt:{opt nopreprocess(#)}}accepted for backward compatibility; has no effect{p_end}
 {synoptline}
+{p 4 6 2}
+{opt fweight}s, {opt iweight}s, and {opt pweight}s are allowed, as in
+{cmd:qreg}; see {help weight}.{p_end}
 
 
 {marker description}{...}
@@ -63,8 +68,8 @@ primal-dual interior-point solver in C.
 {pstd}
 Factor-variable notation is allowed. Include explicit indicators for fixed
 effects, for example {cmd:cqreg y x i.group}. Without {it:indepvars},
-{cmd:cqreg} fits the constant-only model. Weights and {opt absorb()} are
-not accepted. Typing {cmd:cqreg} without arguments, or
+{cmd:cqreg} fits the constant-only model. {opt absorb()} is not accepted.
+Typing {cmd:cqreg} without arguments, or
 {cmd:estimates replay}, redisplays the last estimates; {opt level()} and the
 display options may be given then.
 
@@ -86,18 +91,44 @@ of this check.
 
 {phang}
 {opt quantile(#)} specifies the quantile to be estimated. The quantile must be
-a number strictly between 0 and 1. The default is {cmd:quantile(0.5)}, which
-corresponds to the median.
+a number strictly between 0 and 1, or, as in {cmd:qreg}, a percentage from 1
+to 99 ({cmd:quantile(25)} is {cmd:quantile(.25)}). The default is
+{cmd:quantile(0.5)}, which corresponds to the median.
+
+{pstd}
+As {cmd:qreg}, {cmd:cqreg} allows the {cmd:by} prefix and can be used with
+{cmd:bootstrap}, {cmd:statsby}, {cmd:stepwise}, {cmd:nestreg} and
+{cmd:mi estimate}.
+
+
+{pstd}
+Weights are those of {cmd:qreg}: the coefficients minimize the weighted
+quantile loss, sum_i w_i * rho_q(r_i). {opt fweight}s count each
+observation w_i times, so {cmd:e(N)} and the bandwidth use the sum of the
+weights. {opt pweight}s are fitted as {opt iweight}s and imply
+{cmd:vce(robust)}; {cmd:vce(iid)} and {cmd:denmethod(residual)} are not
+allowed with them (error 404). {cmd:qreg} also accepts negative
+{opt iweight}s, for which the weighted quantile loss is not convex;
+{cmd:cqreg} rejects them (error 402). Observations with zero weight are
+excluded, as in {cmd:qreg}.
 
 
 {dlgtab:SE/Robust}
 
 {phang}
-{opt vce(vcetype)} specifies how standard errors are computed.
+{cmd:vce(}[{it:vcetype}] [{cmd:,} {it:vceopts}]{cmd:)} specifies how standard
+errors are computed, with {cmd:qreg}'s syntax: {it:vceopts} are a density
+method, {opt fit:ted}, {opt res:idual} (or {opt residuals}) or
+{opt ker:nel}[{cmd:(}{it:kernel}{cmd:)}], and a bandwidth method,
+{opt bo:finger}, {opt hs:heather} or {opt ch:amberlain}; for example
+{cmd:vce(robust, kernel(gaussian) bofinger)} or {cmd:vce(, residual)}. They
+are the same as {opt denmethod()} and {opt bwmethod()}, which take the same
+names and abbreviations; given in both places, they must agree. A missing
+{it:vcetype} is the default ({cmd:iid}, or {cmd:robust} with {opt pweight}s).
 
 {phang2}
-{opt vce(iid)} (the default) computes standard errors assuming independent and
-identically distributed errors. The sparsity function is estimated by the
+{opt vce(iid)} (the default without {opt pweight}s) computes standard errors
+assuming independent and identically distributed errors. The sparsity function is estimated by the
 method in {opt denmethod()}.
 
 {phang2}
@@ -163,7 +194,8 @@ The default follows the {help ctools##threads:ctools thread setting}.
 
 {phang}
 {opt tolerance(#)} specifies the convergence tolerance for the IPM solver. The
-default is {cmd:tolerance(1e-12)}. The response is centered at its median and
+default is {cmd:tolerance(1e-12)}; allowed values are greater than zero and
+at most one. The response is centered at its median and
 scaled by a power of two before fitting, so its median absolute deviation is
 between 1 and 2 (the mean absolute deviation when most values are tied). Data
 whose spread is already in that range are only centered. Centering reduces
@@ -183,6 +215,22 @@ estimates.
 {phang}
 {opt nopreprocess(#)} accepts nonnegative integers for compatibility and has
 no effect on the solver.
+
+{marker qregopts}{...}
+{phang}
+{opt wlsiter(#)}, {opt iterate(#)} and {opt trace} are {cmd:qreg}'s options
+for its simplex solver: the weighted least-squares iterations of its starting
+values, its iteration limit, and a trace of the coefficients at each iteration.
+{cmd:cqreg} checks them as {cmd:qreg} does ({it:#} must be a positive integer;
+error 198 otherwise). The interior-point solver uses neither starting values
+nor {opt iterate()} (its limit is {opt maxiter()}); with a unique solution the
+estimates are the same. {opt trace} shows the iteration log line and the
+coefficients at the solution.
+
+{phang}
+Under {cmd:version 12} or earlier, {cmd:qreg} reports its old standard errors
+(and accepts {opt aweight}s); {cmd:cqreg} reports those of {cmd:qreg} in
+version 13 and later, with a note.
 
 {marker prediction}{...}
 {title:Prediction}
@@ -227,14 +275,16 @@ the linear prediction. {cmd:if} and {cmd:in} may restrict the predictions.
 
 {synoptset 20 tabbed}{...}
 {p2col 5 20 24 2: Scalars}{p_end}
-{synopt:{cmd:e(N)}}number of observations{p_end}
+{synopt:{cmd:e(N)}}number of observations (the sum of the weights with {opt fweight}s){p_end}
 {synopt:{cmd:e(q)}}quantile{p_end}
 {synopt:{cmd:e(sum_adev)}}minimized quantile loss, sum of q*u + (1-q)*v{p_end}
 {synopt:{cmd:e(sum_rdev)}}quantile loss from the intercept-only model{p_end}
 {synopt:{cmd:e(r2_p)}}1 - e(sum_adev)/e(sum_rdev){p_end}
-{synopt:{cmd:e(q_v)}}unconditional sample quantile of the dependent variable{p_end}
+{synopt:{cmd:e(q_v)}}unconditional sample quantile of the dependent variable
+(weighted: the first value in sort order whose cumulative weight reaches q
+times the total, as in {cmd:qreg}){p_end}
 {synopt:{cmd:e(f_r)}}estimated density, 1/e(sparsity){p_end}
-{synopt:{cmd:e(sum_w)}}number of observations (weights are not accepted){p_end}
+{synopt:{cmd:e(sum_w)}}sum of the weights (the number of observations when unweighted){p_end}
 {synopt:{cmd:e(sparsity)}}estimated sparsity (1/f(0)); missing with
 {cmd:vce(robust)} or {cmd:vce(cluster)}, as in {cmd:qreg}; zero when the
 dependent variable has a mass point at the fitted quantile, as in {cmd:qreg},
@@ -258,10 +308,21 @@ cluster, or zero sparsity), as in {cmd:qreg}{p_end}
 {synopt:{cmd:e(depvar)}}name of dependent variable{p_end}
 {synopt:{cmd:e(vce)}}variance estimation method{p_end}
 {synopt:{cmd:e(vcetype)}}{cmd:Robust} with {cmd:vce(robust)} or {cmd:vce(cluster)}{p_end}
+{synopt:{cmd:e(basis)}}(hidden, as in {cmd:qreg}) observation numbers of the linear programming basis, empty if the solver identified none{p_end}
+
+{pstd}
+As {cmd:qreg}, {cmd:cqreg} also posts the hidden scalar {cmd:e(tolerance)} (here
+its {opt tolerance()}; {cmd:qreg}'s simplex reports its own, 1e-10) and sets the
+legacy globals {cmd:$S_E_mdf}, {cmd:$S_E_tdf}, {cmd:$S_E_rd}, {cmd:$S_E_nobs},
+{cmd:$S_E_q}, {cmd:$S_E_rq}, {cmd:$S_E_rsd}, {cmd:$S_E_msd}, {cmd:$S_E_vl} (the
+dependent variable and the coefficients' names), {cmd:$S_E_frc} and
+{cmd:$S_E_cmd} ({cmd:cqreg}).
 {synopt:{cmd:e(denmethod)}}density estimation method{p_end}
 {synopt:{cmd:e(kernel)}}kernel function (kernel method){p_end}
 {synopt:{cmd:e(bwmethod)}}bandwidth selection method{p_end}
 {synopt:{cmd:e(clustvar)}}cluster variable (if {opt vce(cluster)}){p_end}
+{synopt:{cmd:e(wtype)}}weight type{p_end}
+{synopt:{cmd:e(wexp)}}weight expression{p_end}
 {synopt:{cmd:e(predict)}}program used to implement {cmd:predict}{p_end}
 
 {synoptset 20 tabbed}{...}
@@ -324,6 +385,18 @@ kband = min(sd, IQR/1.34) * (invnormal(q+h) - invnormal(q-h)) of the residuals r
 The robust VCE is q*(1-q) * H * (X'X) * H, with H the inverse of
 sum_i f_i x_i x_i' ({opt fitted}) or of sum_i K(r_i/kband) x_i x_i' / kband
 ({opt kernel}).
+
+{pstd}
+With weights w_i, as in {cmd:qreg}: the solver fits the rows scaled by w_i
+(rho_q(w r) = w rho_q(r) for w > 0); X'X becomes sum_i w_i x_i x_i' for
+{opt fweight}s and sum_i w_i^2 x_i x_i' for {opt iweight}s and
+{opt pweight}s; H weights each f_i or kernel value by w_i; the {opt fitted}
+sparsity uses the weighted mean of X; the {opt kernel} method uses the
+weighted mean, standard deviation and interquartile range of the residuals
+and the weighted mean of the kernel values; the {opt residual} method uses
+weighted percentiles, removing one copy of each basis observation under
+{opt fweight}s and the basis observations themselves otherwise; and the
+cluster scores are weighted by w_i.
 
 {pstd}
 Fixed effects must enter as explicit indicators in the quantile objective;

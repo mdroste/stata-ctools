@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.4 20261103}{...}
+{* *! version 1.2.6 20261111}{...}
 {viewerjumpto "Syntax" "cinterpolate##syntax"}{...}
 {viewerjumpto "Description" "cinterpolate##description"}{...}
 {viewerjumpto "Options" "cinterpolate##options"}{...}
@@ -40,7 +40,8 @@ distinct known x points are available on each side.
 
 {pstd}{opt by()} computes separate interpolations for numeric or string groups.
 The {cmd:by:} prefix is also accepted; do not combine it with by(). Extended missing
-group values remain distinct. Group string data must fit within 2045 bytes.
+group values remain distinct. {cmd:strL} groups may hold text of any length
+and binary values.
 
 {pstd}{opt epolate} extrapolates at both ends using the nearest two distinct
 known x points. A group with only one known point cannot extrapolate.
@@ -63,7 +64,13 @@ Omitting it or specifying zero uses the {help ctools##threads:ctools setting}.
 
 {title:Stored results}
 
-{pstd}The generated variable is the result; the command does not store results in {cmd:r()} or {cmd:e()}.
+{pstd}As {cmd:ipolate} does, {cmd:cinterpolate} leaves the number of missing
+values in the new variable in {cmd:r(N)} and reports it as
+"({it:#} missing value(s) generated)" when it is not zero.
+
+{synoptset 15 tabbed}{...}
+{p2col 5 15 19 2: Scalars}{p_end}
+{synopt:{cmd:r(N)}}number of missing values generated{p_end}
 
 {marker examples}{...}
 

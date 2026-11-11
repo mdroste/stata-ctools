@@ -4,7 +4,7 @@ d
 d Really fast drop-in replacements for a variety of Stata
 d built-in and user-written commands.
 d
-d Version: 1.2.4
+d Version: 1.2.6
 d Requires: Stata 14.1 or later
 
 p ctools C-accelerated tools for Stata

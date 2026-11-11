@@ -2,6 +2,7 @@
  * All allocations are local to a call. */
 #include "cdistinct_impl.h"
 #include "ctools_types.h"
+#include "ctools_alloc.h"
 #include "ctools_order.h"
 #include "ctools_parse.h"
 #include "ctools_runtime.h"
@@ -169,7 +170,8 @@ static ST_retcode cdistinct_fast_count(stata_data *d, const int *keys, int nk, i
             return rc;
         if (n > SIZE_MAX / sizeof(*d->sort_order))
             return 920;
-        d->sort_order = malloc(n * sizeof(*d->sort_order));
+        /* stata_data owns this buffer and releases it with aligned_free. */
+        d->sort_order = ctools_cacheline_alloc(n * sizeof(*d->sort_order));
         if (!d->sort_order)
             return 920;
         for (size_t j = 0; j < n; j++)

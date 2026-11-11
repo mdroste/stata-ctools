@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.4 20261103}{...}
+{* *! version 1.2.6 20261111}{...}
 {viewerjumpto "Syntax" "crangestat##syntax"}{...}
 {viewerjumpto "Description" "crangestat##description"}{...}
 {viewerjumpto "Options" "crangestat##options"}{...}
@@ -37,7 +37,8 @@ explicit {it:newvar}, each result is named {it:varname_statname}, matching
 and {cmd:mpg_mean}. A specification without {cmd:(}{it:statname}{cmd:)} means
 {cmd:(mean)}.
 An abbreviated {it:varname} names the result by the full variable name, so
-{cmd:(mean) pri} also creates {cmd:price_mean}.
+{cmd:(mean) pri} also creates {cmd:price_mean}. A variable range may have spaces
+around the dash ({cmd:(mean) x1 - x3}), as in {cmd:rangestat}.
 
 {synoptset 24 tabbed}{...}
 {synopthdr}
@@ -48,6 +49,10 @@ An abbreviated {it:varname} names the result by the full variable name, so
 {syntab:Optional}
 {synopt:{opt by(varlist)}}compute statistics within groups{p_end}
 {synopt:{opt excl:udeself}}exclude current observation from calculations{p_end}
+{synopt:{opt casew:ise}}use only the observations with no missing value in the statistic's variables{p_end}
+{synopt:{opt d:escribe}}describe the new variables{p_end}
+{synopt:{opt local(name)}}store the names of the new variables in local {it:name}{p_end}
+{synopt:{opt noch:eck}}accepted, as in {cmd:rangestat}; changes no result{p_end}
 {synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
 {synopt:{opt v:erbose}}display timing breakdown{p_end}
 
@@ -92,10 +97,12 @@ Applications include:
 {phang}
 {opt interval(keyvar low high)} specifies the key variable and the interval
 bounds, separated by spaces or commas, as in {cmd:rangestat}; anything after
-{it:high} is an error. The key variable must be numeric. Bounds must be numeric constants
-or {cmd:.}; variable bounds are not accepted. For each observation, other
-observations are included in the calculation if their key value falls within
-[current_key + low, current_key + high].
+{it:high} is an error. The key variable must be numeric. Each bound is a number,
+{cmd:.}, or a numeric variable, as in {cmd:rangestat}. A number is added to the
+key: observations are included in the calculation if their key value falls
+within [current_key + low, current_key + high]. A variable gives the bound
+itself for each observation (not an offset), and a missing value of it leaves
+that end unbounded.
 
 {p 8 8 2}
 Use {cmd:.} (missing) for {it:low} to indicate negative infinity, or for
@@ -105,16 +112,35 @@ includes all observations from the earliest date up to the current observation.
 {dlgtab:Optional}
 
 {phang}
+{opt casewise} drops, within each window, the observations with a missing value
+in any variable of the same {cmd:(}{it:statname}{cmd:)} specification, as in
+{cmd:rangestat}: {cmd:(mean) x y, casewise} averages {cmd:x} and {cmd:y} over the
+observations where both are nonmissing. A window without such observations
+gives missing results (also for {cmd:count}, {cmd:obs} and {cmd:missing});
+otherwise {cmd:first} and {cmd:last} are the first and last complete
+observations, {cmd:obs} counts them and {cmd:missing} is 0. {cmd:(cov)},
+{cmd:(corr)} and {cmd:(reg)} always delete casewise; for user-written Mata
+functions {opt casewise} applies to the variables passed to them.
+
+{phang}
+{opt describe} runs {help describe} on the new variables, and {opt local(name)}
+stores their names in the caller's local {it:name}, as in {cmd:rangestat}.
+{opt nocheck} turns off {cmd:rangestat}'s shortcut for observations with the
+same interval bounds, which only saves time there; {cmd:crangestat} accepts it
+and gives the same results.
+
+{phang}
 {opt by(varlist)} specifies that statistics should be computed separately
 within groups defined by the variables in {it:varlist}. Observations in
 different groups are never included in each other's calculations.
+{cmd:strL} group variables may hold text of any length and binary values.
 
 {phang}
 {opt excludeself} excludes the current observation from its calculation,
 giving statistics such as the mean of the other observations in the interval.
 
 {phang}
-{opt threads(#)} sets the maximum number of threads, from 1 to 256.
+{opt threads(#)} sets the maximum number of threads, from 1 to 256. Zero uses the default.
 The default follows the {help ctools##threads:ctools thread setting}.
 
 {phang}
@@ -168,6 +194,15 @@ The following statistics are available:
 {p2col :{opt p95}}95th percentile{p_end}
 {p2col :{opt p99}}99th percentile{p_end}
 {p2col :{opt skewness}}skewness{p_end}
+{p2col :{opt cov}}covariance of two variables: {cmd:cov_nobs}, {cmd:cov_x}{p_end}
+{p2col :{opt corr}}correlation of two variables: {cmd:corr_nobs}, {cmd:corr_x}{p_end}
+{p2col :{opt reg}}OLS of the first variable on the others and a constant:
+{cmd:reg_nobs}, {cmd:reg_r2}, {cmd:reg_adj_r2}, {cmd:b_}{it:var}..., {cmd:b_cons},
+{cmd:se_}{it:var}..., {cmd:se_cons} (missing but {cmd:reg_nobs} when the window
+has no more observations than parameters or a regressor would be omitted){p_end}
+{p2col :{it:mfunc}}a user-written Mata function taking the window's rows of the
+variables as a matrix and returning a row vector, stored in
+{it:mfunc}{cmd:1}, {it:mfunc}{cmd:2}, ...{p_end}
 {p2col :{opt kurtosis}}kurtosis (fourth standardized moment; normal distribution = 3){p_end}
 {p2line}
 
@@ -241,7 +276,15 @@ use population moments and are missing when the variance is zero.
 {title:Stored results}
 
 {pstd}
-When the {opt verbose} option is specified, {cmd:crangestat} stores the
+{cmd:crangestat} stores the following in {cmd:r()}, as {cmd:rangestat} does:
+
+{synoptset 28 tabbed}{...}
+{p2col 5 28 32 2: Macros}{p_end}
+{synopt:{cmd:r(newvars)}}the new variables, in the order of the statistics{p_end}
+{synopt:{cmd:r(rangestat_version)}}{cmd:1.1.1}, the {cmd:rangestat} version it follows{p_end}
+
+{pstd}
+When the {opt verbose} option is specified, {cmd:crangestat} also stores the
 following in global scalars:
 
 {synoptset 28 tabbed}{...}

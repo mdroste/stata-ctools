@@ -23,6 +23,7 @@
 #include "civreghdfe_impl.h"
 #include "civreghdfe_result.h"
 #include "civreghdfe_input.h"
+#include "civreghdfe_boot.h"
 
 #include "../ctools_config.h"
 #include "../ctools_runtime.h"
@@ -37,12 +38,18 @@
 #include "civreghdfe_tests.h"
 #include "../ctools_hdfe_utils.h"
 #include "../hdfe/hdfe_sample.h"
+#include "../creghdfe/creghdfe_hdfe.h"  /* heterogeneous slopes, shared with creghdfe */
 #include "../ctools_unroll.h"
 
 static HDFE_State *iv_state = NULL;
 
+/* vce(bootstrap): set by civreghdfe_main (civreghdfe_boot.c) */
+ST_retcode (*civreghdfe_boot_retain_hook)(const civreghdfe_boot_source *src) = NULL;
+void (*civreghdfe_boot_release_hook)(void) = NULL;
+int civreghdfe_boot_retain_requested = 0;
+
 /* Weighted sum of squares sum(w x^2); w may be NULL */
-static ST_double civ_wss(const ST_double *x, const ST_double *w, ST_int N)
+ST_double civ_wss(const ST_double *x, const ST_double *w, ST_int N)
 {
     ST_double s = 0.0;
     if (w) { for (ST_int i = 0; i < N; i++) s += w[i] * x[i] * x[i]; }
@@ -51,7 +58,7 @@ static ST_double civ_wss(const ST_double *x, const ST_double *w, ST_int N)
 }
 
 /* Weighted sum of squared deviations from the weighted mean; w may be NULL */
-static ST_double civ_wss_dev(const ST_double *x, const ST_double *w, ST_int N)
+ST_double civ_wss_dev(const ST_double *x, const ST_double *w, ST_int N)
 {
     ST_double sw = 0.0, m = 0.0, s = 0.0;
     for (ST_int i = 0; i < N; i++) {
@@ -82,6 +89,50 @@ static void civ_drop_missing(const ST_double *v, ST_int i0, ST_int i1, ST_double
 static void civ_gather(ST_double *dst, const ST_double *src, const ST_int *rows, ST_int N)
 {
     for (ST_int j = 0; j < N; j++) dst[j] = src[rows[j]];
+}
+
+/* The slope description creghdfe's slope routines read: factor g is a
+   slope when slope_idx[g] != 0, of the absorbed effect fe_absvar[g] */
+static void civ_slope_input(const civreghdfe_input *in, creghdfe_input *ci)
+{
+    memset(ci, 0, sizeof(*ci));
+    for (ST_int g = 0; g < 10; g++) {
+        ci->slope_idx[g] = in->slope_flag[g];
+        ci->fe_absvar[g] = in->fe_absvar[g];
+    }
+    ci->num_slopes = in->num_slopes;
+    ci->dof_continuous = in->dof_continuous;
+}
+
+/* Redundant coefficients of each factor as reghdfe counts them (nested:
+   NULL or G flags), and exact[g] where reghdfe reports the count as exact:
+   nested effects, the first remaining intercept and, with mobility-group
+   adjustments, the second (its "?" marks the others). With slopes the
+   intercepts are counted among themselves and a slope constant within a
+   level (zero without an intercept) is redundant under
+   dofadjustments(continuous). Returns 0 or 920. */
+static ST_retcode civ_redundant(const HDFE_State *S, const civreghdfe_input *in,
+                                const ST_int *nested, ST_int dof_pairs, ST_int *redundant,
+                                ST_int *exact)
+{
+    const ST_int G = S->G;
+    if (in->num_slopes > 0 && G <= 10) {
+        creghdfe_input ci;
+        civ_slope_input(in, &ci);
+        return creghdfe_redundant(S, &ci, nested, dof_pairs, redundant, exact) ? 920 : 0;
+    }
+    if (ctools_hdfe_redundant_intercepts(S->factors, G, S->N, nested, dof_pairs, redundant))
+        return 920;
+    ST_int first = -1, second = -1;
+    for (ST_int g = 0; g < G; g++) {
+        exact[g] = 0;
+        if (nested && nested[g]) exact[g] = 1;
+        else if (first < 0) first = g;
+        else if (second < 0) second = g;
+    }
+    if (first >= 0) exact[first] = 1;
+    if (dof_pairs && second >= 0) exact[second] = 1;
+    return 0;
 }
 
 /*
@@ -160,12 +211,13 @@ static ST_retcode map_test_cols(const char *name, const char *opt, ST_int opt_co
     partial_out. Partial columns absorbed by the fixed effects (weighted SS
     <= absorb_tol times their pre-partialling SS in ss_exog) or collinear
     with earlier partial columns are left out of P and marked 2, as ivreg2
-    drops collinear partial() variables; the rest keep flag 1.
+    drops collinear partial() variables; the rest keep flag 1. Messages
+    only with report (the bootstrap replicates call it without).
 */
-static ST_retcode fwl_partial_out(ST_double *data, ST_int N, ST_int total_cols,
-                                  ST_int exog_start, ST_int zexog_start, ST_int K_exog,
-                                  ST_int *is_partial, const ST_double *w,
-                                  const ST_double *ss_exog, ST_double absorb_tol)
+ST_retcode civ_fwl_partial_out(ST_double *data, ST_int N, ST_int total_cols,
+                               ST_int exog_start, ST_int zexog_start, ST_int K_exog,
+                               ST_int *is_partial, const ST_double *w,
+                               const ST_double *ss_exog, ST_double absorb_tol, int report)
 {
     ST_int n_cand = 0, n_keep = 0;
     for (ST_int k = 0; k < K_exog; k++) if (is_partial[k]) n_cand++;
@@ -181,7 +233,7 @@ static ST_retcode fwl_partial_out(ST_double *data, ST_int N, ST_int total_cols,
     ST_retcode rc = 0;
 
     if (!cols || !coll || !P || !PtP || !PtP_inv || !PtWX || !coef) {
-        SF_error("civreghdfe: Memory allocation failed for FWL workspace\n");
+        if (report) SF_error("civreghdfe: Memory allocation failed for FWL workspace\n");
         rc = 920;
         goto fwl_done;
     }
@@ -204,7 +256,7 @@ static ST_retcode fwl_partial_out(ST_double *data, ST_int N, ST_int total_cols,
     if (n_keep > 1) {
         ctools_matmul_atdb(P, P, w, N, n_keep, n_keep, PtP);
         if (detect_collinearity_scaled(PtP, n_keep, coll, 0) < 0) {
-            SF_error("civreghdfe: Collinearity detection failed for partial()\n");
+            if (report) SF_error("civreghdfe: Collinearity detection failed for partial()\n");
             rc = 920;
             goto fwl_done;
         }
@@ -229,7 +281,7 @@ static ST_retcode fwl_partial_out(ST_double *data, ST_int N, ST_int total_cols,
     memcpy(PtP_inv, PtP, (size_t)n_keep * n_keep * sizeof(ST_double));
     if (ctools_cholesky(PtP_inv, n_keep) != 0 ||
         ctools_invert_from_cholesky(PtP_inv, n_keep, PtP_inv) != 0) {
-        SF_error("civreghdfe: cannot partial out the partial() variables (P'WP is singular)\n");
+        if (report) SF_error("civreghdfe: cannot partial out the partial() variables (P'WP is singular)\n");
         rc = 498;
         goto fwl_done;
     }
@@ -261,8 +313,8 @@ fwl_done:
    before partialling: only rounding noise is left, which the projection
    leaves at about 1e-30 of that SS. A column with genuine within variation
    above this is kept, as ivreghdfe keeps it (ivreghdfe has no rule of its
-   own: it partials first and drops only what invsym() drops). */
-#define CIV_FE_NOISE 1e-20
+   own: it partials first and drops only what invsym() drops).
+   CIV_FE_NOISE is defined in civreghdfe_impl.h. */
 
 /* Columns dropped by Stata's invsym() of the symmetric K x K cross-product
    A (column-major), the rule behind ivreghdfe's ranks: a column is zeroed
@@ -271,7 +323,7 @@ fwl_done:
    order, the rest on the largest remaining diagonal, as invsym() does.
    Columns with drop[j] already set are left out. Returns the number of
    columns newly dropped, or -1 if memory runs out. */
-static ST_int civ_invsym_drops(const ST_double *A, ST_int K, ST_int n_ordered, ST_int *drop)
+ST_int civ_invsym_drops(const ST_double *A, ST_int K, ST_int n_ordered, ST_int *drop)
 {
     if (K <= 0) return 0;
     ST_double *W = (ST_double *)ctools_safe_malloc3((size_t)K, (size_t)K, sizeof(ST_double));
@@ -327,6 +379,130 @@ static ST_int civ_invsym_drops(const ST_double *A, ST_int K, ST_int n_ordered, S
     - __civreghdfe_vce_type: 0=unadjusted, 1=robust, 2=cluster
     - __civreghdfe_maxiter, __civreghdfe_tolerance, __civreghdfe_verbose
 */
+/*
+    ivreg2 options read here for the estimation (civreghdfe_extra):
+    smatrix()/wmatrix() arrive as __civreghdfe_S0/__civreghdfe_W0 over the
+    instruments left after partial() (Z's order: included, then excluded)
+    and are cut to the instruments kept; bw(auto) needs the row sums of
+    the unpartialled instruments (no constant, no partialled regressor);
+    orthog() on included instruments arrives as __civreghdfe_orthogx_flags
+    over the exogenous regressors left after partial().
+*/
+typedef struct {
+    civreghdfe_extra ex;
+    ST_double *S0, *W0, *abw_z;
+    ST_int *ox;
+    ST_int n_ox;
+} civ_extra_buf;
+
+static void civ_extra_free(civ_extra_buf *b)
+{
+    free(b->S0); free(b->W0); free(b->abw_z); free(b->ox);
+    memset(b, 0, sizeof(*b));
+}
+
+static ST_retcode civ_read_user_matrix(const char *name, ST_int Lp, const ST_int *keep,
+                                       ST_int K_iv, ST_double **out)
+{
+    char mname[64];
+    snprintf(mname, sizeof(mname), "%s", name);
+    *out = NULL;
+    if (SF_row(mname) != Lp || SF_col(mname) != Lp) return 0;
+    ST_double *M = (ST_double *)calloc((size_t)K_iv * K_iv, sizeof(ST_double));
+    if (!M) return 920;
+    ST_int c = 0;
+    for (ST_int j = 0; j < Lp; j++) {
+        if (!keep[j]) continue;
+        ST_int r = 0;
+        for (ST_int i = 0; i < Lp; i++) {
+            if (!keep[i]) continue;
+            ST_double v = 0.0;
+            if (SF_mat_el(mname, i + 1, j + 1, &v) != 0 || !(v < SV_missval)) { free(M); return 504; }
+            M[(size_t)c * K_iv + r] = v;
+            r++;
+        }
+        c++;
+    }
+    *out = M;
+    return 0;
+}
+
+static ST_retcode civ_build_extra(civ_extra_buf *b, ST_int N, ST_int K_exog_in, ST_int K_excl_in,
+                                  const ST_double *Z_raw, ST_int G, ST_int K_exog_post,
+                                  const ST_int *is_collinear_x, ST_int K_iv,
+                                  ST_int kernel_type, ST_double bw, const ST_double *abw_fe)
+{
+    ST_double dv = 0;
+    ST_retcode rc = 0;
+    memset(b, 0, sizeof(*b));
+    if (SF_scal_use("__civreghdfe_ffirst", &dv) == 0 && dv != 0) b->ex.ffirst = 1;
+    if (SF_scal_use("__civreghdfe_psd", &dv) == 0 && (dv == 1 || dv == 2)) b->ex.psd = (ST_int)dv;
+    if (SF_scal_use("__civreghdfe_store_sw", &dv) == 0 && dv != 0) b->ex.store_sw = 1;
+
+    /* partial() flags of the raw exogenous columns */
+    ST_int *part = (ST_int *)calloc((size_t)(K_exog_in > 0 ? K_exog_in : 1), sizeof(ST_int));
+    if (!part) return 920;
+    char mname[64];
+    snprintf(mname, sizeof(mname), "__civreghdfe_partial_flags");
+    if (SF_scal_use("__civreghdfe_n_partial", &dv) == 0 && dv > 0 &&
+        SF_row(mname) == 1 && SF_col(mname) == K_exog_in) {
+        for (ST_int k = 0; k < K_exog_in; k++) {
+            ST_double v = 0;
+            if (SF_mat_el(mname, 1, k + 1, &v) == 0) part[k] = (v != 0.0);
+        }
+    }
+
+    /* kept instruments, over the columns left after partial() */
+    ST_int Lp = K_exog_post + K_excl_in;
+    ST_int *keep = (ST_int *)calloc((size_t)(Lp > 0 ? Lp : 1), sizeof(ST_int));
+    if (!keep) { free(part); return 920; }
+    for (ST_int k = 0; k < K_exog_post; k++) keep[k] = !is_collinear_x[k];
+    for (ST_int j = 0; j < K_excl_in; j++) {
+        char sn[64];
+        snprintf(sn, sizeof(sn), "__civreghdfe_zcollin_%d", (int)(j + 1));
+        ST_double z = 0;
+        keep[K_exog_post + j] = !(SF_scal_use(sn, &z) == 0 && z != 0);
+    }
+    rc = civ_read_user_matrix("__civreghdfe_S0", Lp, keep, K_iv, &b->S0);
+    if (!rc) rc = civ_read_user_matrix("__civreghdfe_W0", Lp, keep, K_iv, &b->W0);
+    free(keep);
+
+    /* bw(auto) */
+    if (!rc && kernel_type > 0 && bw < 0 && Z_raw) {
+        ST_double has_cons = 0, span = 0;
+        SF_scal_use("__civreghdfe_has_cons", &has_cons);
+        SF_scal_use("__civreghdfe_tspan", &span);
+        ST_int cons_col = (G == 0 && has_cons != 0) ? K_exog_in - 1 : -1;
+        b->abw_z = (ST_double *)calloc((size_t)(N > 0 ? N : 1), sizeof(ST_double));
+        if (!b->abw_z) rc = 920;
+        for (ST_int k = 0; !rc && !abw_fe && k < K_exog_in + K_excl_in; k++) {
+            if (k < K_exog_in && (k == cons_col || part[k])) continue;
+            const ST_double *z = Z_raw + (size_t)k * N;
+            for (ST_int i = 0; i < N; i++) b->abw_z[i] += z[i];
+        }
+        if (abw_fe) memcpy(b->abw_z, abw_fe, (size_t)N * sizeof(ST_double));
+        b->ex.abw_tobs = span + 1.0;
+    }
+    free(part);
+
+    /* orthog() on included instruments */
+    if (!rc && SF_scal_use("__civreghdfe_n_orthogx", &dv) == 0 && dv > 0) {
+        ST_int n = (ST_int)dv;
+        b->ox = (ST_int *)malloc((size_t)n * sizeof(ST_int));
+        if (!b->ox) rc = 920;
+        else {
+            rc = map_test_cols("__civreghdfe_orthogx_flags", "orthog", 4, n, K_exog_post,
+                               is_collinear_x, b->ox);
+            b->n_ox = n;
+        }
+    }
+    b->ex.S0 = b->S0;
+    b->ex.W0 = b->W0;
+    b->ex.abw_z = b->abw_z;
+    if (rc == 504) SF_error("civreghdfe: smatrix()/wmatrix() has missing values\n");
+    return rc;
+}
+
 static ST_retcode do_iv_regression(void)
 {
     /* Heap state released at iv_cleanup; every error path leaves through it */
@@ -334,12 +510,18 @@ static ST_retcode do_iv_regression(void)
     ST_int *cluster_ids = NULL, *cluster2_ids = NULL, *valid_mask = NULL, *singleton_mask = NULL;
     ST_int **fe_levels_c = NULL;
     ST_int *level_max = NULL, *is_partial = NULL, *is_collinear_x = NULL, *test_idx = NULL, *ts_int = NULL;
-    ST_int *fe_redundant = NULL, *fe_nested = NULL;
+    ST_int *fe_redundant = NULL, *fe_nested = NULL, *fe_exact = NULL;
     ST_double *y_c = NULL, *X_endog_c = NULL, *X_exog_c = NULL, *Z_c = NULL, *weights_c = NULL;
+    ST_double *slope_c[10] = {0};  /* compacted slope variables (slope factors only) */
     ST_int *cluster_ids_c = NULL, *cluster2_ids_c = NULL;
-    ST_double *all_data = NULL, *beta = NULL, *V = NULL, *first_stage_F = NULL;
+    ST_double *all_data = NULL, *beta = NULL, *V = NULL, *first_stage_F = NULL, *abw_fe = NULL;
     perm_idx_t *est_obs = NULL;
     HDFE_State *state = NULL;
+    /* vce(bootstrap): what the retained model needs beyond the fit's arrays */
+    const int bs_retain = civreghdfe_boot_retain_requested && civreghdfe_boot_retain_hook;
+    ST_int *bs_partial = NULL, *bs_collin_z = NULL;
+    ST_double *bs_tilde = NULL, *bs_b = NULL;
+    ST_int bs_endo_in_z = 0;
 
     /* Start total timing */
     double t_total_start = ctools_timer_seconds();
@@ -379,10 +561,6 @@ static ST_retcode do_iv_regression(void)
     ST_double fuller_alpha = input.fuller_alpha;
     ST_double tdelta = input.tdelta;
 
-    if (center) {
-        SF_error("civreghdfe: center is not supported\n");
-        return 198;
-    }
     /* The IV code indexes its K x K workspaces in int: j * K + i overflows
        once K exceeds 46340 (cqreg has the same cap) */
     if (K_iv > 46340 || K_exog + K_endog > 46340) {
@@ -406,6 +584,9 @@ static ST_retcode do_iv_regression(void)
     ST_int var_weight_idx = has_weights ? (var_fe_start_idx + G + (has_cluster ? 1 : 0) + (has_cluster2 ? 1 : 0)) : -1;
     /* tsset columns (panel, time) follow the weight */
     ST_int var_ts_start_idx = var_fe_start_idx + G + (has_cluster ? 1 : 0) + (has_cluster2 ? 1 : 0) + (has_weights ? 1 : 0);
+    /* Heterogeneous slopes: one variable per slope factor, after the tsset columns */
+    const ST_int num_slopes = input.num_slopes;
+    ST_int var_slope_start_idx = var_ts_start_idx + ts_cols;
 
     ST_int K_total = K_exog + K_endog;  /* Total regressors */
 
@@ -423,7 +604,8 @@ static ST_retcode do_iv_regression(void)
         return 198;
     }
     ST_int total_vars = 1 + K_endog + K_exog + K_excl_in + G +
-                        (has_cluster ? 1 : 0) + (has_cluster2 ? 1 : 0) + (has_weights ? 1 : 0) + ts_cols;
+                        (has_cluster ? 1 : 0) + (has_cluster2 ? 1 : 0) + (has_weights ? 1 : 0) + ts_cols +
+                        num_slopes;
 
     /* Build variable indices array (1-based for Stata) */
     int *var_indices = (int *)malloc(total_vars * sizeof(int));
@@ -548,6 +730,8 @@ static ST_retcode do_iv_regression(void)
                 civ_drop_missing(filtered.data.vars[c].data.dbl, i0, i1, missval, valid_mask);
             for (ST_int k = 0; k < ts_cols; k++)
                 civ_drop_missing(filtered.data.vars[var_ts_start_idx + k].data.dbl, i0, i1, missval, valid_mask);
+            for (ST_int k = 0; k < num_slopes; k++)
+                civ_drop_missing(filtered.data.vars[var_slope_start_idx + k].data.dbl, i0, i1, missval, valid_mask);
             if (has_weights) {
                 const ST_double *w = filtered.data.vars[var_weight_idx].data.dbl;
                 for (ST_int ii = i0; ii < i1; ii++) {
@@ -734,7 +918,19 @@ static ST_retcode do_iv_regression(void)
             }
             civ_gather(dst, src, rows, N);
         }
+        /* slope variables, one array per slope factor */
+        for (ST_int g = 0, k = 0; g < G && !iv_rc; g++) {
+            if (!input.slope_flag[g]) continue;
+            slope_c[g] = (ST_double *)ctools_safe_malloc2((size_t)(N > 0 ? N : 1), sizeof(ST_double));
+            if (!slope_c[g]) {
+                SF_error("civreghdfe: Memory allocation failed for the slope variables\n");
+                iv_rc = 920;
+                break;
+            }
+            civ_gather(slope_c[g], filtered.data.vars[var_slope_start_idx + k++].data.dbl, rows, N);
+        }
         free(rows);
+        if (iv_rc) goto iv_cleanup;
         /* Z = [X_exog, excluded instruments] */
         if (K_exog > 0) memcpy(Z_c, X_exog_c, (size_t)N * K_exog * sizeof(ST_double));
     }
@@ -828,6 +1024,26 @@ static ST_retcode do_iv_regression(void)
         iv_rc = factor_rc;
         goto iv_cleanup;
     }
+    /* Slope factors (before the solver buffers: their counts become the
+       sums of squares of the centered slopes per level) */
+    if (num_slopes > 0) {
+        ST_int *ones = (ST_int *)ctools_safe_malloc2((size_t)(N > 0 ? N : 1), sizeof(ST_int));
+        if (!ones) {
+            iv_rc = 920;
+            goto iv_cleanup;
+        }
+        for (ST_int i = 0; i < N; i++) ones[i] = 1;
+        creghdfe_input ci;
+        civ_slope_input(&input, &ci);
+        iv_rc = creghdfe_setup_slopes(state, &ci, (const ST_double *const *)slope_c, ones, N,
+                                      has_weights ? weights_c : NULL);
+        free(ones);
+        if (iv_rc) {
+            SF_error(iv_rc == 498 ? "civreghdfe: the weights sum to zero\n"
+                                  : "civreghdfe: Memory allocation failed for the slope factors\n");
+            goto iv_cleanup;
+        }
+    }
 
     /* Allocate inv_counts, inv_weighted_counts, and CG solver buffers */
     ST_int num_threads = ctools_get_max_threads();
@@ -871,6 +1087,13 @@ static ST_retcode do_iv_regression(void)
                                 : "civreghdfe: Memory allocation failed for partial indices\n");
             iv_rc = flag_rc;
             goto iv_cleanup;
+        }
+        if (bs_retain) {
+            if (!(bs_partial = (ST_int *)malloc((size_t)K_exog * sizeof(ST_int)))) {
+                iv_rc = 920;
+                goto iv_cleanup;
+            }
+            memcpy(bs_partial, is_partial, (size_t)K_exog * sizeof(ST_int));
         }
     }
 
@@ -971,17 +1194,40 @@ static ST_retcode do_iv_regression(void)
         for (ST_int i = 0; i < N; i++) x[i] *= col_scale[c];
     }
     free(col_scale);
+    if (bs_retain && !projection.status) {
+        const size_t n_tilde = (size_t)N * (size_t)(total_cols - col_excl);
+        if (!(bs_tilde = (ST_double *)malloc(n_tilde * sizeof(ST_double)))) {
+            iv_rc = 920;
+            goto iv_cleanup;
+        }
+        memcpy(bs_tilde, all_data + (size_t)N * col_excl, n_tilde * sizeof(ST_double));
+    }
+    /* bw(auto) with absorb(): ivreghdfe selects the bandwidth from the
+       instruments after the fixed effects are partialled out (and before
+       partial()) */
+    if (!projection.status && G > 0 && kernel_type > 0 && bw < 0) {
+        abw_fe = (ST_double *)ctools_safe_calloc2((size_t)N, sizeof(ST_double));
+        if (!abw_fe) {
+            iv_rc = 920;
+            goto iv_cleanup;
+        }
+        for (ST_int c = 0; c < K_excl_in + K_exog; c++) {
+            if (c >= K_excl_in && is_partial && is_partial[c - K_excl_in]) continue;
+            const ST_double *x = all_data + (size_t)N * (c < K_excl_in ? col_excl + c : col_exog + (c - K_excl_in));
+            for (ST_int i = 0; i < N; i++) abw_fe[i] += x[i];
+        }
+    }
     ST_retcode fwl_rc = 0;
     if (!projection.status && K_exog > 0) {
         memcpy(all_data, all_data + (size_t)N * col_exog, (size_t)N * K_exog * sizeof(ST_double));
     }
     if (!projection.status && is_partial) {
-        fwl_rc = fwl_partial_out(all_data, N, total_cols, col_exog, 0, K_exog,
-                                 is_partial, weights_c, ss_exog, absorb_tol);
+        fwl_rc = civ_fwl_partial_out(all_data, N, total_cols, col_exog, 0, K_exog,
+                                     is_partial, weights_c, ss_exog, absorb_tol, 1);
     }
 
     if (projection.status || fwl_rc) {
-        if (projection.status) SF_error("civreghdfe: fixed-effect projection did not converge\n");
+        if (projection.status && projection.status != 1) SF_error("civreghdfe: fixed-effect projection did not converge\n");
         iv_rc = projection.status ? projection.status : fwl_rc;
         goto iv_cleanup;
     }
@@ -1070,14 +1316,25 @@ static ST_retcode do_iv_regression(void)
 
     fe_redundant = (ST_int *)ctools_safe_calloc2((size_t)(G > 0 ? G : 1), sizeof(ST_int));
     fe_nested = (ST_int *)ctools_safe_calloc2((size_t)(G > 0 ? G : 1), sizeof(ST_int));
-    if (!fe_redundant || !fe_nested ||
-        ctools_hdfe_redundant_intercepts(state->factors, G, N, NULL, dof_pairs, fe_redundant)) {
+    fe_exact = (ST_int *)ctools_safe_calloc2((size_t)(G > 0 ? G : 1), sizeof(ST_int));
+    if (!fe_redundant || !fe_nested || !fe_exact ||
+        civ_redundant(state, &input, NULL, dof_pairs, fe_redundant, fe_exact)) {
         SF_error("civreghdfe: Memory allocation failed for the absorbed degrees of freedom\n");
         iv_rc = 920;
         goto iv_cleanup;
     }
     for (ST_int g = 0; g < G; g++) df_a += state->factors[g].num_levels - fe_redundant[g];
-    if (G >= 2 && dof_pairs) mobility_groups = fe_redundant[1] + (dof_pairs == CTOOLS_DOF_PAIRWISE ? G - 2 : 0);
+    {
+        /* the mobility groups of the second intercept factor, and one
+           redundant coefficient for each further one (pairwise) */
+        ST_int n_int = 0, second = -1;
+        for (ST_int g = 0; g < G; g++) {
+            if (input.slope_flag[g]) continue;
+            if (++n_int == 2) second = g;
+        }
+        if (second >= 0 && dof_pairs)
+            mobility_groups = fe_redundant[second] + (dof_pairs == CTOOLS_DOF_PAIRWISE ? n_int - 2 : 0);
+    }
 
     for (ST_int g = 0; g < G; g++) {
         /* Save per-FE num_levels to Stata scalars for absorbed DOF table */
@@ -1138,6 +1395,11 @@ static ST_retcode do_iv_regression(void)
     if (has_cluster && !kiefer && dof_clusters) {
         df_a_nested = 0;
         for (ST_int g = 0; g < G; g++) {
+            /* a slope is never nested in the clusters */
+            if (input.slope_flag[g]) {
+                fe_nested[g] = 0;
+                continue;
+            }
             ST_int is_nested = ctools_fe_nested_in_cluster(
                 state->factors[g].levels, state->factors[g].num_levels,
                 cluster_ids_c, N);
@@ -1154,8 +1416,7 @@ static ST_retcode do_iv_regression(void)
             if (is_nested) df_a_nested += state->factors[g].num_levels;
         }
         if (df_a_nested > 0) {
-            if (ctools_hdfe_redundant_intercepts(state->factors, G, N, fe_nested,
-                                                 dof_pairs, fe_redundant)) {
+            if (civ_redundant(state, &input, fe_nested, dof_pairs, fe_redundant, fe_exact)) {
                 SF_error("civreghdfe: Memory allocation failed for the absorbed degrees of freedom\n");
                 iv_rc = 920;
                 goto iv_cleanup;
@@ -1175,6 +1436,9 @@ static ST_retcode do_iv_regression(void)
             goto iv_cleanup;
         snprintf(scalar_name, sizeof(scalar_name), "__civreghdfe_fe_redundant_%d", (int)(g + 1));
         if ((iv_rc = ctools_scal_save(scalar_name, (ST_double)fe_redundant[g])))
+            goto iv_cleanup;
+        snprintf(scalar_name, sizeof(scalar_name), "__civreghdfe_fe_exact_%d", (int)(g + 1));
+        if ((iv_rc = ctools_scal_save(scalar_name, (ST_double)fe_exact[g])))
             goto iv_cleanup;
     }
 
@@ -1384,6 +1648,16 @@ static ST_retcode do_iv_regression(void)
         }
         num_collinear_z = K_iv - new_K_iv;
         K_excl_dropped = num_collinear_z;
+        /* which excluded instruments were dropped (smatrix(), sfirst names) */
+        for (ST_int j = 0; j < K_excl_z && !iv_rc; j++) {
+            char zn[64];
+            snprintf(zn, sizeof(zn), "__civreghdfe_zcollin_%d", (int)(j + 1));
+            iv_rc = ctools_scal_save(zn, (ST_double)(is_collinear_z[K_exog + j] != 0));
+        }
+        if (iv_rc) {
+            free(is_collinear_z);
+            goto iv_cleanup;
+        }
         K_iv = new_K_iv;
         /* excluded instruments dropped here, for ivreghdfe's footer note */
         if ((iv_rc = ctools_scal_save("__civreghdfe_z_dropped", (ST_double)num_collinear_z))) {
@@ -1437,6 +1711,7 @@ static ST_retcode do_iv_regression(void)
             iv_rc = 920;
             goto iv_cleanup;
         }
+        bs_endo_in_z = j_drops;
         if ((iv_rc = ctools_scal_save("__civreghdfe_endo_in_z", (ST_double)j_drops))) {
             free(is_collinear_z);
             goto iv_cleanup;
@@ -1466,6 +1741,12 @@ static ST_retcode do_iv_regression(void)
         test_rc = map_test_cols("__civreghdfe_redundant_flags", "redundant", 3, n_redund_t, K_excl_z,
                                 is_collinear_z ? is_collinear_z + K_exog : NULL,
                                 test_idx + n_orthog_t + n_endogtest_t);
+    if (bs_retain && !test_rc) {
+        bs_collin_z = (ST_int *)calloc((size_t)(K_excl_z > 0 ? K_excl_z : 1), sizeof(ST_int));
+        if (!bs_collin_z) test_rc = 920;
+        for (ST_int j = 0; bs_collin_z && is_collinear_z && j < K_excl_z; j++)
+            bs_collin_z[j] = is_collinear_z[K_exog + j] != 0;
+    }
     free(is_collinear_z);
 
     /* Post-compaction identification check */
@@ -1560,7 +1841,8 @@ static ST_retcode do_iv_regression(void)
     civreghdfe_test_cols test_cols = {
         test_idx, n_orthog_t,
         test_idx + n_orthog_t, n_endogtest_t,
-        test_idx + n_orthog_t + n_endogtest_t, n_redund_t
+        test_idx + n_orthog_t + n_endogtest_t, n_redund_t,
+        NULL, 0
     };
 
     /* ivreghdfe with absorb() implies small and partialsmall: its small-sample
@@ -1602,6 +1884,13 @@ static ST_retcode do_iv_regression(void)
         }
     }
 
+    civ_extra_buf xb;
+    memset(&xb, 0, sizeof(xb));
+    if (!rc) rc = civ_build_extra(&xb, N, input.K_exog, K_excl_in, Z_c, G, K_exog_orig,
+                                  is_collinear_x, K_iv, kernel_type, bw, abw_fe);
+    test_cols.orthog_x = xb.ox;
+    test_cols.n_orthog_x = xb.n_ox;
+
     ST_double lambda = 1.0;
     if (!rc) rc = ivest_compute_2sls(
         y_dem, X_exog_dem, X_endog_dem, Z_dem,
@@ -1617,8 +1906,9 @@ static ST_retcode do_iv_regression(void)
         (G > 0) ? (df_a_for_vce > 0 ? df_a_for_vce : 1) + sdof_extra : sdofminus_opt, center,
         &test_cols,
         n_abs_x_exog + n_abs_x_endog, n_abs_x_exog + n_abs_z_excl, n_abs_exog_all,
-        dofminus_vce, small, b0, K_excl_dropped
+        dofminus_vce, small, b0, K_excl_dropped, &xb.ex
     );
+    civ_extra_free(&xb);
     free(b0);
     free(test_idx);
     free(ts_int);
@@ -1766,6 +2056,46 @@ static ST_retcode do_iv_regression(void)
     iv_rc = civreghdfe_post_results(&result);
     if (iv_rc) goto iv_cleanup;
 
+    /* vce(bootstrap): keep the model for the replicates (plan 9.3) */
+    if (bs_retain) {
+        const ST_int K_b = K_exog_orig + K_endog_orig;
+        bs_b = (ST_double *)calloc((size_t)(K_b > 0 ? K_b : 1), sizeof(ST_double));
+        if (!bs_b) {
+            iv_rc = 920;
+            goto iv_cleanup;
+        }
+        /* e(b)'s layout: [endogenous, exogenous], zeros where omitted */
+        for (ST_int i = 0, ce = 0, cx = 0; i < K_exog_orig + K_endog_orig; i++) {
+            if (i < K_exog_orig) {
+                if (!is_collinear_x[i]) bs_b[K_endog_orig + i] = beta[cx++];
+            } else if (!is_collinear_x[i]) {
+                bs_b[i - K_exog_orig] = beta[K_exog + ce++];
+            }
+        }
+        const civreghdfe_boot_source bs_src = {
+            .N = N, .G = G,
+            .K_endog = input.K_endog, .K_exog = input.K_exog, .K_excl = K_excl_in,
+            .y = y_c, .X_endog = X_endog_c, .X_exog = X_exog_c,
+            .Z_excl = Z_c + (size_t)N * input.K_exog,
+            .tilde = bs_tilde,
+            .weights = has_weights ? weights_c : NULL, .weight_type = weight_type,
+            .factors = state->factors,
+            .partial = bs_partial,
+            .collin_x = is_collinear_x, .collin_z = bs_collin_z, .endo_in_z = bs_endo_in_z,
+            .K_b = K_b, .b_hat = bs_b,
+            .est_method = est_method, .kclass_user = kclass_user, .fuller_alpha = fuller_alpha,
+            .center = center, .dofminus = dofminus, .maxiter = maxiter,
+            .keep_singletons = keep_singletons == 1, .tolerance = tolerance,
+            .vce_type = vce_type, .kernel_type = kernel_type, .kiefer = kiefer,
+            .cluster_ids = (vce_type == 2 && has_cluster) ? cluster_ids_c : NULL,
+            .obs_map = est_obs,
+            .N_eff = N_eff, .K_iv = K_iv,
+        };
+        if (!bs_tilde) iv_rc = 198;
+        else iv_rc = civreghdfe_boot_retain_hook(&bs_src);
+        if (iv_rc) goto iv_cleanup;
+    }
+
     /* End store timing, compute total */
     t_store = ctools_timer_seconds() - t_store_start;
     double t_total = ctools_timer_seconds() - t_total_start;
@@ -1796,10 +2126,12 @@ iv_cleanup:
         free(fe_levels_c);
     }
     free(level_max); free(is_partial); free(is_collinear_x); free(test_idx); free(ts_int);
-    free(fe_redundant); free(fe_nested);
+    free(fe_redundant); free(fe_nested); free(fe_exact);
+    for (ST_int g = 0; g < 10; g++) free(slope_c[g]);
+    free(bs_partial); free(bs_collin_z); free(bs_tilde); free(bs_b);
     free(all_data); free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
     free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
-    free(beta); free(V); free(first_stage_F);
+    free(beta); free(V); free(first_stage_F); free(abw_fe);
     if (state) {
         ctools_hdfe_state_cleanup(state);
         free(state);
@@ -1811,22 +2143,10 @@ iv_cleanup:
     return iv_rc;
 }
 
-/*
-    Main entry point for civreghdfe plugin.
-*/
-ST_retcode civreghdfe_main(const char *args)
+/* The full fit (civreghdfe_main, in civreghdfe_boot.c, dispatches) */
+ST_retcode civreghdfe_fit(void)
 {
-    if (args == NULL || strlen(args) == 0) {
-        SF_error("civreghdfe: No subcommand specified\n");
-        return 198;
-    }
-
-    if (strcmp(args, "iv_regression") == 0) {
-        return do_iv_regression();
-    }
-
-    SF_error("civreghdfe: Unknown subcommand\n");
-    return 198;
+    return do_iv_regression();
 }
 
 /*
@@ -1844,4 +2164,6 @@ void civreghdfe_cleanup_state(void)
            This just nulls the pointer to prevent double-free issues. */
         iv_state = NULL;
     }
+    /* the model retained for vce(bootstrap) */
+    if (civreghdfe_boot_release_hook) civreghdfe_boot_release_hook();
 }

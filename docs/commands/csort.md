@@ -10,12 +10,12 @@ Sort Stata datasets.
 - **MSD Radix Sort**: Best for long variable-length strings with common prefixes
 - **Timsort**: Best for partially sorted data (panel data, time series)
 
-The default `auto` mode chooses an algorithm from the key types and ranges: counting sort (falling back to LSD) when every key is numeric, LSD when the string keys are at most 16 bytes wide (`str1`-`str16`), and MSD when any string key is wider. `sample`, `counting`, `merge`, and `ips4o` are also available. Like native `sort`, `csort` rejects `if` and `in`.
+The default `auto` mode chooses an algorithm from the key types and ranges: counting sort (falling back to LSD) when every key is numeric, LSD when the string keys are at most 16 bytes wide (`str1`-`str16`), and MSD when any string key is wider. `sample`, `counting`, `merge`, and `ips4o` are also available. Like native `sort`, `csort` rejects `if` and accepts `in`: `csort varlist in range` orders only the observations in the range and leaves the others in place. That form is run by `sort, stable` itself, which sets the sort marker only when the range covers the whole dataset.
 
 ## Syntax
 
 ```stata
-csort varlist [, options]
+csort varlist [in] [, options]
 ```
 
 ## Options
@@ -28,6 +28,7 @@ csort varlist [, options]
 | `nosortedby` | Skip the final native sort used to set sorted metadata |
 | `threads(#)` | Maximum threads |
 | `verbose` | Display timing breakdown (load, sort, store, total) |
+| `stable` | Accepted for compatibility with `sort`; `csort` is always stable |
 
 ## Examples
 
@@ -171,7 +172,8 @@ When using the `verbose` option, you'll see:
 ## Supported Variable Types
 
 - Numeric variables (all Stata numeric types)
-- Fixed-width string variables (strL is rejected)
+- Fixed-width string variables
+- strL variables, as keys or not: the plugin cannot write them, so such datasets are sorted by `sort, stable` itself (the same stable order; `nosortedby` then drops the sort marker, and the timing results are missing)
 - Multiple sort keys (sorts by first variable, then second, etc.)
 
 ## Stored Results
@@ -189,6 +191,8 @@ When using the `verbose` option, you'll see:
 | `r(algorithm)`, `r(sortvars)`, `r(cmd)` | Algorithm, sort keys, and command name |
 
 A timing result is missing when the selected method does not measure that stage.
+
+Native `sort` leaves the caller's `r()` results alone; `csort` replaces them with the results above.
 
 ## Technical Notes
 

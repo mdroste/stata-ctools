@@ -3,10 +3,13 @@
 import contextlib
 import io
 import json
+import os
 import platform
 import re
 import shlex
 import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 from functools import partial
@@ -339,7 +342,7 @@ def check_dataset_cleanup(root):
                 argv.append("--keep-data")
             with patch("sys.argv", argv), patch.object(runner.subprocess, "run"), patch.object(
                 runner, "launch_driver", fake_launch
-            ):
+            ), patch.dict(os.environ, {"CTOOLS_STATA_EXECUTABLE": "mock-stata"}):
                 if mode == "summary_failure":
                     with patch.object(runner, summary_name, side_effect=ValueError("bad summary")):
                         reject(run)
@@ -374,6 +377,11 @@ def test_performance():
 
 
 def test_runner():
+    optimized = subprocess.run(
+        [sys.executable, "-O", "-c", "import validation"],
+        cwd=launcher.ROOT, capture_output=True, text=True,
+    )
+    assert optimized.returncode != 0 and "requires Python assertions" in optimized.stderr
     # MSYS2 Python may default to cp1252, which cannot decode UTF-8 source comments.
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -394,6 +402,16 @@ def test_runner():
             source = native_harness.unit(root, "encoding")
             assert "CTOOLS_CASE_encoding" in source.read_text(encoding="utf-8")
     available, _ = launcher.cases()
+    # The Linux ASan selection must reach the shared native compiler recipe.
+    with tempfile.TemporaryDirectory() as tmp:
+        for sanitizers in ("undefined", "address,undefined"):
+            with patch.dict(os.environ, {"CTOOLS_SANITIZERS": sanitizers}), patch.object(
+                native_harness, "compile_native"
+            ) as compile_call, patch.object(native_harness.subprocess, "run"), patch.object(
+                native_harness.platform, "system", return_value="Linux"
+            ), contextlib.redirect_stdout(io.StringIO()):
+                native_harness.run_test(Path(tmp), "sanitizer_recipe", "int main(void) { return 0; }")
+            assert "-fsanitize=" + sanitizers in compile_call.call_args.args[0]
     assert "memory_safety" in available
     for marker in (
         "",
@@ -419,6 +437,15 @@ def test_runner():
         log + "\n" + log,
     ):
         reject(lambda: launcher.validate_results(bad, expected))
+    # Assertion-only cases need no test_pass counter, but any recorded failure
+    # or skip is still a failure. Previously counted=False ignored both.
+    assertion_only = "TEST_RESULT raw PASSED=0 FAILED=0 SKIPPED=0 RC=0 COMPLETE=raw"
+    launcher.validate_results(assertion_only, {"raw": False})
+    for bad in (
+        assertion_only.replace("FAILED=0", "FAILED=1"),
+        assertion_only.replace("SKIPPED=0", "SKIPPED=1"),
+    ):
+        reject(lambda: launcher.validate_results(bad, {"raw": False}))
     with tempfile.TemporaryDirectory(prefix="ctools runner spaces ") as tmp:
         root = Path(tmp)
         folder = root / "validation/stata"
@@ -440,23 +467,38 @@ def test_runner():
             f'log using "{logpath}", text replace\nlocal rc = 0\nlog close\nexit, clear\n'
         )
         launched = []
+        executable = "C:/Program Files/Stata/StataMP-64.exe" if os.name == "nt" else "/opt/stata/stata-mp"
 
         def fake_run(argv, **kwargs):
-            assert argv[:2] == ["/bin/zsh", "-lic"]
-            command = shlex.split(argv[2])
-            assert command[:4] == ["stata", "-q", "-b", "do"]
-            path = Path(command[4])
+            if argv[0] == executable:
+                # A configured executable is run directly, in batch mode
+                batch = ["/e", "do"] if os.name == "nt" else ["-q", "-b", "do"]
+                assert argv[1:-1] == batch, argv
+                path = Path(argv[-1])
+            else:
+                # Otherwise the local shell alias (not available on Windows)
+                assert os.name != "nt" and argv[:2] == ["/bin/zsh", "-lic"], argv
+                command = shlex.split(argv[2])
+                assert command[:4] == ["stata", "-q", "-b", "do"]
+                path = Path(command[4])
             launched.append(path)
             text = path.read_text()
             assert text.rstrip().endswith("exit, clear")
-            assert Path(kwargs["cwd"]).resolve() == path.parent
+            assert Path(kwargs["cwd"]).resolve() == path.parent.resolve()
             assert text.startswith("cd " + launcher.quote(root.resolve()) + "\n")
             nonce = re.search("CTOOLS_LAUNCH=([a-f0-9]+)", text)[1]
             logpath.write_text(f"\nCTOOLS_LAUNCH={nonce} RC=0\n")
 
+        unset = {k: v for k, v in os.environ.items() if k != "CTOOLS_STATA_EXECUTABLE"}
         with patch.object(launcher.subprocess, "run", fake_run):
-            launcher.launch_driver(driver, logpath, cwd=root)
-        assert launched and not launched[0].exists()
+            with patch.dict(os.environ, {"CTOOLS_STATA_EXECUTABLE": executable}):
+                launcher.launch_driver(driver, logpath, cwd=root)
+            with patch.dict(os.environ, unset, clear=True):
+                if os.name == "nt":
+                    reject(lambda: launcher.launch_driver(driver, logpath, cwd=root))
+                else:
+                    launcher.launch_driver(driver, logpath, cwd=root)
+        assert launched and not any(path.exists() for path in launched)
         driver.write_text("local rc = 0\n")
         reject(lambda: launcher.launch_driver(driver, logpath))
         # The cleanup checks create their own build fixture.

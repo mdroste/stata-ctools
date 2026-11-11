@@ -315,6 +315,7 @@ void cqreg_state_free(cqreg_state *state)
     }
 
     ctools_aligned_free(state->weights);
+    ctools_aligned_free(state->obs_map);
 
     /* Free stata_data if we own it */
     if (state->data_owned && state->data != NULL) {

@@ -1,4 +1,4 @@
-*! version 1.2.4 20261103 github.com/mdroste/stata-ctools
+*! version 1.2.6 20261111 github.com/mdroste/stata-ctools
 
 program define ctools, rclass
     version 14.1
@@ -32,7 +32,7 @@ program define ctools, rclass
         exit `update_rc'
     }
 
-    local __ado_version "1.2.4"
+    local __ado_version "1.2.6"
     if "`environment_check'" != "" | "`version'" != "" | `"`threads'"' != "" {
         * Load the plugin if not already loaded
         _ctools_load
@@ -152,7 +152,7 @@ program define ctools, rclass
     di as result "╚██████╗   ██║   ╚██████╔╝╚██████╔╝███████╗███████║"
     di as result " ╚═════╝   ╚═╝    ╚═════╝  ╚═════╝ ╚══════╝╚══════╝"
     di as text ""
-    di as text "  {it:C-accelerated tools for Stata}{col 56}v1.2.4"
+    di as text "  {it:C-accelerated tools for Stata}{col 56}v1.2.6"
     di as text "{hline 60}"
     di as text ""
     di as text "{ul:Data Management}"

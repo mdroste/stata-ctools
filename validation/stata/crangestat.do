@@ -1974,6 +1974,94 @@ if !_rc {
         ctools_cmd(crangestat (sd) price, interval(t -2 2 junk)) testname("interval() extra argument")
 }
 
+* RSTAT-04/05/06: casewise for every statistic, describe, local(), nocheck,
+* r(newvars) and r(rangestat_version), variable ranges with spaced dashes.
+* _crs_cmp runs rangestat and then crangestat with the same arguments on the
+* same data and compares every new variable (values and labels), the
+* variables' order, r(newvars), r(rangestat_version) and local().
+capture program drop _crs_cmp
+program define _crs_cmp
+    gettoken name 0 : 0, parse(":")
+    gettoken colon 0 : 0, parse(":")
+    local name = strtrim(`"`name'"')
+    preserve
+    quietly ds
+    local before `r(varlist)'
+    local loc_ref
+    capture noisily rangestat `0'
+    local rc_ref = _rc
+    local nv_ref `"`r(newvars)'"'
+    local ver_ref `"`r(rangestat_version)'"'
+    local loc_ref `"`crs_loc'"'
+    tempfile ref
+    quietly save `ref'
+    quietly ds
+    local after_ref `r(varlist)'
+    restore, preserve
+    local crs_loc
+    capture noisily crangestat `0'
+    local rc_ct = _rc
+    local bad
+    if `rc_ref' != `rc_ct' local bad rc:`rc_ref'/`rc_ct'
+    else if !`rc_ref' {
+        if `"`r(newvars)'"' != `"`nv_ref'"' local bad `bad' r(newvars):[`r(newvars)']/[`nv_ref']
+        if `"`r(rangestat_version)'"' != `"`ver_ref'"' local bad `bad' r(rangestat_version)
+        if `"`crs_loc'"' != `"`loc_ref'"' local bad `bad' local()
+        quietly ds
+        if "`r(varlist)'" != "`after_ref'" local bad `bad' varlist
+        local new : list after_ref - before
+        foreach v of local new {
+            local lab_ct_`v' : variable label `v'
+            rename `v' _ct_`v'
+        }
+        quietly merge 1:1 _n using `ref', nogenerate keepusing(`new')
+        foreach v of local new {
+            local lab_ref : variable label `v'
+            if `"`lab_ref'"' != `"`lab_ct_`v''"' local bad `bad' label:`v'
+            capture assert _ct_`v' == `v' | reldif(_ct_`v', `v') < 1e-9
+            if _rc local bad `bad' `v'
+        }
+    }
+    restore
+    if "`bad'" == "" test_pass "`name'"
+    else test_fail "`name'" "`bad'"
+end
+capture which rangestat
+if !_rc {
+    clear
+    set seed 4042
+    quietly set obs 400
+    gen id = _n
+    gen g = mod(_n, 3)
+    gen t = floor(_n / 2)
+    gen double a = cond(runiform() < .25, ., rnormal())
+    gen double b = cond(runiform() < .2, ., runiform() * 10)
+    gen c = cond(runiform() < .1, ., rpoisson(3))
+    _crs_cmp RSTAT-04 casewise every single statistic: ///
+        (mean) a b (count) a b (obs) a b (missing) a b (first) a b (last) a b ///
+        (sum) a b (min) a b (max) a b (sd) a b (variance) a b (median) a b ///
+        (firstnm) a b (lastnm) a b, interval(t -3 3) casewise
+    _crs_cmp RSTAT-04 casewise one variable per statistic: ///
+        (obs) a (missing) b (first) c (last) a (count) b, interval(t -2 0) casewise
+    _crs_cmp RSTAT-04 casewise by() excludeself: ///
+        (mean) a b c (obs) a b c (first) a b, interval(t -4 4) by(g) excludeself casewise
+    _crs_cmp RSTAT-04 casewise newvar= and if: ///
+        (mean) ma=a mb=b (skewness) a b (kurtosis) a b if g != 1, interval(t . 0) casewise
+    _crs_cmp RSTAT-04 casewise variable bounds: ///
+        (sum) a c (obs) a c, interval(t id .) casewise
+    _crs_cmp RSTAT-04 casewise with (corr): ///
+        (corr) a b (mean) a b, interval(t -10 10) casewise
+    _crs_cmp RSTAT-04 describe and local(): ///
+        (mean) mc=a (sd) a - c, interval(id -2 0) describe local(crs_loc)
+    _crs_cmp RSTAT-04 nocheck: (mean) a b (count) c, interval(t -1 1) nocheck
+    _crs_cmp RSTAT-05 r() with flexible statistics: ///
+        (cov) a b (mean) c (reg) a b c, interval(t -20 0) by(g)
+    _crs_cmp RSTAT-06 range a - c: (mean) a - c, interval(id -1 1)
+    _crs_cmp RSTAT-06 range a -c: (sd) a -c (max) mx = b, interval(id -1 1)
+    _crs_cmp RSTAT-06 range in (corr) a - c refused: (corr) a - c, interval(id -10 10)
+    _crs_cmp RSTAT-06 range in (reg): (reg) a b - c, interval(id -30 0)
+}
+
 * End of crangestat validation
 noi print_summary "crangestat"
 }

@@ -101,6 +101,9 @@ typedef struct
     double interval_high; /* Offset for high bound (can be . for +inf) */
     int low_is_missing;   /* 1 if low bound is . (meaning -infinity) */
     int high_is_missing;  /* 1 if high bound is . (meaning +infinity) */
+    int var_bounds;       /* 1: bounds per observation, from two extra sources */
+    int low_src;          /* 0-based source holding the low bounds */
+    int high_src;         /* 0-based source holding the high bounds */
 } crangestat_config;
 
 /* Statistic specification */
@@ -242,6 +245,21 @@ typedef struct
  * Matching/window traversal preserve stable order and existing definitions. */
 size_t crangestat_lower_bound(const double *key, size_t start, size_t end, double target);
 size_t crangestat_upper_bound(const double *key, size_t start, size_t end, double target);
+
+/* Window of observation i when the bounds come from variables (rangestat's
+ * interval(key lowvar highvar)): the keys in [low, high], where a missing
+ * low is unbounded below and a missing high unbounded above, as inrange().
+ * A low above the high gives an empty window. */
+static inline void crangestat_var_window(const double *key, size_t g_start, size_t g_end,
+                                         double low, double high,
+                                         size_t *win_start, size_t *win_end)
+{
+    if (low >= SV_missval) low = -DBL_MAX;
+    if (high >= SV_missval) high = DBL_MAX;
+    *win_start = crangestat_lower_bound(key, g_start, g_end, low);
+    *win_end = crangestat_upper_bound(key, g_start, g_end, high);
+    if (*win_end < *win_start) *win_end = *win_start;
+}
 double crangestat_compute_percentile(double *work, size_t n, double pctl);
 void crangestat_build_prefix_arrays(const double *data, size_t start, size_t count,
                                     prefix_arrays *pa);

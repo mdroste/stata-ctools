@@ -1,17 +1,19 @@
 {smcl}
-{* *! version 1.2.4 20261103}{...}
+{* *! version 1.2.6 20261111}{...}
 {viewerjumpto "Syntax" "cimport##syntax"}{...}
 {viewerjumpto "Description" "cimport##description"}{...}
 {viewerjumpto "Options" "cimport##options"}{...}
 {viewerjumpto "Excel options" "cimport##exceloptions"}{...}
+{viewerjumpto "Parquet" "cimport##parquet"}{...}
 {viewerjumpto "Other formats" "cimport##formats"}{...}
+{viewerjumpto "FRED and Haver" "cimport##fred"}{...}
 {viewerjumpto "Remarks" "cimport##remarks"}{...}
 {viewerjumpto "Examples" "cimport##examples"}{...}
 {viewerjumpto "Stored results" "cimport##results"}{...}
 {title:Title}
 
 {phang}
-{bf:cimport} {hline 2} C-accelerated text, Excel, and statistical file import
+{bf:cimport} {hline 2} C-accelerated text, Excel, Parquet, and statistical file import
 
 
 {marker syntax}{...}
@@ -51,7 +53,7 @@ variables is an error.
 
 {syntab:Variable types}
 {synopt:{opt asfloat}}use float for noninteger numeric columns{p_end}
-{synopt:{opt asdouble}}import all numeric variables as double{p_end}
+{synopt:{opt asdouble}}import noninteger numeric variables as double{p_end}
 {synopt:{opt numeric:cols(numlist)}}force specified columns to be numeric{p_end}
 {synopt:{opt string:cols(numlist)}}force specified columns to be string; {cmd:_all} selects all columns{p_end}
 {synopt:{opt favorstrfixed}}prefer fixed-width strings when values fit in 2,045 bytes{p_end}
@@ -62,17 +64,20 @@ variables is an error.
 {synopt:{opt enc:oding(encoding)}}file encoding; default is automatic detection; UTF-8/16/32 and named system encodings{p_end}
 {synopt:{opt rowr:ange([start][:end])}}range of rows to import{p_end}
 {synopt:{opt colr:ange([start][:end])}}range of columns to import{p_end}
-{synopt:{opt empty:lines(option)}}empty line handling; {opt skip} or {opt fill}{p_end}
+{synopt:{opt emptyl:ines(option)}}empty line handling; {opt skip} or {opt include}{p_end}
 
 {syntab:Number formats}
-{synopt:{opt decimalsep:arator(char)}}decimal point character; default is period{p_end}
-{synopt:{opt groupsep:arator(char)}}thousands grouping character; default is none{p_end}
+{synopt:{opt decimals:eparator(char)}}decimal point character; default is period{p_end}
+{synopt:{opt groups:eparator(char)}}thousands grouping character; default is none{p_end}
 {synopt:{opt parsel:ocale(name)}}locale for numeric parsing{p_end}
 {synopt:{opt maxquoted:rows(#)}}limit on lines in a strict quoted field{p_end}
 
 {syntab:Data recovery}
 {synopt:{opt snap:shot}}use {help preserve} to restore data after an error or interruption{p_end}
 {synopt:{opt fast}}skip data recovery after an error or interruption{p_end}
+
+{syntab:Speed}
+{synopt:{opt tempdta}}load strL-heavy data through a temporary .dta file{p_end}
 
 {syntab:Reporting}
 {synopt:{opt verbose}}display progress information{p_end}
@@ -92,30 +97,83 @@ variables is an error.
 {synopthdr:excel options}
 {synoptline}
 {syntab:Main}
-{synopt:{opt sheet(name)}}worksheet name to import{p_end}
+{synopt:{opt sh:eet(name)}}worksheet name to import{p_end}
 {synopt:{opt cellr:ange(range)}}cell range to import (e.g., A1:F100){p_end}
 {synopt:{opt first:row}}treat first row as variable names{p_end}
 {synopt:{opt allstring}[{cmd:(}{it:format}{cmd:)}]}import all columns as string, optionally using a numeric format{p_end}
 {synopt:{opt case(option)}}variable name case; {opt preserve}, {opt lower}, or {opt upper}{p_end}
 {synopt:{opt clear}}clear data in memory before loading{p_end}
 {synopt:{opt desc:ribe}}list worksheet names and ranges without loading data{p_end}
-{synopt:{opt v:erbose}}display progress information{p_end}
+{synopt:{opt v:erbose}}accepted; Excel import displays no timing details{p_end}
 {synopt:{opt snap:shot}}use {help preserve} to restore data after an error or interruption{p_end}
 {synopt:{opt fast}}skip data recovery after an error or interruption{p_end}
 {synoptline}
+
+{pstd}Import or describe a Parquet file (see {help cimport##parquet:Parquet}):
+
+{p 8 17 2}
+{cmdab:cimport}
+{cmd:parquet}
+[{cmd:using}]
+{it:filename}
+[{cmd:,} {it:parquet_options}]
+
+{p 8 17 2}
+{cmdab:cimport}
+{cmd:parquet}
+{it:columnlist}
+{cmd:using}
+{it:filename}
+[{cmd:,} {it:parquet_options}]
+
+{p 8 17 2}
+{cmdab:cimport}
+{cmd:parquet}
+[{cmd:using}]
+{it:filename}{cmd:,}
+{opt desc:ribe}
+
+{synoptset 32 tabbed}{...}
+{synopthdr:parquet options}
+{synoptline}
+{synopt:{opt clear}}replace data in memory{p_end}
+{synopt:{opt rowr:ange([start][:end])}}row range of data to load{p_end}
+{synopt:{opt favormemory}}accepted for compatibility; has no effect{p_end}
+{synopt:{opt snap:shot}}use {help preserve} to restore data after an error or interruption{p_end}
+{synopt:{opt fast}}skip data recovery after an error or interruption{p_end}
+{synoptline}
+
+{pstd}Import from FRED or Haver Analytics with Stata's own commands (see
+{help cimport##fred:FRED and Haver}):
+
+{p 8 17 2}
+{cmdab:cimport}
+{cmd:fred}|{cmd:haver}|{cmd:haverdirect}
+{it:...}
 
 
 {marker description}{...}
 {title:Description}
 
 {pstd}
-{cmd:cimport} reads delimited text, Excel (.xls and .xlsx), dBase, SAS7BDAT,
-SAS XPORT5/8, SPSS SAV/ZSAV, and ESRI shapefiles into Stata. It uses C readers
-for file parsing. Text longer than 2,045 bytes is stored as {cmd:strL}.
+{cmd:cimport} reads delimited text, Excel (.xls, .xlsx, .xlsm, .xltx; as with
+{cmd:import excel}, the kind of workbook comes from the file's content, whatever
+its name), Parquet, dBase,
+SAS7BDAT, SAS XPORT5/8, SPSS SAV/ZSAV, and ESRI shapefiles into Stata. It uses C
+readers for file parsing. Text longer than 2,045 bytes is stored as
+{cmd:strL}. {cmd:cimport fred}, {cmd:cimport haver} and {cmd:cimport haverdirect}
+run Stata's {help import fred} and {help import haver}.
 
 
 {marker options}{...}
 {title:Options for delimited text}
+
+{pstd}
+As with {cmd:import delimited} and {cmd:import excel}, a delimited or Excel
+file may be a URL ({cmd:http://}, {cmd:https://} or {cmd:ftp://}); it is copied
+to a temporary file and read from there ({cmd:r(filename)} is the URL). The
+other formats take local files only. A file name that starts with {cmd:~} names
+a file in your home directory, as it does for Stata's own file commands.
 
 {dlgtab:Main}
 
@@ -165,8 +223,10 @@ columns. Integer columns retain their inferred byte, int, or long storage. This 
 double but has less precision. Cannot be combined with {opt asdouble}.
 
 {phang}
-{opt asdouble} imports all numeric variables as Stata {help data types:double}
-type, regardless of whether a smaller type would suffice. This retains double precision for fractional values. Cannot be combined with {opt asfloat}.
+{opt asdouble} uses Stata {help data types:double} for noninteger numeric
+columns, as {cmd:import delimited} does. Integer columns retain their inferred
+byte, int, or long storage. This retains double precision for fractional
+values. Cannot be combined with {opt asfloat}.
 
 {phang}
 {opt numericcols(numlist)} forces the specified columns to be imported as
@@ -216,8 +276,15 @@ sampled values. Rows of any width are read; more columns than {cmd:maxvar}
 allows fail with error 900, as in {cmd:import delimited}.
 
 {phang}
-{opt encoding(encoding)} overrides automatic encoding detection. Supported encodings include UTF-8,
-UTF-16LE/BE, UTF-32LE/BE, ASCII, Latin-1/9, Windows code pages and Mac Roman.
+{opt encoding(encoding)} overrides automatic encoding detection. As in
+{cmd:import delimited}, it takes the names and aliases of the charsets of Java
+(StataNow's runtime), in any case: {cmd:latin1}, {cmd:cyrillic},
+{cmd:windows-1251}, {cmd:cp1252}, {cmd:KOI8-U}, {cmd:x-MacCyrillic}, {cmd:IBM037},
+{cmd:windows-31j}, {cmd:Shift_JIS}, {cmd:GB18030}, {cmd:UTF-16} and so on.
+Single-byte charsets are decoded from Java's own tables on every platform; a byte
+the charset does not map is dropped, as natively. Multi-byte charsets are decoded by
+the system converter. On Windows, a few have no Windows code page and give error 198:
+{cmd:Big5-HKSCS}, {cmd:x-EUC-TW}, {cmd:x-ISCII91} and the IBM EBCDIC CJK pages.
 {opt charset()} is an alias for {opt encoding()}.
 
 {phang}
@@ -237,9 +304,12 @@ numbered, and {opt numericcols()} and {opt stringcols()} count columns within
 the range.
 
 {phang}
-{opt emptylines(option)} specifies how empty lines in the file are handled.
-{opt skip} (the default) ignores empty lines. {opt fill} includes empty
-lines as observations with all missing values.
+{opt emptylines(option)} specifies how empty lines in the file are handled:
+{opt skip} (the default) ignores them, and {opt include} imports each one as an
+observation with all values missing, as in {cmd:import delimited}. As there,
+{opt include} follows the version of the caller: under {help version} 16 or
+earlier, {cmd:import delimited} reads such a file as with {opt skip}, and so
+does {cmd:cimport}.
 
 {dlgtab:Number formats}
 
@@ -261,8 +331,9 @@ Use {opt parselocale()} for delimited text; {opt locale()} is not accepted.
 
 {phang}
 {opt maxquotedrows(#)} limits the number of file lines that one quoted field
-may span with {cmd:bindquotes(strict)}. It accepts a nonnegative integer or
-{cmd:unlimited}. The default is 20; zero and {cmd:unlimited} remove the limit.
+may span with {cmd:bindquotes(strict)}. It accepts an integer or
+{cmd:unlimited}. The default is 20; zero, a negative number and {cmd:unlimited}
+remove the limit, as in {cmd:import delimited}.
 Exceeding the limit returns error 5101.
 
 {dlgtab:Data recovery}
@@ -281,6 +352,26 @@ otherwise clear the dataset before reading the input.
 {phang}
 {opt fast} skips recovery and reduces memory use. An error or interruption can
 leave an empty or incomplete import. It cannot be combined with {opt snapshot}.
+
+{dlgtab:Speed}
+
+{phang}
+Without {opt tempdta}, strL values are stored through Mata and, from Stata 16,
+nothing is written to disk. {opt tempdta} speeds up files whose strL text
+outweighs their other data, such
+as job postings with long descriptions. Stata stores strL values through Mata
+several times slower than {help use} reads them, so with this option the plugin
+writes the imported dataset (or, failing that, its strL columns) to a temporary
+.dta file that {cmd:use} loads; the file is then erased. The file is about the
+size of the imported data. It is marked temporary, which asks Windows to keep
+it in memory, but it may still be written to disk, so the option is off by
+default; repeated imports of large files add writes to the drive holding
+{cmd:c(tmpdir)}. The result is the same as without the option, including
+{cmd:c(filename)}, {cmd:c(filedate)} and {cmd:c(changed)}. The option is ignored
+when the file has no strL column, when the other variables' data outweigh the
+strL text (copying them through a file is slower than storing them directly),
+when a column is named {cmd:_all} or {cmd:_skip}, and when an empty dataset
+kept without {opt clear} holds value labels, a data label or characteristics.
 
 
 {dlgtab:Reporting}
@@ -319,9 +410,11 @@ labels; a numeric header cell's label is its {cmd:%18.0g} text.
 change variable-name case, including Unicode letters.
 
 {phang}
-{opt allstring} imports every column as text. {cmd:allstring(%12.2f)}, for
-example, specifies how numeric cells are converted to strings. Otherwise a
-number in a text column reads as its {cmd:%18.0g} text, as in {cmd:import excel}.
+{opt allstring} imports every column as text ({cmd:all} is enough, as in
+{cmd:import excel}). {cmd:allstring(%12.2f)}, for example, specifies how numeric
+cells are converted to strings; as natively, the format is read only with the full
+option name ({cmd:all(%12.2f)} imports as neither). Otherwise a number in a text
+column reads as its {cmd:%18.0g} text, as in {cmd:import excel}.
 
 {phang}
 An Excel column list selects and names columns, for example
@@ -335,9 +428,89 @@ and non-worksheet tabs have no reported range.
 
 {phang}
 {opt clear}, {opt snapshot}, and {opt fast} have the meanings given above.
-{opt verbose} is accepted. Excel {opt locale()} and {opt detail} are accepted
-for compatibility and do not change the import. Excel import does not accept
+{opt verbose} is accepted. Excel {opt locale()} is accepted and needs no
+effect: Stata uses it to translate extended ASCII text (and ignores it on
+Windows), while {cmd:cimport} reads text as Unicode directly, from the
+workbook's own code page for .xls files. {opt detail} is accepted: the
+{cmd:r(N)} and {cmd:r(k)} it adds to {cmd:import excel}'s results are always
+returned. Excel import does not accept
 {opt threads()}; it uses the {help ctools##threads:ctools thread setting}.
+
+{marker parquet}{...}
+{title:Parquet}
+
+{pstd}
+{cmd:cimport parquet} reads Apache Parquet files with a reader written in C,
+without Java or the Arrow library. Its syntax, variables, messages and stored
+results are those of StataNow's {cmd:import parquet}: the same variable names,
+storage types, display formats, variable and value labels, and values.
+{it:filename} without an extension means {it:filename}{cmd:.parquet}; it may
+not be a URL.
+
+{pstd}
+{it:columnlist} names the columns to import, exactly as they are named in the
+file; an unknown name is noted and skipped, and a name given twice is read
+once. Without {opt clear}, data in memory that have changed since they were
+last saved are an error. {opt describe} lists the columns and their types and
+stores the numbers of rows and columns; like {cmd:import parquet}, it reads
+the data and reports -1 rows for a file whose data cannot be read.
+
+{pstd}
+{opt rowrange(start:end)} loads rows {it:start} to {it:end}. {it:start} may be
+{cmd:f} (the first row) and {it:end} may be {cmd:l} (the last row) or omitted;
+a negative number counts from the end, so {cmd:rowrange(-10)} loads the last
+10 rows.
+
+{pstd}
+Column types are converted as {cmd:import parquet} converts them:
+
+{p2colset 9 40 42 2}{...}
+{p2col:Parquet type}Stata variable{p_end}
+{p2line}
+{p2col:boolean}{cmd:byte} 0/1{p_end}
+{p2col:int8, uint8}{cmd:byte}, or {cmd:int} when a value in the row range exceeds 100{p_end}
+{p2col:int16, uint16}{cmd:int}, or {cmd:long} past 32,740{p_end}
+{p2col:int32, uint32}{cmd:long}, or {cmd:double} past 2,147,483,620{p_end}
+{p2col:int64, uint64}{cmd:long}; when a value in the row range lies outside
+{cmd:long}'s range, {cmd:str16} holding each value's 64 bits in lowercase
+hexadecimal{p_end}
+{p2col:float, float16}{cmd:float}, or {cmd:double} past {cmd:c(maxfloat)}{p_end}
+{p2col:double}{cmd:double}{p_end}
+{p2col:date}{cmd:long}, {cmd:%td}{p_end}
+{p2col:time}{cmd:double}, milliseconds since midnight (finer units truncated){p_end}
+{p2col:timestamp, INT96}{cmd:double}, {cmd:%tc}, milliseconds (finer units
+truncated; UTC adjustment is ignored){p_end}
+{p2col:decimal}{cmd:str}{it:#} text, {it:#} the precision plus 2{p_end}
+{p2col:string, JSON}{cmd:str}{it:#}, {it:#} the longest value in the file
+(in bytes), or {cmd:strL} past 2,045{p_end}
+{p2col:binary, enum, BSON, fixed-length}{cmd:strL}{p_end}
+{p2col:Arrow dictionary}{cmd:byte}, {cmd:int} or {cmd:long} codes 0, 1, ...,
+labeled with the dictionary's entries{p_end}
+{p2line}
+
+{pstd}
+A value a type cannot hold is missing. Null values are missing ({cmd:.} or
+empty text). Nested columns (structs, lists, maps, repeated fields), null-type
+columns and Arrow durations are skipped with a note. Column names become valid
+Stata names: characters other than letters, digits and underscores are
+removed, leading digits are dropped and names are cut to 32 characters; an
+empty name becomes {cmd:v}{it:#}, {it:#} the column's position counting from
+0, and if two names would be the same, every variable is named that way. A
+variable whose name differs from its column is labeled with the column's
+name.
+
+{pstd}
+All row groups, data page versions 1 and 2, and the PLAIN, dictionary, RLE,
+BIT_PACKED, DELTA_BINARY_PACKED, DELTA_LENGTH_BYTE_ARRAY, DELTA_BYTE_ARRAY and
+BYTE_STREAM_SPLIT encodings are read, uncompressed or compressed with Snappy,
+Gzip, Brotli, Zstandard, LZ4 or LZ4_RAW. Neither command reads LZO.
+{opt favormemory} changes nothing: {cmd:cimport parquet} always decodes only
+the selected columns.
+
+{pstd}
+By default, an import that fails restores the data in memory; {opt fast}
+skips that copy, and {opt snapshot} makes it with {help preserve}.
+
 
 {marker formats}{...}
 {title:Other file formats}
@@ -358,8 +531,14 @@ The following formats and options are available:
 {synopt:{cmd:shp}}.shp geometry files{p_end}
 
 {pstd}
-{cmd:sas} and {cmd:spss} also accept a variable list before {cmd:using} and
-{cmd:if}/{cmd:in} selectors evaluated on the imported data. Other formats
+{cmd:sas} and {cmd:spss} also accept a list of variable names and
+{cmd:if}/{cmd:in} before {cmd:using}. As in {cmd:import sas} and {cmd:import spss},
+the names are the file's exact (case-sensitive) names, a hyphen separates names
+as a blank does ({cmd:a-b} is {cmd:a} and {cmd:b}), names the file lacks are
+ignored, and with no match the import fails ("no matching names found in data",
+r(111)). The names and an {cmd:in} range are applied while the file is read, so
+only the selection is held in memory; {cmd:if} is then applied to the selected
+variables. Other formats
 in this table import the whole file. Variable-name case defaults to
 {cmd:preserve}, except XPORT5, which uses lowercase names.
 
@@ -385,6 +564,19 @@ Shapefile import reads geometry into {cmd:_ID}, {cmd:_X}, {cmd:_Y},
 {cmd:rec_header}, and, for shapes that use them, {cmd:_Z} and {cmd:_M}.
 The dataset retains shape metadata needed by {help cexport}. Import associated
 dBase attributes separately with {cmd:cimport dbase}.
+
+{marker fred}{...}
+{title:FRED and Haver}
+
+{pstd}
+{cmd:cimport fred}, {cmd:cimport haver} and {cmd:cimport haverdirect} (and
+their abbreviations) pass all their arguments, unchanged, to Stata's
+{help import fred}, {help import haver} and {help import haverdirect}. FRED is
+a web service and Haver databases need Haver Analytics' Windows library, so
+ctools has no C reader for them; the results, messages, stored results and
+the data left in memory after an error are those of Stata's commands.
+Options {opt snapshot} and {opt fast} do not apply.
+
 
 {marker remarks}{...}
 {title:Excel values and dates}
@@ -416,7 +608,10 @@ the workbook; the importer does not recalculate formulas. Unicode text and
 cell text longer than 32,766 bytes are retained. A cell value that is not a
 number reads as 0, and one that begins with a number as that number, as in
 {cmd:import excel}. Values cached inside a chart embedded in an .xls worksheet
-are not read as cells.
+are not read as cells. In .xlsx text, a carriage return, or a carriage return
+and line feed, written as such reads as a line feed, as XML requires and as
+{cmd:import excel} reads it; one written as {cmd:_x000D_} or {cmd:&#13;} stays
+a carriage return.
 
 {pstd}
 An .xlsx file contains compressed files. Before extracting each one,
@@ -473,6 +668,14 @@ either case, the data in memory are kept.
 {pstd}Import all columns as string:{p_end}
 {phang2}{cmd:. cimport excel using mydata.xlsx, clear allstring}{p_end}
 
+{pstd}{ul:Parquet import examples}
+
+{pstd}Describe the columns of a Parquet file:{p_end}
+{phang2}{cmd:. cimport parquet using auto, describe}{p_end}
+
+{pstd}Import rows 64 through 74 of columns make and price:{p_end}
+{phang2}{cmd:. cimport parquet make price using auto, rowrange(64:74) clear}{p_end}
+
 
 {marker results}{...}
 {title:Stored results}
@@ -498,6 +701,12 @@ Excel and the other file formats return {cmd:r(N)}, {cmd:r(k)}, {cmd:r(width)}
 {cmd:r(filename)}. They do not return {cmd:r(time)}.
 
 {pstd}
+{cmd:cimport parquet} returns {cmd:r(N)} and {cmd:r(k)}, and
+{cmd:cimport parquet, describe} returns {cmd:r(N_rows)} and
+{cmd:r(n_columns)}, as {cmd:import parquet} does. {cmd:cimport fred} and
+{cmd:cimport haver} return what Stata's commands return.
+
+{pstd}
 {cmd:cimport excel, describe} returns {cmd:r(N_worksheet)} and the macros
 {cmd:r(worksheet_1)}, {cmd:r(range_1)}, and corresponding names and ranges for
 subsequent tabs. XPORT5 {opt describe} returns {cmd:r(N)}, {cmd:r(k)}, and
@@ -514,8 +723,8 @@ Michael Droste{break}
 {title:Also see}
 
 {psee}
-Manual: {bf:[D] import delimited}, {bf:[D] import excel}
+Manual: {bf:[D] import delimited}, {bf:[D] import excel}, {bf:[D] import parquet}
 
 {psee}
-Online: {help import delimited}, {help import excel}, {help insheet}, {help cexport}, {help ctools}
+Online: {help import delimited}, {help import excel}, {help import parquet}, {help insheet}, {help cexport}, {help ctools}
 {p_end}

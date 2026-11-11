@@ -1,4 +1,4 @@
-*! version 1.2.4 20261103 github.com/mdroste/stata-ctools
+*! version 1.2.6 20261111 github.com/mdroste/stata-ctools
 *! Shared plugin loader and identity contract
 program define _ctools_load
     version 14.1
@@ -50,7 +50,7 @@ program define _ctools_load
     }
 
     * The ado/plugin argument protocol, stamped from config/release.json.
-    local __ado_protocol "2"
+    local __ado_protocol "3"
     local __reinstall `"net install ctools, from("https://raw.githubusercontent.com/mdroste/stata-ctools/main/build") replace"'
 
     tempname __rhold
@@ -71,7 +71,8 @@ program define _ctools_load
         di as error "  Stata's plugin loader reported:"
         capture noisily program ctools_plugin, plugin using("`__plugin'")
         if "`__os'" == "Unix" & !`__is_mac' {
-            di as error "  The Linux plugin needs x86-64 glibc 2.17 or later and libgomp.so.1 from GCC 6 or later."
+            di as error "  The distribution Linux plugin needs x86-64 and glibc 2.17 or later; OpenMP is linked statically."
+            di as error "  Run ldd -r on the plugin to inspect missing libraries or symbols."
         }
         else if `__is_mac' {
             di as error "  On macOS, check that the plugin is the notarized ctools release and is not quarantined."

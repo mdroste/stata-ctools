@@ -1,4 +1,4 @@
-*! version 1.2.4 20261103 github.com/mdroste/stata-ctools
+*! version 1.2.6 20261111 github.com/mdroste/stata-ctools
 *! Remove absorbed fixed effects from a list of variables
 program define chdfe, eclass
     version 14.1
@@ -19,10 +19,10 @@ program define chdfe, eclass
     * verbose(#) arrives among the other options and is parsed on its own,
     * so no text of the command line is rewritten.
     syntax varlist(numeric fv ts) [if] [in] [aw fw pw], Absorb(string) ///
-        [GENerate(name) SAMPLE(name) CLEAR KEEPIDs KEEPVars(varlist) ///
+        [Generate(name) SAMPLE(name) CLEAR KEEPIDs KEEPVars(varlist) ///
          CLUSTERVars(string) Verbose VERBOSITY(integer -1) TIMEit ///
          TOLerance(real 1e-8) MAXITerations(real 10000) POOLsize(integer 10) ///
-         ACCELeration(string) TRANSform(string) DOFadjustments(string) ///
+         ACCELeration(string) TRAnsform(string) DOFadjustments(string) ///
          GROUPVar(name) KEEPSINgletons THReads(integer 0) *]
     * verbosity(#) is the same setting
     local __verbosity = `verbosity'
@@ -39,12 +39,15 @@ program define chdfe, eclass
     if missing(`maxiterations') local maxiterations 2147483646
     if `maxiterations'<1 | `maxiterations'!=floor(`maxiterations') | `maxiterations'>2147483646 exit 198
     if `verbosity' | "`timeit'" != "" local verbose verbose
+    * hdfe's transforms and accelerations, with its abbreviations; the
+    * experimental random Kaczmarz and hybrid acceleration included
     local transform = lower("`transform'")
     local trans = 0
     if "`transform'" != "" {
         if strpos("symmetric_kaczmarz","`transform'")==1 local trans 0
         else if strpos("kaczmarz","`transform'")==1 local trans 1
         else if strpos("cimmino","`transform'")==1 local trans 2
+        else if strpos("rand_kaczmarz","`transform'")==1 | strpos("random_kaczmarz","`transform'")==1 local trans 3
         else exit 198
     }
     local acceleration = lower("`acceleration'")
@@ -54,11 +57,8 @@ program define chdfe, eclass
         else if "`acceleration'"=="cg" | strpos("conjugate_gradient","`acceleration'")==1 local accel 1
         else if "`acceleration'"=="sd" | strpos("steepest_descent","`acceleration'")==1 | strpos("steep_descent","`acceleration'")==1 local accel 2
         else if strpos("aitken","`acceleration'")==1 local accel 3
+        else if strpos("hybrid","`acceleration'")==1 local accel 4
         else exit 198
-    }
-    if `trans'==1 & `accel'==1 {
-        di as error "conjugate gradient requires a symmetric transform; use transform(sym) or acceleration(none)"
-        exit 198
     }
     _ctools_hdfe_dof, `dofadjustments'
     local flags `s(flags)'
@@ -252,15 +252,27 @@ program define chdfe, eclass
     if _rc != 0 & _rc != 110 exit 601
     local storeids
     if "`keepids'"!="" local storeids storeids
-    plugin call ctools_plugin `inputs' `fevars' `slopevars' `clusters' `weightvar' ///
+    capture noisily plugin call ctools_plugin `inputs' `fevars' `slopevars' `clusters' `weightvar' ///
         `outputs' `used' `groupoutput' `touse', ///
         "chdfe `k' `g' `nc' `wt' `keeps' `maxiterations' `flags' `poolsize' `trans' `accel' `hasgroup' `slopecodes' tol=`tolerance' `threadopt' `verbose' `storeids'"
+    local rc = _rc
+    * hdfe's messages: the singletons dropped, its warning on Kaczmarz with
+    * conjugate gradient (which it runs anyway), and the iterations
+    if `rc' {
+        if `trans' == 1 & `accel' == 1 di as error "(WARNING: convergence is {bf:unlikely} with transform=kaczmarz and accel=CG)"
+        exit `rc'
+    }
+    if `chdfe_singletons' > 0 di as text "(dropped `chdfe_singletons' singleton observations)"
+    if `trans' == 1 & `accel' == 1 di as error "(WARNING: convergence is {bf:unlikely} with transform=kaczmarz and accel=CG)"
+    di as text "(converged in `chdfe_iterations' iterations)"
     * No user variables change until all C work succeeds. Clear mode also
     * restores the original dataset if publication fails.
     if "`clear'"!="" preserve
     capture noisily {
         if "`clear'"!="" {
-            local retain `outputs' `used' `groupoutput' `keepvars' `clusterkeep' `weightkeep' `cachevars'
+            * As hdfe: the cluster variables are not kept (only as
+            * __CL#__ with keepids)
+            local retain `outputs' `used' `groupoutput' `keepvars' `weightkeep' `cachevars'
             if "`keepids'"!="" local retain `retain' `idvars' `clusters'
             quietly keep if `used'
             keep `retain'

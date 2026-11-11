@@ -61,6 +61,8 @@
 #define CEXPORT_RETRY_PWRITE (-1)
 
 #define CEXPORT_ROW_TOO_LONG_MSG "cexport: an observation exceeds 2 GiB of delimited text\n"
+/* write_rows_buffered: its row buffer could not be allocated */
+#define CEXPORT_BUFFER_NOMEM (-4)
 
 /* ========================================================================
    Global Context
@@ -104,11 +106,14 @@ static size_t row_reserve_bytes(void)
    ======================================================================== */
 
 /*
-    Sample rows to compute actual average row size.
-    Returns average bytes per row, or 0 on error.
+    Sample rows to size buffers. Returns bytes per row for buffers (at least
+    the longest sampled row, or the strL reserve), or 0 on error; *mean gets
+    the sampled average plus a margin, which estimates the file size: a few
+    long rows must not inflate the pre-size by orders of magnitude.
 */
-static size_t sample_row_sizes(size_t nobs, bool longtext)
+static size_t sample_row_sizes(size_t nobs, bool longtext, size_t *mean)
 {
+    *mean = 0;
     size_t sample_size = row_reserve_bytes();
     char *sample_buf = sample_size == SIZE_MAX ? NULL : malloc(sample_size);
     if (!sample_buf) return 0;
@@ -137,6 +142,7 @@ static size_t sample_row_sizes(size_t nobs, bool longtext)
 
     /* Use average + 10% margin, but ensure at least max_row_size + padding */
     size_t avg_with_margin = (total_size / rows_sampled) * 11 / 10 + 64;
+    *mean = avg_with_margin;
     size_t min_safe = max_row_size + 64;
     if (longtext && sample_size > min_safe) min_safe = sample_size;
     return (avg_with_margin > min_safe) ? avg_with_margin : min_safe;
@@ -254,17 +260,20 @@ static int write_rows_buffered(FILE *fp, size_t nobs, size_t avg_row_size, size_
 {
     size_t rows_written = 0;
 
-    /* Keep room for a worst-case row after every flush. */
+    /* Keep room for a worst-case row after every flush: one reserve and some
+     * slack, not two reserves, since a reserve for a long strL (twice its
+     * length, for doubled quotes) can be gigabytes. */
     size_t reserve = row_reserve_bytes();
     size_t buffer_size = avg_row_size * CEXPORT_ROW_BUFFER_ROWS;
     if (buffer_size < 65536) buffer_size = 65536;
     if (buffer_size > 4 * 1024 * 1024) buffer_size = 4 * 1024 * 1024;
-    if (buffer_size < 2 * reserve) buffer_size = 2 * reserve;
+    if (reserve > SIZE_MAX - 65536) return CEXPORT_BUFFER_NOMEM;
+    if (buffer_size < reserve + 65536) buffer_size = reserve + 65536;
     if (buffer_size < avg_row_size * 2 + 64) buffer_size = avg_row_size * 2 + 64;
 
     char *buffer = (char *)malloc(buffer_size);
     if (buffer == NULL) {
-        return -1;
+        return CEXPORT_BUFFER_NOMEM;
     }
 
     size_t buf_pos = 0;
@@ -292,8 +301,9 @@ static int write_rows_buffered(FILE *fp, size_t nobs, size_t avg_row_size, size_
             row_len = format_row_at(i, buffer + buf_pos, buffer_size - buf_pos);
         }
         if (row_len < 0) {
+            /* -2: unreadable Stata data; -1 here: no room even when empty */
             free(buffer);
-            return row_len == CEXPORT_ROW_TOO_LONG ? row_len : -1;
+            return row_len == CEXPORT_ROW_TOO_LONG || row_len == -2 ? row_len : CEXPORT_BUFFER_NOMEM;
         }
 
         buf_pos += row_len;
@@ -347,8 +357,12 @@ static ST_retcode export_single_threaded(size_t nobs, size_t avg_row_size,
 
     size_t rows_written = 0;
     int write_rc = write_rows_buffered(g_ctx.fp, nobs, avg_row_size, &rows_written);
-    if (write_rc == CEXPORT_ROW_TOO_LONG) {
-        SF_error(CEXPORT_ROW_TOO_LONG_MSG);
+    /* As in the parallel path: rows that cannot be formatted are r(920),
+     * with what failed; only a failed write is a write error. */
+    if (write_rc == CEXPORT_ROW_TOO_LONG || write_rc == -2 || write_rc == CEXPORT_BUFFER_NOMEM) {
+        SF_error(write_rc == CEXPORT_ROW_TOO_LONG ? CEXPORT_ROW_TOO_LONG_MSG
+                 : write_rc == -2 ? "cexport: failed to read Stata data\n"
+                                  : "cexport: memory allocation failed for the output buffer\n");
         fclose(g_ctx.fp);
         g_ctx.fp = NULL;
         return 920;
@@ -387,9 +401,12 @@ static ST_retcode export_mmap(size_t nobs, size_t avg_row_size, size_t chunk_siz
     }
 
     int presize = cexport_io_presize(&outfile, estimated_total);
-    if (presize == CEXPORT_IO_UNRESERVED) {
+    if (presize != 0) {
         /* Without reserved blocks a mapped write could fault with SIGBUS on
-         * a full disk; write the (unpublished) temporary through pwrite. */
+         * a full disk, and the windows are sized for the longest rows, so the
+         * file may not fit where the output does (Windows SetEndOfFile
+         * allocates it on NTFS): write the (unpublished) temporary through
+         * pwrite, which needs no reservation. */
         if (g_ctx.verbose) {
             snprintf(msg, sizeof(msg), "  %s; using pwrite\n", outfile.error_message);
             SF_display(msg);
@@ -397,14 +414,6 @@ static ST_retcode export_mmap(size_t nobs, size_t avg_row_size, size_t chunk_siz
         cexport_io_close(&outfile, 0);
         free(header_buf);
         return CEXPORT_RETRY_PWRITE;
-    }
-    if (presize != 0) {
-        snprintf(msg, sizeof(msg), "cexport: failed to pre-size file: %s\n",
-                outfile.error_message);
-        SF_error(msg);
-        cexport_io_close(&outfile, 0);
-        free(header_buf);
-        return 693;
     }
 
     char *mapped_base = cexport_io_get_mapped_ptr(&outfile, 0);
@@ -502,12 +511,12 @@ static ST_retcode export_mmap(size_t nobs, size_t avg_row_size, size_t chunk_siz
     Example: 10M rows at 10K/chunk = 1000 chunks * 2.4MB = 2.4GB
              -> 8 threads * 2.4MB = 19MB
 */
-static ST_retcode export_pwrite(size_t nobs, size_t avg_row_size, size_t chunk_size,
+static ST_retcode export_pwrite(size_t nobs, size_t mean_row_size, size_t chunk_size,
                                  size_t num_chunks, size_t chunk_buffer_size,
                                  char *header_buf, size_t header_len,
                                  ctools_persistent_pool *pool)
 {
-    (void)avg_row_size;  /* Used for buffer sizing, computed externally */
+    /* mean_row_size only estimates the pre-size; buffers come sized. */
     char msg[512];
     ST_retcode ret = 0;
 
@@ -570,7 +579,7 @@ static ST_retcode export_pwrite(size_t nobs, size_t avg_row_size, size_t chunk_s
     }
 
     /* Estimate total file size for pre-sizing */
-    size_t estimated_total = header_len + (nobs * avg_row_size * 12 / 10);
+    size_t estimated_total = header_len + (nobs * mean_row_size * 12 / 10);
 
     /* Open and pre-size file */
     cexport_io_file outfile;
@@ -587,16 +596,12 @@ static ST_retcode export_pwrite(size_t nobs, size_t avg_row_size, size_t chunk_s
         return 603;
     }
 
-    if (cexport_io_presize(&outfile, estimated_total) != 0) {
-        snprintf(msg, sizeof(msg), "cexport: failed to pre-size file: %s\n",
-                outfile.error_message);
-        SF_error(msg);
-        cexport_io_close(&outfile, 0);
-        for (size_t u = 0; u < total_buffers; u++) {
-            if (wave_buffers[u]) free(wave_buffers[u]);
-        }
-        free(header_buf);
-        return 693;
+    /* Pre-sizing only helps allocation; positioned writes extend the file
+     * anyway, and close truncates to the bytes written. A pre-size that does
+     * not fit (the estimate can exceed the output) is no reason to fail. */
+    if (cexport_io_presize(&outfile, estimated_total) != 0 && g_ctx.verbose) {
+        snprintf(msg, sizeof(msg), "  pre-size skipped: %s\n", outfile.error_message);
+        SF_display(msg);
     }
 
     /* Write header */
@@ -846,7 +851,8 @@ ST_retcode cexport_main(const char *args)
     if (num_threads > max_threads) num_threads = max_threads;
     if (num_threads < 1) num_threads = 1;
 
-    size_t avg_row_size = sample_row_sizes(nobs, longtext);
+    size_t mean_row_size;
+    size_t avg_row_size = sample_row_sizes(nobs, longtext, &mean_row_size);
     if (avg_row_size == 0) {
         if (nvars > SIZE_MAX / 22) {
             SF_error("cexport: variable count too large\n");
@@ -855,6 +861,7 @@ ST_retcode cexport_main(const char *args)
         }
         avg_row_size = nvars * 22;
     }
+    if (!mean_row_size || mean_row_size > avg_row_size) mean_row_size = avg_row_size;
     g_ctx.actual_avg_row_size = avg_row_size;
 
     /* Bound each chunk by bytes as well as rows. With wide rows a 50,000-row
@@ -946,7 +953,7 @@ ST_retcode cexport_main(const char *args)
                 if (export_rc == CEXPORT_RETRY_PWRITE) {
                     ctools_arena_free(&g_ctx.chunk_arena);
                     g_ctx.io_backend = CEXPORT_IO_PWRITE;
-                    export_rc = export_pwrite(nobs, avg_row_size, chunk_size, num_chunks,
+                    export_rc = export_pwrite(nobs, mean_row_size, chunk_size, num_chunks,
                                                chunk_buffer_size, header_copy, header_len, pool);
                 } else {
                     free(header_copy);
@@ -956,7 +963,7 @@ ST_retcode cexport_main(const char *args)
             g_ctx.time_write = ctools_timer_seconds() - t_phase - g_ctx.time_format;
         } else {
             double t_format_start = ctools_timer_seconds();
-            export_rc = export_pwrite(nobs, avg_row_size, chunk_size, num_chunks,
+            export_rc = export_pwrite(nobs, mean_row_size, chunk_size, num_chunks,
                                        chunk_buffer_size, header_buf, header_len, pool);
             g_ctx.time_format = ctools_timer_seconds() - t_format_start;
             g_ctx.time_write = ctools_timer_seconds() - t_phase - g_ctx.time_format;

@@ -63,4 +63,22 @@ ST_retcode fit_group_polynomial(
     ByGroupResult *group
 );
 
+/*
+ * rd(): fit each group's polynomial separately on each side of the break
+ * points config->rd[0..n_rd-1], as binscatter's rd() does: interval 0 is
+ * x <= rd[0], interval r is rd[r-1] < x <= rd[r], the last x > rd[n_rd-1].
+ * results->rd_coefs and rd_stats (allocated here) get one row per group and
+ * interval; an interval without observations keeps missing values. An
+ * interval with one observation is an error (2001), as regress makes it.
+ */
+ST_retcode fit_all_groups_rd(
+    const ST_double *y,
+    const ST_double *x,
+    const ST_int *group_start,   /* num_by_groups + 1 row offsets, NULL without by() */
+    const ST_double *weights,
+    ST_int N,
+    const BinscatterConfig *config,
+    BinscatterResults *results
+);
+
 #endif /* CBINSCATTER_FIT_H */

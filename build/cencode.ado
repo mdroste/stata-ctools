@@ -1,4 +1,4 @@
-*! version 1.2.4 20261103 github.com/mdroste/stata-ctools
+*! version 1.2.6 20261111 github.com/mdroste/stata-ctools
 
 program define cencode, rclass
     version 14.1
@@ -6,22 +6,41 @@ program define cencode, rclass
     * variable is encoded, so a failure leaves the variables untouched. Value
     * labels are the only other state cencode changes: the labels it may write
     * are saved exactly (through Mata) and put back if anything fails.
+    * encode leaves the caller's r() in place, so cencode keeps it too: it
+    * is held while cencode works and returned along with r(N_unique) and
+    * r(N_vars). It is in place while the if is evaluated, as it may name it.
+    tempname __caller_r
+    _return hold `__caller_r'
+    _return restore `__caller_r', hold
     syntax varlist [if] [in], [Generate(string) replace Label(name) *]
     local __labels "`label'"
     if "`__labels'" == "" {
         local __labels = cond("`replace'" != "", "`varlist'", "`generate'")
     }
     capture mata: _cencode_labels_save(tokens(st_local("__labels")))
-    local __saved = (_rc == 0)
+    local __backup_rc = _rc
+    if `__backup_rc' {
+        capture mata: mata drop __cencode_vl_saved __cencode_vl_names
+        _return restore `__caller_r'
+        return add
+        exit `__backup_rc'
+    }
     capture noisily _cencode_impl `0'
     local rc = _rc
     if `rc' {
-        if `__saved' capture mata: _cencode_labels_restore()
+        capture mata: _cencode_labels_restore()
         capture mata: mata drop __cencode_vl_saved __cencode_vl_names
+        _return restore `__caller_r'
+        return add
         exit `rc'
     }
     capture mata: mata drop __cencode_vl_saved __cencode_vl_names
+    local __n_unique = r(N_unique)
+    local __n_vars = r(N_vars)
+    _return restore `__caller_r'
     return add
+    return scalar N_unique = `__n_unique'
+    return scalar N_vars = `__n_vars'
 end
 
 program define _cencode_impl, rclass
@@ -80,11 +99,11 @@ program define _cencode_impl, rclass
         _ctools_newvars `generate'
     }
 
-    * Check that all source variables are string (match encode rc=107)
+    * Check that all source variables are string (encode's message, r(107))
     foreach v of local varlist {
         capture confirm string variable `v'
         if _rc != 0 {
-            di as error "`v' is not a string variable"
+            di as error "not possible with numeric variable"
             exit 107
         }
     }

@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.4 20261103}{...}
+{* *! version 1.2.6 20261111}{...}
 {viewerjumpto "Syntax" "crangejoin##syntax"}{...}
 {viewerjumpto "Description" "crangejoin##description"}{...}
 {viewerjumpto "Options" "crangejoin##options"}{...}
@@ -88,7 +88,10 @@ joined dataset. It cannot be combined with {opt snapshot}.
 {pstd}Every matching pair produces an output observation, so the joined dataset
 can be much larger than either input. Inputs and output are limited to
 2,147,483,647 observations. Numeric and fixed-width string variables are
-supported. Master variables and retained using variables cannot be {cmd:strL}.
+supported, and so are {cmd:strL} master and using variables: the plugin
+carries their observation numbers through the join and the values are copied
+in afterwards. As in {cmd:rangejoin}, whose {cmd:merge} refuses them, {opt by()}
+variables cannot be {cmd:strL} (error 106, with {cmd:merge}'s message).
 {cmd:rangejoin} and {cmd:rangestat} are not required.
 
 

@@ -25,8 +25,21 @@ foreach absorb in "a" "a b" "a#b" "a##c.t b" "a#c.t b" "a##c.(t u) b" {
         hdfe y x if order>5 `wt', absorb(`absorb') gen(ref_) sample(refsample) tol(1e-12) accel(none)
         local df=e(df_a)
         local nh=e(N_hdfe)
+        local ne=e(N_hdfe_extended)
+        assert `ne'<.
+        forvalues j=1/`ne' {
+            foreach field in K`j' M`j' M`j'_exact M`j'_nested G`j' {
+                local ref_`field'=e(`field')
+                assert `ref_`field''<.
+            }
+        }
         chdfe y x if order>5 `wt', absorb(`absorb') gen(got_) sample(gotsample) tol(1e-12)
-        assert e(df_a)==`df' & e(N_hdfe)==`nh'
+        assert e(df_a)==`df' & e(N_hdfe)==`nh' & e(N_hdfe_extended)==`ne'
+        forvalues j=1/`ne' {
+            foreach field in K`j' M`j' M`j'_exact M`j'_nested G`j' {
+                assert e(`field')==`ref_`field''
+            }
+        }
         assert refsample==gotsample
         assert_var_equal got_y ref_y $DEFAULT_SIGFIGS "hdfe `absorb' `wt' y"
         assert_var_equal got_x ref_x $DEFAULT_SIGFIGS "hdfe `absorb' `wt' x"
@@ -42,8 +55,21 @@ foreach dof in "all" "none" "firstpair" "pairwise" "clusters" "continuous" {
     hdfe y x, absorb(a b) gen(ref_) clustervars(a) dof(`refdof') keepsingletons tol(1e-12) accel(none)
     local df=e(df_a)
     local m=e(mobility)
+    local ne=e(N_hdfe_extended)
+    forvalues j=1/`ne' {
+        foreach field in K`j' M`j' M`j'_exact M`j'_nested G`j' {
+            local ref_`field'=e(`field')
+            assert `ref_`field''<.
+        }
+    }
     chdfe y x, absorb(a b) gen(got_) clustervars(a) dof(`dof') keepsingletons tol(1e-12)
     assert e(df_a)==`df' & e(mobility)==`m'
+    assert e(N_hdfe_extended)==`ne'
+    forvalues j=1/`ne' {
+        foreach field in K`j' M`j' M`j'_exact M`j'_nested G`j' {
+            assert e(`field')==`ref_`field''
+        }
+    }
     assert_var_equal got_y ref_y $DEFAULT_SIGFIGS "cluster nesting and dof(`dof')"
     drop got_* ref_*
 }
@@ -196,6 +222,77 @@ else test_fail "clear keepv()" "rc=`rc'"
 restore
 
 }
+* CHDFE-01 to CHDFE-06: hdfe's abbreviations g() and tra(), its
+* experimental transform and acceleration, Kaczmarz with conjugate gradient,
+* slopes with time-series operators, and the variables clear keeps
+capture noisily {
+    sysuse auto, clear
+    quietly hdfe price weight, absorb(turn foreign) g(ref_) tol(1e-12) accel(none)
+    quietly chdfe price weight, absorb(turn foreign) g(got_) tol(1e-12)
+    assert_var_equal got_price ref_price $DEFAULT_SIGFIGS "CHDFE-01 g() abbreviation"
+    drop got_*
+    foreach o in "tra(cim)" "transform(random_kaczmarz)" "transform(rand)" ///
+        "acceleration(hybrid)" "tra(rand) accel(hybrid)" {
+        quietly chdfe price weight, absorb(turn foreign) gen(got_) tol(1e-12) `o'
+        assert_var_equal got_price ref_price $DEFAULT_SIGFIGS "CHDFE-02/03/04 `o'"
+        assert_var_equal got_weight ref_weight $DEFAULT_SIGFIGS "CHDFE-02/03/04 `o' weight"
+        drop got_*
+    }
+    * Kaczmarz with conjugate gradient runs, with hdfe's warning; it stops by
+    * reghdfe's rule for it and is less accurate than the other choices
+    quietly chdfe price weight, absorb(turn foreign) gen(got_) tol(1e-12) transform(kaczmarz) acceleration(cg)
+    assert_var_equal got_price ref_price 5 "CHDFE-04 transform(kaczmarz) acceleration(cg)"
+    assert_var_equal got_weight ref_weight 5 "CHDFE-04 transform(kaczmarz) acceleration(cg) weight"
+    drop got_*
+    drop ref_*
+    * hdfe and chdfe both refuse a slope variable with a time-series operator
+    generate t = _n
+    tsset t
+    capture hdfe price weight, absorb(turn foreign#c.L.length) gen(ref_)
+    local rc = _rc
+    capture chdfe price weight, absorb(turn foreign#c.L.length) gen(got_)
+    assert _rc == 101 & `rc' == 101
+}
+if _rc test_fail "CHDFE-01 to 05 abbreviations, solvers and slopes" "r(`=_rc')"
+else test_pass "CHDFE-01 to 05 abbreviations, solvers and slopes"
+* clear keeps what hdfe keeps: no absorbed or cluster variables
+local fails
+foreach c in "price weight, absorb(turn foreign##c.length) clear" ///
+    "price weight, absorb(turn foreign##c.length) clear keepids" ///
+    "price weight, absorb(turn foreign##c.length) clear keepvars(make) clustervars(rep78)" ///
+    "price weight [aw=mpg], absorb(turn) clear keepids clustervars(rep78)" ///
+    "price weight [fw=rep78], absorb(turn) clear keepvars(mpg make)" ///
+    "price i.rep78 weight, absorb(turn) clear" {
+    sysuse auto, clear
+    capture noisily {
+        quietly hdfe `c'
+        quietly describe, varlist
+        local ref `r(varlist)'
+        sysuse auto, clear
+        quietly chdfe `c'
+        quietly describe, varlist
+        assert "`r(varlist)'" == "`ref'"
+    }
+    if _rc local fails `"`fails' [`c']"'
+}
+if `"`fails'"' == "" test_pass "CHDFE-06 variables kept by clear"
+else test_fail "CHDFE-06 variables kept by clear" `"`fails'"'
+* A group-constant slope remains redundant at extreme scale.
+clear
+set obs 96
+gen int group=mod(floor((_n-1)/2),3)
+gen double slope=(group+1)*1e200
+gen double y=3*group+cond(mod(_n,2),1,-1)
+gen double w=cond(mod(_n,2),1,2)
+foreach wt in "" "[aw=w]" {
+    chdfe y `wt', absorb(group##c.slope) gen(got_) tol(1e-12)
+    assert e(K1)==3 & e(K2)==3 & e(M1)==0 & e(M2)==3 & e(df_a)==3
+    assert e(N_hdfe)==1 & e(N_hdfe_extended)==2 & e(G1)==1 & e(G2)==1
+    if "`wt'"=="" assert abs(got_y-cond(mod(_n,2),1,-1))<1e-12
+    else assert abs(got_y-cond(mod(_n,2),4/3,-2/3))<1e-12
+    drop got_*
+}
+test_pass "constant slopes retain exact redundancy at extreme scale"
 noisily print_summary "chdfe"
 global CTOOLS_CASE_COMPLETE "chdfe"
 }

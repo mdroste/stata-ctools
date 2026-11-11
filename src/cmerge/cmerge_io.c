@@ -19,6 +19,7 @@ void *cmerge_write_keepusing_var_thread(void *arg)
     stata_variable *src = &g_using_cache.keepusing.data.vars[a->keepusing_idx];
 
     a->success = 0;
+    a->error = 0;
 
     if (src->type == STATA_TYPE_DOUBLE) {
         /* Numeric keepusing variable */
@@ -43,7 +44,7 @@ void *cmerge_write_keepusing_var_thread(void *arg)
                     /* Shared var: update fills missing master values; replace
                      * also overwrites with nonmissing using values. */
                     double current_val;
-                    SF_vdata(dest_idx, (ST_int)(i + 1), &current_val);
+                    if ((a->error = SF_vdata(dest_idx, (ST_int)(i + 1), &current_val))) return a;
                     double using_val = (using_row >= 0 && using_row < (int32_t)src->nobs)
                                        ? src->data.dbl[using_row] : SV_missval;
                     int master_missing = SF_is_missing(current_val);
@@ -69,7 +70,7 @@ void *cmerge_write_keepusing_var_thread(void *arg)
             if (should_write && using_row >= 0 && using_row < (int32_t)src->nobs) {
                 /* Checked store: other workers write other variables and
                  * row ranges at the same time (see ctools_transport_internal.h). */
-                (_stata_)->safestore(dest_idx, (ST_int)(i + 1), src->data.dbl[using_row]);
+                if ((a->error = (_stata_)->safestore(dest_idx, (ST_int)(i + 1), src->data.dbl[using_row]))) return a;
             }
         }
     } else {
@@ -95,7 +96,7 @@ void *cmerge_write_keepusing_var_thread(void *arg)
                 else if (update_mode || replace_mode) {
                     /* Shared var: "" is missing; update fills empty master
                      * values; replace also overwrites with nonempty using values. */
-                    SF_sdata(dest_idx, (ST_int)(i + 1), str_buf);
+                    if ((a->error = SF_sdata(dest_idx, (ST_int)(i + 1), str_buf))) return a;
                     int master_missing = (str_buf[0] == '\0');
                     const char *using_val = (using_row >= 0 && using_row < (int32_t)src->nobs &&
                                              src->data.str[using_row] != NULL)
@@ -116,7 +117,7 @@ void *cmerge_write_keepusing_var_thread(void *arg)
 
             if (should_write && using_row >= 0 && using_row < (int32_t)src->nobs) {
                 const char *val = src->data.str[using_row] ? src->data.str[using_row] : "";
-                SF_sstore(dest_idx, (ST_int)(i + 1), (char *)val);
+                if ((a->error = SF_sstore(dest_idx, (ST_int)(i + 1), (char *)val))) return a;
             }
         }
     }

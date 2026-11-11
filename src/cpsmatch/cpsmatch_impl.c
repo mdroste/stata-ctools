@@ -2,918 +2,915 @@
 #include "cpsmatch_impl.h"
 #include "cpsmatch_stats.h"
 #include "cpsmatch_index.h"
+#include "ctools_ols.h"
 
-/* Nearest-neighbor matching step by step as psmatch2's match_pscore() does it
- * (its matches and weights are the reference), with replacement and ties()
- * or without replacement (noreplace, neighbor(1), with or without ties()):
- * - controls and treated are in psmatch2's order (pscore, ascending or
- *   descending, then observation), and treated are visited in that order;
- * - the nearest control is found by scanning on from the previous one in the
- *   current direction, over controls not yet used when noreplace, while the
+/* Propensity-score matching as psmatch2 4.0.12 performs it.
+ *
+ * Nearest-neighbor matching works on psmatch2's row order: the sample sorted
+ * by support (on support first), _treated, pscore (negated with descending)
+ * and observation. A row's position in that order is psmatch2's _id; the
+ * supported controls and the supported treated are two blocks of it. A pass
+ * matches each row of a target block, in order, to rows of a donor block:
+ * - the treated to the controls (ATT); with ate first the controls to the
+ *   treated; with ai(#) each block to itself, skipping the row itself;
+ * - the nearest donor is found by scanning on from the previous one in the
+ *   current direction, over donors not yet used when noreplace, while the
  *   distance does not increase (the first of equal distances wins); once a
- *   match is the last control, the direction turns backward;
- * - ties() adds the (unused) controls that follow it in that direction at no
+ *   match is the last donor, the direction turns backward;
+ * - ties adds the (unused) donors that follow it in that direction at no
  *   greater distance, and neighbor(k) then adds the k-1 closest around it
- *   from both sides, so a control can enter a treated's list twice;
+ *   from both sides, the left on equal distance, so a donor can enter a
+ *   list twice;
  * - every list entry gets 1/(list length), and a match needs a distance below
- *   caliper() (strict, as psmatch2);
- * - without replacement the matched controls are used up and the scan
- *   resumes at the next unused control; once it runs off the controls the
- *   remaining treated are off support. */
-static ssize_t cpsmatch_next_unused(ssize_t j, int forward, int noreplace,
-                                    const unsigned char *used, ssize_t j1)
+ *   caliper() (strict); a target left without one is off support;
+ * - without replacement the matched donors are used up and the scan resumes
+ *   at the next unused donor; once it runs off the donors the remaining
+ *   targets are off support.
+ * With replacement and without ties the scan finds what a binary search
+ * finds (the closer neighbor, the lower on equal distance, the first of a run
+ * of equal scores), so those passes run in parallel.
+ *
+ * Kernel and radius matching weigh every donor of the other arm within the
+ * bandwidth; with ate the controls are matched first, and a control left
+ * without a match is then no longer a donor for the treated, as in psmatch2. */
+
+/* Stata's missing values, tested without a host callback per element */
+static inline int psm_missing(double x, double missval)
 {
-    do {
-        j += forward ? 1 : -1;
-    } while (noreplace && j >= 0 && j <= j1 && used[j]);
-    return j;
+    return !(x < missval);
 }
 
-static int cpsmatch_match_psmatch2_ties(const sorted_control_t *controls, size_t n_controls,
-                                        const sorted_control_t *treated, size_t n_treated,
-                                        const size_t *treated_idx, const size_t *control_idx,
-                                        const perm_idx_t *obs_map,
-                                        int n_neighbors, double caliper, int ties, int noreplace,
-                                        double *out_weight, double *out_match, double *out_nn,
-                                        double *out_support, int *n_matched, int *n_off)
+/* One in-sample row in psmatch2's matching order */
+typedef struct
 {
-    if (n_treated == 0) return 0;
-    if (n_controls == 0) {
-        for (size_t t = 0; t < n_treated; t++) {
-            out_support[treated_idx[treated[t].orig_idx]] = 0.0;
-            (*n_off)++;
+    double arm;      /* stored _treated */
+    double key;      /* pscore, negated with descending; zero for kernel matching */
+    perm_idx_t obs;  /* Stata observation */
+    perm_idx_t row;  /* filtered row */
+    int support;     /* support before matching */
+} psm_order_t;
+
+static int psm_compare_order(const void *a, const void *b)
+{
+    const psm_order_t *pa = (const psm_order_t *)a, *pb = (const psm_order_t *)b;
+    if (pa->support != pb->support) return pa->support > pb->support ? -1 : 1;
+    if (pa->arm != pb->arm) return pa->arm < pb->arm ? -1 : 1;
+    if (pa->key != pb->key) return pa->key < pb->key ? -1 : 1;
+    return (pa->obs > pb->obs) - (pa->obs < pb->obs);
+}
+
+/* A stable sort of a block by score: an LSD radix sort of order-preserving
+ * 64-bit images of the keys, so equal scores keep the block's observation
+ * order. tmp holds n rows; keys and spare hold n entries each. */
+typedef struct
+{
+    uint64_t key;
+    uint32_t at;
+} psm_radix_t;
+
+static uint64_t psm_radix_key(double x)
+{
+    uint64_t bits;
+    if (x == 0.0) x = 0.0; /* -0 sorts with +0, as they compare */
+    memcpy(&bits, &x, sizeof(bits));
+    return (bits >> 63) ? ~bits : bits | ((uint64_t)1 << 63);
+}
+
+/* Sort keys[0..n) stably by key; returns the array holding the result
+ * (keys or spare) */
+static psm_radix_t *psm_radix_sort(psm_radix_t *keys, psm_radix_t *spare, size_t n)
+{
+    enum { BITS = 11, BUCKETS = 1 << BITS };
+    size_t count[BUCKETS];
+    if (n < 2) return keys;
+    for (int shift = 0; shift < 64; shift += BITS) {
+        uint64_t first = (keys[0].key >> shift) & (BUCKETS - 1);
+        int same = 1;
+        memset(count, 0, sizeof(count));
+        for (size_t i = 0; i < n; i++) {
+            uint64_t digit = (keys[i].key >> shift) & (BUCKETS - 1);
+            same &= digit == first;
+            count[digit]++;
         }
-        return 0;
-    }
-    size_t *list = malloc((n_controls + (size_t)n_neighbors + 1) * sizeof(size_t));
-    unsigned char *used = calloc(n_controls, 1);
-    if (!list || !used) { free(list); free(used); return 920; }
-    const ssize_t j1 = (ssize_t)n_controls - 1;
-    const double cal = caliper != 0.0 ? caliper : INFINITY;
-    ssize_t jmatch = 0;
-    int forward = 1;
-    size_t t = 0;
-    for (; t < n_treated && jmatch >= 0 && jmatch <= j1; t++) {
-        double p = treated[t].pscore;
-        size_t obs_idx = treated_idx[treated[t].orig_idx];
-        ssize_t j = jmatch;
-        double dif0, dif1 = fabs(p - controls[j].pscore);
-        while (j >= 0 && j < j1) {
-            j = cpsmatch_next_unused(j, forward, noreplace, used, j1);
-            if (j < 0 || j > j1) break;
-            dif0 = dif1;
-            dif1 = fabs(p - controls[j].pscore);
-            if (dif1 > dif0) j = j1;
-            if (dif1 < dif0) jmatch = j;
+        if (same) continue;
+        size_t sum = 0;
+        for (size_t b = 0; b < BUCKETS; b++) {
+            size_t c = count[b];
+            count[b] = sum;
+            sum += c;
         }
-        size_t n = 0;
-        if (fabs(p - controls[jmatch].pscore) < cal) {
-            list[n++] = (size_t)jmatch;
-            used[jmatch] = 1;
-            /* ties(): onward in the scan direction */
-            if (ties) {
-                double tie = fabs(p - controls[jmatch].pscore);
-                for (ssize_t k = cpsmatch_next_unused(jmatch, forward, noreplace, used, j1);
-                     k >= 0 && k <= j1 && fabs(p - controls[k].pscore) <= tie;
-                     k = cpsmatch_next_unused(k, forward, noreplace, used, j1)) {
-                    list[n++] = (size_t)k;
-                    if (noreplace) used[k] = 1;
-                }
-            }
-            /* neighbor(k): the k-1 closest around the nearest, left on equal
-             * distance */
-            ssize_t pos0 = jmatch - 1, pos1 = jmatch + 1, jm = jmatch;
-            double d0 = 0.0, d1 = 0.0;
-            for (int k = 1; k < n_neighbors; ) {
-                if (pos0 >= 0) d0 = fabs(p - controls[pos0].pscore);
-                if (pos1 <= j1) d1 = fabs(p - controls[pos1].pscore);
-                if (pos0 >= 0 && (d0 <= d1 || pos1 > j1)) jm = pos0--;
-                else if (pos1 <= j1) jm = pos1++;
-                else break;
-                if (!(fabs(p - controls[jm].pscore) < cal)) break;
-                list[n++] = (size_t)jm;
-                k++;
-            }
-            for (size_t m = 0; m < n; m++) {
-                out_weight[control_idx[controls[list[m]].orig_idx]] += 1.0 / (double)n;
-            }
-            out_match[obs_idx] = (double)obs_map[control_idx[controls[jmatch].orig_idx]];
-            out_nn[obs_idx] = (double)n;
-            out_weight[obs_idx] = 1.0;
-            (*n_matched)++;
-        } else {
-            out_support[obs_idx] = 0.0;
-            (*n_off)++;
-        }
-        if (jmatch == j1 && t + 1 < n_treated) forward = 0;
-        if (noreplace && n > 0) jmatch = cpsmatch_next_unused(jmatch, forward, noreplace, used, j1);
+        for (size_t i = 0; i < n; i++)
+            spare[count[(keys[i].key >> shift) & (BUCKETS - 1)]++] = keys[i];
+        psm_radix_t *swap = keys;
+        keys = spare;
+        spare = swap;
     }
-    /* the controls ran out: the remaining treated are off support */
-    for (; t < n_treated; t++) {
-        out_support[treated_idx[treated[t].orig_idx]] = 0.0;
-        (*n_off)++;
+    return keys;
+}
+
+static void psm_sort_block(psm_order_t *block, size_t n, psm_order_t *tmp, psm_radix_t *keys,
+                           psm_radix_t *spare)
+{
+    if (n < 2) return;
+    for (size_t i = 0; i < n; i++) {
+        keys[i].key = psm_radix_key(block[i].key);
+        keys[i].at = (uint32_t)i;
     }
-    free(list);
-    free(used);
+    keys = psm_radix_sort(keys, spare, n);
+    for (size_t i = 0; i < n; i++) tmp[i] = block[keys[i].at];
+    memcpy(block, tmp, n * sizeof(psm_order_t));
+}
+
+/* The bins of psmatch2's order: supported rows coded below 0, the
+ * supported controls, supported rows coded in (0, 1), the supported
+ * treated, then the rest. */
+static int psm_bin(const psm_order_t *r)
+{
+    if (!r->support) return 4;
+    if (r->arm < 0.0) return 0;
+    if (r->arm == 0.0) return 1;
+    if (r->arm < 1.0) return 2;
+    return r->arm == 1.0 ? 3 : 4;
+}
+
+/* Match lists of a pass: target t's donors (positions) are
+ * item[start[t] .. start[t] + count[t]). */
+typedef struct
+{
+    size_t *start;
+    uint32_t *count;
+    perm_idx_t *item;
+    size_t len, cap;
+} psm_lists;
+
+static void psm_lists_free(psm_lists *l)
+{
+    free(l->start);
+    free(l->count);
+    free(l->item);
+    memset(l, 0, sizeof(*l));
+}
+
+static int psm_lists_init(psm_lists *l, size_t n_targets, size_t capacity)
+{
+    memset(l, 0, sizeof(*l));
+    l->start = ctools_safe_malloc2(n_targets ? n_targets : 1, sizeof(size_t));
+    l->count = ctools_safe_calloc2(n_targets ? n_targets : 1, sizeof(uint32_t));
+    l->item = ctools_safe_malloc2(capacity ? capacity : 1, sizeof(perm_idx_t));
+    l->cap = capacity ? capacity : 1;
+    if (!l->start || !l->count || !l->item) {
+        psm_lists_free(l);
+        return -1;
+    }
     return 0;
 }
 
-/* psmatch2's _weight for a row coded neither 0 nor 1: generate double
- * _weight = _treated if _support==1, then missing where it is zero */
-static double cpsmatch_other_weight(double code)
+static int psm_lists_push(psm_lists *l, ssize_t position)
 {
-    return (code == 0.0 || SF_is_missing(code)) ? SV_missval : code;
+    if (l->len == l->cap) {
+        size_t cap = l->cap * 2;
+        perm_idx_t *grown = realloc(l->item, cap * sizeof(perm_idx_t));
+        if (!grown) return -1;
+        l->item = grown;
+        l->cap = cap;
+    }
+    l->item[l->len++] = (perm_idx_t)position;
+    return 0;
+}
+
+/* psmatch2's next_unmatched: the next position in the scan direction, past
+ * the target itself and, without replacement, past used donors. Positions
+ * outside the sample are returned for the caller to reject. */
+static ssize_t psm_step(ssize_t j, int forward, ssize_t self, int noreplace,
+                        const unsigned char *used, ssize_t n_pos)
+{
+    for (;;) {
+        j += forward ? 1 : -1;
+        if (j < 0 || j >= n_pos) return j;
+        if (j == self) continue;
+        if (!noreplace || !used[j]) return j;
+    }
+}
+
+/* The sequential pass over targets [i0, i1] and donors [j0, j1] (inclusive
+ * positions; a range is empty when its end precedes its start). self: the
+ * two ranges are one block, matched to itself. */
+static int psm_scan(const double *ps, ssize_t n_pos, ssize_t i0, ssize_t i1, ssize_t j0,
+                    ssize_t j1, int self, int neighbors, double cal, int ties, int noreplace,
+                    unsigned char *used, psm_lists *out)
+{
+    memset(used, 0, (size_t)n_pos);
+    ssize_t jm = j0, i = i0;
+    int forward = 1;
+    for (; i <= i1 && jm >= j0 && jm <= j1; i++) {
+        size_t t = (size_t)(i - i0);
+        ssize_t me = self ? i : -1;
+        out->start[t] = out->len;
+        out->count[t] = 0;
+        if (self) {
+            if (i == j0) jm++;
+            if (i == jm) jm--;
+            /* a block of one row has no other donor */
+            if (jm > j1) break;
+        }
+        ssize_t j = jm;
+        double d0, d1 = fabs(ps[i] - ps[j]);
+        while (j >= j0 && j < j1) {
+            j = psm_step(j, forward, me, noreplace, used, n_pos);
+            if (j < j0 || j > j1) break;
+            d0 = d1;
+            d1 = fabs(ps[i] - ps[j]);
+            if (d1 > d0) break;
+            if (d1 < d0) jm = j;
+        }
+        uint32_t n = 0;
+        double nearest = fabs(ps[i] - ps[jm]);
+        if (nearest < cal) {
+            used[jm] = 1;
+            if (psm_lists_push(out, jm)) return -1;
+            n++;
+            if (ties) {
+                for (ssize_t k = psm_step(jm, forward, me, noreplace, used, n_pos);
+                     k >= j0 && k <= j1 && fabs(ps[i] - ps[k]) <= nearest;
+                     k = psm_step(k, forward, me, noreplace, used, n_pos)) {
+                    if (psm_lists_push(out, k)) return -1;
+                    n++;
+                    if (noreplace) used[k] = 1;
+                }
+            }
+            ssize_t p0 = jm - 1, p1 = jm + 1;
+            if (p0 == me) p0--;
+            if (p1 == me) p1++;
+            double e0 = 0.0, e1 = 0.0;
+            for (int k = 1; k < neighbors;) {
+                if (p0 >= j0) e0 = fabs(ps[i] - ps[p0]);
+                if (p1 <= j1) e1 = fabs(ps[i] - ps[p1]);
+                ssize_t pick;
+                if (p0 >= j0 && (p1 > j1 || e0 <= e1)) {
+                    pick = p0--;
+                    if (p0 == me) p0--;
+                } else if (p1 <= j1) {
+                    pick = p1++;
+                    if (p1 == me) p1++;
+                } else {
+                    break;
+                }
+                if (!(fabs(ps[i] - ps[pick]) < cal)) break;
+                if (psm_lists_push(out, pick)) return -1;
+                n++;
+                k++;
+            }
+        }
+        out->count[t] = n;
+        if (jm == j1 && i < i1) forward = 0;
+        if (noreplace && n > 0) jm = psm_step(jm, forward, me, noreplace, used, n_pos);
+    }
+    /* the donors ran out: the remaining targets have no match */
+    for (; i <= i1; i++) {
+        out->start[i - i0] = out->len;
+        out->count[i - i0] = 0;
+    }
+    return 0;
+}
+
+static size_t psm_lower_bound(const double *x, size_t n, double target)
+{
+    size_t lo = 0, hi = n;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        if (x[mid] < target) lo = mid + 1;
+        else hi = mid;
+    }
+    return lo;
+}
+
+/* The same pass with replacement and without ties, one target at a time:
+ * lists have at most neighbors entries, at stride neighbors. */
+static void psm_nearest(const double *ps, ssize_t i0, ssize_t i1, ssize_t j0, ssize_t j1,
+                        int neighbors, double cal, psm_lists *out)
+{
+    const double *donor = ps + j0;
+    const size_t n_donors = (size_t)(j1 - j0 + 1);
+    const ssize_t n_targets = i1 - i0 + 1;
+#pragma omp parallel for schedule(static) num_threads(ctools_get_max_threads())
+    for (ssize_t t = 0; t < n_targets; t++) {
+        const double p = ps[i0 + t];
+        perm_idx_t *list = out->item + (size_t)t * (size_t)neighbors;
+        out->start[t] = (size_t)t * (size_t)neighbors;
+        out->count[t] = 0;
+        size_t at = psm_lower_bound(donor, n_donors, p), jm = at;
+        if (at == n_donors || (at > 0 && fabs(p - donor[at - 1]) <= fabs(p - donor[at])))
+            jm = psm_lower_bound(donor, n_donors, donor[at - 1]);
+        if (!(fabs(p - donor[jm]) < cal)) continue;
+        uint32_t n = 0;
+        list[n++] = (perm_idx_t)(j0 + (ssize_t)jm);
+        ssize_t p0 = (ssize_t)jm - 1;
+        size_t p1 = jm + 1;
+        while ((int)n < neighbors) {
+            size_t pick;
+            if (p0 >= 0 && (p1 >= n_donors || fabs(p - donor[p0]) <= fabs(p - donor[p1])))
+                pick = (size_t)p0--;
+            else if (p1 < n_donors)
+                pick = p1++;
+            else
+                break;
+            if (!(fabs(p - donor[pick]) < cal)) break;
+            list[n++] = (perm_idx_t)(j0 + (ssize_t)pick);
+        }
+        out->count[t] = n;
+    }
+    out->len = (size_t)n_targets * (size_t)neighbors;
+}
+
+/* Outputs, by filtered row */
+typedef struct
+{
+    double *weight, *support, *nn, *id, *ids, *pdif, *matched, *self;
+    int neighbors;
+} psm_outputs;
+
+/* Record a matching pass between blocks (not ai()): psmatch2's _n#, _nn,
+ * _weight, _pdif and matched outcome, and support for unmatched targets. */
+static void psm_apply(const psm_lists *l, ssize_t i0, ssize_t i1, const psm_order_t *order,
+                      const double *ps, const double *y, psm_outputs *o)
+{
+    for (ssize_t i = i0; i <= i1; i++) {
+        size_t t = (size_t)(i - i0), row = order[i].row;
+        uint32_t n = l->count[t];
+        if (n == 0) {
+            o->support[row] = 0.0;
+            continue;
+        }
+        const perm_idx_t *list = l->item + l->start[t];
+        o->nn[row] = (double)n;
+        if (o->ids) {
+            for (uint32_t m = 0; m < n && (int)m < o->neighbors; m++)
+                o->ids[row * (size_t)o->neighbors + m] = (double)list[m] + 1.0;
+        }
+        if (o->pdif) o->pdif[row] = fabs(ps[i] - ps[list[0]]);
+        double matched = 0.0;
+        int missing = 0;
+        for (uint32_t m = 0; m < n; m++) {
+            size_t donor = order[list[m]].row;
+            o->weight[donor] += 1.0 / (double)n;
+            if (y) {
+                if (psm_missing(y[donor], SV_missval)) missing = 1;
+                else matched = matched + y[donor] / (double)n;
+            }
+        }
+        if (o->matched) o->matched[row] = missing ? SV_missval : matched;
+    }
+}
+
+/* Record an ai() pass: the mean outcome of the same-arm matches, or with
+ * altvariance the conditional variance of Abadie et al. (2004, p. 303) */
+static void psm_apply_self(const psm_lists *l, ssize_t i0, ssize_t i1, const psm_order_t *order,
+                           const double *y, int altvariance, double *self)
+{
+    for (ssize_t i = i0; i <= i1; i++) {
+        size_t t = (size_t)(i - i0), row = order[i].row;
+        uint32_t n = l->count[t];
+        if (n == 0 || psm_missing(self[row], SV_missval)) continue;
+        const perm_idx_t *list = l->item + l->start[t];
+        double mean = self[row];
+        int missing = psm_missing(y[row], SV_missval);
+        for (uint32_t m = 0; m < n; m++) {
+            double v = y[order[list[m]].row];
+            if (psm_missing(v, SV_missval)) missing = 1;
+            else mean = mean + v / (double)n;
+        }
+        if (missing) {
+            self[row] = SV_missval;
+            continue;
+        }
+        if (altvariance) {
+            double center = ((double)n * mean + y[row]) / ((double)n + 1.0);
+            double sum = (y[row] - center) * (y[row] - center);
+            for (uint32_t m = 0; m < n; m++) {
+                double d = y[order[list[m]].row] - center;
+                sum = sum + d * d;
+            }
+            mean = sum / (double)n;
+        }
+        self[row] = mean;
+    }
+}
+
+/* Kernel matching pass: targets are filtered rows; donor_sorted (donor_rows
+ * by orig_idx) is ordered by score. A target weighs the donors with
+ * |dif| <= bandwidth (the normal kernel: all, within the window where its
+ * weight underflows to zero), normalized to sum to one; the weights add into
+ * weight, and targets get _nn (positive weights), support and the weighted
+ * mean outcome. Donor scores, outcomes and weight sums are kept in sorted
+ * order, so a target reads one contiguous run. */
+static int psm_kernel_pass(const cpsmatch_options *opts, const double *ps, const double *y,
+                           const size_t *targets, size_t n_targets,
+                           const sorted_control_t *donor_sorted, const size_t *donor_rows,
+                           size_t n_donors, double *weight, double *nn, double *support,
+                           double *matched)
+{
+    const double missval = SV_missval;
+    /* psmatch2 weighs by normalden(dif/bw), which is even in bw; the other
+     * kernels need |dif| <= bw and so match nothing when bw <= 0 */
+    double bw = opts->bandwidth;
+    if (opts->kernel == KERNEL_NORMAL) bw = fabs(bw);
+    if (n_targets == 0) return 0;
+    if (n_donors == 0 || !(bw > 0.0)) {
+        for (size_t t = 0; t < n_targets; t++) support[targets[t]] = 0.0;
+        return 0;
+    }
+    /* exp(-u^2/2) underflows to exactly 0 beyond |u| = 38.6 */
+    const double window = opts->kernel == KERNEL_NORMAL ? 38.7 * bw : bw;
+    int n_threads = 1;
+#ifdef _OPENMP
+    n_threads = ctools_get_max_threads();
+#endif
+    int failed = 0;
+    double *dy = ctools_safe_malloc2(n_donors, sizeof(double));
+    double **local = ctools_safe_calloc2((size_t)n_threads, sizeof(double *));
+    /* a target's kernel weights, in its thread's workspace */
+    match_workspace *ws = ctools_safe_calloc2((size_t)n_threads, sizeof(match_workspace));
+    if (!dy || !local || !ws) failed = 1;
+    for (int k = 0; k < n_threads && !failed; k++) {
+        local[k] = ctools_safe_calloc2(n_donors, sizeof(double));
+        cpsmatch_match_workspace_init(&ws[k], MATCH_WORKSPACE_INITIAL_CAP);
+        if (!local[k] || !ws[k].match_weights) failed = 1;
+    }
+    if (!failed) {
+        for (size_t j = 0; j < n_donors; j++)
+            dy[j] = y ? y[donor_rows[donor_sorted[j].orig_idx]] : 0.0;
+#pragma omp parallel num_threads(n_threads) reduction(| : failed)
+        {
+            int tid = 0;
+#ifdef _OPENMP
+            tid = omp_get_thread_num();
+#endif
+#pragma omp for schedule(dynamic, 64)
+            for (size_t t = 0; t < n_targets; t++) {
+                size_t row = targets[t], start, end;
+                double p = ps[row];
+                cpsmatch_distance_window(donor_sorted, n_donors, p, window, &start, &end);
+                if (cpsmatch_match_workspace_ensure_match(&ws[tid], end - start)) {
+                    failed = 1;
+                    continue;
+                }
+                double *w = ws[tid].match_weights, total = 0.0;
+                for (size_t j = start; j < end; j++) {
+                    double dist = fabs(p - donor_sorted[j].pscore);
+                    w[j - start] = (opts->kernel != KERNEL_NORMAL && !(dist <= bw))
+                                       ? 0.0 : cpsmatch_apply_kernel(dist / bw, opts->kernel);
+                    total += w[j - start];
+                }
+                if (!(total > 0.0)) {
+                    support[row] = 0.0;
+                    continue;
+                }
+                double sum_w = 0.0, sum_wy = 0.0;
+                int n = 0, missing = 0;
+                for (size_t j = start; j < end; j++) {
+                    if (!(w[j - start] > 0.0)) continue;
+                    double wn = w[j - start] / total;
+                    local[tid][j] += wn;
+                    if (psm_missing(dy[j], missval)) missing = 1;
+                    sum_wy += wn * dy[j];
+                    sum_w += wn;
+                    n++;
+                }
+                nn[row] = (double)n;
+                if (matched) matched[row] = missing ? missval : sum_wy / sum_w;
+            }
+        }
+    }
+    if (!failed) {
+        for (size_t j = 0; j < n_donors; j++) {
+            double sum = 0.0;
+            for (int k = 0; k < n_threads; k++) sum += local[k][j];
+            weight[donor_rows[donor_sorted[j].orig_idx]] += sum;
+        }
+    }
+    for (int k = 0; local && k < n_threads; k++) free(local[k]);
+    for (int k = 0; ws && k < n_threads; k++) cpsmatch_match_workspace_free(&ws[k]);
+    free(dy);
+    free(local);
+    free(ws);
+    return failed ? 920 : 0;
+}
+
+/* Radius matching pass: each donor within the radius gets 1/count, through
+ * the exact endpoint sums of cpsmatch_match_radius; the matched outcome is a
+ * range mean over double-double prefix sums. */
+static int psm_radius_pass(size_t n_rows, const double *ps, const double *y, const size_t *targets,
+                           size_t n_targets, const sorted_control_t *donor_sorted,
+                           const size_t *donor_rows, size_t n_donors, const perm_idx_t *obs_map,
+                           double radius, double *weight, double *nn, double *support,
+                           double *matched)
+{
+    double *target_ps = ctools_safe_malloc2(n_targets ? n_targets : 1, sizeof(double));
+    double *scratch_w = ctools_safe_calloc2(n_rows ? n_rows : 1, sizeof(double));
+    double *scratch_m = ctools_safe_malloc2(n_rows ? n_rows : 1, sizeof(double));
+    dd_real *prefix = y ? ctools_safe_calloc2(n_donors + 1, sizeof(dd_real)) : NULL;
+    size_t *missing = y ? ctools_safe_calloc2(n_donors + 1, sizeof(size_t)) : NULL;
+    perm_idx_t *starts = ctools_safe_malloc2(n_targets ? n_targets : 1, sizeof(perm_idx_t));
+    int rc = 0;
+    if (!target_ps || !scratch_w || !scratch_m || !starts || (y && (!prefix || !missing))) {
+        rc = 920;
+        goto done;
+    }
+    for (size_t t = 0; t < n_targets; t++) target_ps[t] = ps[targets[t]];
+    int n_matched = 0, n_off = 0;
+    rc = cpsmatch_match_radius(donor_sorted, n_donors, target_ps, targets, n_targets, donor_rows,
+                               obs_map, radius, 0, 0.0, 0.0, scratch_w, scratch_m, nn, support,
+                               &n_matched, &n_off, starts);
+    if (rc) goto done;
+    for (size_t j = 0; j < n_donors; j++) {
+        size_t row = donor_rows[donor_sorted[j].orig_idx];
+        weight[row] += scratch_w[row];
+    }
+    if (y) {
+        for (size_t j = 0; j < n_donors; j++) {
+            double v = y[donor_rows[donor_sorted[j].orig_idx]];
+            int absent = psm_missing(v, SV_missval);
+            prefix[j + 1] = dd_add_d(prefix[j], absent ? 0.0 : v);
+            missing[j + 1] = missing[j] + (size_t)absent;
+        }
+        for (size_t t = 0; t < n_targets; t++) {
+            size_t row = targets[t];
+            if (nn[row] <= 0.0) continue;
+            size_t start = starts[t], end = start + (size_t)nn[row];
+            if (missing[end] != missing[start]) {
+                matched[row] = SV_missval;
+                continue;
+            }
+            double sum = (prefix[end].hi - prefix[start].hi) + (prefix[end].lo - prefix[start].lo);
+            double scale = fmax(fabs(prefix[end].hi), fabs(prefix[start].hi));
+            if (!isfinite(sum) || fabs(sum) <= 1e-8 * scale) {
+                /* Prefix subtraction can erase a small local result after
+                 * enormous unrelated outcomes, even with double-double sums.
+                 * Recompute only this interval; average before summing to
+                 * avoid overflowing a finite local mean. */
+                dd_real mean = {0.0, 0.0};
+                for (size_t j = start; j < end; j++)
+                    mean = dd_add_d(mean, y[donor_rows[donor_sorted[j].orig_idx]] / nn[row]);
+                matched[row] = mean.hi + mean.lo;
+            } else {
+                matched[row] = sum / nn[row];
+            }
+        }
+    }
+done:
+    free(target_ps);
+    free(scratch_w);
+    free(scratch_m);
+    free(prefix);
+    free(missing);
+    free(starts);
+    return rc;
+}
+
+/* Donors of a kernel pass, ordered by score; rows are in observation
+ * order, which the stable sort keeps among equal scores */
+static void psm_kernel_donors(const double *ps, const perm_idx_t *obs_map, const size_t *rows,
+                              size_t n, sorted_control_t *sorted, psm_radix_t *keys,
+                              psm_radix_t *spare)
+{
+    for (size_t j = 0; j < n; j++) {
+        keys[j].key = psm_radix_key(ps[rows[j]]);
+        keys[j].at = (uint32_t)j;
+    }
+    keys = psm_radix_sort(keys, spare, n);
+    for (size_t k = 0; k < n; k++) {
+        size_t j = keys[k].at;
+        sorted[k].orig_idx = j;
+        sorted[k].obs_idx = obs_map[rows[j]];
+        sorted[k].pscore = ps[rows[j]];
+    }
 }
 
 ST_retcode cpsmatch_main(const char *args)
 {
-    int match_failed = 0;
     cpsmatch_options opts;
-    double t_start, t_load, t_setup, t_sort, t_match, t_store, t_total, t_stats = 0.0;
     ST_retcode rc = 0;
+    double t_start = ctools_timer_seconds(), t_load, t_setup, t_sort = 0.0, t_match = 0.0;
+    double t_store = 0.0, t_stats = 0.0;
 
-    t_start = ctools_timer_seconds();
-    t_setup = 0.0;
-    t_sort = 0.0;
-
-    /* Parse arguments */
     if (args == NULL || *args == '\0') {
         SF_error("cpsmatch: no arguments specified\n");
         return 198;
     }
-
     if (cpsmatch_parse_options(args, &opts) != 0) {
         SF_error("cpsmatch: failed to parse arguments\n");
         return 198;
     }
-
-    opts.out_nn_idx = opts.outcome_idx > 0 ? 7 : 6;
-
-    if (!opts.with_replace && (opts.method != MATCH_NEAREST || opts.n_neighbors != 1)) {
-        SF_error("cpsmatch: noreplacement requires nearest-neighbor matching with neighbor(1)\n");
-        return 198;
-    }
-
+    if (opts.out_nn_idx == 0) opts.out_nn_idx = opts.outcome_idx > 0 ? 7 : 6;
     if (opts.nobs == 0) {
         SF_error("cpsmatch: no observations\n");
         return 2000;
     }
+    const int nearest = opts.method == MATCH_NEAREST;
+    const int K = opts.n_neighbors;
 
-    /* Get observation range bounds (used for ctools_data_load) */
-    (void)SF_in1();  /* obs1/obs2 handled by filtered load */
-    (void)SF_in2();
-
-    /* ========================================================================
-     * PHASE 1: Load data with if/in filtering using ctools_data_load()
-     * This loads ONLY observations that pass the if-condition, reducing memory
-     * and eliminating the need for double iteration with SF_ifobs().
-     * ======================================================================== */
+    /* Load treatment, score, then the optional outcome, support and arm */
     t_load = ctools_timer_seconds();
+    int var_indices[5], nvars = 0, col_outcome = -1, col_presup = -1, col_arm = -1;
+    var_indices[nvars++] = opts.treat_idx;
+    var_indices[nvars++] = opts.pscore_idx;
+    if (opts.outcome_idx > 0) { col_outcome = nvars; var_indices[nvars++] = opts.outcome_idx; }
+    if (opts.presupport_idx > 0) { col_presup = nvars; var_indices[nvars++] = opts.presupport_idx; }
+    if (opts.arm_idx > 0) { col_arm = nvars; var_indices[nvars++] = opts.arm_idx; }
 
-    /* Build array of variable indices to load */
-    int nvars_to_load = ((opts.outcome_idx > 0) ? 3 : 2) + opts.statistics;
-    int *var_indices = malloc(nvars_to_load * sizeof(int));
-    if (!var_indices) {
-        SF_error("cpsmatch: memory allocation failed\n");
-        return 920;
-    }
-    var_indices[0] = opts.treat_idx;
-    var_indices[1] = opts.pscore_idx;
-    if (opts.outcome_idx > 0) {
-        var_indices[2] = opts.outcome_idx;
-    }
-    if (opts.statistics) var_indices[nvars_to_load - 1] = opts.out_nn_idx + 1;
-
-    /* Load filtered data - only observations passing if-condition are loaded.
-     * With touse, the sample marker follows every other variable in place of
-     * an if condition. */
     ctools_filtered_data filtered;
     ctools_filtered_data_init(&filtered);
-    int load_flags = CTOOLS_LOAD_NO_SORT_ORDER | (opts.touse ? CTOOLS_LOAD_MARKER : CTOOLS_LOAD_CHECK_IF);
-    stata_retcode load_rc = ctools_data_load(&filtered, var_indices,
-                                                       nvars_to_load, 0, 0, load_flags);
-    free(var_indices);
-
+    int load_flags =
+        CTOOLS_LOAD_NO_SORT_ORDER | (opts.touse ? CTOOLS_LOAD_MARKER : CTOOLS_LOAD_CHECK_IF);
+    stata_retcode load_rc =
+        ctools_data_load(&filtered, var_indices, (size_t)nvars, 0, 0, load_flags);
     if (load_rc != STATA_OK) {
         SF_error("cpsmatch: failed to load data\n");
         ctools_filtered_data_free(&filtered);
         return ctools_stata_rc(load_rc);
     }
-
-    /* Get pointers to the filtered data arrays */
-    size_t n_filtered = filtered.data.nobs;
-    double *treatment = filtered.data.vars[0].data.dbl;
-    double *pscore = filtered.data.vars[1].data.dbl;
-    perm_idx_t *obs_map = filtered.obs_map;  /* Maps filtered index -> Stata obs */
-    double *outcome = (opts.outcome_idx > 0) ? filtered.data.vars[2].data.dbl : NULL;
-    /* Preserve gen byte _treated's conversion, including nonbinary inputs the
-     * existing two-level validation accepts. Matching still uses the original. */
-    double *stat_treatment = opts.statistics
-        ? filtered.data.vars[nvars_to_load - 1].data.dbl : NULL;
+    const size_t n_rows = filtered.data.nobs;
+    const double *treatment = filtered.data.vars[0].data.dbl;
+    const double *ps = filtered.data.vars[1].data.dbl;
+    const double *y = col_outcome >= 0 ? filtered.data.vars[col_outcome].data.dbl : NULL;
+    const double *presup = col_presup >= 0 ? filtered.data.vars[col_presup].data.dbl : NULL;
     /* psmatch2 matches on _treated (gen byte _treated = treatvar): treated
      * are _treated == 1 and controls _treated == 0. Rows with another code
      * stay in the sample, on support, with _weight = _treated. */
-    const double *arm = stat_treatment ? stat_treatment : treatment;
-
+    const double *arm = col_arm >= 0 ? filtered.data.vars[col_arm].data.dbl : treatment;
+    const perm_idx_t *obs_map = filtered.obs_map;
     t_load = ctools_timer_seconds() - t_load;
-
-    /* ========================================================================
-     * PHASE 2: Separate treated and control groups (single pass, no SF_ifobs)
-     * Since data is already filtered, we just need to check treatment values.
-     * ======================================================================== */
     t_setup = ctools_timer_seconds();
 
-    /* Count treated and controls - no SF_ifobs needed, already filtered */
+    /* Every buffer is allocated before the first store */
+    const size_t nr = n_rows ? n_rows : 1;
+    psm_outputs out = {0};
+    out.neighbors = K;
+    psm_order_t *order = ctools_safe_malloc2(nr, sizeof(psm_order_t));
+    psm_order_t *order_tmp = ctools_safe_malloc2(nr, sizeof(psm_order_t));
+    psm_radix_t *radix = ctools_safe_malloc2(nr, sizeof(psm_radix_t));
+    psm_radix_t *radix_spare = ctools_safe_malloc2(nr, sizeof(psm_radix_t));
+    double *ps_pos = ctools_safe_malloc2(nr, sizeof(double));
+    unsigned char *used = ctools_safe_malloc2(nr, 1);
+    size_t *target_rows = ctools_safe_malloc2(nr, sizeof(size_t));
+    size_t *donor_rows = ctools_safe_malloc2(nr, sizeof(size_t));
+    sorted_control_t *donor_sorted = ctools_safe_malloc2(nr, sizeof(sorted_control_t));
+    out.weight = ctools_safe_malloc2(nr, sizeof(double));
+    out.support = ctools_safe_malloc2(nr, sizeof(double));
+    out.nn = ctools_safe_malloc2(nr, sizeof(double));
+    out.id = opts.out_match_idx > 0 ? ctools_safe_malloc2(nr, sizeof(double)) : NULL;
+    out.ids =
+        opts.neighbor_ids_idx > 0 ? ctools_safe_malloc2(nr, (size_t)K * sizeof(double)) : NULL;
+    out.pdif = opts.pdif_idx > 0 ? ctools_safe_malloc2(nr, sizeof(double)) : NULL;
+    out.matched = y && opts.matched_idx > 0 ? ctools_safe_malloc2(nr, sizeof(double)) : NULL;
+    out.self =
+        y && opts.self_idx > 0 && opts.ai > 0 ? ctools_safe_malloc2(nr, sizeof(double)) : NULL;
+    psm_lists lists = {0};
+    if (!order || !order_tmp || !radix || !radix_spare || !ps_pos || !used || !target_rows ||
+        !donor_rows || !donor_sorted || !out.weight || !out.support || !out.nn ||
+        (opts.out_match_idx > 0 && !out.id) ||
+        (opts.neighbor_ids_idx > 0 && !out.ids) || (opts.pdif_idx > 0 && !out.pdif) ||
+        (y && opts.matched_idx > 0 && !out.matched) ||
+        (y && opts.self_idx > 0 && opts.ai > 0 && !out.self)) {
+        rc = 920;
+        goto cleanup;
+    }
+
+    /* Arms and the control score range (r(common_min), r(common_max)) */
     size_t n_treated = 0, n_controls = 0;
-    for (size_t i = 0; i < n_filtered; i++) {
-        /* psmatch2 excludes observations without a score from matching */
-        if (SF_is_missing(treatment[i]) || SF_is_missing(pscore[i])) continue;
+    double cmin = SV_missval, cmax = SV_missval;
+    for (size_t i = 0; i < n_rows; i++) {
+        if (psm_missing(treatment[i], SV_missval) || psm_missing(ps[i], SV_missval)) continue;
         if (arm[i] == 1.0) n_treated++;
-        else if (arm[i] == 0.0) n_controls++;
-    }
-
-    /* psmatch2 defines the arms by ==1 and ==0, not by truthiness.
-     * Other numeric codes may be retained, but cannot become matches. */
-    if (n_treated == 0) {
-        /* r(common_min)/r(common_max) are the control score range, as when
-         * there are treated rows (missing without controls) */
-        double control_min = SV_missval, control_max = SV_missval;
-        for (size_t i = 0; i < n_filtered; i++) {
-            if (SF_is_missing(treatment[i]) || SF_is_missing(pscore[i]) || arm[i] != 0.0)
-                continue;
-            if (SF_is_missing(control_min) || pscore[i] < control_min) control_min = pscore[i];
-            if (SF_is_missing(control_max) || pscore[i] > control_max) control_max = pscore[i];
-        }
-        if (opts.statistics) {
-            cpsmatch_statistics statistics;
-            double started = ctools_timer_seconds();
-            cpsmatch_compute_statistics(n_filtered, stat_treatment, outcome, NULL, NULL, &statistics);
-            rc = cpsmatch_save_statistics(&statistics);
-            t_stats = ctools_timer_seconds() - started;
-        }
-        for (size_t i=0; i<n_filtered && !rc; i++) {
-            ST_int obs=(ST_int)obs_map[i];
-            if (opts.out_nn_idx>0) rc=SF_vstore(opts.out_nn_idx,obs,SV_missval);
-            if (!rc && opts.out_weight_idx>0) rc=SF_vstore(opts.out_weight_idx,obs,cpsmatch_other_weight(arm[i]));
-            if (!rc && opts.out_match_idx>0) rc=SF_vstore(opts.out_match_idx,obs,SV_missval);
-            if (!rc && opts.out_support_idx>0) rc=SF_vstore(opts.out_support_idx,obs,1.0);
-        }
-        SF_scal_save("_cpsmatch_n_treated",0);
-        SF_scal_save("_cpsmatch_n_controls",(double)n_controls);
-        SF_scal_save("_cpsmatch_n_matched",0);
-        SF_scal_save("_cpsmatch_n_off_support",0);
-        SF_scal_save("_cpsmatch_common_min",control_min);
-        SF_scal_save("_cpsmatch_common_max",control_max);
-        SF_scal_save("_cpsmatch_time_load",t_load);
-        SF_scal_save("_cpsmatch_time_setup",0);
-        SF_scal_save("_cpsmatch_time_sort",0);
-        SF_scal_save("_cpsmatch_time_match",0);
-        SF_scal_save("_cpsmatch_time_store",0);
-        SF_scal_save("_cpsmatch_time_stats",t_stats);
-        SF_scal_save("_cpsmatch_time_total",ctools_timer_seconds()-t_start);
-        ctools_filtered_data_free(&filtered);
-        return rc;
-    }
-    if (n_controls == 0) {
-        /* psmatch2 finds no match for any treated row: all are off support,
-         * with _nn zero; r(common_min)/r(common_max) are missing */
-        double *support = malloc((n_filtered ? n_filtered : 1) * sizeof(double));
-        if (!support) {
-            ctools_filtered_data_free(&filtered);
-            SF_error("cpsmatch: memory allocation failed\n");
-            return 920;
-        }
-        for (size_t i = 0; i < n_filtered; i++) support[i] = arm[i] == 1.0 ? 0.0 : 1.0;
-        if (opts.statistics) {
-            cpsmatch_statistics statistics;
-            double started = ctools_timer_seconds();
-            cpsmatch_compute_statistics(n_filtered, stat_treatment, outcome, NULL, support, &statistics);
-            rc = cpsmatch_save_statistics(&statistics);
-            t_stats = ctools_timer_seconds() - started;
-        }
-        for (size_t i = 0; i < n_filtered && !rc; i++) {
-            ST_int obs = (ST_int)obs_map[i];
-            int treated = arm[i] == 1.0;
-            if (opts.out_nn_idx > 0) rc = SF_vstore(opts.out_nn_idx, obs, treated ? 0.0 : SV_missval);
-            if (!rc && opts.out_weight_idx > 0)
-                rc = SF_vstore(opts.out_weight_idx, obs, treated ? SV_missval : cpsmatch_other_weight(arm[i]));
-            if (!rc && opts.out_match_idx > 0) rc = SF_vstore(opts.out_match_idx, obs, SV_missval);
-            if (!rc && opts.out_support_idx > 0) rc = SF_vstore(opts.out_support_idx, obs, support[i]);
-        }
-        free(support);
-        SF_scal_save("_cpsmatch_n_treated", (double)n_treated);
-        SF_scal_save("_cpsmatch_n_controls", 0);
-        SF_scal_save("_cpsmatch_n_matched", 0);
-        SF_scal_save("_cpsmatch_n_off_support", (double)n_treated);
-        SF_scal_save("_cpsmatch_common_min", SV_missval);
-        SF_scal_save("_cpsmatch_common_max", SV_missval);
-        SF_scal_save("_cpsmatch_time_load", t_load);
-        SF_scal_save("_cpsmatch_time_setup", 0);
-        SF_scal_save("_cpsmatch_time_sort", 0);
-        SF_scal_save("_cpsmatch_time_match", 0);
-        SF_scal_save("_cpsmatch_time_store", 0);
-        SF_scal_save("_cpsmatch_time_stats", t_stats);
-        SF_scal_save("_cpsmatch_time_total", ctools_timer_seconds() - t_start);
-        ctools_filtered_data_free(&filtered);
-        return rc;
-    }
-
-    /* Build index arrays - indices now refer to position in filtered array */
-    size_t *treated_idx = malloc(n_treated * sizeof(size_t));
-    size_t *control_idx = malloc(n_controls * sizeof(size_t));
-    double *treated_pscore = malloc(n_treated * sizeof(double));
-    double *control_pscore = malloc(n_controls * sizeof(double));
-
-    if (!treated_idx || !control_idx || !treated_pscore || !control_pscore) {
-        ctools_filtered_data_free(&filtered);
-        free(treated_idx);
-        free(control_idx);
-        free(treated_pscore);
-        free(control_pscore);
-        SF_error("cpsmatch: memory allocation failed\n");
-        return 920;
-    }
-
-    size_t ti = 0, ci = 0;
-    for (size_t i = 0; i < n_filtered; i++) {
-        if (SF_is_missing(treatment[i]) || SF_is_missing(pscore[i])) continue;
-        if (arm[i] == 1.0) {
-            treated_idx[ti] = i;  /* Index in filtered array */
-            treated_pscore[ti] = pscore[i];
-            ti++;
-        } else if (arm[i] == 0.0) {
-            control_idx[ci] = i;  /* Index in filtered array */
-            control_pscore[ci] = pscore[i];
-            ci++;
+        else if (arm[i] == 0.0) {
+            n_controls++;
+            if (psm_missing(cmin, SV_missval) || ps[i] < cmin) cmin = ps[i];
+            if (psm_missing(cmax, SV_missval) || ps[i] > cmax) cmax = ps[i];
         }
     }
 
-    /* ========================================================================
-     * PHASE 3: Compute common support region
-     * ======================================================================== */
-
-    double ps_min_treated = DBL_MAX, ps_max_treated = -DBL_MAX;
-    double ps_min_control = DBL_MAX, ps_max_control = -DBL_MAX;
-
-    for (size_t i = 0; i < n_treated; i++) {
-        if (!SF_is_missing(treated_pscore[i])) {
-            if (treated_pscore[i] < ps_min_treated) ps_min_treated = treated_pscore[i];
-            if (treated_pscore[i] > ps_max_treated) ps_max_treated = treated_pscore[i];
-        }
+    /* psmatch2's variables before matching: _weight = _treated on support
+     * (zero for the treated with ate), _nn zero on support, the matched
+     * outcome zero for the rows to be matched. */
+    size_t n_valid = 0;
+    for (size_t i = 0; i < n_rows; i++) {
+        out.weight[i] = out.support[i] = out.nn[i] = SV_missval;
+        if (out.id) out.id[i] = SV_missval;
+        if (out.ids) for (int m = 0; m < K; m++) out.ids[i * (size_t)K + m] = SV_missval;
+        if (out.pdif) out.pdif[i] = SV_missval;
+        if (out.matched) out.matched[i] = SV_missval;
+        if (out.self) out.self[i] = SV_missval;
+        if (psm_missing(treatment[i], SV_missval) || psm_missing(ps[i], SV_missval)) continue;
+        int s = 1;
+        if (presup) s = presup[i] == 1.0;
+        else if (opts.common_support && arm[i] == 1.0) s = !(ps[i] < cmin || ps[i] > cmax);
+        order[n_valid].arm = arm[i];
+        order[n_valid].key = nearest ? (opts.descending ? -ps[i] : ps[i]) : 0.0;
+        order[n_valid].obs = obs_map[i];
+        order[n_valid].row = (perm_idx_t)i;
+        order[n_valid].support = s;
+        n_valid++;
+        out.support[i] = s;
+        if (!s) continue;
+        out.weight[i] = (opts.ate && arm[i] == 1.0) ? 0.0 : arm[i];
+        out.nn[i] = 0.0;
+        if (out.matched && (opts.ate || arm[i] == 1.0)) out.matched[i] = 0.0;
     }
-
-    for (size_t i = 0; i < n_controls; i++) {
-        if (!SF_is_missing(control_pscore[i])) {
-            if (control_pscore[i] < ps_min_control) ps_min_control = control_pscore[i];
-            if (control_pscore[i] > ps_max_control) ps_max_control = control_pscore[i];
-        }
-    }
-
-    /* Common support: psmatch2 restricts TREATED to be within control pscore range.
-     * Controls are not restricted - they're always on support for ATT estimation. */
-    double common_min = ps_min_control;
-    double common_max = ps_max_control;
-
-    /* ========================================================================
-     * PHASE 4: Perform matching
-     * ======================================================================== */
-
-    /* Allocate output arrays - sized by n_filtered (not nobs_range) for memory efficiency.
-     * These are indexed by position in the filtered array, and use obs_map for write-back. */
-    double *out_weight = calloc(n_filtered, sizeof(double));
-    double *out_match = malloc(n_filtered * sizeof(double));
-    double *out_support = malloc(n_filtered * sizeof(double));
-    double *out_nn = malloc(n_filtered * sizeof(double));
-
-    if (!out_weight || !out_match || !out_support || !out_nn) {
-        ctools_filtered_data_free(&filtered);
-        free(treated_idx);
-        free(control_idx);
-        free(treated_pscore);
-        free(control_pscore);
-        free(out_weight);
-        free(out_match);
-        free(out_support); free(out_nn);
-        SF_error("cpsmatch: memory allocation failed\n");
-        return 920;
-    }
-
-    /* Initialize to missing */
-    for (size_t i = 0; i < n_filtered; i++) {
-        out_match[i] = SV_missval;
-        out_support[i] = SV_missval;
-        out_nn[i] = SV_missval;
-    }
-
-    for (size_t t = 0; t < n_treated; t++) out_nn[treated_idx[t]] = 0.0;
-
-    /* Caliper is always in absolute units (propensity score scale) for psmatch2 compatibility */
-    double caliper = opts.caliper;
-
-    int n_matched_treated = 0;
-    int n_off_support = 0;
-
-    /* End setup phase, start sort/index phase */
     t_setup = ctools_timer_seconds() - t_setup;
+
     t_sort = ctools_timer_seconds();
-
-    /* For matching without replacement, we need to:
-     * 1. Sort treated by propensity score (descending by default, like psmatch2)
-     * 2. Process sequentially to avoid race conditions
-     * 3. Mark excess treated as off-support when controls run out
-     */
-
-    /* Create sorted order for treated (by propensity score) */
-    size_t *treated_order = malloc(n_treated * sizeof(size_t));
-    if (!treated_order) {
-        ctools_filtered_data_free(&filtered);
-        free(treated_idx);
-        free(control_idx);
-        free(treated_pscore);
-        free(control_pscore);
-        free(out_weight);
-        free(out_match);
-        free(out_support); free(out_nn);
-        SF_error("cpsmatch: memory allocation failed\n");
-        return 920;
+    /* Bin the rows (stably), then sort each bin: the supported controls and
+     * treated are contiguous blocks of the order. Kernel and radius
+     * matching need only the blocks. */
+    size_t bin_start[6] = {0};
+    for (size_t p = 0; p < n_valid; p++) bin_start[psm_bin(&order[p]) + 1]++;
+    for (int b = 0; b < 5; b++) bin_start[b + 1] += bin_start[b];
+    {
+        size_t fill[5];
+        memcpy(fill, bin_start, sizeof(fill));
+        for (size_t p = 0; p < n_valid; p++) order_tmp[fill[psm_bin(&order[p])]++] = order[p];
+        psm_order_t *swap = order;
+        order = order_tmp;
+        order_tmp = swap;
     }
-
-    /* For noreplacement, we need to sort treated by propensity score.
-     * Use qsort with sorted_control_t structure for O(n log n) instead of O(n²) insertion sort */
-    sorted_control_t *sorted_treated = NULL;
-    if (!opts.with_replace) {
-        sorted_treated = malloc(n_treated * sizeof(sorted_control_t));
-        if (!sorted_treated) {
-            ctools_filtered_data_free(&filtered);
-            free(treated_idx);
-            free(control_idx);
-            free(treated_pscore);
-            free(control_pscore);
-            free(out_weight);
-            free(out_match);
-            free(out_support); free(out_nn);
-            free(treated_order);
-            SF_error("cpsmatch: memory allocation failed\n");
-            return 920;
-        }
-
-        /* Populate and sort */
-        for (size_t i = 0; i < n_treated; i++) {
-            sorted_treated[i].orig_idx = i;
-            sorted_treated[i].obs_idx = treated_idx[i];
-            sorted_treated[i].pscore = treated_pscore[i];
-        }
-
-        /* Sort: ascending (default) or descending */
-        if (opts.descending) {
-            qsort(sorted_treated, n_treated, sizeof(sorted_control_t), cpsmatch_compare_by_pscore_desc);
-        } else {
-            qsort(sorted_treated, n_treated, sizeof(sorted_control_t), cpsmatch_compare_by_pscore);
-        }
-
-        /* Copy sorted indices to treated_order */
-        for (size_t i = 0; i < n_treated; i++) {
-            treated_order[i] = sorted_treated[i].orig_idx;
-        }
-        free(sorted_treated);
-    } else {
-        /* For with-replacement, order doesn't matter - use original order */
-        for (size_t i = 0; i < n_treated; i++) {
-            treated_order[i] = i;
+    if (nearest) {
+        for (int b = 0; b < 5; b++) {
+            size_t n = bin_start[b + 1] - bin_start[b];
+            if (b == 1 || b == 3)
+                psm_sort_block(order + bin_start[b], n, order_tmp, radix, radix_spare);
+            else
+                qsort(order + bin_start[b], n, sizeof(psm_order_t), psm_compare_order);
         }
     }
+    const ssize_t c0 = (ssize_t)bin_start[1], c1 = (ssize_t)bin_start[2] - 1;
+    const ssize_t t0 = (ssize_t)bin_start[3], t1 = (ssize_t)bin_start[4] - 1;
+    for (size_t p = 0; p < n_valid; p++) {
+        ps_pos[p] = ps[order[p].row];
+        if (out.id) out.id[order[p].row] = (double)p + 1.0;
+    }
+    t_sort = ctools_timer_seconds() - t_sort;
 
-    /* Matching loop - sequential for noreplacement, parallel otherwise */
-    if (!opts.with_replace) {
-        /* ================================================================
-         * FAST sequential matching for noreplacement using sorted index
-         * ================================================================ */
-
-        /* psmatch2's scan (match_pscore with noreplace): controls and
-         * treated in its order, ascending or descending */
-        int (*cmp)(const void *, const void *) = opts.descending ?
-            cpsmatch_compare_by_pscore_desc : cpsmatch_compare_by_pscore;
-        sorted_control_t *sorted_controls = malloc((n_controls ? n_controls : 1) * sizeof(sorted_control_t));
-        sorted_control_t *trt = malloc((n_treated ? n_treated : 1) * sizeof(sorted_control_t));
-        if (!sorted_controls || !trt) {
-            free(sorted_controls);
-            free(trt);
-            ctools_filtered_data_free(&filtered);
-            free(treated_idx);
-            free(control_idx);
-            free(treated_pscore);
-            free(control_pscore);
-            free(out_weight);
-            free(out_match);
-            free(out_support); free(out_nn);
-            free(treated_order);
-            SF_error("cpsmatch: memory allocation failed\n");
-            return 920;
-        }
-        for (size_t i = 0; i < n_controls; i++) {
-            sorted_controls[i].orig_idx = i;
-            sorted_controls[i].obs_idx = obs_map[control_idx[i]];  /* Stata observation number for stable sort */
-            sorted_controls[i].pscore = control_pscore[i];
-        }
-        qsort(sorted_controls, n_controls, sizeof(sorted_control_t), cmp);
-        size_t n_on = 0;
-        for (size_t t = 0; t < n_treated; t++) {
-            size_t obs_idx = treated_idx[t];
-            double ps = treated_pscore[t];
-            if (opts.common_support && (ps < common_min || ps > common_max)) {
-                out_support[obs_idx] = 0.0;
-                n_off_support++;
-                continue;
-            }
-            out_support[obs_idx] = 1.0;
-            trt[n_on].orig_idx = t;
-            trt[n_on].obs_idx = obs_map[obs_idx];
-            trt[n_on].pscore = ps;
-            n_on++;
-        }
-        qsort(trt, n_on, sizeof(sorted_control_t), cmp);
-
-        /* End sort phase, start matching phase */
-        t_sort = ctools_timer_seconds() - t_sort;
-        t_match = ctools_timer_seconds();
-
-        rc = cpsmatch_match_psmatch2_ties(sorted_controls, n_controls, trt, n_on, treated_idx,
-                                          control_idx, obs_map, 1, caliper, opts.ties, 1,
-                                          out_weight, out_match, out_nn, out_support,
-                                          &n_matched_treated, &n_off_support);
-        free(trt);
-        if (rc) {
-            free(sorted_controls);
-            ctools_filtered_data_free(&filtered);
-            free(treated_idx);
-            free(control_idx);
-            free(treated_pscore);
-            free(control_pscore);
-            free(out_weight);
-            free(out_match);
-            free(out_support); free(out_nn);
-            free(treated_order);
-            SF_error("cpsmatch: memory allocation failed\n");
-            return 920;
-        }
-
-        free(sorted_controls);
-    } else {
-        /* ================================================================
-         * FAST matching for with-replacement using sorted control index
-         * ================================================================ */
-
-        /* Build sorted control index for O(log n) lookups */
-        sorted_control_t *sorted_controls = malloc(n_controls * sizeof(sorted_control_t));
-        if (!sorted_controls) {
-            ctools_filtered_data_free(&filtered);
-            free(treated_idx);
-            free(control_idx);
-            free(treated_pscore);
-            free(control_pscore);
-            free(out_weight);
-            free(out_match);
-            free(out_support); free(out_nn);
-            free(treated_order);
-            SF_error("cpsmatch: memory allocation failed\n");
-            return 920;
-        }
-
-        /* Populate sorted control array */
-        for (size_t i = 0; i < n_controls; i++) {
-            sorted_controls[i].orig_idx = i;
-            sorted_controls[i].obs_idx = obs_map[control_idx[i]];  /* Stata observation number for stable sort */
-            sorted_controls[i].pscore = control_pscore[i];
-        }
-
-        /* Sort controls by propensity score */
-        qsort(sorted_controls, n_controls, sizeof(sorted_control_t), cpsmatch_compare_by_pscore);
-
-        /* End sort phase, start matching phase */
-        t_sort = ctools_timer_seconds() - t_sort;
-        t_match = ctools_timer_seconds();
-
-        if (opts.method == MATCH_NEAREST && opts.ties) {
-            /* psmatch2's sequential ties() algorithm, in its sort order */
-            sorted_control_t *ctrl = malloc((n_controls ? n_controls : 1) * sizeof(sorted_control_t));
-            sorted_control_t *trt = malloc((n_treated ? n_treated : 1) * sizeof(sorted_control_t));
-            if (!ctrl || !trt) {
-                free(ctrl); free(trt);
+    t_match = ctools_timer_seconds();
+    const double cal = opts.caliper != 0.0 ? opts.caliper : INFINITY;
+    if (nearest) {
+        /* passes: with ate the controls to the treated first, then the
+         * treated to the controls */
+        for (int pass = opts.ate ? 0 : 1; pass < 2 && !rc; pass++) {
+            ssize_t i0 = pass ? t0 : c0, i1 = pass ? t1 : c1;
+            ssize_t j0 = pass ? c0 : t0, j1 = pass ? c1 : t1;
+            size_t n_t = i1 >= i0 ? (size_t)(i1 - i0 + 1) : 0;
+            int fast = opts.with_replace && !opts.ties && j1 >= j0;
+            if (psm_lists_init(&lists, n_t, fast ? n_t * (size_t)K : n_t + 16)) { rc = 920; break; }
+            if (fast && n_t) psm_nearest(ps_pos, i0, i1, j0, j1, K, cal, &lists);
+            else if (n_t && psm_scan(ps_pos, (ssize_t)n_valid, i0, i1, j0, j1, 0, K, cal,
+                                     opts.ties, !opts.with_replace, used, &lists)) {
                 rc = 920;
+                break;
+            }
+            psm_apply(&lists, i0, i1, order, ps_pos, y, &out);
+            psm_lists_free(&lists);
+        }
+        /* ai(#): each arm matched to itself, controls then treated */
+        if (!rc && out.self) {
+            for (size_t i = 0; i < n_rows; i++)
+                out.self[i] = out.support[i] == 1.0 ? 0.0 : SV_missval;
+            for (int pass = 0; pass < 2 && !rc; pass++) {
+                ssize_t i0 = pass ? t0 : c0, i1 = pass ? t1 : c1;
+                size_t n_t = i1 >= i0 ? (size_t)(i1 - i0 + 1) : 0;
+                if (psm_lists_init(&lists, n_t, n_t + 16)) { rc = 920; break; }
+                if (n_t && psm_scan(ps_pos, (ssize_t)n_valid, i0, i1, i0, i1, 1, opts.ai, cal,
+                                    opts.ties, !opts.with_replace, used, &lists)) {
+                    rc = 920;
+                    break;
+                }
+                psm_apply_self(&lists, i0, i1, order, y, opts.altvariance, out.self);
+                psm_lists_free(&lists);
+            }
+        }
+    } else {
+        /* kernel and radius: controls first with ate; their donors are the
+         * supported treated, and the treated's donors are then the controls
+         * still on support */
+        for (int pass = opts.ate ? 0 : 1; pass < 2 && !rc; pass++) {
+            ssize_t i0 = pass ? t0 : c0, i1 = pass ? t1 : c1;
+            ssize_t j0 = pass ? c0 : t0, j1 = pass ? c1 : t1;
+            size_t n_t = 0, n_d = 0;
+            for (ssize_t p = i0; p <= i1; p++) target_rows[n_t++] = order[p].row;
+            for (ssize_t p = j0; p <= j1; p++)
+                if (out.support[order[p].row] == 1.0) donor_rows[n_d++] = order[p].row;
+            psm_kernel_donors(ps, obs_map, donor_rows, n_d, donor_sorted, radix, radix_spare);
+            if (opts.method == MATCH_RADIUS) {
+                /* psmatch2's radius is |dif| <= caliper: a negative caliper
+                 * matches nothing, so only 0 (none given) takes the default */
+                double radius = opts.caliper != 0.0 ? opts.caliper : CPSMATCH_DEFAULT_CALIPER;
+                rc = psm_radius_pass(n_rows, ps, y, target_rows, n_t, donor_sorted, donor_rows,
+                                     n_d, obs_map, radius, out.weight, out.nn, out.support,
+                                     out.matched);
             } else {
-                int (*cmp)(const void *, const void *) = opts.descending ?
-                    cpsmatch_compare_by_pscore_desc : cpsmatch_compare_by_pscore;
-                memcpy(ctrl, sorted_controls, n_controls * sizeof(sorted_control_t));
-                if (opts.descending) qsort(ctrl, n_controls, sizeof(sorted_control_t), cmp);
-                size_t n_on = 0;
-                for (size_t t = 0; t < n_treated; t++) {
-                    size_t obs_idx = treated_idx[t];
-                    double ps = treated_pscore[t];
-                    if (opts.common_support && (ps < common_min || ps > common_max)) {
-                        out_support[obs_idx] = 0.0;
-                        n_off_support++;
-                        continue;
-                    }
-                    out_support[obs_idx] = 1.0;
-                    trt[n_on].orig_idx = t;
-                    trt[n_on].obs_idx = obs_map[obs_idx];
-                    trt[n_on].pscore = ps;
-                    n_on++;
-                }
-                qsort(trt, n_on, sizeof(sorted_control_t), cmp);
-                rc = cpsmatch_match_psmatch2_ties(ctrl, n_controls, trt, n_on, treated_idx,
-                                                  control_idx, obs_map, opts.n_neighbors, caliper,
-                                                  1, 0,
-                                                  out_weight, out_match, out_nn, out_support,
-                                                  &n_matched_treated, &n_off_support);
-                free(ctrl); free(trt);
-            }
-            if (rc) {
-                free(sorted_controls);
-                ctools_filtered_data_free(&filtered);
-                free(treated_idx);
-                free(control_idx);
-                free(treated_pscore);
-                free(control_pscore);
-                free(out_weight);
-                free(out_match);
-                free(out_support); free(out_nn);
-                free(treated_order);
-                SF_error("cpsmatch: memory allocation failed\n");
-                return 920;
-            }
-        } else if (opts.method == MATCH_RADIUS) {
-            /* psmatch2's radius is |dif| <= caliper: a negative caliper
-             * matches nothing, so only 0 (none given) takes the default */
-            double radius = (caliper != 0.0) ? caliper : CPSMATCH_DEFAULT_CALIPER;
-            match_failed = cpsmatch_match_radius(sorted_controls, n_controls,
-                treated_pscore, treated_idx, n_treated, control_idx, obs_map,
-                radius, opts.common_support, common_min, common_max,
-                out_weight, out_match, out_nn, out_support,
-                &n_matched_treated, &n_off_support) != 0;
-        } else {
-        /* Optimized parallel matching using fast O(log n) algorithms */
-
-        /* Get number of threads */
-        int n_threads = 1;
-        #ifdef _OPENMP
-        n_threads = ctools_get_max_threads();
-        #endif
-
-        /* Allocate thread-local weight buffers (shared by all methods) */
-        double **thread_weights = malloc(n_threads * sizeof(double *));
-        if (thread_weights) {
-            for (int i = 0; i < n_threads; i++) {
-                thread_weights[i] = calloc(n_filtered, sizeof(double));
+                rc = psm_kernel_pass(&opts, ps, y, target_rows, n_t, donor_sorted, donor_rows,
+                                     n_d, out.weight, out.nn, out.support, out.matched);
             }
         }
-
-        /* Allocate per-thread workspaces (for NN/kernel only) */
-        match_workspace *thread_ws = NULL;
-        if (opts.method != MATCH_RADIUS) {
-            thread_ws = malloc(n_threads * sizeof(match_workspace));
-            if (!thread_ws) {
-                if (thread_weights) {
-                    for (int i = 0; i < n_threads; i++) free(thread_weights[i]);
-                    free(thread_weights);
-                }
-                free(sorted_controls);
-                ctools_filtered_data_free(&filtered);
-                free(treated_idx);
-                free(control_idx);
-                free(treated_pscore);
-                free(control_pscore);
-                free(out_weight);
-                free(out_match);
-                free(out_support); free(out_nn);
-                free(treated_order);
-                SF_error("cpsmatch: memory allocation failed\n");
-                return 920;
-            }
-            for (int i = 0; i < n_threads; i++) {
-                cpsmatch_match_workspace_init(&thread_ws[i], MATCH_WORKSPACE_INITIAL_CAP);
-            }
-        }
-
-        {
-            /* NN and kernel matching with thread-local weights and workspaces */
-            #pragma omp parallel reduction(+:n_matched_treated, n_off_support) reduction(|:match_failed)
-            {
-                int tid = 0;
-                #ifdef _OPENMP
-                tid = omp_get_thread_num();
-                #endif
-
-                double *local_weights = (thread_weights && thread_weights[tid]) ? thread_weights[tid] : out_weight;
-                int use_local = (thread_weights && thread_weights[tid]) ? 1 : 0;
-                match_workspace *ws = (thread_ws) ? &thread_ws[tid] : NULL;
-
-                #pragma omp for schedule(dynamic, 64)
-                for (size_t t = 0; t < n_treated; t++) {
-                    size_t obs_idx = treated_idx[t];
-                    double ps = treated_pscore[t];
-
-                    /* Check common support */
-                    if (opts.common_support) {
-                        if (ps < common_min || ps > common_max) {
-                            out_support[obs_idx] = 0.0;
-                            n_off_support++;
-                            continue;
-                        }
-                    }
-                    out_support[obs_idx] = 1.0;
-
-                    match_result result;
-                    memset(&result, 0, sizeof(result));
-
-                    int match_rc = 0;
-
-                    switch (opts.method) {
-                        case MATCH_NEAREST:
-                            match_rc = cpsmatch_find_nearest_neighbors_fast(
-                                ps, sorted_controls, control_idx, n_controls,
-                                opts.n_neighbors, caliper, opts.ties, ws, &result);
-                            break;
-
-                        case MATCH_KERNEL:
-                            /* psmatch2's kernel matching ignores caliper() */
-                            match_rc = cpsmatch_find_kernel_matches_fast(
-                                ps, sorted_controls, control_idx, n_controls,
-                                opts.bandwidth, opts.kernel, 0.0, ws, &result);
-                            break;
-
-                        default:
-                            match_rc = cpsmatch_find_nearest_neighbors_fast(
-                                ps, sorted_controls, control_idx, n_controls,
-                                opts.n_neighbors, caliper, opts.ties, ws, &result);
-                            break;
-                    }
-
-                    if (match_rc != 0) { match_failed = 1; continue; }
-                    if (result.n_matches > 0) {
-                        n_matched_treated++;
-                        out_nn[obs_idx] = (double)result.n_matches;
-
-                        /* Store first match ID - use obs_map for Stata observation number */
-                        out_match[obs_idx] = (double)obs_map[result.match_ids[0]];
-
-                        /* Accumulate weights using thread-local buffer (no atomics) */
-                        for (int m = 0; m < result.n_matches; m++) {
-                            size_t match_filtered_idx = result.match_ids[m];
-                            if (use_local) {
-                                local_weights[match_filtered_idx] += result.match_weights[m];
-                            } else {
-                                #pragma omp atomic
-                                out_weight[match_filtered_idx] += result.match_weights[m];
-                            }
-                        }
-
-                        /* Weight for treated observation = 1 */
-                        if (use_local) {
-                            local_weights[obs_idx] = 1.0;
-                        } else {
-                            out_weight[obs_idx] = 1.0;
-                        }
-                    } else {
-                        /* No match found (e.g., caliper/bandwidth constraint) */
-                        out_support[obs_idx] = 0.0;
-                        n_off_support++;
-                    }
-                    /* No free needed - workspace owns the buffers */
-                }
-            }
-        }
-
-        /* Shared merge phase: reduce thread_weights into out_weight */
-        if (thread_weights) {
-            #pragma omp parallel for schedule(static)
-            for (size_t j = 0; j < n_filtered; j++) {
-                double sum = 0.0;
-                for (int i = 0; i < n_threads; i++) {
-                    if (thread_weights[i]) {
-                        sum += thread_weights[i][j];
-                    }
-                }
-                out_weight[j] += sum;
-            }
-            for (int i = 0; i < n_threads; i++) {
-                free(thread_weights[i]);
-            }
-            free(thread_weights);
-        }
-
-        /* Free per-thread workspaces */
-        if (thread_ws) {
-            for (int i = 0; i < n_threads; i++) {
-                cpsmatch_match_workspace_free(&thread_ws[i]);
-            }
-            free(thread_ws);
-        }
-        } /* end parallel matching */
-
-        free(sorted_controls);
     }
+    if (rc) goto cleanup;
 
-    free(treated_order);
-
-    if (match_failed) { rc=920; goto cleanup; }
-
-    /* Mark controls on support - for psmatch2 compatibility, controls are always
-     * on support for ATT estimation. The common support restriction only applies
-     * to treated observations. */
-    for (size_t i = 0; i < n_controls; i++) {
-        size_t obs_idx = control_idx[i];
-        out_support[obs_idx] = 1.0;
+    /* psmatch2: replace _weight = . if _weight==0 | _support==0, and no
+     * matched outcome off support */
+    size_t n_matched = 0, n_off = 0, n_controls_on = 0, n_controls_off = 0;
+    for (size_t i = 0; i < n_rows; i++) {
+        if (out.weight[i] == 0.0 || out.support[i] == 0.0) out.weight[i] = SV_missval;
+        if (out.support[i] == 0.0) {
+            if (out.matched) out.matched[i] = SV_missval;
+            if (out.self) out.self[i] = SV_missval;
+        }
+        if (!psm_missing(treatment[i], SV_missval) && !psm_missing(ps[i], SV_missval)) {
+            if (arm[i] == 1.0) {
+                if (out.support[i] == 1.0) n_matched++;
+                else n_off++;
+            } else if (arm[i] == 0.0) {
+                if (out.support[i] == 1.0) n_controls_on++;
+                else n_controls_off++;
+            }
+        }
     }
-    /* Other treatment codes: on support, _weight = _treated */
-    for (size_t i = 0; i < n_filtered; i++) {
-        if (arm[i] == 0.0 || arm[i] == 1.0) continue;
-        out_support[i] = 1.0;
-        out_weight[i] = cpsmatch_other_weight(arm[i]);
-    }
-
     t_match = ctools_timer_seconds() - t_match;
 
     if (opts.statistics) {
         cpsmatch_statistics statistics;
         double started = ctools_timer_seconds();
-        cpsmatch_compute_statistics(n_filtered, stat_treatment, outcome,
-                                    out_weight, out_support, &statistics);
+        cpsmatch_compute_statistics(n_rows, arm, y, out.weight, out.support, &statistics);
+        if (y && opts.float_squares) {
+            /* psmatch2 squares the weights with gen w2 = _weight^2, in the
+             * default storage type: with float, each square is rounded */
+            dd_real sum = {0.0, 0.0};
+            for (size_t i = 0; i < n_rows; i++) {
+                double w = out.weight[i];
+                if (arm[i] != 0.0 || psm_missing(w, SV_missval)) continue;
+                float square = (float)(w * w);
+                if (isfinite(square)) sum = dd_add_d(sum, (double)square);
+            }
+            statistics.weight_squared = sum.hi + sum.lo;
+        }
         rc = cpsmatch_save_statistics(&statistics);
         t_stats = ctools_timer_seconds() - started;
         if (rc) goto cleanup;
     }
 
-    /* ========================================================================
-     * PHASE 5: Store results back to Stata using obs_map
-     * ======================================================================== */
     t_store = ctools_timer_seconds();
-
-    /* Store results - use obs_map to write to correct Stata observations.
-     * Output arrays are indexed by filtered position (0 to n_filtered-1).
-     * Variable positions from the ado are already one-based. */
-    for (size_t i = 0; i < n_filtered; i++) {
+    for (size_t i = 0; i < n_rows && !rc; i++) {
         ST_int obs = (ST_int)obs_map[i];
-
-        rc = SF_vstore(opts.out_nn_idx, obs, out_nn[i]);
-        if (rc) goto cleanup;
-
-        if (opts.out_weight_idx > 0) {
-            /* Unused controls and rows off support get a missing weight, as
-             * psmatch2's replace _weight = . if _weight==0 | _support==0 */
-            double weight = out_weight[i];
-            if (weight == 0.0 || out_support[i] == 0.0) weight = SV_missval;
-            rc = SF_vstore(opts.out_weight_idx, obs, weight);
-            if (rc) goto cleanup;
-        }
-
-        if (opts.out_match_idx > 0) {
-            rc = SF_vstore(opts.out_match_idx, obs, out_match[i]);
-            if (rc) goto cleanup;
-        }
-
-        if (opts.out_support_idx > 0) {
-            rc = SF_vstore(opts.out_support_idx, obs, out_support[i]);
-            if (rc) goto cleanup;
-        }
+        rc = SF_vstore(opts.out_nn_idx, obs, out.nn[i]);
+        if (!rc && opts.out_weight_idx > 0) rc = SF_vstore(opts.out_weight_idx, obs, out.weight[i]);
+        if (!rc && opts.out_support_idx > 0)
+            rc = SF_vstore(opts.out_support_idx, obs, out.support[i]);
+        if (!rc && out.id) rc = SF_vstore(opts.out_match_idx, obs, out.id[i]);
+        for (int m = 0; out.ids && m < K && !rc; m++)
+            rc = SF_vstore(opts.neighbor_ids_idx + m, obs, out.ids[i * (size_t)K + m]);
+        if (!rc && out.pdif) rc = SF_vstore(opts.pdif_idx, obs, out.pdif[i]);
+        if (!rc && out.matched) rc = SF_vstore(opts.matched_idx, obs, out.matched[i]);
+        if (!rc && out.self) rc = SF_vstore(opts.self_idx, obs, out.self[i]);
     }
-
+    if (rc) goto cleanup;
     t_store = ctools_timer_seconds() - t_store;
 
-    /* ========================================================================
-     * PHASE 6: Store timing and diagnostics
-     * ======================================================================== */
-
-    t_total = ctools_timer_seconds() - t_start;
-
-    SF_scal_save("_cpsmatch_time_load", t_load);
-    SF_scal_save("_cpsmatch_time_setup", t_setup);
-    SF_scal_save("_cpsmatch_time_sort", t_sort);
-    SF_scal_save("_cpsmatch_time_match", t_match);
-    SF_scal_save("_cpsmatch_time_store", t_store);
-    SF_scal_save("_cpsmatch_time_stats", t_stats);
-    SF_scal_save("_cpsmatch_time_total", t_total);
-
-    SF_scal_save("_cpsmatch_n_treated", (double)n_treated);
-    SF_scal_save("_cpsmatch_n_controls", (double)n_controls);
-    SF_scal_save("_cpsmatch_n_matched", (double)n_matched_treated);
-    SF_scal_save("_cpsmatch_n_off_support", (double)n_off_support);
-    SF_scal_save("_cpsmatch_common_min", common_min);
-    SF_scal_save("_cpsmatch_common_max", common_max);
-
-    /* Thread diagnostics */
-    CTOOLS_SAVE_THREAD_INFO("_cpsmatch");
+    if ((rc = SF_scal_save("_cpsmatch_time_load", t_load))) goto cleanup;
+    if ((rc = SF_scal_save("_cpsmatch_time_setup", t_setup))) goto cleanup;
+    if ((rc = SF_scal_save("_cpsmatch_time_sort", t_sort))) goto cleanup;
+    if ((rc = SF_scal_save("_cpsmatch_time_match", t_match))) goto cleanup;
+    if ((rc = SF_scal_save("_cpsmatch_time_store", t_store))) goto cleanup;
+    if ((rc = SF_scal_save("_cpsmatch_time_stats", t_stats))) goto cleanup;
+    if ((rc = SF_scal_save("_cpsmatch_time_total", ctools_timer_seconds() - t_start))) goto cleanup;
+    if ((rc = SF_scal_save("_cpsmatch_n_treated", (double)n_treated))) goto cleanup;
+    if ((rc = SF_scal_save("_cpsmatch_n_controls", (double)n_controls))) goto cleanup;
+    if ((rc = SF_scal_save("_cpsmatch_n_matched", (double)n_matched))) goto cleanup;
+    if ((rc = SF_scal_save("_cpsmatch_n_off_support", (double)n_off))) goto cleanup;
+    if ((rc = SF_scal_save("_cpsmatch_n_controls_on", (double)n_controls_on))) goto cleanup;
+    if ((rc = SF_scal_save("_cpsmatch_n_controls_off", (double)n_controls_off))) goto cleanup;
+    if ((rc = SF_scal_save("_cpsmatch_common_min", cmin))) goto cleanup;
+    if ((rc = SF_scal_save("_cpsmatch_common_max", cmax))) goto cleanup;
+    if ((rc = SF_scal_save("_cpsmatch_threads_max", (double)ctools_get_max_threads()))) goto cleanup;
+    if ((rc = SF_scal_save("_cpsmatch_openmp_enabled", (double)CTOOLS_OPENMP_ENABLED))) goto cleanup;
 
 cleanup:
-    /* Cleanup - use stata_data_free for input data (frees treatment, pscore, outcome) */
+    if (rc == 920) SF_error("cpsmatch: memory allocation failed\n");
+    psm_lists_free(&lists);
+    free(order);
+    free(order_tmp);
+    free(radix);
+    free(radix_spare);
+    free(ps_pos);
+    free(used);
+    free(target_rows);
+    free(donor_rows);
+    free(donor_sorted);
+    free(out.weight);
+    free(out.support);
+    free(out.nn);
+    free(out.id);
+    free(out.ids);
+    free(out.pdif);
+    free(out.matched);
+    free(out.self);
     ctools_filtered_data_free(&filtered);
-    free(treated_idx);
-    free(control_idx);
-    free(treated_pscore);
-    free(control_pscore);
-    free(out_weight);
-    free(out_match);
-    free(out_support); free(out_nn);
-
     return rc;
 }

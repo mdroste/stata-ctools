@@ -14,6 +14,7 @@
 #include <string.h>
 #include <math.h>
 #include <stdint.h>
+#include <stdio.h>
 #include "stplugin.h"
 #include "cbinscatter_bins.h"
 #include "../ctools_config.h"
@@ -730,9 +731,19 @@ ST_retcode densify_bin_ids(ST_int *bin_ids, ST_int N, const ByGroupResult *resul
  * Discrete Mode Bin Computation
  * ======================================================================== */
 
-ST_retcode compute_bins_discrete(
+void set_external_bin_ids(const ST_double *keys, const ST_int *bin_ids,
+                         ST_int N, ByGroupResult *result)
+{
+    for (ST_int i = 0; i < N; i++) {
+        ST_int b = bin_ids[i];
+        if (b >= 1 && b <= result->num_bins) result->bins[b - 1].external_id = keys[i];
+    }
+}
+
+ST_retcode compute_bins_by_key(
     const ST_double *y,
     const ST_double *x,
+    const ST_double *key,
     const ST_double *weights,
     ST_int N,
     ST_int compute_se,
@@ -742,7 +753,6 @@ ST_retcode compute_bins_discrete(
 ) {
     ST_int i, j, unique_count;
     ST_int *sort_idx = NULL;
-    ST_double *unique_x = NULL;
     ST_int *bin_ids = NULL;
     ST_retcode rc = CBINSCATTER_OK;
 
@@ -754,8 +764,8 @@ ST_retcode compute_bins_discrete(
         sort_idx[i] = i;
     }
 
-    /* Argsort by x */
-    g_sort_values = x;
+    /* Argsort by the key */
+    g_sort_values = key;
     qsort(sort_idx, N, sizeof(ST_int), compare_indices);
 
     /* Count unique non-missing values */
@@ -763,7 +773,7 @@ ST_retcode compute_bins_discrete(
     ST_double prev_val = SV_missval;
     for (i = 0; i < N; i++) {
         ST_int idx = sort_idx[i];
-        ST_double val = x[idx];
+        ST_double val = key[idx];
         if (SF_is_missing(val)) continue;
         if (unique_count == 0 || val != prev_val) {
             unique_count++;
@@ -781,13 +791,10 @@ ST_retcode compute_bins_discrete(
         return CBINSCATTER_ERR_CAPACITY;
     }
 
-    /* Collect unique x values and assign bins in one pass */
-    unique_x = (ST_double *)malloc(unique_count * sizeof(ST_double));
+    /* Assign bins in one pass */
     bin_ids = (ST_int *)calloc(N, sizeof(ST_int));
-    if (!unique_x || !bin_ids) {
+    if (!bin_ids) {
         free(sort_idx);
-        free(unique_x);
-        free(bin_ids);
         return CBINSCATTER_ERR_MEMORY;
     }
 
@@ -795,13 +802,12 @@ ST_retcode compute_bins_discrete(
     prev_val = SV_missval;
     for (i = 0; i < N; i++) {
         ST_int idx = sort_idx[i];
-        ST_double val = x[idx];
+        ST_double val = key[idx];
         if (SF_is_missing(val)) {
             bin_ids[idx] = 0;
             continue;
         }
         if (j == 0 || val != prev_val) {
-            unique_x[j] = val;
             j++;
             prev_val = val;
         }
@@ -816,9 +822,208 @@ ST_retcode compute_bins_discrete(
     if (bin_ids_out) memcpy(bin_ids_out, bin_ids, (size_t)N * sizeof(ST_int));
 
     free(sort_idx);
-    free(unique_x);
     free(bin_ids);
     return rc;
+}
+
+ST_retcode compute_bins_discrete(
+    const ST_double *y,
+    const ST_double *x,
+    const ST_double *weights,
+    ST_int N,
+    ST_int compute_se,
+    ST_int max_bins,
+    ByGroupResult *result,
+    ST_int *bin_ids_out
+) {
+    return compute_bins_by_key(y, x, x, weights, N, compute_se, max_bins, result, bin_ids_out);
+}
+
+/* ========================================================================
+ * Bin Medians
+ * ======================================================================== */
+
+/*
+ * _pctile's percentile p = num/den of the n sorted values vs (weights ws,
+ * NULL for one each). Unweighted, with i = floor(n p): the average of the
+ * i-th and next values when n p is an integer i, otherwise value i + 1.
+ * Weighted, with cumulative weights W_i and P = W p: the first value whose
+ * W_i reaches P, averaged with the next when W_i equals P. Stata finds that
+ * tie also for aweights such as 0.1, whose sums carry rounding error, so W_i
+ * within a few ulps of P counts as equal.
+ */
+static ST_double pctile_sorted(const ST_double *vs, const ST_double *ws, ST_int n,
+                               int64_t num, int64_t den)
+{
+    if (n <= 0) return SV_missval;
+    if (!ws) {
+        int64_t np = (int64_t)n * num;
+        int64_t i = np / den;
+        if (np % den == 0) {
+            if (i < 1) return vs[0];
+            if (i >= n) return vs[n - 1];
+            return (vs[i - 1] + vs[i]) / 2;
+        }
+        if (i >= n) i = n - 1;
+        return vs[i];
+    }
+    ST_double total = 0.0, c = 0.0;
+    for (ST_int i = 0; i < n; i++) {
+        ST_double yv = ws[i] - c, t = total + yv;
+        c = (t - total) - yv;
+        total = t;
+    }
+    const ST_double target = total * (ST_double)num / (ST_double)den;
+    const ST_double tol = 1e-12 * fabs(total);
+    ST_double cum = 0.0;
+    c = 0.0;
+    for (ST_int i = 0; i < n; i++) {
+        ST_double yv = ws[i] - c, t = cum + yv;
+        c = (t - cum) - yv;
+        cum = t;
+        if (fabs(cum - target) <= tol) return (i < n - 1) ? (vs[i] + vs[i + 1]) / 2 : vs[i];
+        if (cum > target) return vs[i];
+    }
+    return vs[n - 1];
+}
+
+/* _pctile's median of the n values v (weights w or NULL); vs and ws are
+ * scratch space for n values */
+static ST_retcode pctile_median(const ST_double *v, const ST_double *w, ST_int n,
+                               ST_double *vs, ST_double *ws, ST_double *median)
+{
+    *median = SV_missval;
+    if (n <= 0) return CBINSCATTER_OK;
+    ST_int sorted = sort_nonmissing_x(v, w, n, vs, w ? ws : NULL);
+    if (sorted < 0) return CBINSCATTER_ERR_MEMORY;
+    if (sorted == n) *median = pctile_sorted(vs, w ? ws : NULL, n, 1, 2);
+    return CBINSCATTER_OK;
+}
+
+ST_retcode apply_bin_medians(
+    const ST_double *y,
+    const ST_double *x,
+    const ST_double *weights,
+    ST_int N,
+    const ST_int *bin_ids,
+    int x_too,
+    ByGroupResult *result
+) {
+    const ST_int nb = result->num_bins;
+    if (nb <= 0 || !result->bins) return CBINSCATTER_OK;
+    ST_int max_id = 0;
+    for (ST_int b = 0; b < nb; b++)
+        if (result->bins[b].bin_id > max_id) max_id = result->bins[b].bin_id;
+
+    ST_int *pos_of = (ST_int *)malloc(((size_t)max_id + 1) * sizeof(ST_int));
+    ST_int *start = (ST_int *)calloc((size_t)nb + 1, sizeof(ST_int));
+    ST_int *fill = (ST_int *)malloc(((size_t)nb + 1) * sizeof(ST_int));
+    ST_int *rows = (ST_int *)malloc(((size_t)N + 1) * sizeof(ST_int));
+    ST_double *v = (ST_double *)malloc(((size_t)N + 1) * sizeof(ST_double));
+    ST_double *w = weights ? (ST_double *)malloc(((size_t)N + 1) * sizeof(ST_double)) : NULL;
+    ST_double *vs = (ST_double *)malloc(((size_t)N + 1) * sizeof(ST_double));
+    ST_double *ws = weights ? (ST_double *)malloc(((size_t)N + 1) * sizeof(ST_double)) : NULL;
+    ST_retcode rc = CBINSCATTER_OK;
+    if (!pos_of || !start || !fill || !rows || !v || !vs || (weights && (!w || !ws))) {
+        rc = CBINSCATTER_ERR_MEMORY;
+        goto done;
+    }
+    for (ST_int b = 0; b <= max_id; b++) pos_of[b] = -1;
+    for (ST_int b = 0; b < nb; b++) pos_of[result->bins[b].bin_id] = b;
+
+    /* Rows grouped by bin (counting sort) */
+    for (ST_int i = 0; i < N; i++) {
+        ST_int id = bin_ids[i];
+        if (id >= 1 && id <= max_id && pos_of[id] >= 0) start[pos_of[id] + 1]++;
+    }
+    for (ST_int b = 0; b < nb; b++) start[b + 1] += start[b];
+    memcpy(fill, start, (size_t)nb * sizeof(ST_int));
+    for (ST_int i = 0; i < N; i++) {
+        ST_int id = bin_ids[i];
+        if (id >= 1 && id <= max_id && pos_of[id] >= 0) rows[fill[pos_of[id]]++] = i;
+    }
+
+    for (ST_int b = 0; b < nb; b++) {
+        const ST_int n = start[b + 1] - start[b];
+        const ST_int *r = rows + start[b];
+        for (int pass = 0; pass < (x_too ? 2 : 1); pass++) {
+            const ST_double *src = pass ? x : y;
+            for (ST_int k = 0; k < n; k++) {
+                v[k] = src[r[k]];
+                if (w) w[k] = weights[r[k]];
+            }
+            ST_double med;
+            rc = pctile_median(v, w, n, vs, ws, &med);
+            if (rc != CBINSCATTER_OK) goto done;
+            if (pass) result->bins[b].x_mean = med;
+            else result->bins[b].y_mean = med;
+        }
+    }
+
+done:
+    free(pos_of); free(start); free(fill); free(rows);
+    free(v); free(w); free(vs); free(ws);
+    return rc;
+}
+
+/* ========================================================================
+ * Cutpoints From a Random Subsample
+ * ======================================================================== */
+
+ST_retcode compute_sampled_cutpoints(
+    const ST_double *x,
+    const ST_double *weights,
+    const unsigned char *sel,
+    ST_int N,
+    ST_int nq,
+    ST_double **cutpoints_out
+) {
+    *cutpoints_out = NULL;
+    ST_int m = 0;
+    for (ST_int i = 0; i < N; i++) m += (sel[i] && !SF_is_missing(x[i]));
+    if (m == 0 || nq < 1 || nq > m + 1) {
+        char msg[200];
+        snprintf(msg, sizeof(msg), "nquantiles() must be less than or equal to the number "
+                 "of sampled observations [%d] plus one\n", (int)m);
+        SF_error(msg);
+        return CBINSCATTER_ERR_SYNTAX;
+    }
+
+    ST_double *xs = (ST_double *)malloc(((size_t)m + 1) * sizeof(ST_double));
+    ST_double *ws = (ST_double *)malloc(((size_t)m + 1) * sizeof(ST_double));
+    ST_double *xsorted = (ST_double *)malloc(((size_t)m + 1) * sizeof(ST_double));
+    ST_double *wsorted = (ST_double *)malloc(((size_t)m + 1) * sizeof(ST_double));
+    ST_double *cut = (ST_double *)malloc(((size_t)nq + 1) * sizeof(ST_double));
+    if (!xs || !ws || !xsorted || !wsorted || !cut) {
+        free(xs); free(ws); free(xsorted); free(wsorted); free(cut);
+        return CBINSCATTER_ERR_MEMORY;
+    }
+    ST_int k = 0;
+    for (ST_int i = 0; i < N; i++) {
+        if (!sel[i] || SF_is_missing(x[i])) continue;
+        xs[k] = x[i];
+        ws[k] = weights ? weights[i] : 1.0;
+        k++;
+    }
+    /* Every observation is binned on these cutpoints, also those between
+     * two sampled values, so they are _pctile's values themselves (for the
+     * sample alone, any value between gives the same bins) */
+    ST_retcode rc = CBINSCATTER_OK;
+    if (sort_nonmissing_x(xs, ws, m, xsorted, wsorted) != m) {
+        rc = CBINSCATTER_ERR_MEMORY;
+    } else {
+        cut[0] = xsorted[0];
+        cut[nq] = xsorted[m - 1];
+        for (ST_int q = 1; q < nq; q++)
+            cut[q] = pctile_sorted(xsorted, weights ? wsorted : NULL, m, q, nq);
+    }
+    free(xs); free(ws); free(xsorted); free(wsorted);
+    if (rc != CBINSCATTER_OK) {
+        free(cut);
+        return rc;
+    }
+    *cutpoints_out = cut;
+    return CBINSCATTER_OK;
 }
 
 /* ========================================================================

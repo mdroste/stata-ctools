@@ -120,7 +120,7 @@ int main(void) {
     assert(!cimport_context_number(&numeric,&number,&value));
     CImportContext limit={0};limit.file_data="1,\"a\nb\nc\"\n";limit.file_size=strlen(limit.file_data);
     limit.bindquotes=CIMPORT_BINDQUOTES_STRICT;limit.max_quoted_rows=2;
-    assert(cimport_check_quoted_rows(&limit)==5101);limit.max_quoted_rows=3;assert(!cimport_check_quoted_rows(&limit));
+    assert(cimport_check_quoted_rows(&limit,limit.file_size)==5101);limit.max_quoted_rows=3;assert(!cimport_check_quoted_rows(&limit,limit.file_size));
     CImportContext *ctx=calloc(1,sizeof(*ctx));pthread_mutex_init(&ctx->warning_mutex,NULL);
     ctx->num_columns=1;ctx->total_rows=1;ctx->num_chunks=1;ctx->num_threads=1;ctx->quote_char='"';
     ctx->columns=calloc(1,sizeof(*ctx->columns));ctx->columns[0].type=CIMPORT_COL_STRING;ctx->columns[0].max_strlen=20000;

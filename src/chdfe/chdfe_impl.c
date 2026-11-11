@@ -54,8 +54,8 @@ ST_retcode chdfe_main(const char *args)
         return 198;
     if (k < 1 || g < 1 || c < 0 || k > SF_nvars() || g > SF_nvars() || c > SF_nvars() ||
         weighted < 0 || weighted > 3 || keepsingletons < 0 || keepsingletons > 1 || maxiter < 1 ||
-        pool < 1 || flags < 0 || flags > 15 || transform < 0 || transform > 2 || accel < 0 ||
-        accel > 3 || groupout < 0 || groupout > 1)
+        pool < 1 || flags < 0 || flags > 15 || transform < 0 || transform > 3 || accel < 0 ||
+        accel > 4 || groupout < 0 || groupout > 1)
         return 198;
     double tolerance = ctools_parse_double_option(cursor, "tol", 1e-8);
     if (!isfinite(tolerance) || tolerance < 1e-16 || tolerance >= 1)
@@ -224,15 +224,25 @@ ST_retcode chdfe_main(const char *args)
             if (slopes[j] == 2)
             {
                 f->slope_center = calloc(l, sizeof(*f->slope_center));
-                if (!f->slope_center)
+                double *deviation = calloc(l, sizeof(*deviation));
+                if (!f->slope_center || !deviation)
                 {
+                    free(deviation);
                     rc = 920;
                     goto cleanup;
                 }
+                /* Center relative to an observed value in each group. A
+                 * constant slope then centers to exactly zero even at extreme
+                 * scales, rather than amplifying summation roundoff. */
                 for (int i = 0; i < n; i++)
-                    f->slope_center[f->levels[i] - 1] += f->slope[i] * (weights ? weights[i] : 1);
+                    f->slope_center[f->levels[i] - 1] = f->slope[i];
+                for (int i = 0; i < n; i++) {
+                    int h = f->levels[i] - 1;
+                    deviation[h] += (f->slope[i] - f->slope_center[h]) * (weights ? weights[i] : 1);
+                }
                 for (int h = 0; h < l; h++)
-                    f->slope_center[h] /= weights ? f->weighted_counts[h] : f->counts[h];
+                    f->slope_center[h] += deviation[h] / (weights ? f->weighted_counts[h] : f->counts[h]);
+                free(deviation);
             }
             memset(f->counts, 0, (size_t)l * sizeof(*f->counts));
             if (weights)
@@ -416,7 +426,7 @@ ST_retcode chdfe_main(const char *args)
         rc = result.status;
         if (rc)
         {
-            ctools_error("chdfe", "fixed effects did not converge");
+            if (rc != 1) ctools_error("chdfe", "fixed effects did not converge");
             goto cleanup;
         }
         if (result.iterations > iterations)

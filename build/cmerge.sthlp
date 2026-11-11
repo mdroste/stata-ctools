@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.4 20261103}{...}
+{* *! version 1.2.6 20261111}{...}
 {viewerjumpto "Syntax" "cmerge##syntax"}{...}
 {viewerjumpto "Description" "cmerge##description"}{...}
 {viewerjumpto "Options" "cmerge##options"}{...}
@@ -56,10 +56,12 @@ As with {cmd:merge}, {opt n} may be written for {opt m} ({opt 1:n}, {opt n:1}, {
 {syntab:Data recovery}
 {synopt:{opt snap:shot}}use {help preserve} to restore data after an error or interruption{p_end}
 {synopt:{opt fast}}skip data recovery after an error or interruption{p_end}
+{synopt:{opt tempdta}}merge {cmd:strL} data in the plugin, through a temporary file{p_end}
 {syntab:Reporting}
 {synopt:{opt norep:ort}}do not display result summary{p_end}
 {synopt:{opt verbose}}display detailed timing and progress information{p_end}
 {synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
+{synopt:{opt debug}}show the command that performs the merge (as {cmd:merge}'s undocumented option){p_end}
 {synoptline}
 
 {pstd}
@@ -82,6 +84,19 @@ For an observation-by-observation merge, use {cmd:cmerge 1:1 _n using}
 {cmd:m:m} pairs observations sequentially within each key group and repeats
 the last observation of the shorter group; it does not form every pair. Use
 {help joinby} for all combinations.
+
+{pstd}
+Before the merge, {cmd:cmerge} notes, as {cmd:merge} does, each master variable
+whose storage type it widens to hold the using values ("variable x was byte,
+now int to accommodate using data's values") and, with {opt force}, each using
+variable whose string or numeric values are discarded for the master's type.
+
+{pstd}
+The syntax of {cmd:merge} before Stata 11, without a match type
+({cmd:cmerge} [{varlist}] {cmd:using} {it:filename} [{it:filename} ...]
+[{cmd:,} {opt unique} {opt uniqmaster} ...]), is passed to Stata's {cmd:merge},
+which runs it as it always has. An invalid match type, such as {cmd:2:2},
+exits with {cmd:merge}'s message and r(198).
 
 {marker options}{...}
 {title:Options}
@@ -171,6 +186,18 @@ when it exceeds {cmd:c(max_preservemem)}.
 {opt fast} skips recovery to reduce memory use. An error or interruption can
 leave a partially merged dataset. It cannot be combined with {opt snapshot}.
 
+{phang}
+{opt tempdta} merges data with {cmd:strL} variables in the plugin instead of
+Stata's {cmd:merge}. The plugin writes the merged dataset to a temporary
+{cmd:.dta} file, the size of the merged data, and {cmd:use} loads it; the
+formats, labels, value labels, notes, and characteristics are put back as
+{cmd:merge} leaves them. This pays off on large merges: on 10 million master
+observations it took about half the time of {cmd:merge}, while on 2 million
+it was about 10% slower. The file may reach the disk. Without {cmd:strL}
+variables the option has no effect. An error or interruption before the
+merged data are loaded leaves the master as it was; after that point there is
+nothing to undo. Not available when the master has frame alias variables.
+
 {marker remarks}{...}
 {title:Remarks}
 
@@ -179,7 +206,10 @@ Shared numeric and fixed-width string variables are widened as needed to hold
 both inputs; a {cmd:long}/{cmd:float} combination uses {cmd:double}. New
 variables retain the using data's formats, labels, notes, and characteristics.
 If either dataset contains a {cmd:strL} variable that will be retained,
-{cmd:cmerge} uses Stata's {cmd:merge} and ignores {opt preserve_order()}.
+{cmd:cmerge} uses Stata's {cmd:merge} and ignores {opt preserve_order()}: the
+result, strL types and values included, is {cmd:merge}'s ({opt verbose}
+notes it). With {opt tempdta} the plugin merges such data itself, with the
+same values, storage types, and metadata.
 
 {marker failure}{...}
 {pstd}

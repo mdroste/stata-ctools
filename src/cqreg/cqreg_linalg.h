@@ -103,4 +103,35 @@ ST_double cqreg_compute_quantile(const ST_double *y, ST_int N, ST_double tau);
  */
 ST_double cqreg_sum_raw_deviations(const ST_double *y, ST_int N, ST_double q, ST_double tau);
 
+/* ============================================================================
+ * Weighted order statistics (fweight, iweight and pweight fits)
+ * ============================================================================ */
+
+/*
+ * Stata's weighted percentiles (_pctile; summarize, detail): with the values
+ * sorted, cumulative weights C_i and total W, the pct-th percentile is x_(i)
+ * for the first i with C_i >= W*pct/100, or (x_(i) + x_(i+1))/2 when C_i
+ * equals W*pct/100. Stata treats C_i/W within about 1.2e-7 of pct/100 as
+ * equal; CQREG_WPCTILE_TOL reproduces that. Weights must be positive.
+ * Writes the np percentiles pct[] to out[]; returns 0, or 920 when the
+ * working copy cannot be allocated.
+ */
+#define CQREG_WPCTILE_TOL 1.1920928955078125e-07
+ST_int cqreg_weighted_pctiles(const ST_double *values, const ST_double *weights,
+                              ST_int N, const ST_double *pct, ST_int np,
+                              ST_double *out);
+
+/*
+ * qreg's raw quantile e(q_v) of weighted data: the value of the first
+ * observation in sort order whose cumulative weight reaches tau*W (the lower
+ * end of the minimizing interval). Returns NaN when the working copy cannot
+ * be allocated.
+ */
+ST_double cqreg_compute_quantile_w(const ST_double *y, const ST_double *w,
+                                   ST_int N, ST_double tau);
+
+/* Weighted raw sum of deviations: sum_i w_i rho_tau(y_i - q) */
+ST_double cqreg_sum_raw_deviations_w(const ST_double *y, const ST_double *w,
+                                     ST_int N, ST_double q, ST_double tau);
+
 #endif /* CQREG_LINALG_H */

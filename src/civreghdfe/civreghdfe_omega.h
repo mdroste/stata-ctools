@@ -55,6 +55,17 @@ typedef struct {
     ST_int *order;              /* observations sorted by panel, then time (owned) */
     ST_int *pstart;             /* panel boundaries in order, npanels + 1 (owned) */
     ST_int npanels;
+    ST_int center;              /* ivreg2's center: centered moments (set after init) */
+    ST_int psd;                 /* ivreg2's psd0 (1) / psda (2): negative eigenvalues of S
+                                   set to 0 / to their absolute value (set after init) */
+    /* Bootstrap replicates (set after init; NULL/0 otherwise): mult holds
+       each row's draw count m, with w = m times the fit's weight. A row's
+       copies are separate observations, so the heteroskedastic terms use
+       w^2 / m (aw/pw; fw and none are already linear in m). With
+       mult_groups the clusters are the resampled units, each copy its own
+       cluster: a cluster's outer product is divided by its count. */
+    const ST_double *mult;
+    ST_int mult_groups;
     ST_int owns;                /* 1 if the owned arrays belong to this copy */
 } civ_omega;
 
@@ -82,7 +93,8 @@ void civ_omega_free(civ_omega *om);
     S = sum of the moment contributions u_i = e_i (x) z_i with the selected
     structure; E is N x K (residual columns), Z is N x L, both column-major.
     S is (K*L) x (K*L), index k*L + l, and "raw": N times ivreg2's m_omega
-    (dofminus = 0). Returns 0 or 920.
+    (dofminus = 0). With om->psd, S is made positive semidefinite as
+    ivreg2's psd0/psda make it. Returns 0 or 920.
 */
 ST_retcode civ_omega_build(const civ_omega *om, const ST_double *E, ST_int K,
                            const ST_double *Z, ST_int L, ST_double *S);
@@ -95,11 +107,25 @@ ST_retcode civ_omega_build(const civ_omega *om, const ST_double *E, ST_int K,
 */
 ST_int civ_sym_solve(const ST_double *A, ST_int n, const ST_double *b, ST_int nrhs, ST_double *x);
 
+/* Eigen-decomposition of the symmetric n x n A (column-major) by cyclic
+   Jacobi sweeps: eigenvalues in ev (unsorted), eigenvectors in the columns
+   of Q (n x n). Returns 0, or -1 on allocation failure. */
+ST_int civ_sym_eigvec(const ST_double *A, ST_int n, ST_double *ev, ST_double *Q);
+
 /* (A)^-1 of a symmetric matrix with the same fallback. Returns 0 or -1. */
 ST_int civ_sym_inverse(const ST_double *A, ST_int n, ST_double *inv);
 
 /* Rank of scale * A (A symmetric) as Stata counts it: n minus the columns
    that invsym() zeroes (ivreg2's rankS). Returns -1 on allocation failure. */
 ST_int civ_sym_rank(const ST_double *A, ST_int n, ST_double scale);
+
+/*
+    Newey-West (1994) automatic bandwidth (ivreg2's bw(auto)) for the
+    Bartlett, Parzen and Quadratic Spectral kernels: e are the first-step
+    residuals, zsum the row sums of the instruments ivreg2 uses, tobs the
+    time span T. Returns the bandwidth (lag + 1), or -1 on failure.
+*/
+ST_double civ_auto_bandwidth(const ST_double *e, const ST_double *zsum, ST_int N,
+                             const civreghdfe_ts *ts, ST_double tobs, ST_int kernel);
 
 #endif /* CIVREGHDFE_OMEGA_H */

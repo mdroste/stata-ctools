@@ -13,6 +13,7 @@
 #include "stplugin.h"
 #include "cmerge_join.h"
 #include "../ctools_types.h"
+#include "../formats/ctools_dta.h"
 
 /* Forward declaration for using cache */
 typedef struct {
@@ -23,6 +24,13 @@ typedef struct {
     int n_keepusing;
     int loaded;
     int merge_by_n;
+    /* load_using strl (option tempdta): each strL keepusing column is held
+     * whole in ku_spans[v] (bytes in ku_arena[v]), sorted like the other
+     * columns, and its keepusing entry is an empty string column. Only the
+     * .dta execute reads them. NULL arrays when no column is strL. */
+    ctools_dta_span **ku_spans;
+    char **ku_arena;
+    int has_strl;
 } cmerge_using_cache_t;
 
 /* External reference to global cache (defined in cmerge_impl.c) */
@@ -40,6 +48,7 @@ typedef struct {
     size_t output_nobs;             /* One past the last output row to write */
     uint8_t *row_flags;             /* update: per output row, OR of CMERGE_ROW_* (NULL if unused) */
     int success;                    /* Thread result */
+    ST_retcode error;               /* First failed SPI read/store */
 } cmerge_keepusing_write_args_t;
 
 /* update: a missing master value met a nonmissing using value (_merge 4), or

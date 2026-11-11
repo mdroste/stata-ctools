@@ -124,23 +124,43 @@ static int cimport_normalize_line_endings(CImportContext *ctx) {
   return 0;
 }
 
-static int cimport_check_quoted_rows(const CImportContext *ctx) {
-  if (ctx->bindquotes != CIMPORT_BINDQUOTES_STRICT || ctx->max_quoted_rows <= 0)
-    return 0;
-  int quoted = 0, lines = 1;
-  for (size_t i = 0; i < ctx->file_size; i++) {
-    char ch = ctx->file_data[i];
-    if (ch == '"') {
-      if (quoted && i + 1 < ctx->file_size && ctx->file_data[i + 1] == '"') {
-        i++;
-        continue;
-      }
-      quoted = !quoted;
-      lines = 1;
-    } else if (ch == '\n' && quoted && ++lines > ctx->max_quoted_rows) {
-      cimport_display_error("Unmatched quote exceeded maxquotedrows()\n");
-      return 5101;
+/* A quoted field may span at most maxquotedrows() lines: true when one in
+   [p, end), which starts outside quotes, spans more than max. Outside quotes
+   only the next quote matters; inside, the line ends up to the closing quote
+   are counted at once ("" stays inside the quotes). */
+static bool cimport_quoted_rows_exceed(const char *p, const char *end, size_t max) {
+  while (p < end) {
+    const char *open = memchr(p, '"', (size_t)(end - p));
+    if (!open)
+      return false;
+    size_t lines = 1;
+    for (p = open + 1;;) {
+      const char *close = memchr(p, '"', (size_t)(end - p));
+      lines += cimport_count_byte(p, close ? close : end, '\n');
+      if (lines > max)
+        return true;
+      if (!close)
+        return false;
+      p = close + 1;
+      if (p < end && *p == '"')
+        p++;
+      else
+        break;
     }
+  }
+  return false;
+}
+
+static bool cimport_checks_quoted_rows(const CImportContext *ctx) {
+  return ctx->bindquotes == CIMPORT_BINDQUOTES_STRICT && ctx->max_quoted_rows > 0;
+}
+
+/* The bytes [0, size) of the input, which end at a row start. */
+static int cimport_check_quoted_rows(const CImportContext *ctx, size_t size) {
+  if (cimport_checks_quoted_rows(ctx) &&
+      cimport_quoted_rows_exceed(ctx->file_data, ctx->file_data + size, (size_t)ctx->max_quoted_rows)) {
+    cimport_display_error("Unmatched quote exceeded maxquotedrows()\n");
+    return 5101;
   }
   return 0;
 }

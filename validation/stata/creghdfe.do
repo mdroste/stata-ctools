@@ -1695,11 +1695,11 @@ if _rc == 0 {
         else test_fail "N after singletons" "reghdfe=`reghdfe_N' vs creghdfe=`creghdfe_N'"
     }
     else {
-        test_pass "singleton count: creghdfe fails gracefully (rc=`=_rc')"
+        test_fail "singleton count: creghdfe" "unexpected estimation failure (rc=`=_rc')"
     }
 }
 else {
-    test_pass "singleton count: reghdfe fails (rc=`=_rc')"
+    test_fail "singleton count: reference" "unexpected estimation failure (rc=`=_rc')"
 }
 
 * Two-way FE singleton detection
@@ -1724,11 +1724,11 @@ if _rc == 0 {
         else test_fail "two-way FE singleton count" "reghdfe=`reghdfe_singletons' vs creghdfe=`creghdfe_singletons'"
     }
     else {
-        test_pass "two-way singleton: creghdfe graceful (rc=`=_rc')"
+        test_fail "two-way singleton: creghdfe" "unexpected estimation failure (rc=`=_rc')"
     }
 }
 else {
-    test_pass "two-way singleton: reghdfe fails (rc=`=_rc')"
+    test_fail "two-way singleton: reference" "unexpected estimation failure (rc=`=_rc')"
 }
 
 * No singletons - compare singleton count AND all regression output
@@ -3323,9 +3323,15 @@ sysuse auto, clear
 gen float_fw = 1.5
 test_error_match, stata_cmd(reghdfe price mpg [fw=float_fw], absorb(foreign)) ctools_cmd(creghdfe price mpg [fw=float_fw], absorb(foreign)) testname("non-integer fweight")
 
-* Invalid vce specification
+* vce(bootstrap): reghdfe refuses it; creghdfe bootstraps (a ctools
+* extension, checked against Stata's bootstrap prefix in the
+* creghdfe_bootstrap case of validation/stata/bootstrap_reference.do)
 sysuse auto, clear
-test_error_match, stata_cmd(reghdfe price mpg, absorb(foreign) vce(bootstrap)) ctools_cmd(creghdfe price mpg, absorb(foreign) vce(bootstrap)) testname("invalid vce(bootstrap)")
+capture reghdfe price mpg, absorb(foreign) vce(bootstrap)
+local rc_ref = _rc
+capture creghdfe price mpg, absorb(foreign) vce(bootstrap, reps(10) seed(1) nodots)
+if `rc_ref' != 0 & _rc == 0 & "`e(vce)'" == "bootstrap" test_pass "vce(bootstrap): reghdfe refuses it, creghdfe bootstraps"
+else test_fail "vce(bootstrap)" "reghdfe rc=`rc_ref', creghdfe rc=`=_rc'"
 
 * Absorb with continuous variable
 sysuse auto, clear
@@ -3613,6 +3619,7 @@ program define _creghdfe_cmp
     foreach s in `ints' `reals' {
         local r_`s' = e(`s')
     }
+    ereturn clear
     capture quietly `ct'
     if _rc {
         test_fail "`testname'" "creghdfe failed rc=`=_rc'"
@@ -3640,7 +3647,7 @@ program define _creghdfe_cmp
         else sigfigs `r_`s'' `=e(`s')'
         if r(sigfigs) < `minsf' local diffs "`diffs' e(`s'):`r_`s'' vs `=e(`s')'"
     }
-    if !(e(ic) > 0) local diffs "`diffs' e(ic)=`=e(ic)'"
+    if !(e(ic) > 0 & e(ic) < .) local diffs "`diffs' e(ic)=`=e(ic)'"
     if "`diffs'" == "" test_pass "`testname'"
     else test_fail "`testname'" "`=trim("`diffs'")'"
 end

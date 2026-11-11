@@ -1,9 +1,12 @@
-*! version 1.2.4 20261103 github.com/mdroste/stata-ctools
+*! version 1.2.6 20261111 github.com/mdroste/stata-ctools
 
-program define cqreg, eclass
+* byable(recall) and the sw and mi properties as qreg declares them: by:,
+* stepwise, nestreg and mi estimate accept cqreg
+program define cqreg, eclass byable(recall) prop(sw mi)
     version 14.1
 
     if replay() {
+        if _by() error 190
         if "`e(cmd)'" != "cqreg" error 301
         syntax [, Level(cilevel) *]
         _get_diopts diopts, `options'
@@ -27,12 +30,32 @@ program define cqreg, eclass
     * Capture full command line before parsing
     local cmdline "cqreg `0'"
 
-    syntax varlist(min=1 numeric fv) [if] [in], [Quantile(real 0.5) Absorb(varlist) ///
+    syntax varlist(min=1 numeric fv) [if] [in] [fw iw pw], [Quantile(real 0.5) Absorb(varlist) ///
         VCE(string) DENmethod(string) BWmethod(string) Verbose TOLerance(real 1e-12) MAXiter(integer 200) NOPReprocess(integer 0) THReads(integer 0) ///
-        Level(cilevel) NOLOg LOg *]
-    * qreg's display options; nolog and log are accepted (cqreg prints no
-    * iteration log)
+        Level(cilevel) NOLOg LOg WLSiter(integer 1) ITERate(string) TRACE *]
+    * qreg's display options; log and nolog show or hide the iteration log
     _get_diopts diopts, `options'
+
+    * qreg's wlsiter() and iterate() set the weighted least-squares start
+    * and the iteration limit of its simplex solver. They are checked as qreg
+    * checks them; the interior-point solver uses neither (its limit is
+    * maxiter()).
+    if `wlsiter' < 1 {
+        di as err "{p}{bf:wlsiter(`wlsiter')} must be a positive integer{p_end}"
+        exit 198
+    }
+    if `"`iterate'"' != "" {
+        capture confirm integer number `iterate'
+        if _rc | real(`"`iterate'"') <= 0 {
+            di as err "{p}{bf:iterate({it:#})} must be a nonnegative integer{p_end}"
+            exit 198
+        }
+    }
+    * qreg under version 12 or earlier reports its old standard errors,
+    * which cqreg does not reproduce
+    if _caller() < 13 {
+        di as text "(note: cqreg reports qreg's standard errors of version 13 and later, not those of version " _caller() ")"
+    }
 
     * Least-squares partialling is not valid for the quantile-loss objective.
     if "`absorb'" != "" {
@@ -49,13 +72,19 @@ program define cqreg, eclass
         exit 198
     }
 
-    * Validate quantile
-    if `quantile' >= 1 {
-        di as error "cqreg: quantile must be between 0 and 1"
-        exit 498
+    if `nopreprocess' < 0 | missing(`nopreprocess') {
+        di as error "cqreg: nopreprocess() must be nonnegative"
+        exit 198
     }
-    if `quantile' <= 0 {
-        di as error "cqreg: quantile must be between 0 and 1"
+    if `tolerance' <= 0 | `tolerance' > 1 | missing(`tolerance') {
+        di as error "cqreg: tolerance() must be greater than zero and at most one"
+        exit 198
+    }
+
+    * Validate quantile; as in qreg, a value of 1 or more is a percentage
+    if `quantile' >= 1 local quantile = `quantile' / 100
+    if `quantile' <= 0 | `quantile' >= 1 {
+        di as error "cqreg: quantile must be between 0 and 1 (or a percentage)"
         exit 198
     }
 
@@ -66,8 +95,20 @@ program define cqreg, eclass
     local vcetype = 0   // 0=iid, 1=robust, 2=cluster
     local clustervar ""
     local clustervar_orig ""
+    * qreg's vce([type] [, density bandwidth]) syntax. The density method and
+    * bandwidth may instead be given in denmethod() and bwmethod().
+    local vce_method
+    local vce_kernel
+    local vce_bw
     if `"`vce'"' != "" {
-        _ctools_vce vce_kind clustervar : `vce'
+        _cqreg_vceparse `vce'
+        local vce_kind `r(vce)'
+        local clustervar `r(clustvar)'
+        local vce_method `r(method)'
+        local vce_kernel `r(kernel)'
+        local vce_bw `r(bwidth)'
+        local vce_type_given `vce_kind'
+        if "`vce_kind'" == "" local vce_kind iid
         if "`vce_kind'" == "cluster" {
             local vcetype = 2
             if "`clustervar'" == "" {
@@ -94,17 +135,10 @@ program define cqreg, eclass
         else if "`vce_kind'" == "iid" {
             local vcetype = 0
         }
-        else if "`vce_kind'" == "bootstrap" {
-            di as error "cqreg: vce(bootstrap) is not currently supported"
-            di as error "       Use Stata's qreg for bootstrap standard errors"
-            exit 198
-        }
-        else {
-            di as error "cqreg: unrecognized vce() option: `vce'"
-            di as error "       Valid options: iid, robust, cluster"
-            exit 198
-        }
     }
+    * An empty vce() type is the default (iid, robust with pweights), as in
+    * qreg: the suboptions alone may be given
+    if "`vce_type_given'" == "" local vce
 
     * Parse variable list
     gettoken depvar indepvars : varlist
@@ -141,59 +175,44 @@ program define cqreg, eclass
     local nvars : word count `varlist_expanded'
     local K_x = `nvars' - 1  // number of independent variables (after expansion)
 
-    * Parse bandwidth method
-    local bwmethod_num = 0  // 0=hsheather, 1=bofinger, 2=chamberlain
-    if "`bwmethod'" != "" {
-        local bw_lower = lower(trim("`bwmethod'"))
-        if "`bw_lower'" == "bofinger" {
-            local bwmethod_num = 1
-        }
-        else if "`bw_lower'" == "chamberlain" {
-            local bwmethod_num = 2
-        }
-        else if "`bw_lower'" == "hsheather" | "`bw_lower'" == "hall-sheather" {
-            local bwmethod_num = 0
-        }
-        else {
-            di as error "cqreg: unrecognized bandwidth method: `bwmethod'"
-            di as error "       Valid options: hsheather, bofinger, chamberlain"
+    * Bandwidth and density methods, with qreg's names and abbreviations
+    * (bofinger, hsheather, chamberlain; fitted, residual or residuals,
+    * kernel[(kernel)]), from bwmethod() and denmethod() or from the vce()
+    * suboptions. Given in both places, they must agree.
+    local bw_name
+    if `"`bwmethod'"' != "" {
+        _cqreg_bwparse `bwmethod'
+        local bw_name `r(bwidth)'
+    }
+    if "`vce_bw'" != "" {
+        if "`bw_name'" != "" & "`bw_name'" != "`vce_bw'" {
+            di as error "cqreg: bwmethod(`bwmethod') conflicts with the vce() bandwidth `vce_bw'"
             exit 198
         }
+        local bw_name `vce_bw'
     }
+    if "`bw_name'" == "" local bw_name hsheather
+    local bwmethod_num = cond("`bw_name'" == "hsheather", 0, cond("`bw_name'" == "bofinger", 1, 2))
 
-    * Parse density estimation method
-    local denmethod_num = 1  // 0=residual, 1=fitted (default), 2=kernel
-    local denmethod_name "fitted"
-    local kernel_name ""
-    if "`denmethod'" != "" {
-        local den_lower = lower(trim("`denmethod'"))
-        local den_kopt = trim(substr("`den_lower'", 7, .))
-        if "`den_lower'" == "residual" | "`den_lower'" == "res" {
-            local denmethod_num = 0
-            local denmethod_name "residual"
-        }
-        else if "`den_lower'" == "fitted" | "`den_lower'" == "fit" {
-            local denmethod_num = 1
-            local denmethod_name "fitted"
-        }
-        else if substr("`den_lower'", 1, 6) == "kernel" & ///
-            ("`den_kopt'" == "" | (substr("`den_kopt'", 1, 1) == "(" & ///
-            substr("`den_kopt'", -1, 1) == ")")) {
-            * kernel or kernel(name), as qreg's vce(, kernel(name))
-            if "`den_kopt'" != "" {
-                local den_kopt = substr("`den_kopt'", 2, strlen("`den_kopt'") - 2)
-            }
-            _cqreg_kernel, `den_kopt'
-            local kernel_name "`r(kernel)'"
-            local denmethod_num = 2
-            local denmethod_name "kernel"
-        }
-        else {
-            di as error "cqreg: unrecognized density method: `denmethod'"
-            di as error "       Valid options: fitted (default), residual, kernel[(kernel)]"
+    local den_name
+    local den_kernel
+    if `"`denmethod'"' != "" {
+        _cqreg_denparse `denmethod'
+        local den_name `r(method)'
+        local den_kernel `r(kernel)'
+    }
+    if "`vce_method'" != "" {
+        if "`den_name'" != "" & ("`den_name'" != "`vce_method'" | "`den_kernel'" != "`vce_kernel'") {
+            di as error "cqreg: denmethod(`denmethod') conflicts with the vce() density method `vce_method'"
             exit 198
         }
+        local den_name `vce_method'
+        local den_kernel `vce_kernel'
     }
+    if "`den_name'" == "" local den_name fitted
+    local denmethod_name `den_name'
+    local kernel_name `den_kernel'
+    local denmethod_num = cond("`den_name'" == "residual", 0, cond("`den_name'" == "fitted", 1, 2))
 
     * qreg defines the residual method only for the iid VCE
     if `denmethod_num' == 0 & `vcetype' != 0 {
@@ -203,16 +222,53 @@ program define cqreg, eclass
         exit 184
     }
 
+    * Weights as qreg: pweights imply vce(robust) and exclude vce(iid) and
+    * the residual method (r(404)); the plugin fits pweights as iweights
+    local wtype_num = 0
+    if "`weight'" == "pweight" {
+        if `"`vce'"' != "" & `vcetype' == 0 {
+            di as error "cqreg: option vce(iid) is not possible with pweighted data;"
+            di as error "       pweights imply robust"
+            exit 404
+        }
+        if `denmethod_num' == 0 {
+            di as error "cqreg: denmethod(residual) is not possible with pweighted data"
+            exit 404
+        }
+        if `"`vce'"' == "" local vcetype = 1
+    }
+    if "`weight'" == "fweight" local wtype_num = 1
+    else if "`weight'" != "" local wtype_num = 2
+
     * Count observations
     qui count if `touse'
     local nobs = r(N)
+
+    * The weights in double precision, as qreg's GetVCE. marksample has
+    * dropped zero and missing weights and rejected negative fweights and
+    * pweights; the check loss is not convex with a negative iweight.
+    * With fweights, e(N) and the bandwidth count the weights.
+    local nobs_w = `nobs'
+    local sum_w = `nobs'
+    if `wtype_num' {
+        tempvar wvar
+        quietly gen double `wvar' `exp' if `touse'
+        capture assert `wvar' > 0 if `touse'
+        if _rc {
+            di as error "cqreg: negative weights are not allowed"
+            exit 402
+        }
+        quietly summarize `wvar' if `touse', meanonly
+        local sum_w = r(sum)
+        if `wtype_num' == 1 local nobs_w = r(sum)
+    }
 
     if `nobs' == 0 {
         di as error "cqreg: no observations"
         exit 2000
     }
 
-    if `nobs' <= `K_x' + 1 {
+    if `nobs' < 2 {
         di as error "cqreg: not enough observations"
         exit 2001
     }
@@ -229,7 +285,8 @@ program define cqreg, eclass
     * Pre-compute bandwidth in Stata for exact precision match with qreg.
     * Using Stata's invnormal()/normalden() avoids C approximation errors.
     * As qreg, the Hall-Sheather and Chamberlain bandwidths use the
-    * confidence level: alpha = 1 - level/100
+    * confidence level: alpha = 1 - level/100, and N is the sum of the
+    * fweights
     local __bw_alpha = 1 - `level'/100
     local __invtau = invnormal(`quantile')
     local __phi_invtau = normalden(`__invtau')
@@ -237,18 +294,18 @@ program define cqreg, eclass
     if `bwmethod_num' == 0 {
         * Hall-Sheather
         local __z_alpha = invnormal(1 - `__bw_alpha'/2)
-        local __bw = (`nobs'^(-1/3)) * (`__z_alpha'^(2/3)) * ///
+        local __bw = (`nobs_w'^(-1/3)) * (`__z_alpha'^(2/3)) * ///
             (1.5*`__phi_invtau'^2 / (2*`__invtau2'+1))^(1/3)
     }
     else if `bwmethod_num' == 1 {
         * Bofinger
-        local __bw = `nobs'^(-1/5) * ((4.5*`__phi_invtau'^4) / ///
+        local __bw = `nobs_w'^(-1/5) * ((4.5*`__phi_invtau'^4) / ///
             (2*`__invtau2'+1)^2)^(1/5)
     }
     else {
         * Chamberlain
         local __z_alpha = invnormal(1 - `__bw_alpha'/2)
-        local __bw = `__z_alpha' * sqrt(`nobs'^(-1)*`quantile'*(1-`quantile'))
+        local __bw = `__z_alpha' * sqrt(`nobs_w'^(-1)*`quantile'*(1-`quantile'))
     }
 
     * Set up parameters via Stata scalars (expected by C plugin)
@@ -261,6 +318,7 @@ program define cqreg, eclass
     scalar __cqreg_tolerance = `tolerance'
     scalar __cqreg_maxiter = `maxiter'
     scalar __cqreg_bandwidth = `__bw'
+    scalar __cqreg_wtype = `wtype_num'
 
     * Kernel method: qreg's KernelBWidth factor invnormal(q+h) - invnormal(q-h),
     * missing when q-h <= 0 or q+h >= 1 (the plugin then exits with r(498))
@@ -279,11 +337,14 @@ program define cqreg, eclass
         local threads_code "threads(`threads')"
     }
 
-    * Build varlist for plugin: depvar indepvars [cluster_var]
+    * Build varlist for plugin: depvar indepvars [cluster_var] [weight]
     * Use expanded varlist (factor variables converted to temp numeric vars)
     local plugin_varlist `varlist_expanded'
     if `vcetype' == 2 {
         local plugin_varlist `plugin_varlist' `clustervar'
+    }
+    if `wtype_num' {
+        local plugin_varlist `plugin_varlist' `wvar'
     }
     * The sample marker goes last, in place of if `touse': the plugin reads
     * it in parallel, where Stata answers an if one observation at a time
@@ -294,6 +355,10 @@ program define cqreg, eclass
     matrix __cqreg_V = J(`K_x' + 1, `K_x' + 1, 0)
     * and the same covariance in the plugin's scaled response units (rank)
     matrix __cqreg_Vn = J(`K_x' + 1, `K_x' + 1, 0)
+    * the observation numbers of the basis (the plugin fills the first
+    * __cqreg_basis_n)
+    matrix __cqreg_basis = J(1, `K_x' + 1, .)
+    scalar __cqreg_basis_n = 0
 
     * Call the C plugin with full_regression subcommand
     capture noisily plugin call ctools_plugin `plugin_varlist', ///
@@ -307,7 +372,8 @@ program define cqreg, eclass
     }
 
     * Retrieve results from scalars set by C plugin
-    local N_final = __cqreg_N
+    * e(N) is the sum of the fweights, as in qreg
+    local N_final = cond(`wtype_num' == 1, `nobs_w', __cqreg_N)
     local K_keep = __cqreg_K_keep
     local sum_adev = __cqreg_sum_adev
     local sum_rdev = __cqreg_sum_rdev
@@ -381,7 +447,7 @@ program define cqreg, eclass
     ereturn scalar df_r = `df_r'
     ereturn scalar f_r = `f_r'
     ereturn scalar N = `N_final'
-    ereturn scalar sum_w = `N_final'
+    ereturn scalar sum_w = `sum_w'
     ereturn scalar q_v = `q_v'
     ereturn scalar q = `quantile'
     ereturn scalar sum_rdev = `sum_rdev'
@@ -414,6 +480,57 @@ program define cqreg, eclass
     ereturn local depvar "`depvar'"
     if `vcetype' == 2 {
         ereturn local clustvar "`clustervar_orig'"
+    }
+    if "`weight'" != "" {
+        ereturn local wexp "`exp'"
+        ereturn local wtype "`weight'"
+    }
+    * qreg's hidden results: the observation numbers of the basis of the
+    * linear program (the observations the fitted hyperplane passes
+    * through), empty when the solver identified none, and the solver's
+    * convergence tolerance (qreg's simplex reports its own, 1e-10)
+    local basis
+    if scalar(__cqreg_basis_n) > 0 & scalar(__cqreg_basis_n) < . {
+        forvalues j = 1/`=scalar(__cqreg_basis_n)' {
+            local basis `basis' `=__cqreg_basis[1, `j']'
+        }
+    }
+    ereturn hidden local basis `"`basis'"'
+    ereturn hidden scalar tolerance = `tolerance'
+    * and the legacy globals qreg sets; $S_E_vl is the dependent variable
+    * and the coefficients' names (qreg's _rmcoll list)
+    local __vl : colnames e(b)
+    local __cons _cons
+    local __vl : list __vl - __cons
+    global S_E_mdf = e(df_m)
+    global S_E_tdf = e(df_r)
+    global S_E_rd = e(f_r)
+    global S_E_nobs = e(N)
+    global S_E_q = e(q)
+    global S_E_rq = e(q_v)
+    global S_E_rsd = e(sum_rdev)
+    global S_E_msd = e(sum_adev)
+    global S_E_vl "`depvar' `__vl'"
+    global S_E_frc = e(convcode)
+    global S_E_cmd "cqreg"
+
+    * Iteration log. The interior-point steps have no counterpart in qreg's
+    * iterations, so the log is qreg's final line: the iteration count and
+    * the minimized sum. nolog (or set iterlog off) hides it, as in qreg.
+    if "`trace'" != "" | ("`nolog'" == "" & ("`log'" != "" | "`c(iterlog)'" != "off")) {
+        di as text "Iteration `iterations':  Sum of abs. weighted deviations = " ///
+            as result %10.0g `sum_adev'
+    }
+    * trace: qreg prints the coefficients under each iteration's line; here,
+    * those of the solution
+    if "`trace'" != "" {
+        tempname __tb
+        matrix `__tb' = e(b)
+        di as result _skip(12) %9.0g `__tb'[1, 1] _c
+        forvalues j = 2/`=colsof(`__tb')' {
+            di as result "  " %9.0g `__tb'[1, `j'] _c
+        }
+        di
     }
 
     * Display results (matching qreg format exactly)
@@ -500,29 +617,24 @@ program define cqreg, eclass
     _ctools_cleanup cqreg
 end
 
-* Header and coefficient table of the posted results (also on replay)
+* Header and coefficient table of the posted results (also on replay), as
+* qreg's Replay prints them
 program define _cqreg_display
     syntax [, Level(cilevel) *]
-    di as text ""
-
-    * Title line - match qreg exactly
+    di
     if e(q) == 0.5 {
-        di as text "Median regression" _col(52) "Number of obs =" _col(68) as result %10.0fc e(N)
+        di in gr "Median regression" _col(53) "Number of obs = " in ye %10.0gc e(N)
     }
     else {
-        di as text "`=e(q)' Quantile regression" _col(52) "Number of obs =" _col(68) as result %10.0fc e(N)
+        di in gr e(q) " Quantile regression" _col(53) "Number of obs = " in ye %10.0gc e(N)
     }
-
-    * Raw sum of deviations line - match qreg format
-    di as text "  Raw sum of deviations " as result %-8.6g e(sum_rdev) as text " (about " as result %-9.7g e(q_v) as text ")"
-
-    * Min sum of deviations line
-    di as text "  Min sum of deviations " as result %-8.6g e(sum_adev) _col(52) as text "Pseudo R2     =" _col(68) as result %10.4f e(r2_p)
-
-    di as text ""
+    di in gr "  Raw sum of deviations" in ye %9.0g e(sum_rdev) ///
+        in gr " (about " in ye e(q_v) in gr ")"
+    di in gr "  Min sum of deviations" in ye %9.0g e(sum_adev) _col(53) ///
+        in gr "Pseudo R2     = " in ye %10.4f 1 - (e(sum_adev)/e(sum_rdev)) _n
 
     * Display coefficient table
-    ereturn display, level(`level') `options'
+    _coef_table, level(`level') `options'
     if e(nonunique) == 1 {
         di as text "Note: the solution is not unique; other coefficient vectors attain the"
         di as text "      same minimum sum of deviations."
@@ -549,4 +661,146 @@ program define _cqreg_kernel, rclass
     }
     if "`kernel'" == "" local kernel epanechnikov
     return local kernel `kernel'
+end
+
+* qreg's vce() syntax: vce([iid | robust | cluster clustvar | excluster
+* clustvar] [, fitted | residual | residuals | kernel[(kernel)]
+* bofinger | hsheather | chamberlain]), with qreg's abbreviations (vce(r),
+* res, fit, ker(), bo, hs, ch). cluster is cqreg's name for qreg's
+* excluster. Returns r(vce) (iid, robust, cluster or empty), r(clustvar),
+* and r(method), r(kernel) and r(bwidth), each empty unless specified.
+program define _cqreg_vceparse, rclass
+    syntax [anything(name=vcetype id="vce type")] [, FITted RESidual residuals KERnel(string) *]
+    local s_fitted `fitted'
+    local s_residual `residual'`residuals'
+    local s_kernel `"`kernel'"'
+    local s_options `"`options'"'
+    local vcetype = strtrim(`"`vcetype'"')
+    gettoken word rest : vcetype
+    local rest = strtrim(`"`rest'"')
+    local lword = lower(`"`word'"')
+    local len = strlen(`"`lword'"')
+    local vce
+    if `"`lword'"' == "" local vce
+    else if `"`lword'"' == "iid" local vce iid
+    else if `"`lword'"' == substr("robust", 1, `len') local vce robust
+    else if `len' >= 2 & `"`lword'"' == substr("cluster", 1, `len') local vce cluster
+    else if `len' >= 4 & `"`lword'"' == substr("excluster", 1, `len') local vce cluster
+    else if substr(`"`lword'"', 1, 4) == "boot" {
+        di as error "cqreg: vce(bootstrap) is not supported; use the bootstrap prefix,"
+        di as error "       bootstrap: cqreg ..., or Stata's bsqreg"
+        exit 198
+    }
+    else {
+        di as err `"{p}option {bf:vce(`vcetype')} is not allowed{p_end}"'
+        exit 198
+    }
+    if "`vce'" == "cluster" {
+        if `"`rest'"' == "" {
+            di as error "cqreg: cluster variable required with vce(cluster)"
+            exit 198
+        }
+        local 0 `"`rest'"'
+        syntax varname
+        return local clustvar `varlist'
+    }
+    else if `"`rest'"' != "" {
+        di as err `"{p}option {bf:vce(`vcetype')} is not allowed{p_end}"'
+        exit 198
+    }
+    return local vce `vce'
+
+    local fitted `s_fitted'
+    local residual = cond("`s_residual'" != "", "residual", "")
+    local kernel `"`s_kernel'"'
+    local options `"`s_options'"'
+    local k = ("`fitted'" != "") + ("`residual'" != "") + (`"`kernel'"' != "")
+    if `k' > 1 {
+        di as err "{p}invalid {bf:vce()} specification; only one of {bf:fitted}, " ///
+            "{bf:residual}, or {bf:kernel()} is allowed{p_end}"
+        exit 198
+    }
+    local method `fitted'`residual'
+    if !`k' {
+        * kernel without its argument
+        local 0 `", `options'"'
+        syntax [, Kernel *]
+        if "`kernel'" != "" local method kernel
+        local kernel
+    }
+    else if `"`kernel'"' != "" local method kernel
+    if "`method'" == "kernel" {
+        capture _cqreg_kernel, `kernel'
+        if _rc {
+            local kname = strtrim(`"`kernel'"')
+            di as err `"{p}invalid {bf:vce()} specification; suboption {bf:kernel(`kname')} is not allowed{p_end}"'
+            exit 198
+        }
+        return local kernel `r(kernel)'
+    }
+    return local method `method'
+
+    local 0 `", `options'"'
+    capture syntax [, BOfinger HSheather CHamberlain]
+    if _rc {
+        local opts = strtrim(`"`options'"')
+        di as err `"{p}invalid {bf:vce()} specification; suboption {bf:`opts'} is not allowed{p_end}"'
+        exit 198
+    }
+    local bw `bofinger' `hsheather' `chamberlain'
+    if `: word count `bw'' > 1 {
+        di as err "{p}invalid {bf:vce()} specification; only one of {bf:bofinger}, " ///
+            "{bf:hsheather}, or {bf:chamberlain} is allowed{p_end}"
+        exit 198
+    }
+    return local bwidth `bw'
+end
+
+* bwmethod(): bofinger, hsheather or chamberlain, with qreg's abbreviations
+* (bo, hs, ch), and hall-sheather. Returns r(bwidth).
+program define _cqreg_bwparse, rclass
+    local spec = lower(strtrim(`"`0'"'))
+    if `"`spec'"' == "hall-sheather" local spec hsheather
+    local 0 `", `spec'"'
+    capture syntax [, BOfinger HSheather CHamberlain]
+    local bw `bofinger' `hsheather' `chamberlain'
+    if _rc | `: word count `bw'' != 1 {
+        di as error `"cqreg: unrecognized bandwidth method: `spec'"'
+        di as error "       Valid options: hsheather, bofinger, chamberlain"
+        exit 198
+    }
+    return local bwidth `bw'
+end
+
+* denmethod(): fitted, residual (or residuals) or kernel[(kernel)], with
+* qreg's abbreviations (fit, res, ker). Returns r(method) and r(kernel).
+program define _cqreg_denparse, rclass
+    local spec = lower(strtrim(`"`0'"'))
+    local 0 `", `spec'"'
+    capture syntax [, FITted RESidual residuals KERnel(string) *]
+    local bad = _rc
+    if !`bad' {
+        if "`residuals'" != "" local residual residual
+        local method `fitted' `residual'
+        if `"`kernel'"' != "" local method `method' kernel
+        else if `"`options'"' != "" {
+            local 0 `", `options'"'
+            capture syntax [, Kernel]
+            if _rc local bad = 1
+            else if "`kernel'" != "" local method `method' kernel
+            local kernel
+        }
+        if `: word count `method'' != 1 local bad = 1
+    }
+    if !`bad' & "`method'" == "kernel" {
+        capture _cqreg_kernel, `kernel'
+        if _rc local bad = 1
+        else return local kernel `r(kernel)'
+    }
+    if `bad' {
+        di as error `"cqreg: unrecognized density method: `spec'"'
+        di as error "       Valid options: fitted (default), residual, kernel[(kernel)]"
+        exit 198
+    }
+    return local method `method'
 end

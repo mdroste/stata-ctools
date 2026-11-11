@@ -293,13 +293,34 @@ static char *xedit_remove_chain(const char *xml, const char *element,
 }
 
 static char *xedit_recalculate(const char *book) {
+  static const char calcpr[] =
+      "<calcPr "
+      "xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" "
+      "calcId=\"124519\" fullCalcOnLoad=\"1\"/>";
   xedit_node calc;
-  if (!xedit_find(book, book + strlen(book), "calcPr", &calc))
-    return xedit_insert(
-        book, "workbook",
-        "<calcPr "
-        "xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" "
-        "calcId=\"124519\" fullCalcOnLoad=\"1\"/>");
+  const char *end = book + strlen(book);
+  if (!xedit_find(book, end, "calcPr", &calc)) {
+    /* The schema orders workbook's children: calcPr follows sheets,
+       functionGroups, externalReferences and definedNames, and precedes
+       oleSize, pivotCaches, fileRecoveryPr, extLst and the rest. */
+    static const char *const before[] = {"sheets", "functionGroups",
+                                         "externalReferences", "definedNames"};
+    const char *after = NULL;
+    for (int k = 0; k < 4; k++) {
+      xedit_node n;
+      if (xedit_find(book, end, before[k], &n) && (!after || n.end > after))
+        after = n.end;
+    }
+    if (!after)
+      return xedit_insert(book, "workbook", calcpr);
+    StringBuffer sb;
+    if (!strbuf_init(&sb, strlen(book) + sizeof(calcpr) + 16))
+      return NULL;
+    strbuf_append_n(&sb, book, (size_t)(after - book));
+    strbuf_append(&sb, calcpr);
+    strbuf_append(&sb, after);
+    return sb.data;
+  }
   char *node = xedit_set_attr(&calc, "fullCalcOnLoad", 1);
   if (!node)
     return NULL;

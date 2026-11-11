@@ -146,5 +146,33 @@ ST_retcode civreghdfe_read_input(civreghdfe_input *input)
     input->kclass_user = kclass_user;
     input->fuller_alpha = fuller_alpha;
     input->tdelta = tdelta;
+
+    /* Heterogeneous slopes (at most ten factors then, checked by the ado) */
+    input->num_slopes = 0;
+    input->dof_continuous = 1;
+    if (SF_scal_use("__civreghdfe_dof_continuous", &dval) == 0)
+        input->dof_continuous = dval != 0;
+    for (ST_int g = 0; g < 10; g++) {
+        input->slope_flag[g] = 0;
+        input->fe_absvar[g] = g + 1;
+    }
+    if (SF_scal_use("__civreghdfe_num_slopes", &dval) == 0 && dval > 0) {
+        char name[48];
+        if (G > 10) {
+            SF_error("civreghdfe: at most ten absorbed intercepts and slopes are supported with heterogeneous slopes\n");
+            return 198;
+        }
+        for (ST_int g = 0; g < G; g++) {
+            snprintf(name, sizeof(name), "__civreghdfe_slope_%d", (int)(g + 1));
+            if ((rc = read_required(name, &dval)))
+                return rc;
+            input->slope_flag[g] = dval != 0;
+            input->num_slopes += input->slope_flag[g];
+            snprintf(name, sizeof(name), "__civreghdfe_absvar_%d", (int)(g + 1));
+            if ((rc = read_required(name, &dval)))
+                return rc;
+            input->fe_absvar[g] = (ST_int)dval;
+        }
+    }
     return 0;
 }

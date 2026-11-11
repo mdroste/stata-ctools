@@ -46,6 +46,7 @@ def test_io_formats_native():
                 ROOT / "src" / name
                 for name in [
                     "cimport/cimport_xlsx.c",
+                    "cimport/cimport_encoding.c",
                     "formats/xlsx_xml.c",
                     "formats/xlsx_zip.c",
                     "ctools_types.c",

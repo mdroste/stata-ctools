@@ -25,4 +25,14 @@
 */
 ST_retcode cgroup_main(const char *args);
 
+/*
+    plugin call ctools_plugin <vars...> [in], "strlcheck"
+
+    Sets local _ctools_strl_bad to one word per variable: 1 for a strL
+    variable holding, in the in-range, a value the loaders refuse (binary, or
+    text longer than 2,045 bytes), 0 otherwise. Reads lengths and flags only,
+    never the text.
+*/
+ST_retcode cgroup_strlcheck_main(const char *args);
+
 #endif /* CGROUP_IMPL_H */

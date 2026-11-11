@@ -196,6 +196,7 @@ void ppml_transform(HDFE_State *S, const double *y, double *ans)
 HDFE_SolveResult ppml_reference_partial(HDFE_State *S, double *data, int N, int K, int threads)
 {
     (void)threads;
+    if (ctools_cancel_requested()) return (HDFE_SolveResult){1, 0, 0};
     if (S->G == 1)
         return partial_out_columns(S, data, N, K, 1);
     int slots = S->num_threads < K ? S->num_threads : K;
@@ -203,51 +204,59 @@ HDFE_SolveResult ppml_reference_partial(HDFE_State *S, double *data, int N, int 
         slots = 1;
     int maxiter = 0, failed = 0;
     int k;
-#pragma omp parallel for num_threads(slots) schedule(dynamic) reduction(max : maxiter) reduction(| : failed) if (slots > 1)
-    for (k = 0; k < K; k++)
+    ctools_cancel_team team = {0};
+#pragma omp parallel num_threads(slots) reduction(max : maxiter) reduction(| : failed) if (slots > 1)
     {
-        int tid = 0;
+#pragma omp for schedule(dynamic) nowait
+        for (k = 0; k < K; k++)
+        {
+            if (ctools_cancel_requested()) continue;
+            int tid = 0;
 #ifdef _OPENMP
-        tid = omp_get_thread_num();
+            tid = omp_get_thread_num();
 #endif
-        double *r = S->thread_cg_r[tid], *u = S->thread_cg_u[tid], *v = S->thread_cg_v[tid];
-        double *y = data + (size_t)k * N;
-        double initial = ppml_quad_dot(y, y, NULL, N);
-        double potential = ppml_quad_dot(y, y, S->weights, N);
-        ppml_transform_slot(S, y, r, tid);
-        double ssr = ppml_quad_dot(r, r, S->weights, N);
-        memcpy(u, r, N * sizeof(double));
-        int iter;
-        for (iter = 1; iter <= S->maxiter; iter++)
-        {
-            ppml_transform_slot(S, u, v, tid);
-            double alpha = ssr / fmax(ppml_quad_dot(u, v, S->weights, N), DBL_EPSILON);
-            double recent = alpha * ssr;
-            potential -= recent;
-            for (int i = 0; i < N; i++)
+            double *r = S->thread_cg_r[tid], *u = S->thread_cg_u[tid], *v = S->thread_cg_v[tid];
+            double *y = data + (size_t)k * N;
+            double initial = ppml_quad_dot(y, y, NULL, N);
+            double potential = ppml_quad_dot(y, y, S->weights, N);
+            ppml_transform_slot(S, y, r, tid);
+            double ssr = ppml_quad_dot(r, r, S->weights, N);
+            memcpy(u, r, N * sizeof(double));
+            int iter;
+            for (iter = 1; iter <= S->maxiter; iter++)
             {
-                y[i] -= alpha * u[i];
-                r[i] -= alpha * v[i];
+                if (ctools_cancel_requested()) break;
+                ppml_transform_slot(S, u, v, tid);
+                double alpha = ssr / fmax(ppml_quad_dot(u, v, S->weights, N), DBL_EPSILON);
+                double recent = alpha * ssr;
+                potential -= recent;
+                for (int i = 0; i < N; i++)
+                {
+                    y[i] -= alpha * u[i];
+                    r[i] -= alpha * v[i];
+                }
+                double old = ssr;
+                ssr = ppml_quad_dot(r, r, S->weights, N);
+                double beta = ssr / fmax(old, DBL_EPSILON);
+                for (int i = 0; i < N; i++)
+                    u[i] = r[i] + beta * u[i];
+                double error = fabs(recent) < 1e-15 ? 0 : recent / fmax(potential, DBL_EPSILON);
+                if (error <= S->tolerance * S->tolerance)
+                    break;
             }
-            double old = ssr;
-            ssr = ppml_quad_dot(r, r, S->weights, N);
-            double beta = ssr / fmax(old, DBL_EPSILON);
-            for (int i = 0; i < N; i++)
-                u[i] = r[i] + beta * u[i];
-            double error = fabs(recent) < 1e-15 ? 0 : recent / fmax(potential, DBL_EPSILON);
-            if (error <= S->tolerance * S->tolerance)
-                break;
+            if (iter > S->maxiter)
+            {
+                failed |= 1;
+                continue;
+            }
+            if (iter > maxiter)
+                maxiter = iter;
+            if (ppml_quad_dot(y, y, NULL, N) <= initial * fmin(1e-6, S->tolerance / 10))
+                memset(y, 0, N * sizeof(double));
         }
-        if (iter > S->maxiter)
-        {
-            failed |= 1;
-            continue;
-        }
-        if (iter > maxiter)
-            maxiter = iter;
-        if (ppml_quad_dot(y, y, NULL, N) <= initial * fmin(1e-6, S->tolerance / 10))
-            memset(y, 0, N * sizeof(double));
+        ctools_cancel_wait(&team);
     }
+    if (ctools_cancel_requested()) return (HDFE_SolveResult){1, 0, maxiter};
     if (failed)
         return (HDFE_SolveResult){430, 0, S->maxiter + 1};
     return (HDFE_SolveResult){0, 1, maxiter};
@@ -302,6 +311,7 @@ HDFE_SolveResult ppml_lsmr(const PPML_Options *options, HDFE_State *S, double *d
            *x = coef + (size_t)4 * M;
     for (int col = 0; col < K; col++)
     {
+        if (ctools_cancel_requested()) { rc = 1; break; }
         double *y = data + (size_t)col * N;
         for (int i = 0; i < N; i++)
             u[i] = b[i] = y[i] * sqrt(S->weights[i]);
@@ -326,6 +336,7 @@ HDFE_SolveResult ppml_lsmr(const PPML_Options *options, HDFE_State *S, double *d
         int iter, converged = 0;
         for (iter = 1; iter <= S->maxiter; iter++)
         {
+            if (ctools_cancel_requested()) { rc = 1; break; }
             ppml_fe_multiply(S, offset, v, av, 0);
             for (int i = 0; i < N; i++)
                 u[i] = av[i] - alpha * u[i];
@@ -392,6 +403,7 @@ HDFE_SolveResult ppml_lsmr(const PPML_Options *options, HDFE_State *S, double *d
                 break;
             }
         }
+        if (rc) break;
         if (!converged)
         {
             rc = 430;
@@ -463,6 +475,7 @@ HDFE_SolveResult ppml_map_options(const PPML_Options *options, HDFE_State *S, do
     int max_iterations = 0, rc = 0;
     for (int k = 0; k < K; k++)
     {
+        if (ctools_cancel_requested()) { rc = 1; break; }
         double *y = data + (size_t)k * N;
         double initial = ppml_quad_dot(y, y, NULL, N),
                potential = ppml_quad_dot(y, y, S->weights, N), ssr = 0;
@@ -475,6 +488,7 @@ HDFE_SolveResult ppml_map_options(const PPML_Options *options, HDFE_State *S, do
         }
         for (iter = 1; iter <= S->maxiter; iter++)
         {
+            if (ctools_cancel_requested()) { rc = 1; break; }
             double error = 0;
             if (method == 0 || (method == 4 && iter > 6))
             {
@@ -540,6 +554,7 @@ HDFE_SolveResult ppml_map_options(const PPML_Options *options, HDFE_State *S, do
             if (error <= S->tolerance)
                 break;
         }
+        if (rc) break;
         if (iter > S->maxiter)
         {
             rc = 430;

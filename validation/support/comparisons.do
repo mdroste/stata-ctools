@@ -131,6 +131,8 @@ program define benchmark_merge
     }
 
     * Sort by all variables for comparison
+    local expected_n = _N
+    local expected_k = c(k)
     quietly ds
     local allvars `r(varlist)'
     quietly sort `allvars'
@@ -166,6 +168,7 @@ program define benchmark_merge
     local counts_match = (`stata_m1' == `cmerge_m1') & (`stata_m2' == `cmerge_m2') & (`stata_m3' == `cmerge_m3')
 
     * Sort and compare datasets
+    local dimensions_match = (_N == `expected_n' & c(k) == `expected_k')
     quietly ds
     local allvars `r(varlist)'
     quietly sort `allvars'
@@ -175,11 +178,14 @@ program define benchmark_merge
     restore
 
     * Every merge type must preserve the reference values, including m:m.
-    if `counts_match' & `cf_rc' == 0 {
+    if `counts_match' & `dimensions_match' & `cf_rc' == 0 {
         test_pass "`testname'"
     }
     else if !`counts_match' {
         test_fail "`testname'" "_merge counts differ: stata(m1=`stata_m1',m2=`stata_m2',m3=`stata_m3') vs cmerge(m1=`cmerge_m1',m2=`cmerge_m2',m3=`cmerge_m3')"
+    }
+    else if !`dimensions_match' {
+        test_fail "`testname'" "merged dataset dimensions differ"
     }
     else {
         test_fail "`testname'" "merged data differs from Stata merge"
@@ -252,6 +258,7 @@ program define benchmark_reghdfe
     local reghdfe_N_hdfe = e(N_hdfe)
 
     * Run creghdfe (quietly)
+    ereturn clear
     capture quietly creghdfe `depvar' `indepvars' `wtexp' `if' `in', absorb(`absorb') `vceopt'
     local creghdfe_rc = _rc
 
@@ -476,6 +483,7 @@ program define benchmark_qreg
     local qreg_convcode = e(convcode)
 
     * Run cqreg (quietly)
+    ereturn clear
     capture quietly cqreg `depvar' `indepvars' `if' `in', quantile(`quantile') `vceopt' `ctoolsopts'
     local cqreg_rc = _rc
 
@@ -1101,27 +1109,18 @@ program define benchmark_psmatch2
             `psmatch2_att_se' `psmatch2_att' `minsf' "`testname'"
     }
 
-    * Compare propensity scores variable using significant figures
-    quietly gen double _pscore_diff = abs(_pscore - `pscore_psm2')
-    quietly sum _pscore_diff
-    local max_diff = r(max)
-    if `max_diff' > 1e-7 {
-        * Find minimum sigfigs across all observations
-        tempvar sf_var
-        quietly gen double `sf_var' = 15 if _pscore == `pscore_psm2'
-        quietly replace `sf_var' = -log10(abs(_pscore - `pscore_psm2') / max(abs(_pscore), abs(`pscore_psm2'))) if `sf_var' == .
-        quietly replace `sf_var' = 0 if `sf_var' < 0
-        quietly replace `sf_var' = 15 if `sf_var' > 15 & !missing(`sf_var')
-        quietly replace `sf_var' = 0 if missing(`sf_var')
-        quietly sum `sf_var'
-        local min_sf = r(min)
-        if `min_sf' < `minsf' {
-            local has_failure = 1
-            local sf_fmt : display %4.1f `min_sf'
-            local all_diffs "`all_diffs' _pscore:sigfigs=`sf_fmt'"
-        }
+    * Compare every score, including small probabilities and missingness.
+    * An absolute 1e-7 prefilter hid large relative errors near zero and
+    * summarize silently omitted missing candidate scores.
+    local failures_before = $TESTS_FAILED
+    assert_var_equal _pscore `pscore_psm2' `minsf' "`testname' propensity scores"
+    if $TESTS_FAILED > `failures_before' local has_failure = 1
+
+    quietly count if _treated != `treated_psm2'
+    if r(N) {
+        local has_failure = 1
+        local all_diffs "`all_diffs' _treated differs"
     }
-    drop _pscore_diff
 
     * Compare _support variable (exact match)
     quietly count if _support != `support_psm2'
@@ -1131,8 +1130,20 @@ program define benchmark_psmatch2
         local all_diffs "`all_diffs' _support:`support_diff'_differ"
     }
 
-    * Compare _weight for control observations on support
-    * For treated obs, both assign _weight=1 (skip).
+    * Both commands must actually assign unit weight to on-support treated
+    * rows, rather than assuming the candidate does so.
+    quietly count if `treated_psm2' == 1 & `support_psm2' == 1 & _weight != `weight_psm2'
+    if r(N) {
+        local has_failure = 1
+        local all_diffs "`all_diffs' _weight(treated) differs"
+    }
+    quietly count if `treated_psm2' == 0 & `support_psm2' == 1 & ///
+        (missing(_weight) | missing(`weight_psm2')) & _weight != `weight_psm2'
+    if r(N) {
+        local has_failure = 1
+        local all_diffs "`all_diffs' _weight(ctrl) missingness differs"
+    }
+    * Compare _weight for control observations on support.
     * For controls, _weight represents match frequency.
     quietly count if `treated_psm2' == 0 & `support_psm2' == 1 & !missing(`weight_psm2')
     local n_ctrl_compare = r(N)
@@ -1322,6 +1333,7 @@ program define benchmark_ivreghdfe
     }
 
     * Run civreghdfe (quietly)
+    ereturn clear
     capture quietly civreghdfe `spec' `wtexp' `if' `in', absorb(`absorb') `vceopt' `dispopts' `diagopts' `fwlopts' `solveropts' `estopts' `hacopts' `b0opt'
     local civreghdfe_rc = _rc
 
@@ -1707,12 +1719,22 @@ program define benchmark_encode
     if "`label'" != "" local opts_stata "`opts_stata' label(`label'_s)"
     if "`noextend'" != "" local opts_stata "`opts_stata' noextend"
 
+    * Retain the source independently: otherwise a candidate that corrupts it
+    * makes the following native command validate the same corrupted input.
+    tempvar source_copy
+    clonevar `source_copy' = `varlist'
+    local source_n = _N
     * Run cencode
     capture drop `generate'_c
     capture label drop `generate'_c
     if "`label'" != "" capture label drop `label'_c
     capture cencode `varlist' `ifin', `opts'
     local rc_c = _rc
+    capture assert `varlist' == `source_copy'
+    if _rc | _N != `source_n' {
+        test_fail "`testname'" "cencode changed the source data"
+        exit
+    }
 
     * Run native encode
     capture drop `generate'_s
@@ -1737,7 +1759,7 @@ program define benchmark_encode
     local ndiff = r(N)
 
     * Compare missing patterns
-    quietly count if missing(`generate'_c) != missing(`generate'_s)
+    quietly count if (missing(`generate'_c) | missing(`generate'_s)) & `generate'_c != `generate'_s
     local nmiss_diff = r(N)
 
     if `ndiff' > 0 | `nmiss_diff' > 0 {
@@ -1951,10 +1973,18 @@ program define benchmark_decode
     local opts_stata "generate(`generate'_s)"
     if `maxlength' > 0 local opts_stata "`opts_stata' maxlength(`maxlength')"
 
+    tempvar source_copy
+    clonevar `source_copy' = `varlist'
+    local source_n = _N
     * Run cdecode
     capture drop `generate'_c
     capture cdecode `varlist' `ifin', `opts'
     local rc_c = _rc
+    capture assert `varlist' == `source_copy'
+    if _rc | _N != `source_n' {
+        test_fail "`testname'" "cdecode changed the source data"
+        exit
+    }
 
     * Run native decode
     capture drop `generate'_s
@@ -2088,7 +2118,7 @@ program define benchmark_destring
             quietly count if `_sf_`v'' < $DEFAULT_SIGFIGS & !missing(`v'_c) & !missing(`v'_s)
             local ndiff_total = `ndiff_total' + r(N)
             * Also check missing patterns match
-            quietly count if missing(`v'_c) != missing(`v'_s)
+            quietly count if (missing(`v'_c) | missing(`v'_s)) & `v'_c != `v'_s
             local ndiff_total = `ndiff_total' + r(N)
         }
 
@@ -2115,9 +2145,26 @@ program define benchmark_destring
             capture drop `v'
         }
 
+        local source_n = _N
+        local source_copies
+        foreach v of local varlist {
+            tempvar source_copy
+            clonevar `source_copy' = `v'
+            local source_copies `source_copies' `source_copy'
+        }
         * Run cdestring
         capture cdestring `varlist' `ifin', `opts_c'
         local rc_c = _rc
+        local j = 0
+        foreach v of local varlist {
+            local ++j
+            local source_copy : word `j' of `source_copies'
+            capture assert `v' == `source_copy'
+            if _rc | _N != `source_n' {
+                test_fail "`testname'" "cdestring changed source variable `v'"
+                exit
+            }
+        }
 
         * Run destring
         capture destring `varlist' `ifin', `opts_s'
@@ -2160,7 +2207,7 @@ program define benchmark_destring
             quietly count if `_sf_`v'' < $DEFAULT_SIGFIGS & !missing(`vc') & !missing(`vs')
             local ndiff_total = `ndiff_total' + r(N)
             * Check missing patterns match
-            quietly count if missing(`vc') != missing(`vs')
+            quietly count if (missing(`vc') | missing(`vs')) & `vc' != `vs'
             local ndiff_total = `ndiff_total' + r(N)
             local ++i
         }
@@ -2488,6 +2535,7 @@ program define benchmark_reghdfe_opts
     }
 
     * Run creghdfe with extra options
+    ereturn clear
     quietly creghdfe `depvar' `indepvars' `wtexp' `if' `in', absorb(`absorb') `vceopt' `creghdfe_opts'
     local creghdfe_N = e(N)
     local creghdfe_df_r = e(df_r)
@@ -2557,6 +2605,7 @@ program define benchmark_reghdfe_dof
     local testname "df_a: `opts'"
 
     foreach cmd in reghdfe creghdfe {
+        ereturn clear
         capture quietly `cmd' `varlist', `opts'
         if _rc {
             test_fail "`testname'" "`cmd' returned error `=_rc'"
@@ -2652,8 +2701,12 @@ program define benchmark_ppmlhdfe
     local ppml_ll = e(ll)
     local ppml_r2_p = e(r2_p)
     local ppml_N_clust = e(N_clust)
+    foreach s in N_full num_singletons num_separated {
+        local ppml_`s' = e(`s')
+    }
 
     * Run cppmlhdfe
+    ereturn clear
     capture quietly cppmlhdfe `depvar' `indepvars' `wtexp' `if' `in', absorb(`absorb') `vceopt' `expopt' `offopt' tolerance(`tolerance')
     local cppml_rc = _rc
 
@@ -2669,6 +2722,9 @@ program define benchmark_ppmlhdfe
     local cppml_ll = e(ll)
     local cppml_r2_p = e(r2_p)
     local cppml_N_clust = e(N_clust)
+    foreach s in N_full num_singletons num_separated {
+        local cppml_`s' = e(`s')
+    }
 
     quietly count if `reference_sample' != e(sample)
     local sample_diff = r(N)
@@ -2690,6 +2746,12 @@ program define benchmark_ppmlhdfe
     }
 
     * Compare N_clust whenever the reference reports it
+    foreach s in N_full num_singletons num_separated {
+        if `ppml_`s'' != `cppml_`s'' {
+            local has_failure = 1
+            local all_diffs "`all_diffs' e(`s'):`ppml_`s''!=`cppml_`s''"
+        }
+    }
     if !missing(`ppml_N_clust') {
         if `ppml_N_clust' != `cppml_N_clust' {
             local has_failure = 1

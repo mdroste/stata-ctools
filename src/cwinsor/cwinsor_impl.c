@@ -160,6 +160,78 @@ static void compute_two_percentiles(double *work, size_t n,
 }
 
 /* ===========================================================================
+   Weighted percentiles (gstats winsor with weights)
+   =========================================================================== */
+
+typedef struct {
+    double v, w;
+} cwinsor_pair;
+
+static int cwinsor_pair_cmp(const void *a, const void *b)
+{
+    double va = ((const cwinsor_pair *)a)->v, vb = ((const cwinsor_pair *)b)->v;
+    return (va > vb) - (va < vb);
+}
+
+/* Weighted percentile pctl of the n pairs sorted by value, as gstats winsor
+ * and _pctile take it: with cumulative weights W_i and P = W pctl / 100, the
+ * first value whose W_i reaches P, averaged with the next value when W_i
+ * equals P. A W_i within rounding error of P (aweights such as 0.1 sum
+ * inexactly) counts as equal, as it does there. pctl 0 and 100 give the
+ * extremes. */
+static double weighted_percentile(const cwinsor_pair *s, size_t n, double total, double pctl)
+{
+    if (n == 0) return SV_missval;
+    if (pctl <= 0.0) return s[0].v;
+    if (pctl >= 100.0) return s[n - 1].v;
+    const double target = total * (pctl / 100.0);
+    const double tol = 1e-12 * fabs(total);
+    double cum = 0.0, c = 0.0;
+    for (size_t i = 0; i < n; i++) {
+        /* Kahan summation keeps the cumulative weights accurate */
+        double y = s[i].w - c, t = cum + y;
+        c = (t - cum) - y;
+        cum = t;
+        if (fabs(cum - target) <= tol) return (i + 1 < n) ? (s[i].v + s[i + 1].v) / 2.0 : s[i].v;
+        if (cum > target) return s[i].v;
+    }
+    return s[n - 1].v;
+}
+
+/* The lower and upper weighted percentiles of the non-missing values of
+ * data[0..count) with weights w (pairs: scratch space for count pairs) */
+static size_t weighted_two_percentiles(const double *data, const double *w, size_t count,
+                                       cwinsor_pair *pairs, double pctl_lo, double pctl_hi,
+                                       double *lo, double *hi)
+{
+    const double miss = SV_missval;
+    size_t n = 0;
+    for (size_t i = 0; i < count; i++) {
+        if (data[i] < miss && w[i] < miss) {
+            pairs[n].v = data[i];
+            pairs[n].w = w[i];
+            n++;
+        }
+    }
+    if (n == 0) return 0;
+    qsort(pairs, n, sizeof(cwinsor_pair), cwinsor_pair_cmp);
+    /* A common scale preserves quantiles while bounding the sum by n. */
+    double scale = 0.0;
+    for (size_t i = 0; i < n; i++) if (pairs[i].w > scale) scale = pairs[i].w;
+    if (!(scale > 0.0)) return 0;
+    double total = 0.0, c = 0.0;
+    for (size_t i = 0; i < n; i++) {
+        pairs[i].w /= scale;
+        double y = pairs[i].w - c, t = total + y;
+        c = (t - total) - y;
+        total = t;
+    }
+    *lo = weighted_percentile(pairs, n, total, pctl_lo);
+    *hi = weighted_percentile(pairs, n, total, pctl_hi);
+    return n;
+}
+
+/* ===========================================================================
    Configuration
    =========================================================================== */
 
@@ -172,6 +244,7 @@ typedef struct {
     int verbose;
     int undo;          /* keep the loaded target values for cwinsor rollback */
     int fault_store;   /* validation hook: fail after storing half the rows */
+    int weighted;      /* a weight column follows the by-variables */
 } cwinsor_config;
 
 /* ===========================================================================
@@ -415,6 +488,7 @@ ST_retcode cwinsor_main(const char *args)
     config.verbose = ctools_parse_bool_option(args, "verbose");
     config.undo = ctools_parse_bool_option(args, "undo");
     config.fault_store = ctools_parse_bool_option(args, "fault_store");
+    config.weighted = ctools_parse_bool_option(args, "weighted");
 
     if (!isfinite(config.lower_pctl) || !isfinite(config.upper_pctl) ||
         config.lower_pctl < 0 || config.lower_pctl > 100 ||
@@ -442,12 +516,13 @@ ST_retcode cwinsor_main(const char *args)
     while (*p == ' ' || *p == '\t') p++;
     int nby_value;
     if (ctools_parse_next_int(&p, &nby_value) || nby_value < 0 ||
-        nby_value > SF_nvars() - nvars_value) {
+        nby_value > SF_nvars() - nvars_value - (config.weighted ? 1 : 0)) {
         ctools_error(CWINSOR_MODULE, "invalid nby");
         return 198;
     }
     size_t nby = (size_t)nby_value;
-    size_t nload = nvars + nby;
+    /* Sources, by-variables, then the weight */
+    size_t nload = nvars + nby + (config.weighted ? 1 : 0);
     char bounds_name[256] = {0};
     if (config.return_bounds) {
         if (nby != 0) return 198;
@@ -541,6 +616,8 @@ ST_retcode cwinsor_main(const char *args)
     for (size_t v = 0; v < nvars; v++) {
         var_data[v] = target_filtered.data.vars[v].data.dbl;
     }
+    /* The weights (rows in the sample have positive weights) */
+    double *wt_data = config.weighted ? target_filtered.data.vars[nvars + nby].data.dbl : NULL;
     if (ctools_parse_bool_option(args, "newoutputs")) {
         /* gen new = source if !missing(source) initializes all missing codes
          * as ordinary missing. Match it while keeping the inputs read-only. */
@@ -610,6 +687,7 @@ ST_retcode cwinsor_main(const char *args)
         for (size_t v = 0; v < nvars; v++) {
             apply_permutation(var_data[v], sort_indices, nobs, temp_buffer);
         }
+        if (wt_data) apply_permutation(wt_data, sort_indices, nobs, temp_buffer);
     }
 
     t_sort = ctools_timer_seconds() - sort_start;
@@ -671,10 +749,12 @@ ST_retcode cwinsor_main(const char *args)
     /* === Winsorization Phase === */
     double winsor_start = ctools_timer_seconds();
 
-    size_t max_group_size = 0;
+    size_t max_group_size = 0, min_group_size = (size_t)-1;
     for (size_t g = 0; g < ngroups; g++) {
         if (groups[g].count > max_group_size)
             max_group_size = groups[g].count;
+        if (groups[g].count < min_group_size)
+            min_group_size = groups[g].count;
     }
 
     /* One work buffer per thread that can get a task: without by() there is
@@ -697,7 +777,8 @@ ST_retcode cwinsor_main(const char *args)
     }
 
     for (int t = 0; t < nwork; t++) {
-        work_arrays[t] = (double *)malloc(max_group_size * sizeof(double));
+        work_arrays[t] = (double *)malloc((max_group_size + 1) *
+                                          (config.weighted ? sizeof(cwinsor_pair) : sizeof(double)));
         if (!work_arrays[t]) {
             for (int j = 0; j < t; j++) free(work_arrays[j]);
             free(work_arrays);
@@ -758,12 +839,17 @@ ST_retcode cwinsor_main(const char *args)
 
             if (count < MIN_OBS_WINSOR) continue;
 
-            size_t n = extract_nonmissing(data, count, work);
-            if (n < MIN_OBS_WINSOR) continue;
-
             double lower, upper;
-            compute_two_percentiles(work, n, config.lower_pctl, config.upper_pctl,
-                                    &lower, &upper);
+            if (wt_data) {
+                if (weighted_two_percentiles(data, wt_data, count, (cwinsor_pair *)work,
+                                             config.lower_pctl, config.upper_pctl,
+                                             &lower, &upper) < MIN_OBS_WINSOR) continue;
+            } else {
+                size_t n = extract_nonmissing(data, count, work);
+                if (n < MIN_OBS_WINSOR) continue;
+                compute_two_percentiles(work, n, config.lower_pctl, config.upper_pctl,
+                                        &lower, &upper);
+            }
 
             if (lower > upper) {
                 double tmp = lower;
@@ -806,12 +892,17 @@ ST_retcode cwinsor_main(const char *args)
 
             if (count < MIN_OBS_WINSOR) continue;
 
-            size_t n = extract_nonmissing(&data[start], count, work);
-            if (n < MIN_OBS_WINSOR) continue;
-
             double lower, upper;
-            compute_two_percentiles(work, n, config.lower_pctl, config.upper_pctl,
-                                    &lower, &upper);
+            if (wt_data) {
+                if (weighted_two_percentiles(&data[start], &wt_data[start], count,
+                                             (cwinsor_pair *)work, config.lower_pctl,
+                                             config.upper_pctl, &lower, &upper) < MIN_OBS_WINSOR) continue;
+            } else {
+                size_t n = extract_nonmissing(&data[start], count, work);
+                if (n < MIN_OBS_WINSOR) continue;
+                compute_two_percentiles(work, n, config.lower_pctl, config.upper_pctl,
+                                        &lower, &upper);
+            }
 
             if (lower > upper) {
                 double tmp = lower;
@@ -929,6 +1020,9 @@ cleanup:
     SF_scal_save("_cwinsor_nobs", (double)nobs);
     SF_scal_save("_cwinsor_nvars", (double)nvars);
     SF_scal_save("_cwinsor_ngroups", (double)ngroups);
+    /* gstats winsor's r(minJ) and r(maxJ): the smallest and largest group */
+    SF_scal_save("_cwinsor_minJ", (double)(ngroups ? min_group_size : 0));
+    SF_scal_save("_cwinsor_maxJ", (double)max_group_size);
 
     #ifdef _OPENMP
     SF_scal_save("_cwinsor_threads", (double)num_threads);

@@ -1,12 +1,12 @@
 {
   "cbinscatter": {
     "genxq": {
-      "kind": "unsupported",
-      "reason": "The command explicitly rejects this interface; rejection and unchanged data are asserted.",
+      "kind": "differential",
+      "reason": "The generated bin variable equals binscatter's genxq(), value by value and in storage type.",
       "evidence": [
         {
-          "path": "validation/stata/oracle_tests.do",
-          "anchor": "genxq(unimplemented)"
+          "path": "validation/stata/s2_bin.do",
+          "anchor": "BIN-03 genxq() equals binscatter's"
         }
       ]
     },
@@ -117,6 +117,172 @@
         {
           "path": "validation/stata/oracle_tests.do",
           "anchor": "Check actual rendered marker shapes/colors/text"
+        }
+      ]
+    },
+    "medians": {
+      "kind": "differential",
+      "reason": "Bin medians are compared with _pctile medians over binscatter's bins, with ties and weights, and the graph with binscatter's.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_bin.do",
+          "anchor": "BIN-02 medians are _pctile medians of binscatter's bins"
+        }
+      ]
+    },
+    "noaddmean": {
+      "kind": "differential",
+      "reason": "Graphs with controls, absorb and qfit are compared with binscatter's e(graphcmd).",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_bin.do",
+          "anchor": "BIN-02 controls/absorb/qfit equal binscatter's"
+        }
+      ]
+    },
+    "rd": {
+      "kind": "differential",
+      "reason": "rd() fits, e(rdintervals) and its errors are compared with binscatter.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_bin.do",
+          "anchor": "BIN-02 rd() fits, e(rdintervals) and errors match binscatter"
+        }
+      ]
+    },
+    "xq": {
+      "kind": "differential",
+      "reason": "Bins from xq() are compared with binscatter's savedata CSV.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_bin.do",
+          "anchor": "BIN-02 savedata CSV bins equal binscatter's"
+        }
+      ]
+    },
+    "mcolors": {
+      "kind": "differential",
+      "reason": "The graph is compared with binscatter's, byte for byte as SVG.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_bin.do",
+          "anchor": "BIN-02 graph equals binscatter's (SVG)"
+        }
+      ]
+    },
+    "lcolors": {
+      "kind": "differential",
+      "reason": "The graph is compared with binscatter's, byte for byte as SVG.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_bin.do",
+          "anchor": "BIN-02 graph equals binscatter's (SVG)"
+        }
+      ]
+    },
+    "savegraph": {
+      "kind": "differential",
+      "reason": "savegraph() writes the files binscatter writes and refuses an existing file without replace.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_bin.do",
+          "anchor": "BIN-02 savegraph() as binscatter's"
+        }
+      ]
+    },
+    "randvar": {
+      "kind": "differential",
+      "reason": "The random subsample, the RNG state and the option errors are compared with binscatter.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_bin.do",
+          "anchor": "BIN-02 random subsample state and option errors"
+        }
+      ]
+    },
+    "randcut": {
+      "kind": "differential",
+      "reason": "The random subsample, the RNG state and the option errors are compared with binscatter.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_bin.do",
+          "anchor": "BIN-02 random subsample state and option errors"
+        }
+      ]
+    },
+    "randn": {
+      "kind": "differential",
+      "reason": "The random subsample, the RNG state and the option errors are compared with binscatter.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_bin.do",
+          "anchor": "BIN-02 random subsample state and option errors"
+        }
+      ]
+    },
+    "nbins": {
+      "kind": "differential",
+      "reason": "binscatter 7.02's legacy options run through binscatter and cbinscatter on the same data: return code, created variables (create_xq's q_<x>), e(N), e(sample), e(y1_coefs) and e(byvalues) agree; with both an option and its legacy form binscatter stops with r(0) after its message and cbinscatter exits with r(198).",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_bin.do",
+          "anchor": "foreach o in \"nbins(10)\" \"create_xq\" \"x_q(rep78)\""
+        },
+        {
+          "path": "validation/stata/s2_bin.do",
+          "anchor": "BIN-08 `o' refused (binscatter r(0), cbinscatter r(198))"
+        }
+      ]
+    },
+    "create_xq": {
+      "kind": "differential",
+      "reason": "binscatter 7.02's legacy options run through binscatter and cbinscatter on the same data: return code, created variables (create_xq's q_<x>), e(N), e(sample), e(y1_coefs) and e(byvalues) agree; with both an option and its legacy form binscatter stops with r(0) after its message and cbinscatter exits with r(198).",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_bin.do",
+          "anchor": "foreach o in \"nbins(10)\" \"create_xq\" \"x_q(rep78)\""
+        },
+        {
+          "path": "validation/stata/s2_bin.do",
+          "anchor": "BIN-08 `o' refused (binscatter r(0), cbinscatter r(198))"
+        }
+      ]
+    },
+    "x_q": {
+      "kind": "differential",
+      "reason": "binscatter 7.02's legacy options run through binscatter and cbinscatter on the same data: return code, created variables (create_xq's q_<x>), e(N), e(sample), e(y1_coefs) and e(byvalues) agree; with both an option and its legacy form binscatter stops with r(0) after its message and cbinscatter exits with r(198).",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_bin.do",
+          "anchor": "foreach o in \"nbins(10)\" \"create_xq\" \"x_q(rep78)\""
+        },
+        {
+          "path": "validation/stata/s2_bin.do",
+          "anchor": "BIN-08 `o' refused (binscatter r(0), cbinscatter r(198))"
+        }
+      ]
+    },
+    "symbols": {
+      "kind": "differential",
+      "reason": "binscatter 7.02's legacy options run through binscatter and cbinscatter on the same data: return code, created variables (create_xq's q_<x>), e(N), e(sample), e(y1_coefs) and e(byvalues) agree; with both an option and its legacy form binscatter stops with r(0) after its message and cbinscatter exits with r(198).",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_bin.do",
+          "anchor": "foreach o in \"nbins(10)\" \"create_xq\" \"x_q(rep78)\""
+        },
+        {
+          "path": "validation/stata/s2_bin.do",
+          "anchor": "BIN-08 several y nbins() symbols()"
+        }
+      ]
+    },
+    "unique": {
+      "kind": "differential",
+      "reason": "binscatter 7.02 ignores unique() with a note; cbinscatter gives binscatter's results with it (return code, e(N), e(sample), e(y1_coefs)).",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_bin.do",
+          "anchor": "foreach o in \"nbins(10)\" \"create_xq\" \"x_q(rep78)\""
         }
       ]
     }
@@ -477,16 +643,30 @@
           "anchor": "[rollback] snapshot and fast together refused"
         }
       ]
+    },
+    "tempdta": {
+      "kind": "differential",
+      "reason": "Delimited imports with tempdta, through the whole-dataset .dta (cimport fulldta) and, with the ado's validation hook, its strL-only fallback (cimport strldta), are compared with import delimited (cf _all and storage types), next to the default strL transfer in memory and through its file fallback.",
+      "evidence": [
+        {
+          "path": "validation/stata/dta.do",
+          "anchor": "test_pass \"DTA-07 cimport strL columns, `how'\""
+        },
+        {
+          "path": "validation/stata/cimport.do",
+          "anchor": "test_pass \"strL transfer: `o', `path'\""
+        }
+      ]
     }
   },
   "civreghdfe": {
     "center": {
-      "kind": "unsupported",
-      "reason": "Explicit rejection with no data mutation is tested.",
+      "kind": "differential",
+      "reason": "Centered moments: e(b), e(V), e(S) and the statistics are compared with ivreg2 and ivreghdfe.",
       "evidence": [
         {
-          "path": "validation/stata/oracle_tests.do",
-          "anchor": "civreghdfe y x (endog=z z2), center"
+          "path": "validation/stata/s2_iv.do",
+          "anchor": "IV-04 center"
         }
       ]
     },
@@ -765,12 +945,12 @@
       ]
     },
     "sfirst": {
-      "kind": "unsupported",
-      "reason": "ivreg2's system of first-stage and reduced-form equations (joint VCE) and its Sanderson-Windmeijer and Anderson-Rubin statistics are not computed; the option is refused with r(198).",
+      "kind": "differential",
+      "reason": "The joint first-stage and reduced-form system and its display are compared with ivreg2's sfirst.",
       "evidence": [
         {
-          "path": "validation/stata/civreghdfe.do",
-          "anchor": "sfirst refused"
+          "path": "validation/stata/s2_iv.do",
+          "anchor": "IV-05 sfirst display"
         }
       ]
     },
@@ -813,6 +993,332 @@
           "anchor": "collinear variables in ivreg2's order"
         }
       ]
+    },
+    "dropfirst": {
+      "kind": "contract",
+      "reason": "Replay with the drop* options hides the stored equations' tables, as ivreg2's replay does.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_iv.do",
+          "anchor": "IV-01 replay drop* options"
+        }
+      ]
+    },
+    "droprf": {
+      "kind": "contract",
+      "reason": "Replay with the drop* options hides the stored equations' tables, as ivreg2's replay does.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_iv.do",
+          "anchor": "IV-01 replay drop* options"
+        }
+      ]
+    },
+    "dropsfirst": {
+      "kind": "contract",
+      "reason": "Replay with the drop* options hides the stored equations' tables, as ivreg2's replay does.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_iv.do",
+          "anchor": "IV-01 replay drop* options"
+        }
+      ]
+    },
+    "savesfirst": {
+      "kind": "differential",
+      "reason": "The stored sfirst system is compared with ivreg2's: e(b), e(V), e(S), e(df_r), e(k_eq).",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_iv.do",
+          "anchor": "IV-05 savesfirst"
+        }
+      ]
+    },
+    "savesfprefix": {
+      "kind": "contract",
+      "reason": "savesfprefix() stores the system under the prefix and implies savesfirst.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_iv.do",
+          "anchor": "IV-05 savesfprefix() implies savesfirst"
+        }
+      ]
+    },
+    "smatrix": {
+      "kind": "differential",
+      "reason": "Estimation with a user S matrix is compared with ivreg2's smatrix().",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_iv.do",
+          "anchor": "smatrix(Sbig)"
+        }
+      ]
+    },
+    "wmatrix": {
+      "kind": "differential",
+      "reason": "Estimation with a user weighting matrix is compared with ivreg2's wmatrix().",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_iv.do",
+          "anchor": "IV-08 wmatrix() aw"
+        }
+      ]
+    },
+    "fevce": {
+      "kind": "differential",
+      "reason": "fevce(bootstrap) with draws(stata) is compared with an oracle that refits civreghdfe, absorb(..., savefe), on each replicate's expanded data from bsample's draws: per-level SEs, valid-replicate counts and d's SE with one and two effects and a cluster bootstrap; shared replicates with vce(bootstrap), output names (v_se, sestub), e() results and refusals are tested. The ci suboption's percentile bounds are compared with the bounds of the oracle's effects over the same replicates.",
+      "evidence": [
+        {
+          "path": "validation/stata/bootstrap_reference.do",
+          "anchor": "the effects' and d's SEs and replicate counts equal the expanded data's"
+        },
+        {
+          "path": "validation/stata/bootstrap_reference.do",
+          "anchor": "vce() and fevce() share the replicates"
+        },
+        {
+          "path": "validation/stata/bootstrap_reference.do",
+          "anchor": "civreghdfe ci: percentile bounds of its own savefe on the same draws"
+        }
+      ]
+    },
+    "nowildtable": {
+      "kind": "contract",
+      "reason": "Display only: with wildbootstrap() it suppresses the wild bootstrap table; e(b), e(V), the diagnostics and the wild results are posted as without it, and replay still shows the table.",
+      "evidence": [
+        {
+          "path": "validation/stata/bootstrap_reference.do",
+          "anchor": "e(b), e(V), e(j) unchanged; coefs(), noci, nowildtable, replay"
+        }
+      ]
+    },
+    "psd0": {
+      "kind": "differential",
+      "reason": "S made positive semidefinite: e(b), e(V), e(S), J and e(vce) compared with ivreg2 for the tent, Tukey-Hanning and truncated kernels; psd0 with psda refused as ivreg2.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_iv.do",
+          "anchor": "IV-12 `p' kernel"
+        },
+        {
+          "path": "validation/stata/s2_iv.do",
+          "anchor": "IV-12 psd0 with psda refused"
+        }
+      ]
+    },
+    "psda": {
+      "kind": "differential",
+      "reason": "As psd0, with absolute eigenvalues; also with gmm2s.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_iv.do",
+          "anchor": "IV-12 `p' kernel"
+        }
+      ]
+    },
+    "sw": {
+      "kind": "unsupported",
+      "reason": "ivreg2's BETA Stock-Watson covariance is rejected with r198 without changing the data.",
+      "evidence": [
+        {
+          "path": "validation/stata/oracle_tests.do",
+          "anchor": "\"civreghdfe y x (endog=z z2), sw\""
+        }
+      ]
+    },
+    "tvar": {
+      "kind": "differential",
+      "reason": "The tsset time variable gives ivreg2's results; another variable is r(5), as ivreg2.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_iv.do",
+          "anchor": "IV-14 tvar() ivar() panel"
+        },
+        {
+          "path": "validation/stata/s2_iv.do",
+          "anchor": "IV-14 `o' refused"
+        }
+      ]
+    },
+    "ivar": {
+      "kind": "differential",
+      "reason": "The tsset panel variable gives ivreg2's results; another variable is r(5), as ivreg2.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_iv.do",
+          "anchor": "IV-14 tvar() ivar() panel"
+        },
+        {
+          "path": "validation/stata/s2_iv.do",
+          "anchor": "IV-14 `o' refused"
+        }
+      ]
+    },
+    "bvclean": {
+      "kind": "differential",
+      "reason": "e(b), e(V) names and the 0/1 varlists compared with ivreg2 and ivreghdfe; implied by partial().",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_iv.do",
+          "anchor": "IV-15 bvclean absorb"
+        },
+        {
+          "path": "validation/stata/s2_iv.do",
+          "anchor": "IV-15 partial() implies bvclean"
+        }
+      ]
+    },
+    "fvall": {
+      "kind": "differential",
+      "reason": "Factor-variable models compared with ivreg2 run with fvall.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_iv.do",
+          "anchor": "\"fvall\" \"fvsep\" \"useqr\""
+        }
+      ]
+    },
+    "fvsep": {
+      "kind": "differential",
+      "reason": "Factor-variable models, interactions included, compared with ivreg2 run with fvsep.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_iv.do",
+          "anchor": "IV-15 fvsep interactions"
+        }
+      ]
+    },
+    "useqr": {
+      "kind": "differential",
+      "reason": "Results compared with ivreg2 run with useqr.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_iv.do",
+          "anchor": "\"fvall\" \"fvsep\" \"useqr\""
+        }
+      ]
+    },
+    "technique": {
+      "kind": "differential",
+      "reason": "reghdfe's option as ivreghdfe passes it: estimates equal ivreghdfe's; an invalid value is refused.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_iv.do",
+          "anchor": "\"technique(lsmr)\" \"acceleration(sd) transform(cim)\""
+        },
+        {
+          "path": "validation/stata/s2_iv.do",
+          "anchor": "IV-18 invalid `o' refused"
+        }
+      ]
+    },
+    "transform": {
+      "kind": "differential",
+      "reason": "As technique().",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_iv.do",
+          "anchor": "\"technique(lsmr)\" \"acceleration(sd) transform(cim)\""
+        },
+        {
+          "path": "validation/stata/s2_iv.do",
+          "anchor": "IV-18 invalid `o' refused"
+        }
+      ]
+    },
+    "acceleration": {
+      "kind": "differential",
+      "reason": "As technique().",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_iv.do",
+          "anchor": "\"technique(lsmr)\" \"acceleration(sd) transform(cim)\""
+        },
+        {
+          "path": "validation/stata/s2_iv.do",
+          "anchor": "IV-18 invalid `o' refused"
+        }
+      ]
+    },
+    "preconditioner": {
+      "kind": "differential",
+      "reason": "As technique().",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_iv.do",
+          "anchor": "\"preconditioner(diag) technique(lsqr)\""
+        }
+      ]
+    },
+    "prune": {
+      "kind": "differential",
+      "reason": "Estimates equal ivreghdfe's with prune.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_iv.do",
+          "anchor": "\"prune poolsize(5)\" \"nosample\" \"nowarn\" \"verbose(-1)\" \"timeit\""
+        }
+      ]
+    },
+    "poolsize": {
+      "kind": "differential",
+      "reason": "Estimates equal ivreghdfe's with poolsize().",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_iv.do",
+          "anchor": "\"prune poolsize(5)\" \"nosample\" \"nowarn\" \"verbose(-1)\" \"timeit\""
+        }
+      ]
+    },
+    "nosample": {
+      "kind": "differential",
+      "reason": "Estimates equal ivreghdfe's, which keeps e(sample) with nosample.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_iv.do",
+          "anchor": "\"prune poolsize(5)\" \"nosample\" \"nowarn\" \"verbose(-1)\" \"timeit\""
+        }
+      ]
+    },
+    "timeit": {
+      "kind": "differential",
+      "reason": "Estimates equal ivreghdfe's with timeit.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_iv.do",
+          "anchor": "\"prune poolsize(5)\" \"nosample\" \"nowarn\" \"verbose(-1)\" \"timeit\""
+        }
+      ]
+    },
+    "nowarn": {
+      "kind": "differential",
+      "reason": "Estimates equal ivreghdfe's with nowarn.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_iv.do",
+          "anchor": "\"prune poolsize(5)\" \"nosample\" \"nowarn\" \"verbose(-1)\" \"timeit\""
+        }
+      ]
+    },
+    "groupvar": {
+      "kind": "differential",
+      "reason": "The mobility group equals ivreghdfe's; with one effect none is created, as ivreghdfe.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_iv.do",
+          "anchor": "IV-18 groupvar()"
+        }
+      ]
+    },
+    "civaux": {
+      "kind": "contract",
+      "reason": "Internal: the auxiliary first-stage and reduced-form fits skip e(S) and e(W); the stored equations' e(S) is the system block, compared with ivreg2 and ivreghdfe.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_iv.do",
+          "anchor": "IV-30d stored equation"
+        }
+      ]
     }
   },
   "cppmlhdfe": {
@@ -833,6 +1339,124 @@
         {
           "path": "validation/stata/cppmlhdfe.do",
           "anchor": "assert native_tag==ref_tag"
+        }
+      ]
+    },
+    "fevce": {
+      "kind": "differential",
+      "reason": "fevce(bootstrap) with draws(stata) is compared with an oracle that refits cppmlhdfe, absorb(f=...), on each replicate's expanded data from bsample's draws: per-level SEs, valid-replicate counts and d's SE for one effect with a cluster bootstrap and two effects with savefe and d(); shared replicates with vce(bootstrap), output names and refusals are tested. The ci suboption's percentile bounds are compared with the bounds of the oracle's effects over the same replicates.",
+      "evidence": [
+        {
+          "path": "validation/stata/bootstrap_reference.do",
+          "anchor": "program define _pf_oracle"
+        },
+        {
+          "path": "validation/stata/bootstrap_reference.do",
+          "anchor": "two effects: per-level and d SEs equal the oracle; normalization warning set"
+        },
+        {
+          "path": "validation/stata/bootstrap_reference.do",
+          "anchor": "cppmlhdfe ci: percentile bounds of ppmlhdfe's effects on the same draws"
+        }
+      ]
+    },
+    "nowildtable": {
+      "kind": "contract",
+      "reason": "Display only: with wildbootstrap() it suppresses the score bootstrap table; e(b), e(V) and the e(wb_*) results are posted as without it, and replay accepts it.",
+      "evidence": [
+        {
+          "path": "validation/stata/bootstrap_reference.do",
+          "anchor": "e(b), e(V) unchanged; coefs(); no intervals by default; e(wb_rngstate); replay"
+        }
+      ]
+    },
+    "r2": {
+      "kind": "differential",
+      "reason": "tagsep() with zvarname() and r2: the same notes, separated rows and R-squared 1 as ppmlhdfe's verification.",
+      "evidence": [
+        {
+          "path": "validation/stata/cppmlhdfe.do",
+          "anchor": "test_pass \"PPML-08 r2 with tagsep()\""
+        }
+      ]
+    },
+    "relu_report_r2": {
+      "kind": "contract",
+      "reason": "relu_report_r2(1) runs r2's verification; relu_report_r2(0) is accepted as by ppmlhdfe.",
+      "evidence": [
+        {
+          "path": "validation/stata/cppmlhdfe.do",
+          "anchor": "test_pass \"PPML-08 relu_report_r2(1)\""
+        }
+      ]
+    },
+    "target_inner_tol": {
+      "kind": "differential",
+      "reason": "Same estimates as ppmlhdfe with the property, top level and in absorb(), and the same fit as itolerance().",
+      "evidence": [
+        {
+          "path": "validation/stata/cppmlhdfe.do",
+          "anchor": "test_pass \"PPML-09 target_inner_tol() is itolerance()\""
+        }
+      ]
+    },
+    "relu_debug": {
+      "kind": "differential",
+      "reason": "Accepted as ppmlhdfe's GLM property, top level and in absorb(), with ppmlhdfe's estimates.",
+      "evidence": [
+        {
+          "path": "validation/stata/cppmlhdfe.do",
+          "anchor": "\"target_inner_tol(1e-10)\" \"relu_debug(0)\" \"relu_report_r2(0)\""
+        }
+      ]
+    },
+    "prune": {
+      "kind": "contract",
+      "reason": "Accepted with unchanged estimates (ppmlhdfe's prune needs moremata, not installed).",
+      "evidence": [
+        {
+          "path": "validation/stata/cppmlhdfe.do",
+          "anchor": "test_pass \"PPML-06 prune\""
+        }
+      ]
+    },
+    "condition": {
+      "kind": "differential",
+      "reason": "Same estimates and e(finite_condition) as ppmlhdfe, top level and in absorb(); refused with one absorbed effect.",
+      "evidence": [
+        {
+          "path": "validation/stata/cppmlhdfe.do",
+          "anchor": "\"absorb(id1 id2) condition\" \"absorb(id1 id2, condition)\" \"absorb(id1 id2) rre(rrev)\""
+        }
+      ]
+    },
+    "rre": {
+      "kind": "differential",
+      "reason": "Accepted with ppmlhdfe's estimates; a missing variable is refused.",
+      "evidence": [
+        {
+          "path": "validation/stata/cppmlhdfe.do",
+          "anchor": "\"absorb(id1 id2) condition\" \"absorb(id1 id2, condition)\" \"absorb(id1 id2) rre(rrev)\""
+        }
+      ]
+    },
+    "algorithm": {
+      "kind": "differential",
+      "reason": "Accepted and unused, as by ppmlhdfe (reghdfe5_parse), with the same estimates.",
+      "evidence": [
+        {
+          "path": "validation/stata/cppmlhdfe.do",
+          "anchor": "\"absorb(id1 id2) algorithm(cg)\" \"absorb(id1 id2) slopemethod(foo)\""
+        }
+      ]
+    },
+    "slopemethod": {
+      "kind": "differential",
+      "reason": "Accepted and unused, as by ppmlhdfe (reghdfe5_parse), with the same estimates.",
+      "evidence": [
+        {
+          "path": "validation/stata/cppmlhdfe.do",
+          "anchor": "\"absorb(id1 id2) algorithm(cg)\" \"absorb(id1 id2) slopemethod(foo)\""
         }
       ]
     }
@@ -877,6 +1501,36 @@
         {
           "path": "validation/stata/oracle_tests.do",
           "anchor": "cqreg y x, absorb(g)"
+        }
+      ]
+    },
+    "wlsiter": {
+      "kind": "differential",
+      "reason": "Accepted with qreg's e() results; invalid values give qreg's error code.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_qreg.do",
+          "anchor": "\"wlsiter(3)\" \"iterate(50)\" \"trace\" \"wlsiter(2) iterate(1000) trace\""
+        }
+      ]
+    },
+    "iterate": {
+      "kind": "differential",
+      "reason": "Accepted with qreg's e() results; invalid values give qreg's error code.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_qreg.do",
+          "anchor": "\"wlsiter(0)\" \"iterate(0)\" \"iterate(-2)\""
+        }
+      ]
+    },
+    "trace": {
+      "kind": "differential",
+      "reason": "Accepted with qreg's e() results.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_qreg.do",
+          "anchor": "\"wlsiter(3)\" \"iterate(50)\" \"trace\" \"wlsiter(2) iterate(1000) trace\""
         }
       ]
     }
@@ -1021,6 +1675,34 @@
           "anchor": "snapshot and fast together are rejected"
         }
       ]
+    },
+    "tempdta": {
+      "kind": "differential",
+      "reason": "Merges with strL variables through the plugin and a temporary .dta are compared with merge's result for 1:1, m:1, 1:m, m:m and _n merges with update, replace, keep(), keepusing(), generate(), nogenerate, nolabel and nonotes: values, storage types, formats, labels, value labels, notes, characteristics, data label, sort marker and c(changed); a failure before the merged data are used leaves the master unchanged.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_strl.do",
+          "anchor": "test_pass \"MERGE-09 cmerge spec `i' with tempdta\""
+        },
+        {
+          "path": "validation/stata/s2_strl.do",
+          "anchor": "MERGE-09 cmerge tempdta fault `fault'"
+        },
+        {
+          "path": "validation/stata/s2_strl.do",
+          "anchor": "MERGE-09 cmerge m:1 30,000 rows tempdta"
+        }
+      ]
+    },
+    "debug": {
+      "kind": "differential",
+      "reason": "merge's undocumented debug option: accepted, shows the command performing the merge, and the result equals merge's.",
+      "evidence": [
+        {
+          "path": "validation/stata/cmerge.do",
+          "anchor": "MERGE-03 debug"
+        }
+      ]
     }
   },
   "creghdfe": {
@@ -1053,6 +1735,234 @@
         {
           "path": "validation/stata/creghdfe.do",
           "anchor": "[rollback] snapshot and fast together refused"
+        }
+      ]
+    },
+    "group_id": {
+      "kind": "differential",
+      "reason": "group() and individual() are compared with reghdfe 6.13.1 (one row per group, the individual effect aggregated by mean or sum; e(b), e(V), e(dof_table) and the fit statistics, with clusters, robust, if and factor regressors), group() alone too; aweights and pweights with the regression on explicit individual shares, singletons with a loop applying the rule, and the errors and refusals.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_hdfe.do",
+          "anchor": "\"y|absorb(year inventor)\""
+        }
+      ]
+    },
+    "individual_id": {
+      "kind": "differential",
+      "reason": "group() and individual() are compared with reghdfe 6.13.1 (one row per group, the individual effect aggregated by mean or sum; e(b), e(V), e(dof_table) and the fit statistics, with clusters, robust, if and factor regressors); aweights and pweights with the regression on explicit individual shares, singletons with a loop applying the rule, and the errors and refusals.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_hdfe.do",
+          "anchor": "\"y|absorb(year inventor)\""
+        }
+      ]
+    },
+    "aggregation": {
+      "kind": "differential",
+      "reason": "aggregation(mean) and aggregation(sum) are compared with reghdfe 6.13.1, with the individual effect alone and with another absorbed effect; aggregation(median) is r(9), as in reghdfe.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_hdfe.do",
+          "anchor": "\"ys|absorb(year inventor) aggregation(sum)\""
+        }
+      ]
+    },
+    "fevce": {
+      "kind": "differential",
+      "reason": "fevce(bootstrap) with draws(stata) is compared with an oracle that refits reghdfe, absorb(..., savefe), on each replicate's expanded data from bsample's draws: per-level SEs, valid-replicate counts and d's SE for one effect with a cluster bootstrap and two effects with aweights; shared replicates with vce(bootstrap), sestub(), and the refusals are tested. The ci suboption's percentile bounds are compared with the bounds of the oracle's effects over the same replicates.",
+      "evidence": [
+        {
+          "path": "validation/stata/bootstrap_reference.do",
+          "anchor": "program define _fe_oracle"
+        },
+        {
+          "path": "validation/stata/bootstrap_reference.do",
+          "anchor": "two effects: per-level and d SEs equal the oracle"
+        },
+        {
+          "path": "validation/stata/bootstrap_reference.do",
+          "anchor": "creghdfe ci: percentile bounds of reghdfe's effects on the same draws"
+        }
+      ]
+    },
+    "nowildtable": {
+      "kind": "contract",
+      "reason": "Display only: with wildbootstrap() it suppresses the wild bootstrap table; e(b), e(V) and the wild results are posted as without it, and replay still shows the table.",
+      "evidence": [
+        {
+          "path": "validation/stata/bootstrap_reference.do",
+          "anchor": "e(b), e(V) unchanged; coefs(), noci, nowildtable, replay"
+        }
+      ]
+    },
+    "nosample": {
+      "kind": "contract",
+      "reason": "As reghdfe: nosample posts no e(sample); timeit shows the timer tables and returns r(timer); nowarn hides the keepsingletons warning.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_hdfe.do",
+          "anchor": "HDFE-12/13/14/21 nosample, timeit, version(), nowarn, nohe"
+        }
+      ]
+    },
+    "timeit": {
+      "kind": "contract",
+      "reason": "As reghdfe: nosample posts no e(sample); timeit shows the timer tables and returns r(timer); nowarn hides the keepsingletons warning.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_hdfe.do",
+          "anchor": "HDFE-12/13/14/21 nosample, timeit, version(), nowarn, nohe"
+        }
+      ]
+    },
+    "nowarn": {
+      "kind": "contract",
+      "reason": "As reghdfe: nosample posts no e(sample); timeit shows the timer tables and returns r(timer); nowarn hides the keepsingletons warning.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_hdfe.do",
+          "anchor": "HDFE-12/13/14/21 nosample, timeit, version(), nowarn, nohe"
+        }
+      ]
+    },
+    "version": {
+      "kind": "rejection",
+      "reason": "version(3|5) is r(198) (historical reghdfe, not implemented); other numbers are r(9), as reghdfe.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_hdfe.do",
+          "anchor": "HDFE-12/13/14/21 nosample, timeit, version(), nowarn, nohe"
+        }
+      ]
+    },
+    "technique": {
+      "kind": "differential",
+      "reason": "e(b) equals reghdfe's with the same option at tolerance(1e-12); invalid values give reghdfe's r(9)/r(3498).",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_hdfe.do",
+          "anchor": "HDFE-15 solver options"
+        }
+      ]
+    },
+    "transform": {
+      "kind": "differential",
+      "reason": "e(b) equals reghdfe's with the same option at tolerance(1e-12); invalid values give reghdfe's r(9)/r(3498).",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_hdfe.do",
+          "anchor": "HDFE-15 solver options"
+        }
+      ]
+    },
+    "acceleration": {
+      "kind": "differential",
+      "reason": "e(b) equals reghdfe's with the same option at tolerance(1e-12); invalid values give reghdfe's r(9)/r(3498).",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_hdfe.do",
+          "anchor": "HDFE-15 solver options"
+        }
+      ]
+    },
+    "preconditioner": {
+      "kind": "differential",
+      "reason": "e(b) equals reghdfe's with the same option at tolerance(1e-12); invalid values give reghdfe's r(9)/r(3498).",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_hdfe.do",
+          "anchor": "HDFE-15 solver options"
+        }
+      ]
+    },
+    "prune": {
+      "kind": "differential",
+      "reason": "e(b) equals reghdfe's with the same option at tolerance(1e-12); invalid values give reghdfe's r(9)/r(3498).",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_hdfe.do",
+          "anchor": "HDFE-15 solver options"
+        }
+      ]
+    },
+    "poolsize": {
+      "kind": "differential",
+      "reason": "e(b) equals reghdfe's with the same option at tolerance(1e-12); invalid values give reghdfe's r(9)/r(3498).",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_hdfe.do",
+          "anchor": "HDFE-15 solver options"
+        }
+      ]
+    },
+    "compact": {
+      "kind": "differential",
+      "reason": "e(b) equals reghdfe's with the same option at tolerance(1e-12); invalid values give reghdfe's r(9)/r(3498).",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_hdfe.do",
+          "anchor": "HDFE-15 solver options"
+        }
+      ]
+    },
+    "parallel": {
+      "kind": "differential",
+      "reason": "e(b) equals reghdfe's with the same option at tolerance(1e-12); invalid values give reghdfe's r(9)/r(3498).",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_hdfe.do",
+          "anchor": "HDFE-15 solver options"
+        }
+      ]
+    },
+    "fastregress": {
+      "kind": "differential",
+      "reason": "e(b) equals reghdfe's with the same option at tolerance(1e-12); invalid values give reghdfe's r(9)/r(3498).",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_hdfe.do",
+          "anchor": "HDFE-15 solver options"
+        }
+      ]
+    },
+    "nopartialout": {
+      "kind": "unsupported",
+      "reason": "reghdfe hands over its Mata HDFE object; creghdfe has none; r(198) with a message.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_hdfe.do",
+          "anchor": "HDFE-18 programming options refused"
+        }
+      ]
+    },
+    "noregress": {
+      "kind": "unsupported",
+      "reason": "reghdfe hands over its Mata HDFE object; creghdfe has none; r(198) with a message.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_hdfe.do",
+          "anchor": "HDFE-18 programming options refused"
+        }
+      ]
+    },
+    "keepmata": {
+      "kind": "unsupported",
+      "reason": "reghdfe hands over its Mata HDFE object; creghdfe has none; r(198) with a message.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_hdfe.do",
+          "anchor": "HDFE-18 programming options refused"
+        }
+      ]
+    },
+    "varlist_is_touse": {
+      "kind": "unsupported",
+      "reason": "reghdfe hands over its Mata HDFE object; creghdfe has none; r(198) with a message.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_hdfe.do",
+          "anchor": "HDFE-18 programming options refused"
         }
       ]
     }
@@ -1089,6 +1999,50 @@
           "anchor": "[rollback] snapshot and fast together refused"
         }
       ]
+    },
+    "casewise": {
+      "kind": "differential",
+      "reason": "Casewise deletion for every single statistic (with by(), excludeself, if, newvar= and variable bounds), for (corr) and for a user-written Mata function is compared with rangestat's results, window by window, with labels, variable order and r(newvars).",
+      "evidence": [
+        {
+          "path": "validation/stata/crangestat.do",
+          "anchor": "_crs_cmp RSTAT-04 casewise every single statistic"
+        },
+        {
+          "path": "validation/stata/regressions.do",
+          "anchor": "by(idcode) casewise|"
+        }
+      ]
+    },
+    "describe": {
+      "kind": "differential",
+      "reason": "describe and local() run through rangestat and crangestat on the same data: the new variables, their labels and order, r(newvars), r(rangestat_version) and the local's contents agree.",
+      "evidence": [
+        {
+          "path": "validation/stata/crangestat.do",
+          "anchor": "_crs_cmp RSTAT-04 describe and local()"
+        }
+      ]
+    },
+    "local": {
+      "kind": "differential",
+      "reason": "describe and local() run through rangestat and crangestat on the same data: the new variables, their labels and order, r(newvars), r(rangestat_version) and the local's contents agree.",
+      "evidence": [
+        {
+          "path": "validation/stata/crangestat.do",
+          "anchor": "_crs_cmp RSTAT-04 describe and local()"
+        }
+      ]
+    },
+    "nocheck": {
+      "kind": "differential",
+      "reason": "nocheck only turns off rangestat's shortcut for repeated interval bounds; the results with it equal rangestat's.",
+      "evidence": [
+        {
+          "path": "validation/stata/crangestat.do",
+          "anchor": "_crs_cmp RSTAT-04 nocheck"
+        }
+      ]
     }
   },
   "cwinsor": {
@@ -1121,6 +2075,104 @@
         {
           "path": "validation/stata/cwinsor.do",
           "anchor": "[rollback] snapshot and fast together refused"
+        }
+      ]
+    },
+    "generate": {
+      "kind": "differential",
+      "reason": "generate(), replace, nomissing and r() are compared with gstats winsor.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_bin.do",
+          "anchor": "WINS-05..08 generate(), replace, nomissing, r() as gstats winsor"
+        }
+      ]
+    },
+    "nomissing": {
+      "kind": "differential",
+      "reason": "generate(), replace, nomissing and r() are compared with gstats winsor.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_bin.do",
+          "anchor": "WINS-05..08 generate(), replace, nomissing, r() as gstats winsor"
+        }
+      ]
+    },
+    "label": {
+      "kind": "differential",
+      "reason": "Variable labels are compared with winsor2's label option.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_bin.do",
+          "anchor": "WINS-01 label as winsor2's"
+        }
+      ]
+    },
+    "compress": {
+      "kind": "differential",
+      "reason": "gstats winsor's gtools options are accepted as gstats accepts them and leave the generated values equal to gstats winsor's; invalid hashmethod() and oncollision() values exit with gstats' return codes.",
+      "evidence": [
+        {
+          "path": "validation/stata/cwinsor.do",
+          "anchor": "foreach o in \"compress\" \"forcestrl\" \"hash(1)\""
+        }
+      ]
+    },
+    "forcestrl": {
+      "kind": "differential",
+      "reason": "gstats winsor's gtools options are accepted as gstats accepts them and leave the generated values equal to gstats winsor's; invalid hashmethod() and oncollision() values exit with gstats' return codes.",
+      "evidence": [
+        {
+          "path": "validation/stata/cwinsor.do",
+          "anchor": "foreach o in \"compress\" \"forcestrl\" \"hash(1)\""
+        }
+      ]
+    },
+    "benchmark": {
+      "kind": "differential",
+      "reason": "gstats winsor's gtools options are accepted as gstats accepts them and leave the generated values equal to gstats winsor's; invalid hashmethod() and oncollision() values exit with gstats' return codes.",
+      "evidence": [
+        {
+          "path": "validation/stata/cwinsor.do",
+          "anchor": "foreach o in \"compress\" \"forcestrl\" \"hash(1)\""
+        }
+      ]
+    },
+    "benchmarklevel": {
+      "kind": "differential",
+      "reason": "gstats winsor's gtools options are accepted as gstats accepts them and leave the generated values equal to gstats winsor's; invalid hashmethod() and oncollision() values exit with gstats' return codes.",
+      "evidence": [
+        {
+          "path": "validation/stata/cwinsor.do",
+          "anchor": "foreach o in \"compress\" \"forcestrl\" \"hash(1)\""
+        }
+      ]
+    },
+    "hashmethod": {
+      "kind": "differential",
+      "reason": "gstats winsor's gtools options are accepted as gstats accepts them and leave the generated values equal to gstats winsor's; invalid hashmethod() and oncollision() values exit with gstats' return codes.",
+      "evidence": [
+        {
+          "path": "validation/stata/cwinsor.do",
+          "anchor": "foreach o in \"compress\" \"forcestrl\" \"hash(1)\""
+        },
+        {
+          "path": "validation/stata/cwinsor.do",
+          "anchor": "foreach o in \"oncollision(foo)\" \"hashmethod(foo)\""
+        }
+      ]
+    },
+    "oncollision": {
+      "kind": "differential",
+      "reason": "gstats winsor's gtools options are accepted as gstats accepts them and leave the generated values equal to gstats winsor's; invalid hashmethod() and oncollision() values exit with gstats' return codes.",
+      "evidence": [
+        {
+          "path": "validation/stata/cwinsor.do",
+          "anchor": "foreach o in \"compress\" \"forcestrl\" \"hash(1)\""
+        },
+        {
+          "path": "validation/stata/cwinsor.do",
+          "anchor": "foreach o in \"oncollision(foo)\" \"hashmethod(foo)\""
         }
       ]
     }
@@ -1445,6 +2497,172 @@
         {
           "path": "validation/stata/chdfe.do",
           "anchor": "mobility group numbering and absent eligible pair"
+        }
+      ]
+    }
+  },
+  "cpsmatch": {
+    "ate": {
+      "kind": "differential",
+      "reason": "ATT, ATU and ATE, their standard errors and every psmatch2 variable are compared with psmatch2 4.0.12.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_psm.do",
+          "anchor": "_s2psm_cmp PSM-02 ate, many neighbors"
+        }
+      ]
+    },
+    "mahalanobis": {
+      "kind": "differential",
+      "reason": "Mahalanobis matching in every method is compared with psmatch2, including the order of _n# and the caliper on squared distance.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_psm.do",
+          "anchor": "_s2psm_cmp PSM-03 mahalanobis common:"
+        }
+      ]
+    },
+    "w": {
+      "kind": "differential",
+      "reason": "A user weighting matrix in w() is compared with psmatch2.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_psm.do",
+          "anchor": "_s2psm_cmp PSM-03 w():"
+        }
+      ]
+    },
+    "llr": {
+      "kind": "differential",
+      "reason": "Local linear regression matching with every kernel is compared with psmatch2.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_psm.do",
+          "anchor": "_s2psm_cmp PSM-04 llr without outcome"
+        }
+      ]
+    },
+    "ai": {
+      "kind": "differential",
+      "reason": "Abadie-Imbens standard errors and _self_ variables are compared with psmatch2.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_psm.do",
+          "anchor": "_s2psm_cmp PSM-06 ai with radius"
+        }
+      ]
+    },
+    "population": {
+      "kind": "differential",
+      "reason": "The population variance with ai() is compared with psmatch2.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_psm.do",
+          "anchor": "ai(3) population ate neighbor(2)"
+        }
+      ]
+    },
+    "altvariance": {
+      "kind": "differential",
+      "reason": "The Abadie et al. (2004) variance with ai() is compared with psmatch2, with one outcome.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_psm.do",
+          "anchor": "ai(2) altvariance population ate"
+        }
+      ]
+    },
+    "trim": {
+      "kind": "differential",
+      "reason": "Density-based trimming of the support is compared with psmatch2.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_psm.do",
+          "anchor": "_s2psm_cmp PSM-07 trim out of range"
+        }
+      ]
+    },
+    "odds": {
+      "kind": "differential",
+      "reason": "Matching on the log odds is compared with psmatch2.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_psm.do",
+          "anchor": "odds logit trim(5) ate"
+        }
+      ]
+    },
+    "index": {
+      "kind": "differential",
+      "reason": "Matching on the linear index is compared with psmatch2.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_psm.do",
+          "anchor": "\"index common\""
+        }
+      ]
+    },
+    "quietly": {
+      "kind": "differential",
+      "reason": "Results with the score model output hidden are compared with psmatch2.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_psm.do",
+          "anchor": "quietly logit kernel"
+        }
+      ]
+    },
+    "warnings": {
+      "kind": "differential",
+      "reason": "Results with warnings on are compared with psmatch2; the warning text itself is not compared.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_psm.do",
+          "anchor": "_s2psm_cmp S3 warnings, tied score:"
+        }
+      ]
+    },
+    "spline": {
+      "kind": "contract",
+      "reason": "spline calls the user-written spline package as psmatch2 does; without the package both exit with the same error, which is all this machine verifies.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_psm.do",
+          "anchor": "PSM-05 spline without the spline package"
+        }
+      ]
+    },
+    "nknots": {
+      "kind": "contract",
+      "reason": "nknots() is passed to the spline package as in psmatch2; the comparison runs only when spline is installed.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_psm.do",
+          "anchor": "PSM-05 spline nknots()"
+        }
+      ]
+    }
+  },
+  "csample": {
+    "pduplicates": {
+      "kind": "contract",
+      "reason": "sample's undocumented tie-avoidance setting: csample draws without ties, so it is accepted and has no effect; output and return codes, including an invalid value, are compared with sample.",
+      "evidence": [
+        {
+          "path": "validation/stata/csample.do",
+          "anchor": "pduplicates(.5) by(g)"
+        }
+      ]
+    }
+  },
+  "csort": {
+    "stable": {
+      "kind": "differential",
+      "reason": "sort's stable option; csort is always stable. The order and sort marker are compared with sort, stable.",
+      "evidence": [
+        {
+          "path": "validation/stata/csort.do",
+          "anchor": "SORT-02 csort x, stable"
         }
       ]
     }

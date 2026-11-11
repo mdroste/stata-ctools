@@ -1,4 +1,4 @@
-*! version 1.2.4 20261103 github.com/mdroste/stata-ctools
+*! version 1.2.6 20261111 github.com/mdroste/stata-ctools
 
 * Hand one value label to the plugin as local __cd_map (format: see
 * src/cdecode/cdecode_impl.c). Sets __cd_ok to 0 when decode itself must do the
@@ -41,7 +41,28 @@ void _cdecode_pack(string scalar label, real scalar maxlength)
 }
 end
 
+* decode leaves the caller's r() in place, so cdecode keeps it too: it is
+* held while cdecode works and returned along with r(N_vars) and
+* r(N_plugin). It is in place while the if is evaluated, as it may name it.
 program define cdecode, rclass
+    version 14.1
+    tempname caller_r
+    _return hold `caller_r'
+    _return restore `caller_r', hold
+    capture noisily _cdecode_impl `0'
+    local rc = _rc
+    if !`rc' {
+        local n_vars = r(N_vars)
+        local n_plugin = r(N_plugin)
+    }
+    _return restore `caller_r'
+    return add
+    if `rc' exit `rc'
+    return scalar N_vars = `n_vars'
+    return scalar N_plugin = `n_plugin'
+end
+
+program define _cdecode_impl, rclass
     version 14.1
     syntax varlist [if] [in], [Generate(string) replace MAXLength(string) Verbose THReads(integer 0)]
 
@@ -75,12 +96,16 @@ program define cdecode, rclass
         }
         confirm new variable `generate'
     }
+    * decode's messages and return codes
     foreach v of local varlist {
         capture confirm numeric variable `v'
-        if _rc exit 108
+        if _rc {
+            di as error "not possible with string variable"
+            exit 108
+        }
         local label : value label `v'
         if "`label'" == "" {
-            di as error "cdecode: `v' has no value label attached"
+            di as error "`v' not labeled"
             exit 182
         }
     }

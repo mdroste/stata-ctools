@@ -1,7 +1,19 @@
-*! version 1.2.4 20261103 github.com/mdroste/stata-ctools
+*! version 1.2.6 20261111 github.com/mdroste/stata-ctools
 
 program define csample, byable(onecall)
     version 14.1
+
+    * Under version 6 or earlier, sample draws with its old algorithm, which
+    * scripts rely on to reproduce old samples: sample itself does the draw
+    if _caller() < 7 {
+        local c = string(_caller())
+        if _by() {
+            di as error "sample may not be combined with by when run under version `c'"
+            exit 190
+        }
+        _csample_version6 `c' `0'
+        exit
+    }
 
     * Check observation limit (Stata plugin API limitation)
     if _N > 2147483647 {
@@ -14,7 +26,45 @@ program define csample, byable(onecall)
     if "`__ct_elapsed90'" == "" local __ct_elapsed90 = 0
     quietly _ctools_clock __ct_start90
 
-    syntax [anything(name=percent)] [if] [in], [Count(numlist integer max=1 >=0) BY(varlist) Verbose THReads(integer 0)]
+    * sample # [, count] as in sample, where count makes # a number of
+    * observations; count(#) is the older ctools form of the same thing.
+    * pduplicates() sets how many uniforms sample draws to avoid ties; the
+    * ctools draw (a partial shuffle) has no ties, so it is accepted unused.
+    local cmdline `"`0'"'
+    syntax [anything(name=percent)] [if] [in] [, *]
+    local paren = ustrregexm(`"`options'"', "(^|\s)(c|co|cou|coun|count)\s*\(")
+    local 0 `"`cmdline'"'
+    if `paren' {
+        syntax [anything(name=percent)] [if] [in], [Count(numlist integer max=1 >=0) ///
+            BY(varlist) Verbose THReads(integer 0) PDUPlicates(real 1e-4)]
+        if "`percent'" != "" {
+            di as error "csample: cannot specify both # and count()"
+            exit 198
+        }
+    }
+    else {
+        syntax [anything(name=percent)] [if] [in], [Count ///
+            BY(varlist) Verbose THReads(integer 0) PDUPlicates(real 1e-4)]
+        if "`percent'" == "" {
+            di as error "csample: must specify # or count(#)"
+            exit 198
+        }
+        * # is read as sample reads it (=/exp), with its errors
+        _csample_exp `percent'
+        if "`count'" != "" {
+            local count `percent'
+            local percent
+        }
+    }
+    if !inrange(`threads', 0, 256) {
+        di as error "threads() must be between 0 and 256"
+        exit 198
+    }
+    if _N == 0 {
+        foreach field in nobs kept dropped ngroups threads time_load time_sort time_sample time_store time_total {
+            scalar _csample_`field' = 0
+        }
+    }
     * by varlist: is by(varlist), as in sample
     if _by() {
         if "`by'" != "" {
@@ -26,37 +76,43 @@ program define csample, byable(onecall)
 
     local __do_timing = ("`verbose'" != "")
 
-    * Validate percent or count
+    * Validate # as sample does, with its messages and return codes
     local use_percent = 0
     local use_count = 0
     local pct_value = 0
 
     if "`percent'" != "" {
-        capture confirm number `percent'
-        if _rc != 0 {
-            di as error "csample: percent must be a number"
-            exit 198
-        }
-        if `percent' < 0 | `percent' > 100 {
-            di as error "csample: percent must be between 0 and 100"
-            exit 198
+        confirm number `percent'
+        if `percent' < 0 | `percent' >= 100 {
+            if `percent' == 100 exit
+            di as error "{p 0 4}"
+            di as error "`percent':"
+            di as error ///
+"# must be between 0 and 100 and is interpreted as a percent unless" _n ///
+"option count is also specified, in which case # is interpreted as" _n ///
+"the number of observations to be drawn" _n ///
+"{p_end}"
+            error 198
         }
         local use_percent = 1
-        local pct_value = `percent'
+        * The literal, as sample computes int(N*#/100+.5) from it
+        local pct_value `percent'
     }
-
-    if "`count'" != "" {
+    else {
+        confirm integer number `count'
+        * sample prints this for a negative count and then keeps none
+        if `count' < 0 {
+            di as error "{p 0 4}"
+            di as error "`count':"
+            di as error ///
+"# must be 0 or positive; with the count option, it represents the" _n ///
+"# of observations to be drawn" _n ///
+"{p_end}"
+            local count 0
+        }
+        * A count of at least _N keeps everything, as in sample
+        if `count' >= _N exit
         local use_count = 1
-    }
-
-    if `use_percent' == 0 & `use_count' == 0 {
-        di as error "csample: must specify either percent or count()"
-        exit 198
-    }
-
-    if `use_percent' == 1 & `use_count' == 1 {
-        di as error "csample: cannot specify both percent and count()"
-        exit 198
     }
 
     * Mark sample
@@ -66,8 +122,14 @@ program define csample, byable(onecall)
     quietly count if `touse'
     local nobs_sample = r(N)
     if `nobs_sample' == 0 {
+        foreach field in nobs kept dropped ngroups time_load time_sort time_sample time_store time_total {
+            scalar _csample_`field' = 0
+        }
+        scalar _csample_threads = 0
         exit 0
     }
+    * sample leaves the data sorted by the by() variables
+    local sort_by `by'
 
     * Load plugin
     _ctools_load
@@ -85,6 +147,18 @@ program define csample, byable(onecall)
     local nby = 0
     if "`by'" != "" {
         local nby : word count `by'
+    }
+
+    * strL by() values the plugin cannot read (binary, or over 2,045 bytes)
+    * are grouped through stand-in ranks in their sort order
+    if "`by'" != "" {
+        local stubs
+        foreach v of local by {
+            tempvar stub
+            local stubs `stubs' `stub'
+        }
+        _ctools_strlkey `by', generate(`stubs')
+        local by `__ctools_keys'
     }
 
     * Create variable for keep flags (will be dropped at end)
@@ -161,6 +235,9 @@ program define csample, byable(onecall)
 
     * Clean up the keep variable
     drop `__keep'
+    * As sample, leave the data sorted by the by() variables (stable: the
+    * kept observations keep their order within each group)
+    if "`sort_by'" != "" sort `sort_by', stable
 
     * Finish timing
     quietly _ctools_clock __ct_now
@@ -201,6 +278,21 @@ program define csample, byable(onecall)
     if "`verbose'" == "" {
         local kept = _csample_kept
         local dropped = _csample_dropped
-        di as text "(`dropped' observations deleted)"
+        di as text "(`dropped' " plural(`dropped', "observation") " deleted)"
     }
+end
+
+* sample under version # (6 or earlier), without the ctools-only options
+program define _csample_version6
+    gettoken c 0 : 0
+    syntax [anything(everything)] [, Verbose THReads(integer 0) *]
+    if `"`options'"' != "" local options `", `options'"'
+    version `c', missing: sample `anything' `options'
+end
+
+* Check # as sample's syntax =/exp does (in its own scope: syntax resets the
+* caller's if and in)
+program define _csample_exp
+    local 0 `"= `0'"'
+    syntax =/exp
 end

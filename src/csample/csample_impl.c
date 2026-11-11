@@ -372,8 +372,9 @@ ST_retcode csample_main(const char *args) {
             /* Fixed count per group */
             keep_count = (config.count < count) ? config.count : count;
         } else {
-            /* Percentage */
-            keep_count = (size_t)round((config.percent / 100.0) * (double)count);
+            /* Percentage, computed as sample does: int(N*#/100+.5), which
+             * Stata evaluates as N*(#/100) (so 29% of 50 keeps 14) */
+            keep_count = (size_t)floor((config.percent / 100.0) * (double)count + 0.5);
             if (keep_count > count) keep_count = count;
         }
 
@@ -455,20 +456,20 @@ cleanup:
 
     /* Store timing scalars */
     double total = ctools_timer_seconds() - t_start;
-    SF_scal_save("_csample_time_load", t_load);
-    SF_scal_save("_csample_time_sort", t_sort);
-    SF_scal_save("_csample_time_sample", t_sample);
-    SF_scal_save("_csample_time_store", t_store);
-    SF_scal_save("_csample_time_total", total);
-    SF_scal_save("_csample_nobs", (double)nobs);
-    SF_scal_save("_csample_kept", (double)kept);
-    SF_scal_save("_csample_dropped", (double)dropped);
-    SF_scal_save("_csample_ngroups", (double)ngroups);
+    if ((rc = SF_scal_save("_csample_time_load", t_load))) return rc;
+    if ((rc = SF_scal_save("_csample_time_sort", t_sort))) return rc;
+    if ((rc = SF_scal_save("_csample_time_sample", t_sample))) return rc;
+    if ((rc = SF_scal_save("_csample_time_store", t_store))) return rc;
+    if ((rc = SF_scal_save("_csample_time_total", total))) return rc;
+    if ((rc = SF_scal_save("_csample_nobs", (double)nobs))) return rc;
+    if ((rc = SF_scal_save("_csample_kept", (double)kept))) return rc;
+    if ((rc = SF_scal_save("_csample_dropped", (double)dropped))) return rc;
+    if ((rc = SF_scal_save("_csample_ngroups", (double)ngroups))) return rc;
 
     #ifdef _OPENMP
-    SF_scal_save("_csample_threads", (double)num_threads);
+    if ((rc = SF_scal_save("_csample_threads", (double)num_threads))) return rc;
     #else
-    SF_scal_save("_csample_threads", 1.0);
+    if ((rc = SF_scal_save("_csample_threads", 1.0))) return rc;
     #endif
 
     if (config.verbose) {

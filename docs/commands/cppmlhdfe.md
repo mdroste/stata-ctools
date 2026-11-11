@@ -12,7 +12,7 @@ cppmlhdfe y x, vce(robust)
 ```
 
 Numeric and string fixed effects and clusters, categorical interactions,
-heterogeneous slopes (`g#c.z`, `g##c.z`, `g##c.(z t)`), factor regressors,
+heterogeneous slopes (`g#c.z`, `g##c.z`, `g##c.(z t)`, and `g##(c.z c.t)` as in ppmlhdfe), factor regressors,
 frequency/probability/analytic weights, and offset/exposure are supported.
 The current implementation permits ten expanded FE terms and ten cluster
 dimensions. Each cluster dimension must retain at least two clusters.
@@ -61,8 +61,9 @@ involving very small fitted means.
 | Step halving | `use_step_halving(0)`, `step_halving_memory(.9)`, `max_step_halving(2)` |
 | ReLU | `relu_tol(1e-4)`, `relu_zero_tol(1e-8)`, `relu_maxiter(100)`, `relu_strict(0)`, `relu_accelerate(0)` |
 | Simplex and mean screening | `simplex_tol(1e-12)`, `simplex_maxiter(1000)`, `mu_tol(1e-6)` |
-| Projection solver | `accel(cg)`, `none`, `sd`, `aitken`, `hybrid`, or `lsmr` |
-| Projection transform | `transform(symmetric_kaczmarz)`, `kaczmarz`, or `cimmino` |
+| Projection solver | `accel(cg)`, `none`, `sd`, `aitken`, `hybrid`, or `lsmr` (any case, any leading part, `off` for `none`, as reghdfe reads them) |
+| Projection transform | `transform(symmetric_kaczmarz)`, `kaczmarz`, or `cimmino` (any case, any leading part) |
+| ppmlhdfe's GLM properties | `target_inner_tol(#)` (= `itolerance()`), `relu_debug(0)`, `relu_report_r2(0)` (= `r2`); all the properties above may also be given inside `absorb(..., )` by their full names |
 | Column pools and LSMR | `poolsize(0)` (all columns), `btol(1e-8)`, `conlim(1e8)` |
 
 `use_exact_partial(1)` (the default) projects the working response and the
@@ -80,7 +81,10 @@ to a diagnostic-only ReLU run, overrides the requested separation methods, and
 saves an indicator of separated observations without estimating a PPML model.
 `zvarname(name)` saves the values used to establish separation. Rows excluded
 from the diagnostic sample remain missing. These values may use a different
-normalization from `ppmlhdfe`.
+normalization from `ppmlhdfe`. With `r2`, as in `ppmlhdfe`, the certificate is
+then regressed on the regressors and absorbed effects (with `creghdfe`, where
+`ppmlhdfe` runs `reghdfe`) when observations were separated; its R-squared of 1
+verifies it.
 
 Individual effects can be saved with `absorb(firm_fe=firm year_fe=year)` or
 `absorb(firm year, savefe)`. The latter creates `__hdfe1__`, `__hdfe2__`, etc.
@@ -95,8 +99,39 @@ place of its unit scale. If an automatically generated output name (`_ppmlhdfe_d
 (regressor, weight, offset, exposure, cluster or absorbed variable), the command
 returns error 198 without changing the dataset. Individual coefficients are not uniquely identified and can
 use a different normalization from the reference. Absorb suboptions also accept
-`generate`, `keepsingletons`, `tolerance`, `iterate`, `dofadjustments`,
-`acceleration`, `transform`, and `poolsize`.
+`generate`, `keepsingletons`, `tolerance`, `iterate` (or reghdfe's
+`maxiterations`), `dofadjustments`, `acceleration`, `transform`, `poolsize`,
+`verbose(#)` (the fixed-effects object's verbosity: `verbose(-1)` hides the note
+on dropped singletons), `prune`, `condition`, `rre()`, `algorithm()`,
+`slopemethod()`, and the GLM properties by their full names, as `ppmlhdfe`
+passes its remaining options to `reghdfe`. These partialling options leave the
+estimates unchanged: `algorithm()` and `slopemethod()` are unused (as in
+reghdfe 5's parser), `rre()` is accepted, `prune` is accepted without
+`e(pruned)` (`ppmlhdfe`'s needs moremata), and `condition` (two absorbed effects
+required) posts `e(finite_condition)` = -1, as `ppmlhdfe` does.
+`precondition` and `residuals()` are refused, as by `ppmlhdfe` (which reports
+Mata's code r(3498) for the first, where `cppmlhdfe` gives r(198), as for other
+values reghdfe's parser rejects with r(3598)); `groupvar()`, which `ppmlhdfe`
+accepts, is not supported.
+
+## Output and replay
+
+The output follows `ppmlhdfe`: the notes on dropped singletons and on
+observations separated by a fixed effect (`(dropped N observations that are
+either singletons or separated by a fixed effect)`), on the separated
+observations each method drops (`(simplex method dropped ...)`, `(ReLU method
+dropped ... in N iterations)`, `(IRLS step detected ...)`), the warnings for
+`keepsingletons` and for an outcome with very low values after standardizing,
+the IRLS log, `ppmlhdfe`'s header (observations, residual df, Wald test,
+deviance, log pseudolikelihood, pseudo R2, `e(title3)` and the clusters per
+dimension), the coefficient table, and reghdfe's table of absorbed degrees of
+freedom (not without absorbed effects). `cppmlhdfe` without a variable list
+replays the last fit with the same parts; `eform` (or its synonym `irr`, both
+shown as exp(b)), `noheader`, `notable` and the display options apply, and the
+replay returns `_coef_table`'s `r()`. `cppmlhdfe, version` shows the command's
+location and version and the ctools plugin; `cppmlhdfe, reload` tells how to
+reinstall ctools (`ctools, update`), where `ppmlhdfe`'s reinstalls from its
+author's working copy.
 
 ## Covariance, inference, and prediction
 
@@ -106,6 +141,60 @@ multiplier based on the minimum marginal cluster count. Negative eigenvalues of
 the full standardized covariance are set to zero before rescaling, as in
 `ppmlhdfe`. Cost grows as `2^Q - 1`. Single-way calculations use a centered slope
 system to avoid cancellation when regressor means are large.
+
+`vce(bootstrap [, bootopts])` gives pairs-bootstrap standard errors, computed
+in the plugin (ppmlhdfe has no such option), and posts what `vce(bootstrap)`
+posts after official commands, so `estat bootstrap` works; the fit's robust
+covariance is `e(V_modelbased)`. The options are creghdfe's: `reps(#)` (50),
+`seed(#)`, `cluster(clustvar)`, `strata(varlist)`, `draws(stata|fast)` (default `stata`), `mse`,
+`level(#)`, `nodots`/`dots(#)` and `saving()`; `e(p)` is the p-value of the Wald `e(chi2)`,
+and `mse` and `level()` behave as in creghdfe. Each replicate refits PPML on the drawn rows
+weighted by their multiplicities: screening on the draws, the separation checks
+again (rows they find leave the replicate, which is refit), and IRLS started
+from the full fit. With `draws(stata)` the results reproduce
+`bootstrap _b, reps(#) seed(#): cppmlhdfe ...` to the IRLS tolerance. Weights
+are allowed: aweights and pweights multiply the resampled rows; with
+`cluster()` each drawn copy of an fweighted row keeps its weight; without it,
+fweights are resampled as the observations they stand for, as in `creghdfe`
+(with `draws(stata)`, the prefix's draws on the expanded data). Heterogeneous
+slopes are re-estimated in each replicate. Not with `tagsep()` or without
+regressors.
+
+`fevce(bootstrap [, feopts])` gives bootstrap standard errors of the saved
+fixed effects (`savefe`, `newvar=`) and of `d()`. Each replicate recovers its
+effects as the fit does (minimum-norm coefficients of its d); a level's SE is
+the standard deviation over the replicates in which it is estimable (drawn,
+and its full-sample connected set over all effects not split). Names:
+`newvar_se`, `__fese#__` for `__hdfe#__` (replaced on reruns), and `d_se` for
+`d()` unless `dse()` names it; `sestub()`, `nreps` (`..._nrep`,
+`__fenrep#__`) and `ci` (`..._lb`/`..._ub`, `__felb#__`/`__feub#__`) as in
+creghdfe. A slope saved in `__hdfe#__Slope1` has its SE in `__fese#__Slope1`;
+it is estimable where the replicate's slope variable varies (and where the
+full fit estimates the slope but a replicate cannot, that replicate does not
+estimate the level's intercept either). With `vce(bootstrap)` both share the
+replicates, and `level()`, `mse` and `dots()` are those of `vce()`. With two or more absorbed
+intercepts a normalization warning is shown and `e(fe_norm_warning)` is 1.
+Results: `e(fevce)`, `e(fe_se)`, `e(fe_nrep)`, `e(fe_lb)`, `e(fe_ub)`,
+`e(fe_dse)`, `e(fe_bs_table)`, `e(fe_N_reps)`, `e(fe_split_reps)`,
+`e(fe_rngstate)`.
+
+`wildbootstrap[(wildopts)]` adds score bootstrap p-values (Kline and Santos,
+as boottest computes them for ML): per tested coefficient the model is refit
+under H0: b = 0 (the regressor moves into the offset), and each replicate
+perturbs the clusters' efficient score contributions and studentizes them,
+recentered by cluster shares. e(b), e(V) and the analytic table stay. It needs
+`vce(robust)` or one-way `vce(cluster)`. Options as in creghdfe, plus `ci` for
+intervals by test inversion (a refit per trial value, about 30-50 per
+coefficient); `nonull` is not available. Unweighted, the p-values equal
+boottest's after `poisson` with dummies for the same seed. With weights the
+score contributions are weighted (boottest leaves them unweighted, and its
+fweighted results then differ from its results on the expanded data, which
+cppmlhdfe reproduces). Combines with `fevce(bootstrap)`, not with
+`vce(bootstrap)`; `nowildtable` hides the table. Results: `e(wb_method)` =
+`score`, `e(wb_t)` (Wald z), `e(wb_score)` (the score statistic the bootstrap
+studentizes, shown in the table), `e(wb_p)`, `e(wb_fail)`, `e(wb_ci)` and `e(wb_cistatus)`
+with `ci`, `e(wb_reps)`, `e(wb_misreps)`, `e(wb_enumerated)`, `e(wb_N_clust)`,
+`e(wb_rngstate)`.
 
 Inference uses normal critical values and a Wald chi-squared test. Residual
 degrees of freedom are stored as `e(df)`. The command also reports absorbed-DF
@@ -118,7 +207,11 @@ IRLS weights rescaled to sum to N, or to the fweight total; the root mean square
 on N - df_a - rank - df_a_nested). `e(ic2)` counts the partialling
 subiterations of the IRLS; it equals `ppmlhdfe`'s with one absorbed effect or
 none, and differs with several because the projection algorithms differ.
-`e(title2)` is `ppmlhdfe`'s. `e(footnote)` and `e(estat_cmd)` name
+`e(title2)` and `e(N_hdfe)` count the `absorb()` terms, as `ppmlhdfe`
+(`absorb(id##c.x year)` is two); `e(title3)` is `Statistics robust to
+heteroskedasticity` with clustering; `e(indepvars)` lists the estimated
+regressors as `ppmlhdfe` does (factor levels in `#bn.` form, without base levels
+and omitted terms) followed by `_cons`. `e(footnote)` and `e(estat_cmd)` name
 `_cppmlhdfe_footnote` and `_cppmlhdfe_estat` (`ppmlhdfe` names `reghdfe`'s
 programs, which refuse other commands); `estat` offers the same subcommands,
 `summarize`, `vce` and `ic` with `e(df_m) + 1` degrees of freedom. With a
@@ -127,11 +220,15 @@ regressors keep their names in `e(b)` where `ppmlhdfe` prefixes them with `o.`;
 `e(V)` and the output agree.
 
 `d(name)` saves the sum of fixed effects; bare `d` uses `_ppmlhdfe_d`.
-`predict` supports `xb`, `mu` (default), `eta`/`xbd`, `d`, `stdp`, `response`,
+`predict` supports `xb`, `mu` (default, with `ppmlhdfe_p`'s note "(option mu
+assumed; predicted mean of depvar)"), `eta`/`xbd`, `d`, `stdp`, `response`,
 `scores`, `pearson`, `deviance`, `anscombe`, and `working`, including after
 `estimates store`/`estimates restore`. As in the reference, absorbed models need
 `d()` for predictions other than `xb`. `xb` includes the constant and offset or
-log exposure, and excludes the absorbed effects.
+log exposure, and excludes the absorbed effects. The new variables carry
+`ppmlhdfe_p`'s labels (`Predicted mean of y`, `Linear prediction: xb + d[...]`,
+`Pearson residual`, ...). Without absorbed effects, `d` gives 0 (`ppmlhdfe_p`
+fails there).
 
 ## Validation and compatibility limits
 
@@ -170,8 +267,7 @@ hybrid solver fails internally on the separated test sample.
 
 The tests compare final results for the listed models. Intermediate calculations
 may differ. Unsupported `ppmlhdfe` options are listed below.
-Reference debugging/benchmarking options (`r2`, `rre`), mobility-group output
-(`groupvar`), graph pruning (`prune`), and hidden acceleration scheduling controls
+Mobility-group output (`groupvar`) and hidden acceleration scheduling controls
 are not implemented. Unsupported options produce an explicit error. Legacy
 `septolerance()` is accepted but does not set the `mu` screening threshold;
 use `mu_tol()` when explicitly enabling that method.

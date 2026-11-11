@@ -87,7 +87,7 @@ static void radius(int shape, int inject)
     calls = 0;
     int matched = 0, off = 0;
     int rc = cpsmatch_match_radius(controls, NC, ps, ti, NT, ci, obs, width, common, .2, .8,
-                                   weights, ids, nn, support, &matched, &off);
+                                   weights, ids, nn, support, &matched, &off, NULL);
     if (inject)
     {
         assert(rc == 920 && matched == 0 && off == 0);
@@ -104,7 +104,7 @@ static void radius(int shape, int inject)
         if (!common || (ps[t] >= .2 && ps[t] <= .8))
         {
             for (size_t j = 0; j < NC; j++)
-                if (controls[j].pscore >= ps[t] - width && controls[j].pscore <= ps[t] + width)
+                if (fabs(controls[j].pscore - ps[t]) <= width)
                 {
                     if (!count)
                         start = j;
@@ -178,7 +178,8 @@ enum
 static double treatment[N], score[N];
 static perm_idx_t observations[N];
 static stata_variable columns[2];
-static int stores;
+static int stores, publish_at, publish_calls;
+static double output[16][N], expected_output[16][N];
 static ST_int first(void)
 {
     return 1;
@@ -193,9 +194,8 @@ static ST_boolean missing(double x)
 }
 static ST_retcode store(ST_int v, ST_int row, double value)
 {
-    (void)v;
-    (void)row;
-    (void)value;
+    assert(v >= 0 && v < 16 && row >= 1 && row <= N);
+    output[v][row-1] = value;
     stores++;
     return 0;
 }
@@ -203,7 +203,7 @@ static ST_retcode scalar(char *name, double value)
 {
     (void)name;
     (void)value;
-    return 0;
+    return ++publish_calls == publish_at ? 459 : 0;
 }
 static ST_retcode message(char *text)
 {
@@ -258,21 +258,46 @@ int main(void)
         treatment[i] = i % 2;
         score[i] = (double)(i % 17) / 17;
     }
+    /* nearest neighbor, radius, and with ate: the sequential scan without
+     * replacement with ties, kernel matching, and neighbor(3) with ai() */
     const char *args[] = {"1 2 0 3 4 5 192 0 1 0 0 0 .06 0 0 0",
-                          "1 2 0 3 4 5 192 1 1 .1 0 0 .06 1 0 0"};
-    for (int method = 0; method < 2; method++)
+                          "1 2 0 3 4 5 192 1 1 .1 0 0 .06 1 0 0",
+                          "1 2 0 3 4 5 192 0 1 0 0 0 .06 0 1 1 ate",
+                          "1 2 0 3 4 5 192 2 1 0 0 0 .1 1 0 0 ate",
+                          "1 2 0 3 4 5 192 0 3 .2 0 0 .06 1 1 0 ate ai=2"};
+    for (int method = 0; method < 5; method++)
     {
         calls = fail_at = stores = 0;
         assert(cpsmatch_main(args[method]) == 0 && stores > 0 && alive == 0);
+        memcpy(expected_output, output, sizeof(output));
         int total = calls;
         for (int fail = 1; fail <= total; fail++)
         {
             calls = stores = 0;
             fail_at = fail;
-            assert(cpsmatch_main(args[method]) == 920);
-            assert(stores == 0 && alive == 0);
+            int failure_rc = cpsmatch_main(args[method]);
+            /* Optional kernel workspaces fall back to the direct scan on
+             * allocation failure. That success must preserve every result. */
+            if (failure_rc == 0) {
+                assert(stores > 0);
+                for (int v=0; v<16; v++) for (int i=0; i<N; i++)
+                    assert(fabs(output[v][i]-expected_output[v][i]) <= 1e-12*fmax(1,fabs(expected_output[v][i])));
+            } else {
+                assert(failure_rc == 920 && stores == 0);
+            }
+            assert(alive == 0);
         }
         printf("path=%d allocation failures checked=%d\n", method, total);
+        fail_at = 0;
+        publish_calls = 0;
+        assert(cpsmatch_main(args[method]) == 0 && alive == 0);
+        int publications = publish_calls;
+        for (int f = 1; f <= publications; f++) {
+            publish_at = f; publish_calls = 0;
+            assert(cpsmatch_main(args[method]) == 459 && alive == 0);
+        }
+        publish_at = publish_calls = 0;
+        assert(cpsmatch_main(args[method]) == 0 && alive == 0);
     }
     puts("CPSMATCH_PATHS_OOM_COMPLETE");
 }
@@ -1193,13 +1218,13 @@ int main(int argc, char **argv) {
 #include "ctools_group.c"
 #include "stplugin.h"
 #include <math.h>
-static int store_at, store_calls;
+static int store_at, store_calls, publish_at, publish_calls;
 static ST_plugin mock;
 ST_plugin *_stata_ = &mock;
 static ST_int one(void) { return 1; }
 static ST_int obs(void) { return 12; }
 static ST_boolean selected(int i) { return 1; }
-static ST_retcode save(char *k, double v) { return 0; }
+static ST_retcode save(char *k, double v) { return ++publish_calls == publish_at ? 459 : 0; }
 static ST_retcode store(ST_int v, ST_int i, double x) {
     return ++store_calls == store_at ? 459 : 0;
 }
@@ -1222,6 +1247,7 @@ stata_retcode ctools_apply_permutation(stata_data *d) { abort(); }
 #include "csample/csample_impl.c"
 #endif
 int main(int argc, char **argv) {
+    publish_at = argc > 3 ? atoi(argv[3]) : 0;
     store_at = argc > 2 ? atoi(argv[2]) : 0;
     fail_at = argc > 1 ? atoi(argv[1]) : 0;
     mock.nobs1 = one;
@@ -1246,6 +1272,7 @@ int main(int argc, char **argv) {
 #endif
     if (store_at)
         assert(rc == 459);
+    if (publish_at) assert(rc == 459);
     printf("rc=%d allocations=%d alive=%d\n", rc, calls, alive);
     leftovers();
     assert(alive == 0);

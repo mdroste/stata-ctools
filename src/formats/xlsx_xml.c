@@ -829,6 +829,20 @@ size_t xlsx_decode_ooxml(char *s, size_t n)
     }
     s[w]=0; return w;
 }
+/* XML end-of-line handling: a literal CR LF or CR reads as LF (a CR written
+   as &#13; or _x000D_ stays CR, as it is decoded afterwards). Native import
+   excel reads text so; returns the new length. */
+static size_t xlsx_xml_newlines(char *s, size_t n)
+{
+    size_t w=0;
+    for(size_t r=0;r<n;r++) {
+        if(s[r]=='\r') {
+            s[w++]='\n';
+            if(r+1<n && s[r+1]=='\n') r++;
+        } else s[w++]=s[r];
+    }
+    return w;
+}
 /* Input is the contents of one XML text element, not its surrounding tags. */
 size_t xlsx_xml_decode_text(char *s, size_t n)
 {
@@ -837,15 +851,17 @@ size_t xlsx_xml_decode_text(char *s, size_t n)
         if(n-r>=9 && !memcmp(s+r,"<![CDATA[",9)) {
             size_t a=r+9,b=a;
             while(b+3<=n && memcmp(s+b,"]]>",3)) b++;
-            memmove(s+w,s+a,b-a);w+=b-a;r=b+3;
+            memmove(s+w,s+a,b-a);w+=xlsx_xml_newlines(s+w,b-a);r=b+3;
         } else if(n-r>=4 && !memcmp(s+r,"<!--",4)) {
             r+=4;while(r+3<=n && memcmp(s+r,"-->",3)) r++;r+=3;
         } else {
             size_t a=r;
             while(r<n && s[r]!='<') r++;
             if(r==a) {r++;continue;}
-            char saved=s[r];s[r]=0;
-            size_t m=xlsx_xml_decode_entities(s+a,r-a);
+            char saved=s[r];
+            size_t m=xlsx_xml_newlines(s+a,r-a);
+            s[a+m]=0;
+            m=xlsx_xml_decode_entities(s+a,m);
             s[r]=saved;memmove(s+w,s+a,m);w+=m;
         }
     }

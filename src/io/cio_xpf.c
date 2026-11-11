@@ -141,6 +141,15 @@ done:
     return rc;
 }
 
+static int cio_sas_literal(FILE *fp, const char *text)
+{
+    if (fputc(39, fp) == EOF) return 603;
+    for (const unsigned char *p = (const unsigned char *)text; *p; p++) {
+        if (fputc(*p, fp) == EOF || (*p == 39 && fputc(39, fp) == EOF)) return 603;
+    }
+    return fputc(39, fp) == EOF ? 603 : 0;
+}
+
 /* SAS PROC FORMAT text is serialized here, with the same naming and order as
    the transport dictionaries. The ado wrapper supplies label metadata only. */
 int cio_export_sascode(int nvar, char (*mapped)[301], const char *path, const char *kind,
@@ -168,10 +177,10 @@ int cio_export_sascode(int nvar, char (*mapped)[301], const char *path, const ch
     cio_local_text("__cio_cwd", cwd, sizeof(cwd));
     cio_local_text("__cio_transportpath", transport, sizeof(transport));
     int v5 = !strcmp(kind, "sasxport5");
-    if (fprintf(fp,
-                "%slibname datapath '%s' ;\nlibname xptfile xport '%s' ;\n\nproc copy in = xptfile "
-                "out = datapath ;\n\nproc format library = work ;\n",
-                v5 ? "\n" : "", cwd, transport) < 0)
+    if (fprintf(fp, "%slibname datapath ", v5 ? "\n" : "") < 0 ||
+        cio_sas_literal(fp, cwd) || fputs(" ;\nlibname xptfile xport ", fp) == EOF ||
+        cio_sas_literal(fp, transport) ||
+        fputs(" ;\n\nproc copy in = xptfile out = datapath ;\n\nproc format library = work ;\n", fp) == EOF)
     {
         rc = 603;
         goto done;
@@ -215,7 +224,8 @@ int cio_export_sascode(int nvar, char (*mapped)[301], const char *path, const ch
             }
             else
                 snprintf(num, sizeof(num), "%.11g", strtod(value, NULL));
-            if (fprintf(fp, "%12s = '%s'%s\n", num, text, k == n ? " ;" : "") < 0)
+            if (fprintf(fp, "%12s = ", num) < 0 || cio_sas_literal(fp, text) ||
+                fprintf(fp, "%s\n", k == n ? " ;" : "") < 0)
             {
                 rc = 603;
                 goto done;

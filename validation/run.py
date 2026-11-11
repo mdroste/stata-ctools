@@ -20,6 +20,7 @@ from validation import ROOT
 # Defaults previously exercised by the Linux correctness gate. Individual tests
 # retain additional compiler modes and runtime variants inside their functions.
 ASAN = {
+    "test_parquet_paths_native",
     "test_newcommands_native",
     "test_sep24_native",
     "test_counting_sort_native",

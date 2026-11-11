@@ -1,5 +1,38 @@
 #include "cppmlhdfe_internal.h"
 
+/* Transform the intercept of a centered sandwich, V <- T V T'. These
+ * differences can cancel to zero even when the slopes are well conditioned.
+ * Keep product and sum roundoff until the final conversion to double. */
+static dd_real ppml_vce_add_product(dd_real sum, double a, double b)
+{
+    dd_real product = two_prod(a, b);
+    return dd_add_d(dd_add_d(sum, product.hi), product.lo);
+}
+
+void ppml_uncenter_vce(double *V, const double *means, int K)
+{
+    const int stride = K + 1;
+    dd_real corner = {V[K * stride + K], 0};
+    for (int i = 0; i < K; i++)
+    {
+        corner = ppml_vce_add_product(corner, -2 * means[i], V[i * stride + K]);
+        for (int j = 0; j < K; j++)
+        {
+            dd_real product = two_prod(means[i], means[j]);
+            corner = ppml_vce_add_product(corner, product.hi, V[i * stride + j]);
+            corner = ppml_vce_add_product(corner, product.lo, V[i * stride + j]);
+        }
+    }
+    for (int i = 0; i < K; i++)
+    {
+        dd_real side = {V[i * stride + K], 0};
+        for (int j = 0; j < K; j++)
+            side = ppml_vce_add_product(side, -V[i * stride + j], means[j]);
+        V[i * stride + K] = V[K * stride + i] = side.hi + side.lo;
+    }
+    V[K * stride + K] = corner.hi + corner.lo;
+}
+
 void ppml_update_fe_weights(HDFE_State *S, const ST_double *irls_w, ST_int N)
 {
     ST_int g, i, lev;

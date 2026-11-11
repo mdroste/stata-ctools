@@ -130,10 +130,15 @@ static int cencode_label_read(size_t maplen, char **map, ctools_str_hash_table *
         entries[e].text = p;
         p += bytes + 1;
     }
+    if (!rc && (end - p != 1 || *p != '|')) rc = 198;
     if (!rc) {
         /* Ascending values: the first insert of a text keeps the smallest value. */
         qsort(entries, (size_t)declared, sizeof(*entries), cencode_label_entry_compare);
         for (long e = 0; e < declared && !rc; e++) {
+            if (e && entries[e].value == entries[e - 1].value) {
+                rc = 198;
+                break;
+            }
             if (entries[e].text[0] != '\0' &&
                 ctools_str_hash_insert_value(table, entries[e].text, (int)entries[e].value) != 0)
                 rc = 920;
@@ -145,16 +150,17 @@ static int cencode_label_read(size_t maplen, char **map, ctools_str_hash_table *
     return rc;
 }
 
-static void cencode_save_times(double parse, double load, double collect, double sort,
+static ST_retcode cencode_save_times(double parse, double load, double collect, double sort,
                                double encode, double labels, double total)
 {
-    SF_scal_save("_cencode_time_parse", parse);
-    SF_scal_save("_cencode_time_load", load);
-    SF_scal_save("_cencode_time_collect", collect);
-    SF_scal_save("_cencode_time_sort", sort);
-    SF_scal_save("_cencode_time_encode", encode);
-    SF_scal_save("_cencode_time_labels", labels);
-    SF_scal_save("_cencode_time_total", total);
+    { ST_retcode publish_rc = SF_scal_save("_cencode_time_parse", parse); if (publish_rc) return publish_rc; }
+    { ST_retcode publish_rc = SF_scal_save("_cencode_time_load", load); if (publish_rc) return publish_rc; }
+    { ST_retcode publish_rc = SF_scal_save("_cencode_time_collect", collect); if (publish_rc) return publish_rc; }
+    { ST_retcode publish_rc = SF_scal_save("_cencode_time_sort", sort); if (publish_rc) return publish_rc; }
+    { ST_retcode publish_rc = SF_scal_save("_cencode_time_encode", encode); if (publish_rc) return publish_rc; }
+    { ST_retcode publish_rc = SF_scal_save("_cencode_time_labels", labels); if (publish_rc) return publish_rc; }
+    { ST_retcode publish_rc = SF_scal_save("_cencode_time_total", total); if (publish_rc) return publish_rc; }
+    return 0;
 }
 
 /*
@@ -389,14 +395,16 @@ static ST_retcode cencode_stream(int var_idx, int gen_idx, const char *labelfile
             SF_error("cencode: failed to read or write Stata data\n");
         return rc; /* 134: too many values, as encode */
     }
-    SF_scal_save("_cencode_fallback", fallback ? 1.0 : 0.0);
-    SF_scal_save("_cencode_n_unique", (double)n_unique);
-    SF_scal_save("_cencode_n_new", (double)n_new);
-    SF_scal_save("_cencode_max_len", (double)max_len);
-    SF_scal_save("_cencode_protocol", 2.0);
-    cencode_save_times(t_parse - t_start, t_load - t_parse, t_collect - t_load, t_sort - t_collect,
+    { ST_retcode publish_rc = SF_scal_save("_cencode_fallback", fallback ? 1.0 : 0.0); if (publish_rc) return publish_rc; }
+    { ST_retcode publish_rc = SF_scal_save("_cencode_n_unique", (double)n_unique); if (publish_rc) return publish_rc; }
+    { ST_retcode publish_rc = SF_scal_save("_cencode_n_new", (double)n_new); if (publish_rc) return publish_rc; }
+    { ST_retcode publish_rc = SF_scal_save("_cencode_max_len", (double)max_len); if (publish_rc) return publish_rc; }
+    { ST_retcode publish_rc = SF_scal_save("_cencode_protocol", 2.0); if (publish_rc) return publish_rc; }
+    rc = cencode_save_times(t_parse - t_start, t_load - t_parse, t_collect - t_load, t_sort - t_collect,
                        t_encode - t_sort, t_labels - t_encode, ctools_timer_seconds() - t_start);
-    CTOOLS_SAVE_THREAD_INFO("_cencode");
+    if (rc) return rc;
+    if ((rc = SF_scal_save("_cencode_threads_max", (double)ctools_get_max_threads()))) return rc;
+    if ((rc = SF_scal_save("_cencode_openmp_enabled", (double)CTOOLS_OPENMP_ENABLED))) return rc;
     return 0;
 }
 
@@ -511,17 +519,17 @@ ST_retcode cencode_main(const char *args)
     if (nobs == 0) {
         /* No observations match if/in - match Stata's encode behavior (return success) */
         ctools_filtered_data_free(&filtered);
-        SF_scal_save("_cencode_n_unique", 0);
-        SF_scal_save("_cencode_max_len", 0);
-        SF_scal_save("_cencode_protocol", 2.0);
+        { ST_retcode publish_rc = SF_scal_save("_cencode_n_unique", 0); if (publish_rc) return publish_rc; }
+        { ST_retcode publish_rc = SF_scal_save("_cencode_max_len", 0); if (publish_rc) return publish_rc; }
+        { ST_retcode publish_rc = SF_scal_save("_cencode_protocol", 2.0); if (publish_rc) return publish_rc; }
         /* (no label file or macros needed for this early-return path) */
-        SF_scal_save("_cencode_time_parse", time_parse);
-        SF_scal_save("_cencode_time_load", ctools_timer_seconds() - t_parse);
-        SF_scal_save("_cencode_time_collect", 0);
-        SF_scal_save("_cencode_time_sort", 0);
-        SF_scal_save("_cencode_time_encode", 0);
-        SF_scal_save("_cencode_time_labels", 0);
-        SF_scal_save("_cencode_time_total", ctools_timer_seconds() - t_start);
+        { ST_retcode publish_rc = SF_scal_save("_cencode_time_parse", time_parse); if (publish_rc) return publish_rc; }
+        { ST_retcode publish_rc = SF_scal_save("_cencode_time_load", ctools_timer_seconds() - t_parse); if (publish_rc) return publish_rc; }
+        { ST_retcode publish_rc = SF_scal_save("_cencode_time_collect", 0); if (publish_rc) return publish_rc; }
+        { ST_retcode publish_rc = SF_scal_save("_cencode_time_sort", 0); if (publish_rc) return publish_rc; }
+        { ST_retcode publish_rc = SF_scal_save("_cencode_time_encode", 0); if (publish_rc) return publish_rc; }
+        { ST_retcode publish_rc = SF_scal_save("_cencode_time_labels", 0); if (publish_rc) return publish_rc; }
+        { ST_retcode publish_rc = SF_scal_save("_cencode_time_total", ctools_timer_seconds() - t_start); if (publish_rc) return publish_rc; }
         return 0;
     }
 
@@ -601,18 +609,18 @@ ST_retcode cencode_main(const char *args)
         ctools_filtered_data_free(&filtered);
         ctools_str_hash_free(&ht);
         if (store_rc) return ctools_stata_rc(store_rc);
-        SF_scal_save("_cencode_n_unique", 0);
-        SF_scal_save("_cencode_max_len", 0);
-        SF_scal_save("_cencode_protocol", 2.0);
+        { ST_retcode publish_rc = SF_scal_save("_cencode_n_unique", 0); if (publish_rc) return publish_rc; }
+        { ST_retcode publish_rc = SF_scal_save("_cencode_max_len", 0); if (publish_rc) return publish_rc; }
+        { ST_retcode publish_rc = SF_scal_save("_cencode_protocol", 2.0); if (publish_rc) return publish_rc; }
 
         t_total = ctools_timer_seconds();
-        SF_scal_save("_cencode_time_parse", time_parse);
-        SF_scal_save("_cencode_time_load", time_load);
-        SF_scal_save("_cencode_time_collect", time_collect);
-        SF_scal_save("_cencode_time_sort", 0);
-        SF_scal_save("_cencode_time_encode", 0);
-        SF_scal_save("_cencode_time_labels", 0);
-        SF_scal_save("_cencode_time_total", t_total - t_start);
+        { ST_retcode publish_rc = SF_scal_save("_cencode_time_parse", time_parse); if (publish_rc) return publish_rc; }
+        { ST_retcode publish_rc = SF_scal_save("_cencode_time_load", time_load); if (publish_rc) return publish_rc; }
+        { ST_retcode publish_rc = SF_scal_save("_cencode_time_collect", time_collect); if (publish_rc) return publish_rc; }
+        { ST_retcode publish_rc = SF_scal_save("_cencode_time_sort", 0); if (publish_rc) return publish_rc; }
+        { ST_retcode publish_rc = SF_scal_save("_cencode_time_encode", 0); if (publish_rc) return publish_rc; }
+        { ST_retcode publish_rc = SF_scal_save("_cencode_time_labels", 0); if (publish_rc) return publish_rc; }
+        { ST_retcode publish_rc = SF_scal_save("_cencode_time_total", t_total - t_start); if (publish_rc) return publish_rc; }
         return 0;
     }
 
@@ -728,9 +736,6 @@ ST_retcode cencode_main(const char *args)
         size_t len = strlen(sorted_strings[i].str);
         if (len > max_len) max_len = len;
     }
-    SF_scal_save("_cencode_n_unique", (double)n_unique);
-    SF_scal_save("_cencode_max_len", (double)max_len);
-    SF_scal_save("_cencode_protocol", 2.0);
 
     if (labelfile[0] != '\0') {
         /* Build arrays for file writing */
@@ -778,16 +783,21 @@ ST_retcode cencode_main(const char *args)
     ctools_filtered_data_free(&filtered);
     ctools_str_hash_free(&ht);
 
-    /* Store timing */
-    SF_scal_save("_cencode_time_parse", time_parse);
-    SF_scal_save("_cencode_time_load", time_load);
-    SF_scal_save("_cencode_time_collect", time_collect);
-    SF_scal_save("_cencode_time_sort", time_sort);
-    SF_scal_save("_cencode_time_encode", time_encode);
-    SF_scal_save("_cencode_time_labels", time_labels);
-    SF_scal_save("_cencode_time_total", time_total);
+    { ST_retcode publish_rc = SF_scal_save("_cencode_n_unique", (double)n_unique); if (publish_rc) return publish_rc; }
+    { ST_retcode publish_rc = SF_scal_save("_cencode_max_len", (double)max_len); if (publish_rc) return publish_rc; }
+    { ST_retcode publish_rc = SF_scal_save("_cencode_protocol", 2.0); if (publish_rc) return publish_rc; }
 
-    CTOOLS_SAVE_THREAD_INFO("_cencode");
+    /* Store timing */
+    { ST_retcode publish_rc = SF_scal_save("_cencode_time_parse", time_parse); if (publish_rc) return publish_rc; }
+    { ST_retcode publish_rc = SF_scal_save("_cencode_time_load", time_load); if (publish_rc) return publish_rc; }
+    { ST_retcode publish_rc = SF_scal_save("_cencode_time_collect", time_collect); if (publish_rc) return publish_rc; }
+    { ST_retcode publish_rc = SF_scal_save("_cencode_time_sort", time_sort); if (publish_rc) return publish_rc; }
+    { ST_retcode publish_rc = SF_scal_save("_cencode_time_encode", time_encode); if (publish_rc) return publish_rc; }
+    { ST_retcode publish_rc = SF_scal_save("_cencode_time_labels", time_labels); if (publish_rc) return publish_rc; }
+    { ST_retcode publish_rc = SF_scal_save("_cencode_time_total", time_total); if (publish_rc) return publish_rc; }
+
+    { ST_retcode publish_rc = SF_scal_save("_cencode_threads_max", (double)ctools_get_max_threads()); if (publish_rc) return publish_rc; }
+    { ST_retcode publish_rc = SF_scal_save("_cencode_openmp_enabled", (double)CTOOLS_OPENMP_ENABLED); if (publish_rc) return publish_rc; }
 
     return 0;
 }

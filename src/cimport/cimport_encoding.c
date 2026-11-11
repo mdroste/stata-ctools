@@ -15,8 +15,114 @@
 #include <iconv.h>
 #endif
 #include "cimport_encoding.h"
-#include "../ctools_simd.h"
 #include "cimport_charset.inc"
+#include "cimport_java_charsets.inc"
+
+/* The cimport_java_charsets entry for a charset name or alias, which Java
+   matches ignoring case; -1 when Java has no charset of that name. */
+static long cimport_java_lookup(const char *name)
+{
+    char key[96];
+    size_t n = strlen(name);
+    if (!n || n >= sizeof(key)) return -1;
+    for (size_t i = 0; i <= n; i++) key[i] = (char)tolower((unsigned char)name[i]);
+    size_t lo = 0, hi = sizeof(cimport_java_charsets) / sizeof(*cimport_java_charsets);
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        int c = strcmp(key, cimport_java_charsets[mid].alias);
+        if (!c) return (long)mid;
+        if (c < 0) hi = mid;
+        else lo = mid + 1;
+    }
+    return -1;
+}
+
+const char *cimport_java_charset(const char *name)
+{
+    long k = cimport_java_lookup(name);
+    return k < 0 ? NULL : cimport_java_charsets[k].java;
+}
+
+const char *cimport_charset_converter(const char *name)
+{
+    long k = cimport_java_lookup(name);
+    return k < 0 ? name : cimport_java_charsets[k].converter;
+}
+
+/* Length of the well-formed UTF-8 sequence (RFC 3629: no overlong forms,
+   surrogates or code points above U+10FFFF) at s[0..n), 0 if none. */
+static size_t cimport_utf8_sequence(const unsigned char *s, size_t n)
+{
+    unsigned char c = s[0], lo = 0x80, hi = 0xbf;
+    size_t need;
+    if (c < 0x80) return 1;
+    if (c >= 0xc2 && c <= 0xdf) need = 1;
+    else if (c >= 0xe0 && c <= 0xef) {
+        need = 2;
+        if (c == 0xe0) lo = 0xa0;
+        else if (c == 0xed) hi = 0x9f;
+    } else if (c >= 0xf0 && c <= 0xf4) {
+        need = 3;
+        if (c == 0xf0) lo = 0x90;
+        else if (c == 0xf4) hi = 0x8f;
+    } else return 0;
+    if (n <= need || s[1] < lo || s[1] > hi) return 0;
+    for (size_t k = 2; k <= need; k++)
+        if ((s[k] & 0xc0) != 0x80) return 0;
+    return need + 1;
+}
+
+/* UTF-8 with malformed bytes: as Java's decoder in native import delimited,
+   each malformed byte is dropped and well-formed text is kept; a leading
+   BOM is dropped too. */
+static int cimport_utf8_drop_malformed(const char *data, size_t size, char **out_data,
+                                       size_t *out_size)
+{
+    const unsigned char *s = (const unsigned char *)data;
+    char *out = malloc(size + 1);
+    if (!out) return 920;
+    size_t used = 0, i = size >= 3 && !memcmp(data, "\xef\xbb\xbf", 3) ? 3 : 0;
+    while (i < size) {
+        size_t n = cimport_utf8_sequence(s + i, size - i);
+        if (!n) { i++; continue; }
+        memcpy(out + used, s + i, n);
+        used += n;
+        i += n;
+    }
+    out[used] = 0;
+    *out_data = out;
+    *out_size = used;
+    return 0;
+}
+
+/* A single-byte Java charset is decoded from Java's own table, the same on
+   every platform: each byte is one character, and a byte Java does not map
+   is dropped, as native import delimited drops undecodable input. */
+static int cimport_decode_java_sbcs(const uint16_t *table, const char *data, size_t size,
+                                    char **out_data, size_t *out_size)
+{
+    if (size > (SIZE_MAX - 1) / 3) return 920;
+    char *out = malloc(size * 3 + 1);
+    if (!out) return 920;
+    size_t used = 0;
+    for (size_t i = 0; i < size; i++) {
+        unsigned u = table[(unsigned char)data[i]];
+        if (u == 0xFFFD) continue;
+        if (u < 0x80) out[used++] = (char)u;
+        else if (u < 0x800) {
+            out[used++] = (char)(0xC0 | (u >> 6));
+            out[used++] = (char)(0x80 | (u & 0x3F));
+        } else {
+            out[used++] = (char)(0xE0 | (u >> 12));
+            out[used++] = (char)(0x80 | ((u >> 6) & 0x3F));
+            out[used++] = (char)(0x80 | (u & 0x3F));
+        }
+    }
+    out[used] = 0;
+    *out_data = out;
+    *out_size = used;
+    return 0;
+}
 
 /* ============================================================================
  * Windows-1252 to Unicode mapping for bytes 0x80-0x9F
@@ -586,6 +692,17 @@ int cimport_convert_to_utf8(const char *data, size_t size, CImportEncoding encod
 int cimport_convert_named_to_utf8(const char *data, size_t size, const char *name,
                                  char **out_data, size_t *out_size) {
     char canonical[128];
+    /* A name or alias of a Java charset, as native import delimited takes
+       them (latin1, cyrillic, x-MacCyrillic...): a single-byte charset is
+       decoded from Java's table, a multi-byte one goes to the converter by
+       its converter name. */
+    long java = cimport_java_lookup(name);
+    if (java >= 0 && cimport_java_charsets[java].table >= 0)
+        return cimport_decode_java_sbcs(cimport_java_sbcs[cimport_java_charsets[java].table],
+                                        data, size, out_data, out_size);
+    if (java >= 0 && !strcmp(cimport_java_charsets[java].converter, "UTF-8"))
+        return cimport_utf8_drop_malformed(data, size, out_data, out_size);
+    if (java >= 0) name = cimport_java_charsets[java].converter;
     if (strlen(name)>=sizeof(canonical)) return 198;
     for (size_t i=0;i<=strlen(name);i++) canonical[i]=(char)tolower((unsigned char)name[i]);
     /* ICU's UTF aliases have a big-endian default without a BOM. */
@@ -636,91 +753,47 @@ int cimport_convert_named_to_utf8(const char *data, size_t size, const char *nam
  * UTF-8 Validation and Stripping
  * ============================================================================ */
 
-/* ============================================================================
- * SIMD-Accelerated ASCII Check
- * ============================================================================ */
-
-bool cimport_is_ascii_simd(const char *data, size_t size)
+/* Well-formed UTF-8 as RFC 3629 defines it: no overlong forms, surrogates,
+ * code points above U+10FFFF or truncated sequences. Both converters behind
+ * cimport_convert_named_to_utf8 (iconv, and Windows' code-page API) return
+ * such input unchanged apart from a leading BOM, so it need not be copied.
+ * *has_high reports a byte above 0x7f before the scan ended (so for valid
+ * input, whether it is not ASCII). ASCII runs are skipped eight bytes at a
+ * time. */
+bool cimport_scan_utf8(const char *data, size_t size, bool *has_high)
 {
-    const unsigned char *ptr = (const unsigned char *)data;
+    const unsigned char *s = (const unsigned char *)data;
     size_t i = 0;
-
-#if CTOOLS_HAS_AVX2
-    {
-        __m256i vor = _mm256_setzero_si256();
-        const __m256i v_high_bit = _mm256_set1_epi8((char)0x80);
-
-        /* Process 128 bytes per iteration (4x unroll) for throughput */
-        for (; i + 128 <= size; i += 128) {
-            __m256i v0 = _mm256_loadu_si256((const __m256i *)(ptr + i));
-            __m256i v1 = _mm256_loadu_si256((const __m256i *)(ptr + i + 32));
-            __m256i v2 = _mm256_loadu_si256((const __m256i *)(ptr + i + 64));
-            __m256i v3 = _mm256_loadu_si256((const __m256i *)(ptr + i + 96));
-            vor = _mm256_or_si256(vor, _mm256_or_si256(_mm256_or_si256(v0, v1),
-                                                        _mm256_or_si256(v2, v3)));
-            /* Early termination check every 128 bytes */
-            if (_mm256_movemask_epi8(_mm256_and_si256(vor, v_high_bit)))
-                return false;
+    *has_high = false;
+    while (i < size) {
+        while (i + 32 <= size) {
+            uint64_t a, b, c, d;
+            memcpy(&a, s + i, 8); memcpy(&b, s + i + 8, 8);
+            memcpy(&c, s + i + 16, 8); memcpy(&d, s + i + 24, 8);
+            if ((a | b | c | d) & UINT64_C(0x8080808080808080)) break;
+            i += 32;
         }
-
-        /* Process remaining 32-byte chunks */
-        for (; i + 32 <= size; i += 32) {
-            __m256i v = _mm256_loadu_si256((const __m256i *)(ptr + i));
-            if (_mm256_movemask_epi8(v))
-                return false;
-        }
-    }
-#elif CTOOLS_HAS_SSE2
-    {
-        /* Process 64 bytes per iteration (4x unroll) */
-        for (; i + 64 <= size; i += 64) {
-            __m128i v0 = _mm_loadu_si128((const __m128i *)(ptr + i));
-            __m128i v1 = _mm_loadu_si128((const __m128i *)(ptr + i + 16));
-            __m128i v2 = _mm_loadu_si128((const __m128i *)(ptr + i + 32));
-            __m128i v3 = _mm_loadu_si128((const __m128i *)(ptr + i + 48));
-            __m128i vor = _mm_or_si128(_mm_or_si128(v0, v1), _mm_or_si128(v2, v3));
-            if (_mm_movemask_epi8(vor))
-                return false;
-        }
-
-        for (; i + 16 <= size; i += 16) {
-            __m128i v = _mm_loadu_si128((const __m128i *)(ptr + i));
-            if (_mm_movemask_epi8(v))
-                return false;
-        }
-    }
-#elif CTOOLS_HAS_NEON
-    {
-        /* Process 64 bytes per iteration (4x unroll) */
-        for (; i + 64 <= size; i += 64) {
-            uint8x16_t v0 = vld1q_u8(ptr + i);
-            uint8x16_t v1 = vld1q_u8(ptr + i + 16);
-            uint8x16_t v2 = vld1q_u8(ptr + i + 32);
-            uint8x16_t v3 = vld1q_u8(ptr + i + 48);
-            uint8x16_t vor = vorrq_u8(vorrq_u8(v0, v1), vorrq_u8(v2, v3));
-            /* Check if any byte has high bit set */
-            uint64x2_t vor64 = vreinterpretq_u64_u8(vor);
-            uint64_t lo = vgetq_lane_u64(vor64, 0);
-            uint64_t hi = vgetq_lane_u64(vor64, 1);
-            if ((lo | hi) & 0x8080808080808080ULL)
-                return false;
-        }
-
-        for (; i + 16 <= size; i += 16) {
-            uint8x16_t v = vld1q_u8(ptr + i);
-            uint64x2_t v64 = vreinterpretq_u64_u8(v);
-            uint64_t lo = vgetq_lane_u64(v64, 0);
-            uint64_t hi = vgetq_lane_u64(v64, 1);
-            if ((lo | hi) & 0x8080808080808080ULL)
-                return false;
-        }
-    }
-#endif
-
-    /* Scalar tail */
-    for (; i < size; i++) {
-        if (ptr[i] >= 0x80)
-            return false;
+        if (i >= size) break;
+        unsigned char c = s[i];
+        if (c < 0x80) { i++; continue; }
+        *has_high = true;
+        size_t need;
+        unsigned char lo = 0x80, hi = 0xbf;
+        if (c >= 0xc2 && c <= 0xdf) need = 1;
+        else if (c >= 0xe0 && c <= 0xef) {
+            need = 2;
+            if (c == 0xe0) lo = 0xa0;
+            else if (c == 0xed) hi = 0x9f;
+        } else if (c >= 0xf0 && c <= 0xf4) {
+            need = 3;
+            if (c == 0xf0) lo = 0x90;
+            else if (c == 0xf4) hi = 0x8f;
+        } else return false;
+        if (size - i <= need) return false;
+        if (s[i + 1] < lo || s[i + 1] > hi) return false;
+        for (size_t k = 2; k <= need; k++)
+            if ((s[i + k] & 0xc0) != 0x80) return false;
+        i += need + 1;
     }
     return true;
 }

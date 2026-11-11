@@ -17,7 +17,7 @@ set graphics off
 if `"`outdir'"' == "" local outdir "docs/benchmarks/readme_profile"
 if `"`sizes'"' == "" local sizes "1000000 10000000 25000000"
 if "`threads'" == "" local threads = c(processors)
-local allpairs "export import sort merge sample bsample encode decode destring distinct ipolate split rangejoin winsor rangestat binscatter reghdfe ivreghdfe ppmlhdfe psmatch2 qreg"
+local allpairs "export import sort merge sample bsample encode decode destring distinct ipolate cipolate split rangejoin winsor rangestat binscatter reghdfe ivreghdfe ppmlhdfe hdfe psmatch2 qreg"
 if `"`pairs'"' == "" local pairs "`allpairs'"
 capture mkdir "`outdir'"
 log using "`outdir'/profile.log", text replace name(profile)
@@ -34,15 +34,35 @@ program define profile_readme
     di "PROFILE_SETTINGS sizes=`sizes' variables=20 processors=`threads' seed=95183 pairs=`pairs'"
     foreach cmd in cimport cexport csort cmerge csample cbsample cencode cdecode ///
         cdestring cdistinct distinct cinterpolate csplit crangejoin cqreg cwinsor crangestat cpsmatch ///
-        cbinscatter creghdfe civreghdfe cppmlhdfe rangejoin rangestat gstats ///
-        psmatch2 binscatter reghdfe ivreghdfe ppmlhdfe ftools ivreg2 {
+        cbinscatter creghdfe civreghdfe cppmlhdfe chdfe rangejoin rangestat gstats ///
+        psmatch2 binscatter reghdfe ivreghdfe ppmlhdfe hdfe cipolate ftools ivreg2 {
         capture noisily which `cmd'
     }
-    tempname results
+    * Older ctools releases installed a linear cipolate; the reference is SSC's cubic one.
+    capture findfile cipolate.ado
+    if !_rc & strpos(" `pairs' ", " cipolate ") {
+        local cipolate_file `"`r(fn)'"'
+        tempname header
+        file open `header' using `"`cipolate_file'"', read text
+        file read `header' line
+        file close `header'
+        if strpos(`"`macval(line)'"', "stata-ctools") {
+            di as error `"`cipolate_file' is an old ctools copy, not SSC cipolate"'
+            error 198
+        }
+    }
+    tempname results steps
     file open `results' using "`outdir'/timings.csv", write text replace
     file write `results' "command,observations,method,seconds,rc,check_rc" _n
+    * Wall-clock seconds of every step, timed or not, to show where a run spends
+    * its time. Timer 98 never overlaps timer 99, which times only the command.
+    file open `steps' using "`outdir'/steps.csv", write text replace
+    file write `steps' "observations,command,method,step,seconds" _n
+    local total 0
     foreach N of local sizes {
         if `N' < 1000 | mod(`N',200) != 0 error 198
+        timer clear 98
+        timer on 98
         clear
         set seed 95183
         set sortseed 95183
@@ -113,6 +133,8 @@ program define profile_readme
         local c_distinct "cdistinct firm group region sector"
         local ref_ipolate "ipolate yi month, by(firm) gen(result) epolate"
         local c_ipolate "cinterpolate yi month, by(firm) gen(result) epolate"
+        local ref_cipolate "cipolate yi month, by(firm) gen(result)"
+        local c_cipolate "cinterpolate yi month, by(firm) gen(result) cubic"
         local ref_split `"split code, gen(part) parse("|")"'
         local c_split `"csplit code, gen(part) parse("|")"'
         local ref_rangejoin `"rangejoin month -.5 .5 using "`offers'", by(firm) keepusing(x2 region)"'
@@ -133,12 +155,26 @@ program define profile_readme
         local c_ivreghdfe "civreghdfe y x2 (x1=z), absorb(firm group) tolerance(1e-8)"
         local ref_ppmlhdfe "ppmlhdfe count x1 x2, absorb(firm group) tolerance(1e-8)"
         local c_ppmlhdfe "cppmlhdfe count x1 x2, absorb(firm group) tolerance(1e-8)"
+        local ref_hdfe "hdfe y x1 x2, absorb(firm group) gen(res_) tol(1e-8)"
+        local c_hdfe "chdfe y x1 x2, absorb(firm group) gen(res_) tol(1e-8)"
+        timer off 98
+        quietly timer list 98
+        local setup = r(t98)
+        local total = `total' + `setup'
+        file write `steps' "`N',setup,,setup,`setup'" _n
+        di "PROFILE_STEP N=`N' step=setup seconds=" strtrim(string(`setup', "%15.3f")) ///
+            " total=" strtrim(string(`total', "%15.3f")) " clock=`c(current_time)'"
 
         foreach cmd of local pairs {
             foreach method in ref c {
+                timer clear 98
+                timer on 98
                 quietly use `base', clear
                 set seed 95183
                 set sortseed 95183
+                timer off 98
+                quietly timer list 98
+                local load = r(t98)
                 local command `"``method'_`cmd''"'
                 di `"PROFILE_START N=`N' method=`method' command=`command'"'
                 timer clear 99
@@ -152,6 +188,8 @@ program define profile_readme
                 }
                 quietly timer list 99
                 local elapsed = r(t99)
+                timer clear 98
+                timer on 98
                 local checkrc = 0
                 if `rc'==0 {
                     local expected = `N'
@@ -164,6 +202,11 @@ program define profile_readme
                     }
                     if "`cmd'"=="import" {
                         capture assert c(k)==20
+                        if _rc local checkrc = _rc
+                    }
+                    * The design has no singletons, so every row is kept.
+                    if "`cmd'"=="hdfe" {
+                        capture assert !missing(res_y, res_x1, res_x2)
                         if _rc local checkrc = _rc
                     }
                     if "`cmd'"=="distinct" {
@@ -186,8 +229,21 @@ program define profile_readme
                         }
                     }
                 }
+                timer off 98
+                quietly timer list 98
+                local check = r(t98)
+                local total = `total' + `load' + `elapsed' + `check'
                 file write `results' "`cmd',`N',`method',`elapsed',`rc',`checkrc'" _n
+                file write `steps' "`N',`cmd',`method',load,`load'" _n ///
+                    "`N',`cmd',`method',run,`elapsed'" _n "`N',`cmd',`method',check,`check'" _n
                 di "PROFILE_RESULT `cmd',`N',`method',`elapsed',`rc',`checkrc'"
+                di "PROFILE_STEP N=`N' method=`method' command=`cmd'" ///
+                    " load=" strtrim(string(`load', "%15.3f")) ///
+                    " run=" strtrim(string(`elapsed', "%15.3f")) ///
+                    " check=" strtrim(string(`check', "%15.3f")) ///
+                    " total=" strtrim(string(`total', "%15.3f")) " clock=`c(current_time)'"
+                * Break (r(1)) ends the run; the rows written so far are kept.
+                if `rc' == 1 | `checkrc' == 1 exit 1
             }
         }
         * Release disk space before generating the next scale.

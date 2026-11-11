@@ -36,7 +36,6 @@
  * ============================================================================ */
 
 #define CDESTRING_STR_BUF_SIZE  2048
-#define CDESTRING_MAX_IGNORE    256
 #define CDESTRING_MAX_FLOAT     0x1.fffffep+126  /* maxfloat(); larger is missing in a float */
 
 /* ============================================================================
@@ -47,9 +46,11 @@ typedef struct {
     int *src_indices;       /* Source string variable indices (1-based) */
     int *dst_indices;       /* Destination numeric variable indices (1-based) */
     int nvars;              /* Number of variables to process */
-    char ignore_chars[CDESTRING_MAX_IGNORE]; /* Characters to ignore */
+    char *ignore_chars;      /* Complete decoded ignore() list */
     int ignore_len;         /* Length of ignore_chars string */
     int strip;              /* 1 = remove ignore_table bytes (ignore() and, with percent, "%") */
+    int asbytes;            /* 1 = ignore() lists bytes, not UTF-8 characters */
+    int illegal;            /* 1 = also remove bytes outside well-formed UTF-8 */
     int force;              /* 1 = keep conversions of variables with nonnumeric values */
     int percent;            /* 1 = strip %; divide the variable by 100 if any value had % */
     int dpcomma;            /* 1 = first comma is the decimal point; any "." is nonnumeric */
@@ -65,12 +66,36 @@ typedef struct {
  */
 static unsigned char ignore_table[256];
 
-static void build_ignore_table(const char *ignore_chars, int len)
+static void build_ignore_table(const char *ignore_chars, int len, int asbytes)
 {
     memset(ignore_table, 0, sizeof(ignore_table));
     for (int i = 0; i < len; i++) {
-        if ((unsigned char)ignore_chars[i] < 128) ignore_table[(unsigned char)ignore_chars[i]] = 1;
+        /* As characters, a byte of 128 or more is part of a multibyte
+         * sequence, matched whole in convert_value(). */
+        if (asbytes || (unsigned char)ignore_chars[i] < 128)
+            ignore_table[(unsigned char)ignore_chars[i]] = 1;
     }
+}
+
+/* Length of the well-formed UTF-8 sequence at s (Unicode Table 3-7), or 0
+ * when the byte at s does not start one. Stata's Unicode functions read each
+ * byte of an ill-formed sequence as U+FFFD, which ignore(, illegal) removes. */
+static int utf8_sequence_len(const unsigned char *s, int avail)
+{
+    unsigned c = s[0];
+    if (c < 0x80) return 1;
+    if (c < 0xc2 || c > 0xf4) return 0;
+    int width = c >= 0xf0 ? 4 : c >= 0xe0 ? 3 : 2;
+    if (avail < width) return 0;
+    unsigned lo = 0x80, hi = 0xbf;
+    if (c == 0xe0) lo = 0xa0;
+    else if (c == 0xed) hi = 0x9f;
+    else if (c == 0xf0) lo = 0x90;
+    else if (c == 0xf4) hi = 0x8f;
+    if (s[1] < lo || s[1] > hi) return 0;
+    for (int k = 2; k < width; k++)
+        if ((s[k] & 0xc0) != 0x80) return 0;
+    return width;
 }
 
 /* Unicode White_Space, as accepted by ustrtrim(), encoded as whole UTF-8
@@ -112,6 +137,65 @@ static int d_exponent_to_e(char *t, int len)
     return 1;
 }
 
+static int hex_digit(char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+/*
+ * real() also reads Stata's hexadecimal format (%21x), [+-]1.hhhX[+-]hhh:
+ * one to 13 mantissa digits and one to three exponent digits, either case.
+ * The parts are the IEEE bits: the exponent -3ff gives a subnormal (0.hhh
+ * times 2^-3fe), and a mantissa written 0.000... is only accepted there, as
+ * zero. Exponents past +-3ff are not numbers; 1.0X+3ff and above are Stata's
+ * missing encodings, retained under force but counted as nonnumeric.
+ * destring first cuts leading
+ * zeros to one, so "00.0X-3ff" is zero too.
+ */
+static int parse_stata_hex(const char *s, int len, double *out)
+{
+    int i = 0, negative = 0;
+    if (len > 0 && (s[0] == '+' || s[0] == '-')) negative = (s[i++] == '-');
+    else while (len - i > 1 && s[i] == '0' && s[i + 1] == '0') i++;
+    if (i >= len || (s[i] != '0' && s[i] != '1')) return 0;
+    int lead = s[i++] - '0';
+    if (i >= len || s[i++] != '.') return 0;
+    uint64_t mantissa = 0;
+    int digits = 0, d;
+    while (i < len && (d = hex_digit(s[i])) >= 0) {
+        if (++digits > 13) return 0;
+        mantissa = (mantissa << 4) | (uint64_t)d;
+        i++;
+    }
+    if (!digits || i >= len || (s[i] != 'X' && s[i] != 'x')) return 0;
+    mantissa <<= 4 * (13 - digits);
+    i++;
+    if (i >= len || (s[i] != '+' && s[i] != '-')) return 0;
+    int exp_negative = s[i++] == '-';
+    int exponent = 0, exp_digits = 0;
+    while (i < len && (d = hex_digit(s[i])) >= 0) {
+        if (++exp_digits > 3) return 0;
+        exponent = exponent * 16 + d;
+        i++;
+    }
+    if (!exp_digits || i != len) return 0;
+    if (exp_negative) exponent = -exponent;
+    uint64_t bits;
+    if (!lead) {
+        if (mantissa || exponent != -0x3ff) return 0;
+        bits = 0;
+    } else {
+        if (exponent < -0x3ff || exponent > 0x3ff) return 0;
+        bits = ((uint64_t)(exponent + 0x3ff) << 52) | mantissa;
+    }
+    if (negative) bits |= (uint64_t)1 << 63;
+    memcpy(out, &bits, sizeof(bits));
+    return 1;
+}
+
 /*
  * Convert one string as native destring does: remove ignore() bytes (and "%"
  * with percent), trim, keep "", "." and ".a"-".z" as missing values, apply
@@ -130,10 +214,18 @@ static int convert_value(const char *src, const cdestring_options *opts,
         for (int i = 0; i < len && n < CDESTRING_STR_BUF_SIZE; i++) {
             unsigned char c = (unsigned char)src[i];
             if (ignore_table[c]) continue;
+            if (opts->asbytes) {
+                buf[n++] = src[i];
+                continue;
+            }
             /* Match complete UTF-8 codepoints, never a union of their bytes. */
-            int width = c >= 0xf0 ? 4 : c >= 0xe0 ? 3 : c >= 0xc2 ? 2 : 1;
+            int width = utf8_sequence_len((const unsigned char *)src + i, len - i);
+            if (!width) {
+                if (!opts->illegal) buf[n++] = src[i];
+                continue;
+            }
             int ignored = 0;
-            if (width > 1 && i + width <= len) {
+            if (width > 1) {
                 for (int j = 0; j + width <= opts->ignore_len; j++) {
                     if (!memcmp(src + i, opts->ignore_chars + j, (size_t)width)) {
                         ignored = 1;
@@ -141,8 +233,17 @@ static int convert_value(const char *src, const cdestring_options *opts,
                     }
                 }
             }
-            if (ignored) i += width - 1;
-            else buf[n++] = src[i];
+            if (!ignored) {
+                /* Preserve a valid sequence whole. Revisiting its continuation
+                 * bytes would classify them as illegal standalone bytes. */
+                if (width > CDESTRING_STR_BUF_SIZE - n) {
+                    *out = missval;
+                    return 0;
+                }
+                memcpy(buf + n, src + i, (size_t)width);
+                n += width;
+            }
+            i += width - 1;
         }
         s = buf;
         len = n;
@@ -189,8 +290,15 @@ static int convert_value(const char *src, const cdestring_options *opts,
         if (len > CDESTRING_STR_BUF_SIZE) return 0;
         memcpy(dexp, s, (size_t)len);
         if (!d_exponent_to_e(dexp, len) ||
-            !ctools_parse_double_fast(dexp, len, &val, missval))
-            return 0;
+            !ctools_parse_double_fast(dexp, len, &val, missval)) {
+            if (!parse_stata_hex(s, len, &val)) return 0;
+            if (val >= missval) {
+                /* Native destring counts these as nonnumeric, but force
+                 * retains real()'s missing encoding before storage/compress. */
+                *out = val;
+                return 0;
+            }
+        }
     }
     if (!(val < missval))
         return 0;
@@ -316,8 +424,14 @@ static int parse_options(const char *args, cdestring_options *opts)
     }
 
     /* Parse ignore= with escape sequence handling */
-    opts->ignore_len = parse_ignore_option(args, opts->ignore_chars,
-                                            CDESTRING_MAX_IGNORE);
+    const char *ignore = strstr(args, "ignore=");
+    size_t capacity = ignore ? strcspn(ignore + 7, " \t") + 1 : 1;
+    if (capacity > INT_MAX || !(opts->ignore_chars = malloc(capacity))) {
+        free(opts->src_indices);
+        free(opts->dst_indices);
+        return -2;
+    }
+    opts->ignore_len = parse_ignore_option(args, opts->ignore_chars, (int)capacity);
 
     /* Boolean options */
     opts->force = ctools_parse_bool_option(args, "force");
@@ -327,7 +441,9 @@ static int parse_options(const char *args, cdestring_options *opts)
     opts->verbose = ctools_parse_bool_option(args, "verbose");
     opts->selection = ctools_parse_bool_option(args, "skipif") ? CTOOLS_LOAD_SKIP_IF
                     : ctools_parse_bool_option(args, "touse") ? CTOOLS_LOAD_MARKER : CTOOLS_LOAD_CHECK_IF;
-    opts->strip = (opts->ignore_len > 0 || opts->percent);
+    opts->asbytes = ctools_parse_bool_option(args, "asbytes");
+    opts->illegal = ctools_parse_bool_option(args, "illegal");
+    opts->strip = (opts->ignore_len > 0 || opts->percent || opts->illegal);
 
     return 0;
 }
@@ -336,6 +452,8 @@ static void free_options(cdestring_options *opts)
 {
     free(opts->src_indices);
     free(opts->dst_indices);
+    free(opts->ignore_chars);
+    opts->ignore_chars = NULL;
     opts->src_indices = NULL;
     opts->dst_indices = NULL;
 }
@@ -365,7 +483,7 @@ ST_retcode cdestring_main(const char *args)
     }
 
     /* Build ignore character lookup table; percent implies ignore("%") */
-    build_ignore_table(opts.ignore_chars, opts.ignore_len);
+    build_ignore_table(opts.ignore_chars, opts.ignore_len, opts.asbytes);
     if (opts.percent) ignore_table['%'] = 1;
 
     t_parse = ctools_timer_seconds();
@@ -407,10 +525,13 @@ ST_retcode cdestring_main(const char *args)
     if (nobs == 0) {
         ctools_filtered_data_free(&filtered);
         free_options(&opts);
-        SF_scal_save("_cdestring_n_converted", 0);
-        SF_scal_save("_cdestring_n_failed", 0);
         ST_retcode empty_rc = save_failed_counts(var_failed, nvars);
         free(var_counts);
+        const char *names[] = {"_cdestring_n_converted", "_cdestring_n_failed",
+            "_cdestring_time_parse", "_cdestring_time_load", "_cdestring_time_convert",
+            "_cdestring_time_store", "_cdestring_time_total"};
+        for (size_t j = 0; j < sizeof(names) / sizeof(names[0]) && !empty_rc; j++)
+            empty_rc = SF_scal_save((char *)names[j], 0);
         return empty_rc;
     }
 
@@ -561,15 +682,17 @@ ST_retcode cdestring_main(const char *args)
     t_total = t_store - t_start;
 
     /* Store results */
-    SF_scal_save("_cdestring_n_converted", (double)total_converted);
-    SF_scal_save("_cdestring_n_failed", (double)total_failed);
-    SF_scal_save("_cdestring_time_parse", t_parse - t_start);
-    SF_scal_save("_cdestring_time_load", t_load - t_parse);
-    SF_scal_save("_cdestring_time_convert", t_convert - t_load);
-    SF_scal_save("_cdestring_time_store", t_store - t_convert);
-    SF_scal_save("_cdestring_time_total", t_total);
+    ST_retcode result_rc;
+    if ((result_rc = SF_scal_save("_cdestring_n_converted", (double)total_converted))) { free_options(&opts); return result_rc; }
+    if ((result_rc = SF_scal_save("_cdestring_n_failed", (double)total_failed))) { free_options(&opts); return result_rc; }
+    if ((result_rc = SF_scal_save("_cdestring_time_parse", t_parse - t_start))) { free_options(&opts); return result_rc; }
+    if ((result_rc = SF_scal_save("_cdestring_time_load", t_load - t_parse))) { free_options(&opts); return result_rc; }
+    if ((result_rc = SF_scal_save("_cdestring_time_convert", t_convert - t_load))) { free_options(&opts); return result_rc; }
+    if ((result_rc = SF_scal_save("_cdestring_time_store", t_store - t_convert))) { free_options(&opts); return result_rc; }
+    if ((result_rc = SF_scal_save("_cdestring_time_total", t_total))) { free_options(&opts); return result_rc; }
 
-    CTOOLS_SAVE_THREAD_INFO("_cdestring");
+    if ((result_rc = SF_scal_save("_cdestring_threads_max", (double)ctools_get_max_threads()))) { free_options(&opts); return result_rc; }
+    if ((result_rc = SF_scal_save("_cdestring_openmp_enabled", (double)CTOOLS_OPENMP_ENABLED))) { free_options(&opts); return result_rc; }
 
     free_options(&opts);
 

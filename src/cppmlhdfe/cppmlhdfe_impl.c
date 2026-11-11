@@ -7,6 +7,8 @@
 
 #include "cppmlhdfe_impl.h"
 #include "cppmlhdfe_irls.h"
+#include "cppmlhdfe_boot.h"
+#include "../ctools_parse.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -43,9 +45,36 @@ ST_retcode cppmlhdfe_main(const char *args)
     }
     subcommand = args_copy;
 
+    /* vce(bootstrap) is linked here, not into the fit (cppmlhdfe_boot.h) */
+    cppmlhdfe_boot_install();
+
     /* Dispatch to appropriate handler */
     if (strcmp(subcommand, "full_regression") == 0) {
+        /* retain keeps the model for vce(bootstrap) (ctools_runtime.c holds
+         * the command in phase 1 until boot_finish) */
+        cppmlhdfe_boot_retain_requested = ctools_parse_bool_option(args, "retain");
         rc = do_ppml_regression(0, NULL);
+        cppmlhdfe_boot_retain_requested = 0;
+    }
+    else if (strcmp(subcommand, "boot_chunk") == 0) {
+        rc = cppmlhdfe_boot_chunk(args);
+    }
+    else if (strcmp(subcommand, "boot_finish") == 0) {
+        rc = cppmlhdfe_boot_finish(args);
+    }
+    else if (strcmp(subcommand, "wild_setup") == 0) {
+        rc = cppmlhdfe_wild_setup(args);
+    }
+    else if (strcmp(subcommand, "wild_chunk") == 0) {
+        rc = cppmlhdfe_wild_chunk(args);
+    }
+    else if (strcmp(subcommand, "wild_finish") == 0) {
+        rc = cppmlhdfe_wild_finish(args);
+    }
+    else if (strcmp(subcommand, "boot_release") == 0) {
+        /* The phase reset at the start of this call freed the model */
+        cppmlhdfe_boot_release();
+        rc = 0;
     }
     else {
         char msg[256];

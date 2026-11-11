@@ -1,4 +1,4 @@
-*! version 1.2.4 20261103 github.com/mdroste/stata-ctools
+*! version 1.2.6 20261111 github.com/mdroste/stata-ctools
 
 program define civreghdfe_p, rclass
     version 14.1
@@ -61,7 +61,10 @@ program define civreghdfe_p, rclass
         label var `varlist' "S.E. of prediction"
     }
     else if "`residuals'" != "" {
-        if "`e(resid)'" != "" {
+        * With absorb() the residuals are the saved ones (e(sample) only, as
+        * reghdfe_p); without it they are computed, also out of sample, as
+        * ivreg2_p computes them
+        if "`e(resid)'" != "" & "`fixed_effects'" != "" {
             confirm numeric variable `e(resid)', exact
             gen `typlist' `varlist' = `e(resid)' if `touse' & e(sample)
         }
@@ -81,21 +84,21 @@ program define civreghdfe_p, rclass
             quietly gen byte `esample' = e(sample)
             local pwt
             if "`e(wtype)'" != "" local pwt [`e(wtype)'`e(wexp)']
-            local pcons = cond(colnumb(e(b), "_cons") < ., "noconstant", "")
+            local pcons = cond(e(partialcons) == 1, "", "noconstant")
             * a partialled-out constant (no absorb()) is the regression's own
             local pterms `e(partial)'
             local __cons_term _cons
             local pterms : list pterms - __cons_term
             _estimates hold `ivest', restore
             quietly regress `ypart' `pterms' `pwt' if `esample', `pcons'
-            quietly predict double `rpart' if `esample', residuals
+            quietly predict double `rpart' if `touse', residuals
             _estimates unhold `ivest'
-            gen `typlist' `varlist' = `rpart' if `touse' & e(sample)
+            gen `typlist' `varlist' = `rpart' if `touse'
         }
         else {
             tempvar xbvar
             PredictXB `xbvar' `if' `in', xb
-            gen `typlist' `varlist' = `depvar' - `xbvar' if `touse' & e(sample)
+            gen `typlist' `varlist' = `depvar' - `xbvar' if `touse'
         }
         label var `varlist' "Residuals"
         if `was_score' {

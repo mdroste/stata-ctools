@@ -50,6 +50,14 @@ int ctools_io_read_stata_strl(ST_int var_idx, ST_int obs, char *value)
     return STATA_OK;
 }
 
+int ctools_io_strl_readable(int var_idx, int obs)
+{
+    if (SF_var_is_binary(var_idx, obs))
+        return 0;
+    ST_int length = SF_sdatalen(var_idx, obs);
+    return length >= 0 && length <= STATA_STR_MAXLEN;
+}
+
 int ctools_io_variable_kind(int var_idx)
 {
     if (!SF_var_is_string(var_idx))

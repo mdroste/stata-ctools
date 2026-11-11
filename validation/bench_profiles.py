@@ -216,6 +216,7 @@ profile_COMMANDS = {
     "destring": "destring",
     "distinct": "distinct",
     "ipolate": "ipolate",
+    "cipolate": "cipolate",
     "split": "split",
     "rangejoin": "rangejoin",
     "qreg": "qreg",
@@ -226,6 +227,7 @@ profile_COMMANDS = {
     "reghdfe": "reghdfe",
     "ivreghdfe": "ivreghdfe",
     "ppmlhdfe": "ppmlhdfe",
+    "hdfe": "hdfe",
 }
 profile_SIZES = (1_000_000, 10_000_000, 25_000_000)
 

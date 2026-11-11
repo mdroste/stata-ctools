@@ -1,3 +1,4 @@
+#include <stddef.h>
 #include "cpsmatch_internal.h"
 
 int cpsmatch_parse_options(const char *args, cpsmatch_options *opts)
@@ -215,16 +216,47 @@ int cpsmatch_parse_options(const char *args, cpsmatch_options *opts)
     if (opts->descending && opts->with_replace)
         return -1;
 
-    /* Optional wire flags. The stored _treated column (stats) precedes the
-     * sample marker, which always remains the final plugin variable. */
+    /* Optional wire flags, the sample marker always the final plugin
+     * variable: a bare name or name=integer. */
+    static const struct
+    {
+        const char *name;
+        size_t offset;
+    } keys[] = {
+        {"presup", offsetof(cpsmatch_options, presupport_idx)},
+        {"arm", offsetof(cpsmatch_options, arm_idx)},
+        {"nnvar", offsetof(cpsmatch_options, out_nn_idx)},
+        {"ids", offsetof(cpsmatch_options, neighbor_ids_idx)},
+        {"pdif", offsetof(cpsmatch_options, pdif_idx)},
+        {"matched", offsetof(cpsmatch_options, matched_idx)},
+        {"self", offsetof(cpsmatch_options, self_idx)},
+        {"ai", offsetof(cpsmatch_options, ai)},
+    };
     while (*p)
     {
         while (*p == ' ') p++;
         size_t length = strcspn(p, " ");
         if (length == 5 && !strncmp(p, "touse", 5)) opts->touse = 1;
-        if (length == 5 && !strncmp(p, "stats", 5)) opts->statistics = 1;
+        else if (length == 5 && !strncmp(p, "stats", 5)) opts->statistics = 1;
+        else if (length == 3 && !strncmp(p, "ate", 3)) opts->ate = 1;
+        else if (length == 6 && !strncmp(p, "altvar", 6)) opts->altvariance = 1;
+        else if (length == 7 && !strncmp(p, "w2float", 7)) opts->float_squares = 1;
+        else
+        {
+            for (size_t k = 0; k < sizeof(keys) / sizeof(keys[0]); k++)
+            {
+                size_t n = strlen(keys[k].name);
+                if (length > n + 1 && !strncmp(p, keys[k].name, n) && p[n] == '=')
+                {
+                    long value = strtol(p + n + 1, &endptr, 10);
+                    if (endptr != p + length || value < 0 || value > 1000000) return -1;
+                    *(int *)((char *)opts + keys[k].offset) = (int)value;
+                }
+            }
+        }
         p += length;
     }
+    if (opts->n_neighbors < 1) return -1;
 
     return 0;
 }

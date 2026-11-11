@@ -14,18 +14,20 @@ static struct {
     ctools_filtered_data input;
     char **delims;
     uint32_t *tokens;
-    int lengths[MAXSTR + 1], next[MAXSTR + 1], head[256];
+    int *lengths, *next, head[256];
     char firstbytes[257];
-    int ndelim, limit, trim, fields, verbose, ready, fillall;
+    int ndelim, loaded_delims, limit, trim, fields, verbose, ready, fillall;
     size_t nobs;
 } state;
 
 void csplit_cleanup_cache(void)
 {
     ctools_filtered_data_free(&state.input);
-    for (int i = 0; i < state.ndelim; i++) free(state.delims ? state.delims[i] : NULL);
+    for (int i = 0; i < state.loaded_delims; i++) free(state.delims[i]);
     free(state.delims);
     free(state.tokens);
+    free(state.lengths);
+    free(state.next);
     memset(&state, 0, sizeof(state));
 }
 
@@ -84,7 +86,7 @@ ST_retcode csplit_main(const char *args)
     if (!strncmp(args, "scan ", 5)) {
         csplit_cleanup_cache();
         args += 5;
-        if (ctools_parse_next_int(&args, &state.ndelim) || state.ndelim < 1 || state.ndelim > 2045 ||
+        if (ctools_parse_next_int(&args, &state.ndelim) || state.ndelim < 1 ||
             ctools_parse_next_int(&args, &state.limit) || state.limit < 1 ||
             ctools_parse_next_int(&args, &state.trim) || state.trim < 0 || state.trim > 2 ||
             ctools_parse_next_int(&args, &state.verbose) || SF_nvars() != 1 || !SF_var_is_string(1)) {
@@ -94,8 +96,10 @@ ST_retcode csplit_main(const char *args)
         state.fillall = ctools_parse_bool_option(args, "fillall");
         int flags = ctools_parse_bool_option(args, "skipif") ? CTOOLS_LOAD_SKIP_IF : CTOOLS_LOAD_CHECK_IF;
         double start = ctools_timer_seconds();
-        state.delims = calloc(state.ndelim, sizeof(*state.delims));
-        if (!state.delims) { rc = 920; goto fail; }
+        state.delims = calloc((size_t)state.ndelim, sizeof(*state.delims));
+        state.lengths = calloc((size_t)state.ndelim, sizeof(*state.lengths));
+        state.next = calloc((size_t)state.ndelim, sizeof(*state.next));
+        if (!state.delims || !state.lengths || !state.next) { rc = 920; goto fail; }
         for (int b = 0; b < 256; b++) state.head[b] = -1;
         int nfirst = 0;
         for (int d = 0; d < state.ndelim; d++) {
@@ -103,6 +107,7 @@ ST_retcode csplit_main(const char *args)
             snprintf(name, sizeof(name), "_csplit_delim%d", d+1);
             state.delims[d] = malloc(MAXSTR + 2);
             if (!state.delims[d]) { rc = 920; goto fail; }
+            state.loaded_delims++;
             rc = SF_macro_use(name, state.delims[d], MAXSTR + 2);
             if (rc || !state.delims[d][0]) { rc = 198; goto fail; }
             state.lengths[d] = (int)strlen(state.delims[d]);

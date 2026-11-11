@@ -102,6 +102,8 @@ void *xlsx_zip_extract_to_heap(xlsx_zip_archive *archive, size_t file_index, siz
 
     size_t size = 0;
     void *data = mz_zip_reader_extract_to_heap(&archive->zip, (mz_uint)file_index, &size, 0);
+    if (!data && mz_zip_get_last_error(&archive->zip) == MZ_ZIP_ALLOC_FAILED)
+        archive->refused = XLSX_ZIP_SIZE_MEMORY;
 
     if (out_size)
         *out_size = size;
@@ -172,6 +174,8 @@ static void *xlsx_zip_extract_fast(xlsx_zip_archive *archive, size_t file_index,
     void *uncomp_buf = malloc(uncomp_size + 1); /* +1 for potential NUL */
     if (!uncomp_buf)
     {
+        /* Out of memory, not a corrupt part: callers report r(909). */
+        archive->refused = XLSX_ZIP_SIZE_MEMORY;
         free(comp_buf);
         return NULL;
     }
@@ -268,6 +272,8 @@ void *xlsx_zip_extract_direct(xlsx_zip_archive *archive, size_t file_index, size
     void *uncomp_buf = malloc(uncomp_size + 1);
     if (!uncomp_buf)
     {
+        /* Out of memory, not a corrupt part: callers report r(909). */
+        archive->refused = XLSX_ZIP_SIZE_MEMORY;
         free(comp_buf);
         return NULL;
     }

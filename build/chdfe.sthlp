@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.4 20261103}{...}
+{* *! version 1.2.6 20261111}{...}
 {viewerjumpto "Syntax" "chdfe##syntax"}{...}
 {viewerjumpto "Description" "chdfe##description"}{...}
 {viewerjumpto "Options" "chdfe##options"}{...}
@@ -13,7 +13,7 @@
 {title:Syntax}
 
 {p 8 12 2}{cmd:chdfe} {varlist} {ifin} [{it:weight}],
-{opt a:bsorb(absvars)} {opt gen:erate(prefix)} [{opt sample(newvar)} {it:options}]
+{opt a:bsorb(absvars)} {opt g:enerate(prefix)} [{opt sample(newvar)} {it:options}]
 
 {p 8 12 2}{cmd:chdfe} {varlist} {ifin} [{it:weight}],
 {opt a:bsorb(absvars)} {opt clear} [{opt keepv:ars(varlist)} {opt keepid:s} {it:options}]
@@ -42,7 +42,9 @@ this sample. An empty sample returns error 2000.
 slopes such as {cmd:firm#c.time}, {cmd:firm##c.time}, and {cmd:firm##c.(time age)}.
 {cmd:#c.} removes slopes only; {cmd:##c.} also removes group intercepts.
 Categorical keys may be strings; {cmd:strL} keys are limited to 2,045 bytes per
-value. Fixed-effect coefficient output is not available.
+value. Fixed-effect coefficient output is not available. As in {cmd:hdfe},
+slope variables cannot carry time-series operators ({cmd:firm#c.L.x} is
+r(101)); generate the lagged variable first.
 
 {pstd}{opt generate(prefix)} creates one new double variable per input, named
 by adding the prefix to its name. For expanded factor or time-series terms,
@@ -53,8 +55,9 @@ Output names must be new. Original variables and observation order are preserved
 {pstd}{opt sample(newvar)} saves a zero-one sample indicator with {opt generate()}.
 
 {pstd}{opt clear} replaces the dataset with the selected rows and transformed
-variables. It also retains the source variables needed for expanded terms and
-simple weight variables. {opt keepvars()} retains additional variables. {opt keepids} keeps
+variables. As in {cmd:hdfe}, it also retains the source variables needed for
+expanded terms and simple weight variables, but not the absorbed or cluster
+variables. {opt keepvars()} retains additional variables. {opt keepids} keeps
 category IDs named {cmd:__ID1__}, {cmd:__ID2__}, and so on, and cluster IDs named
 {cmd:__CL1__}, and so on. Specify exactly one of {opt generate()} and {opt clear}.
 A failed call leaves the original dataset intact.
@@ -83,18 +86,25 @@ removes the practical limit. Failure to converge returns error 430.
 {pstd}{opt poolsize(#)} sets how many variables have their fixed effects
 removed together. The default is 10. Smaller values use less memory.
 
-{pstd}{opt transform(str)} selects {cmd:symmetric_kaczmarz} (default),
-{cmd:kaczmarz}, or {cmd:cimmino}. Abbreviations are allowed.
-{opt acceleration(str)} selects {cmd:conjugate_gradient} ({cmd:cg}, default),
-{cmd:steepest_descent} ({cmd:sd}), {cmd:aitken}, or {cmd:none}. Conjugate
-gradient requires a symmetric transform. Intermediate estimates and the number
-of iterations may differ from those of {cmd:hdfe}.
+{pstd}{opt transform(str)} (abbreviated {opt tra()}) selects
+{cmd:symmetric_kaczmarz} (default), {cmd:kaczmarz}, {cmd:cimmino}, or
+{cmd:hdfe}'s experimental {cmd:random_kaczmarz} ({cmd:rand_kaczmarz}; a
+symmetric sweep in a new random order each time, from a fixed generator, so
+results are reproducible and Stata's random-number state is untouched).
+Abbreviations are allowed. {opt acceleration(str)} selects
+{cmd:conjugate_gradient} ({cmd:cg}, default), {cmd:steepest_descent}
+({cmd:sd}), {cmd:aitken}, {cmd:none}, or {cmd:hdfe}'s experimental
+{cmd:hybrid} (three plain sweeps, then conjugate gradient). As in {cmd:hdfe},
+{cmd:kaczmarz} with conjugate gradient runs, with a warning that it is
+unlikely to converge. Intermediate estimates and the number of iterations may
+differ from those of {cmd:hdfe}.
 
 {pstd}{opt threads(#)} sets the maximum number of threads, from 1 to 256. Zero
 or omission uses the {help ctools##threads:ctools setting}.
 
-{pstd}{opt verbose}, {opt verbose(#)} with a positive number, and {opt timeit}
-report load, projection, and write times. {cmd:verbose(0)} is quiet.
+{pstd}As {cmd:hdfe}, {cmd:chdfe} reports the singleton observations it drops
+and the iterations used. {opt verbose}, {opt verbose(#)} with a positive
+number, and {opt timeit} also report load, projection, and write times.
 {cmd:chdfe, version} reports the ctools release and stores {cmd:e(version)}.
 
 {marker examples}{...}

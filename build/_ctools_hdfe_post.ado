@@ -1,4 +1,4 @@
-*! version 1.2.4 20261103 github.com/mdroste/stata-ctools
+*! version 1.2.6 20261111 github.com/mdroste/stata-ctools
 *! e() results shared by creghdfe and cppmlhdfe.
 * _ctools_hdfe_post, stub(name) absvars(string) nhdfe(#) vce(name)
 *     [extended(string) clustvars(string) nclust(numlist) dofmethod(string)]
@@ -10,14 +10,17 @@
 *   e(absvars), e(extended_absvars) (default: absvars without i. prefixes),
 *   e(N_hdfe) = nhdfe, e(N_hdfe_extended)
 *   e(dof_table): Categories, Redundant, Num_Coefs, Inexact (missing where
-*   unknown) and Nested per effect; e(df_a_initial) and e(df_a_redundant)
+*   unknown) and Nested per effect; e(df_a_initial) and e(df_a_redundant).
+*   Option reghdfenames names its rows and columns exactly as reghdfe does:
+*   rows 1.var, 1.var1#1.var2, 1.var#c.slope (_cons without absorb()),
+*   columns "Categories" "Redundant" "Num Coefs" "Inexact?" "Nested?"
 *   e(dofmethod); e(vce), and e(vcetype) Robust unless vce is unadjusted
 *   with clustvars: e(clustvar), e(N_clustervars), e(clustvar#), e(N_clust#)
 *   from nclust (one count per variable), e(N_clust) their minimum
 program define _ctools_hdfe_post, eclass
     version 14.1
     syntax, STUB(name) ABSvars(string) NHDFE(integer) VCE(name) ///
-        [EXTended(string) CLUSTvars(string) NCLUST(numlist integer) DOFmethod(string)]
+        [EXTended(string) CLUSTvars(string) NCLUST(numlist integer) DOFmethod(string) REGHDFEnames]
     if `"`extended'"' == "" local extended : subinstr local absvars "i." "", all
     local nfe : word count `extended'
     tempname table
@@ -44,6 +47,21 @@ program define _ctools_hdfe_post, eclass
     ereturn scalar df_a_initial = `initial'
     ereturn scalar df_a_redundant = `redundant'
     ereturn matrix dof_table = `table'
+    if "`reghdfenames'" != "" {
+        local rows
+        foreach e of local extended {
+            if "`e'" != "_cons" {
+                local parts : subinstr local e "#" " ", all
+                local e
+                foreach p of local parts {
+                    if substr("`p'", 1, 2) != "c." local p 1.`p'
+                    local e = cond("`e'" == "", "`p'", "`e'#`p'")
+                }
+            }
+            local rows `rows' `e'
+        }
+        mata: _ctools_hdfe_post_names("`rows'")
+    }
     ereturn local dofmethod `"`dofmethod'"'
     ereturn local vce `vce'
     if "`vce'" != "unadjusted" ereturn local vcetype "Robust"
@@ -65,4 +83,18 @@ program define _ctools_hdfe_post, eclass
         ereturn scalar N_clustervars = `ndims'
         ereturn scalar N_clust = `fewest'
     }
+end
+
+capture mata: mata drop _ctools_hdfe_post_names()
+mata:
+// e(dof_table) row and column names as reghdfe posts them (with
+// st_matrix*stripe, so that 1.var and "Num Coefs" stay as they are)
+void _ctools_hdfe_post_names(string scalar rows)
+{
+    string colvector r, c
+    r = tokens(rows)'
+    c = ("Categories" \ "Redundant" \ "Num Coefs" \ "Inexact?" \ "Nested?")
+    st_matrixrowstripe("e(dof_table)", (J(rows(r), 1, ""), r))
+    st_matrixcolstripe("e(dof_table)", (J(5, 1, ""), c))
+}
 end

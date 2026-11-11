@@ -170,6 +170,34 @@ ST_retcode cgroup_main(const char *args)
         if (rc == STATA_ERR_STATA_WRITE) SF_error("group: failed to write Stata data\n");
         return ctools_stata_rc(rc);
     }
-    SF_scal_save("_ctools_group_n", (double)groups);
-    return 0;
+    return SF_scal_save("_ctools_group_n", (double)groups);
+}
+
+/* 1 when every value of strL variable var in obs1..obs2 can be loaded. */
+static int cgroup_strl_readable(int var, ST_int obs1, ST_int obs2)
+{
+    int bad = 0;
+    #pragma omp parallel for schedule(static) if (obs2 - obs1 >= MIN_OBS_PER_THREAD * 2) reduction(|:bad)
+    for (ST_int obs = obs1; obs <= obs2; obs++) {
+        if (!bad && !ctools_io_strl_readable(var, obs)) bad = 1;
+    }
+    return !bad;
+}
+
+ST_retcode cgroup_strlcheck_main(const char *args)
+{
+    (void)args;
+    const int nvars = SF_nvars();
+    const ST_int obs1 = SF_in1(), obs2 = SF_in2();
+    char *list = (char *)malloc((size_t)nvars * 2 + 1);
+    if (!list) return 920;
+    size_t used = 0;
+    list[0] = '\0';
+    for (int j = 1; j <= nvars; j++) {
+        int bad = SF_var_is_strl(j) && obs2 >= obs1 && !cgroup_strl_readable(j, obs1, obs2);
+        used += (size_t)snprintf(list + used, 3, j > 1 ? " %d" : "%d", bad);
+    }
+    ST_retcode rc = SF_macro_save("_ctools_strl_bad", list);
+    free(list);
+    return rc ? 920 : 0;
 }

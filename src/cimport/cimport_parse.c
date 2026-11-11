@@ -161,6 +161,14 @@ static const char *cimport_find_delim_or_newline_simd(const char *ptr, const cha
 }
 #endif
 
+/* The first quote or line end in [ptr, end), or end. */
+static const char *cimport_find_quote_or_newline(const char *ptr, const char *end, char quote)
+{
+    if (quote == '"') return cimport_find_delim_or_newline_simd(ptr, end, '"');
+    while (ptr < end && *ptr != quote && *ptr != '\n') ptr++;
+    return ptr;
+}
+
 /* ============================================================================
  * Row Boundary Detection
  * ============================================================================ */
@@ -316,6 +324,8 @@ int cimport_parse_row_fast(const char *start, const char *end, char delim, char 
                     continue;
                 }
 
+                if ((size_t)(found - field_start) > CIMPORT_FIELD_MAX_LENGTH)
+                    return CIMPORT_FIELD_TOO_LONG;
                 fields[field_count].offset = (uint64_t)(field_start - file_base);
                 fields[field_count].length = (uint32_t)(found - field_start)
                     | (current_field_has_quote ? CIMPORT_FIELD_QUOTED_FLAG : 0);
@@ -335,10 +345,21 @@ int cimport_parse_row_fast(const char *start, const char *end, char delim, char 
             }
             ptr = end;
         } else {
+            /* Inside quotes only a quote matters, and a line end unless
+             * binding is strict: skip to the next one. */
+            if (bindquotes == CIMPORT_BINDQUOTES_STRICT) {
+                const char *q = memchr(ptr, quote, (size_t)(end - ptr));
+                ptr = q ? q : end;
+            } else {
+                ptr = cimport_find_quote_or_newline(ptr, end, quote);
+            }
+            if (ptr >= end) continue;
             char c = *ptr;
             if (c == '\n' && bindquotes != CIMPORT_BINDQUOTES_STRICT) {
                 /* LOOSE mode: newline always terminates row, even inside quotes.
                  * Record current field up to the newline. */
+                if ((size_t)(ptr - field_start) > CIMPORT_FIELD_MAX_LENGTH)
+                    return CIMPORT_FIELD_TOO_LONG;
                 fields[field_count].offset = (uint64_t)(field_start - file_base);
                 fields[field_count].length = (uint32_t)(ptr - field_start)
                     | (current_field_has_quote ? CIMPORT_FIELD_QUOTED_FLAG : 0);
@@ -358,8 +379,10 @@ int cimport_parse_row_fast(const char *start, const char *end, char delim, char 
         }
     }
 
-    /* Trailing field: reached end of buffer or max_fields */
-    if (field_start < end && field_count < max_fields) {
+    /* Trailing field: reached end of buffer or max_fields. After a delimiter
+     * (field_count > 0) the last field is present even when empty, as with a
+     * line end and as natively: a last line "," has two fields, not one. */
+    if ((field_start < end || field_count > 0) && field_count < max_fields) {
         const char *field_end = end;
         /* A strict quote still open at the end of the file keeps its line
          * ends, as native does. */
@@ -367,7 +390,9 @@ int cimport_parse_row_fast(const char *start, const char *end, char delim, char 
                field_end > field_start && (field_end[-1] == '\r' || field_end[-1] == '\n')) {
             field_end--;
         }
-        if (field_end > field_start) {
+        if (field_end > field_start || field_count > 0) {
+            if ((size_t)(field_end - field_start) > CIMPORT_FIELD_MAX_LENGTH)
+                return CIMPORT_FIELD_TOO_LONG;
             fields[field_count].offset = (uint64_t)(field_start - file_base);
             fields[field_count].length = (uint32_t)(field_end - field_start)
                 | (current_field_has_quote ? CIMPORT_FIELD_QUOTED_FLAG : 0);
@@ -443,19 +468,31 @@ int cimport_extract_field_fast(const char *file_base, CImportFieldRef *field,
     }
     bool lead = src_len > 0 && src[0] == quote;
     bool in_quotes = lead;
-    for (int i = lead ? 1 : 0; i < src_len && out_len < max_len - 1; i++) {
+    for (int i = lead ? 1 : 0; i < src_len && out_len < max_len - 1;) {
+        /* Bytes other than a quote or a line end are copied a run at a time. */
+        const char *hit = cimport_find_quote_or_newline(src + i, src + src_len, quote);
+        int run = (int)(hit - (src + i));
+        if (run > max_len - 1 - out_len) run = max_len - 1 - out_len;
+        if (run) {
+            if (!count_only) memcpy(output + out_len, src + i, (size_t)run);
+            out_len += run;
+            i += run;
+            continue;
+        }
         char c = src[i];
         if (c != quote) {
             if (!(c == '\n' && in_quotes && i > 0 && src[i - 1] == '\r')) CIMPORT_PUT(c);
+            i++;
             continue;
         }
         if (in_quotes && i + 1 < src_len && src[i + 1] == quote) {
             CIMPORT_PUT(quote);
-            i++;
+            i += 2;
             continue;
         }
         in_quotes = !in_quotes;
         if (!(lead && i == src_len - 1)) CIMPORT_PUT(quote);
+        i++;
     }
 
     if (!count_only) output[out_len] = '\0';

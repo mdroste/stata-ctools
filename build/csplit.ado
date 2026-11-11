@@ -1,4 +1,4 @@
-*! version 1.2.4 20261103 github.com/mdroste/stata-ctools
+*! version 1.2.6 20261111 github.com/mdroste/stata-ctools
 *! C-accelerated string splitting (ctools)
 program define csplit, rclass
     version 14.1
@@ -18,9 +18,22 @@ program define csplit, rclass
         exit 198
     }
     if _N > 2147483647 exit 920
-    if "`destring'" == "" & `"`force'`float'`ignore'`percent'"' != "" {
-        di as error "destring options require destring"
-        exit 198
+    * destring's options and ignore() are checked as split checks them
+    if "`destring'" == "" {
+        foreach option in force float ignore percent {
+            if `"``option''"' != "" {
+                di as error "may not specify `option' without specifying destring"
+                exit 198
+            }
+        }
+    }
+    else if `"`ignore'"' != "" {
+        if ustrpos(`"`ignore'"', ",") & !ustrpos(`"`ignore'"', `"""') {
+            di as error `"ignore string must be enclosed with quotes to ignore commas or use options"'
+            exit 198
+        }
+        _parse_ignore `ignore'
+        sreturn clear
     }
     if "`generate'" == "" local generate `varlist'
     confirm name `generate'
@@ -93,27 +106,25 @@ program define csplit, rclass
             local staged `staged' `part'
         }
         plugin call ctools_plugin `staged', "csplit `threadopt' write"
-        if "`destring'" != "" {
-            local ignopt
-            if `"`ignore'"' != "" local ignopt `"ignore(`ignore')"'
-            quietly destring `staged', replace `force' `float' `ignopt' `percent'
-        }
         rename (`staged') (`newvars')
-        * destring recorded the command with the temporary names; split
-        * runs it on the final ones (its list ends in a space)
-        if "`destring'" != "" {
-            foreach v of local newvars {
-                local cmd : char `v'[destring_cmd]
-                local cmd : subinstr local cmd "`staged'" "`newvars' "
-                char `v'[destring_cmd] `"`macval(cmd)'"'
-            }
-        }
     }
     local rc = _rc
     capture plugin call ctools_plugin, "csplit clear"
     if `rc' exit `rc'
-    return local varlist `newvars'
+    * split's report: the new variables, listed by ds, then destring's
+    * messages for each. destring runs on the final names, so its
+    * characteristic destring_cmd names them (split's list ends in a space).
+    return local varlist "`newvars' "
     return local nvars `k'
     return scalar k_new = `k'
-    di as text "variables created: " as result "`newvars'"
+    local s = cond(`k' > 1, "s", "")
+    if "`destring'" != "" di as result "variable`s' born as string: "
+    else di as result "variable`s' created as string: "
+    if `k' ds `newvars'
+    if "`destring'" != "" {
+        local ignopt
+        if `"`ignore'"' != "" local ignopt `"ignore(`ignore')"'
+        local destring_vars "`newvars' "
+        destring `destring_vars', replace `force' `float' `ignopt' `percent'
+    }
 end

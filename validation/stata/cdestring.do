@@ -1717,21 +1717,30 @@ assert a == native_a & b == native_b
 assert "`: type a'" == "`: type native_a'" & "`: type b'" == "`: type native_b'"
 test_pass "replace converts a repeated variable once, as destring does"
 
-* The plugin rejects unsupported long strL values after output staging.
-* Exercise a real transfer failure without a test-only implementation hook.
+* strL text the plugin cannot read (over 2,045 bytes) is converted as
+* destring converts it, beside a variable the plugin converts; only the
+* published outputs remain (a 3,000-digit number is nonnumeric).
 clear
 set obs 1
 gen str2 s = "12"
 gen strL t = "1" * 3000
+tempfile long_strl
+save `long_strl'
 foreach mode in "generate(x y)" "replace" {
-    capture cdestring s t, `mode'
-    local rc = _rc
-    assert `rc' == 109
-    assert c(k) == 2
-    confirm string variable s t
-    assert s == "12" & t == "1" * 3000
+    use `long_strl', clear
+    destring s t, `mode'
+    tempfile expected
+    save `expected'
+    use `long_strl', clear
+    cdestring s t, `mode'
+    cf _all using `expected'
+    assert c(k) == cond("`mode'" == "replace", 2, 3)
+    confirm string variable t
+    assert t == "1" * 3000
+    capture confirm variable y
+    assert _rc
 }
-test_pass "post-staging plugin failure removes all temporary outputs"
+test_pass "long strL beside a plugin variable: only published outputs remain"
 
 * Control characters in ignore() must survive the ado/plugin wire format.
 foreach code in 9 10 13 {
@@ -1822,6 +1831,175 @@ foreach mode in "replace" "generate(an bn cn)" {
     else test_fail "DAT-03 characteristic kept: `mode'" "char keep lost"
 }
 
+* _ct_output runs a command and returns its output (r(text), lines joined
+* by |) and return code (r(rc)). _ct_same_output runs a native and a ctools
+* command on copies of the data in memory and passes when the output, return
+* code, variable names and types, and (unless "nodata") values agree.
+capture program drop _ct_output
+program define _ct_output, rclass
+    tempfile f
+    tempname fh
+    capture log close _ctout
+    quietly log using `"`f'"', text replace name(_ctout)
+    capture noisily `0'
+    local rc = _rc
+    quietly log close _ctout
+    local text
+    file open `fh' using `"`f'"', read text
+    file read `fh' line
+    while !r(eof) {
+        if `"`macval(line)'"' != "" & substr(`"`macval(line)'"', 1, 5) != "r; t=" {
+            local text `"`macval(text)'`macval(line)'|"'
+        }
+        file read `fh' line
+    }
+    file close `fh'
+    return local text `"`macval(text)'"'
+    return scalar rc = `rc'
+end
+capture program drop _ct_same_output
+program define _ct_same_output
+    args name native ctools nodata
+    tempfile want
+    preserve
+    _ct_output `native'
+    local want_text `"`r(text)'"'
+    local want_rc = r(rc)
+    local want_vars
+    local want_types
+    forvalues j = 1/`c(k)' {
+        mata: st_local("v", st_varname(`j'))
+        local want_vars `want_vars' `v'
+        local want_types `want_types' `: type `v''
+    }
+    capture quietly save `"`want'"', emptyok
+    restore, preserve
+    _ct_output `ctools'
+    local got_text `"`r(text)'"'
+    local got_rc = r(rc)
+    local got_vars
+    local got_types
+    forvalues j = 1/`c(k)' {
+        mata: st_local("v", st_varname(`j'))
+        local got_vars `got_vars' `v'
+        local got_types `got_types' `: type `v''
+    }
+    local same_data = 1
+    if "`nodata'" == "" & "`got_vars'" != "" {
+        capture cf _all using `"`want'"'
+        local same_data = !_rc
+    }
+    restore
+    if "`nodata'" != "" {
+        local want_vars
+        local got_vars
+        local want_types
+        local got_types
+    }
+    if `"`macval(want_text)'"' == `"`macval(got_text)'"' & `want_rc' == `got_rc' & ///
+        "`want_vars'" == "`got_vars'" & "`want_types'" == "`got_types'" & `same_data' {
+        test_pass "`name'"
+    }
+    else {
+        noisily di as error `"`name': ctools [`macval(got_text)'] rc `got_rc' vars `got_vars' (`got_types')"'
+        noisily di as error `"`name': native [`macval(want_text)'] rc `want_rc' vars `want_vars' (`want_types') same data `same_data'"'
+        test_fail "`name'" "output, return code, variables or data differ from the native command"
+    }
+end
+* S3/S4 (DESTR-02 to DESTR-05, DESTR-07): destring's messages, return codes,
+* generate() ranges, no-varlist form and hexadecimal numbers
+clear
+input str6 p str4 u str4 w str4 v byte num str4 z
+"10%" "1" "a" "1$" 5 "1"
+"20%" "2" "2" "2" 6 "2"
+"x" "." "3" "3" 7 ""
+end
+local i = 0
+foreach pair in ///
+    `"p u w v, replace force"' `"p u w v, replace"' `"p u w v, gen(g1-g4)"' ///
+    `"p u w v, gen(g1 g2 g3 g4) force"' `"p, replace percent force"' ///
+    `"p, replace percent"' `"w v, replace ignore("$") force"' `"w v, replace ignore("$")"' ///
+    `"v, replace ignore("$", asbytes)"' `"v, gen(vv) i("$")"' `"num, replace"' ///
+    `"num u, gen(n1 n2)"' `"u u, replace"' `"w w, replace"' `"u u, gen(a1 a2)"' ///
+    `"w w, replace force"' `"z, replace"' `"z, gen(zz)"' `", gen(h1-h6) force"' ///
+    `", replace force"' `", replace"' `", gen(h1-h5)"' `", gen(h1-h7)"' `"u, gen(num)"' ///
+    `"u, gen(1bad)"' `"u w, gen(k1 k1)"' `"u"' `"u, gen(k1) replace"' `"u, gen(k1 k2)"' ///
+    `"u, replace ignore("a,b")"' `"u, replace ignore("a", asbytes illegal)"' {
+    local ++i
+    _ct_same_output "DESTR-04 messages `i'" `"destring `pair'"' `"cdestring `pair'"'
+}
+* Hexadecimal (%21x) numbers: real() reads them and so does destring
+clear
+input str24 h
+"1.8X+004"
+"-1.0X-001"
+"+1.0000000000000X+000"
+"1.abcX+0"
+"1.ABCX-3fe"
+"1.8x+4"
+"1.0X+03"
+"1.0X-000"
+"1.8X-3ff"
+"1.fffffffffffffX-3ff"
+"1.0X-3ff"
+"0.0X-3ff"
+"-0.0000000000000X-3ff"
+"00.0X-3ff"
+"1.fffffffffffffX+3fe"
+"1.0X+3ff"
+"1.fffffffffffffX+3ff"
+"1.0X+400"
+"1.0X-400"
+"0.0X+0"
+"0.8X-3ff"
+"0.0X-3fe"
+"2.0X+0"
+"1.X+1"
+"1X+1"
+"1.8X4"
+"1.8X+0004"
+"1.00000000000000X+0"
+"01.8X+004"
+"1.8 X+004"
+"1.gX+1"
+"0x1A"
+" 1.8X+004 "
+end
+gen hn = h
+destring h, gen(ref) force
+cdestring h, gen(got) force
+count if ref != got
+if r(N) == 0 test_pass "DESTR-07 hexadecimal values match destring"
+else {
+    noisily list h ref got if ref != got
+    test_fail "DESTR-07 hexadecimal values" "`r(N)' values differ from destring"
+}
+count if !missing(got)
+if r(N) == 16 test_pass "DESTR-07 hexadecimal values read"
+else test_fail "DESTR-07 hexadecimal values read" "`r(N)' nonmissing, expected 16"
+keep in 1/15
+_ct_same_output "DESTR-07 hexadecimal without force" "destring hn, replace" "cdestring hn, replace"
+_ct_same_output "DESTR-07 hexadecimal float" "destring hn, replace float force" "cdestring hn, replace float force"
+replace hn = subinstr(hn, ".", ",", 1)
+_ct_same_output "DESTR-07 hexadecimal dpcomma" "destring hn, replace dpcomma force" "cdestring hn, replace dpcomma force"
+* Removing illegal bytes must preserve complete valid UTF-8 whitespace.
+clear
+set obs 4
+gen str40 unicode = uchar(12288) + "12" + uchar(160)
+replace unicode = uchar(160) + "1.25" + uchar(8195) in 2
+replace unicode = uchar(233) + "12" in 3
+replace unicode = uchar(12288) + "12$" + uchar(160) in 4
+destring unicode, generate(ref) ignore("$", illegal) force
+cdestring unicode, generate(got) ignore("$", illegal) force
+assert ref == got
+assert got == 12 in 1
+assert got == 1.25 in 2
+assert missing(got) in 3
+assert got == 12 in 4
+test_pass "DESTR-08 illegal preserves valid Unicode whitespace"
+* No variables at all: varlist required
+clear
+_ct_same_output "DESTR-03 empty dataset" "destring, replace" "cdestring, replace"
 * SUMMARY
 * End of cdestring validation
 noi print_summary "cdestring"

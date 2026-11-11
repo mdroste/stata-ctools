@@ -13,4 +13,7 @@
 /* Full regression command: HDFE init + partial out + OLS in one shot */
 ST_retcode do_full_regression(int argc, char *argv[]);
 
+/* The full fit; retain keeps the model for vce(bootstrap) replicates. */
+ST_retcode creghdfe_full_regression(int retain);
+
 #endif /* CREGHDFE_REGRESS_H */

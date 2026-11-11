@@ -56,6 +56,15 @@ static void cbinscatter_config_init(BinscatterConfig *config) {
     config->tolerance = 1e-8;
     config->touse_mode = 0;
     config->check_weights = 0;
+    config->addmean = 1;
+    config->medians = 0;
+    config->has_xq = 0;
+    config->n_rd = 0;
+    config->rd = NULL;
+    config->rand_mode = 0;
+    config->randcut = 1.0;
+    config->genxq = 0;
+    config->genxq_var = 0;
 }
 
 static void cbinscatter_results_init(BinscatterResults *results) {
@@ -64,6 +73,8 @@ static void cbinscatter_results_init(BinscatterResults *results) {
     results->nquantiles = 0;
     results->total_obs = 0;
     results->obs_dropped = 0;
+    results->rd_coefs = NULL;
+    results->rd_stats = NULL;
 }
 
 static void cbinscatter_results_free(BinscatterResults *results) {
@@ -78,6 +89,8 @@ static void cbinscatter_results_free(BinscatterResults *results) {
         }
         free(results->groups);
     }
+    free(results->rd_coefs);
+    free(results->rd_stats);
     cbinscatter_results_init(results);
 }
 
@@ -144,6 +157,41 @@ static ST_retcode read_config(BinscatterConfig *config) {
     if (SF_scal_use("__cbinscatter_check_weights", &val) == 0) {
         config->check_weights = (ST_int)val;
     }
+    if (SF_scal_use("__cbinscatter_addmean", &val) == 0) {
+        config->addmean = (ST_int)val;
+    }
+    if (SF_scal_use("__cbinscatter_medians", &val) == 0) {
+        config->medians = (ST_int)val;
+    }
+    if (SF_scal_use("__cbinscatter_has_xq", &val) == 0) {
+        config->has_xq = (ST_int)val;
+    }
+    if (SF_scal_use("__cbinscatter_rand_mode", &val) == 0) {
+        config->rand_mode = (ST_int)val;
+    }
+    if (SF_scal_use("__cbinscatter_randcut", &val) == 0) {
+        config->randcut = val;
+    }
+    if (SF_scal_use("__cbinscatter_genxq", &val) == 0) {
+        config->genxq = (ST_int)val;
+    }
+    if (SF_scal_use("__cbinscatter_n_rd", &val) == 0 && val >= 1) {
+        /* The break points, a 1 x n_rd matrix */
+        config->n_rd = (ST_int)val;
+        config->rd = (ST_double *)malloc((size_t)config->n_rd * sizeof(ST_double));
+        if (!config->rd) {
+            config->n_rd = 0;
+            return CBINSCATTER_ERR_MEMORY;
+        }
+        for (ST_int k = 0; k < config->n_rd; k++) {
+            if (SF_mat_el("__cbinscatter_rd", 1, k + 1, &config->rd[k]) != 0) {
+                free(config->rd);
+                config->rd = NULL;
+                config->n_rd = 0;
+                return CBINSCATTER_ERR_SYNTAX;
+            }
+        }
+    }
 
     return CBINSCATTER_OK;
 }
@@ -160,6 +208,9 @@ static ST_retcode load_data(
     ST_int **fe_vars_out,
     ST_int **by_groups_out,
     ST_double **weights_out,
+    ST_double **xq_out,
+    ST_double **rsel_out,
+    ST_int **obs_out,
     ST_int *N_out,
     ST_int *N_valid_out
 ) {
@@ -173,8 +224,15 @@ static ST_retcode load_data(
     ST_double *fe_codes = NULL;
     ST_int *by_groups = NULL;
     ST_double *weights = NULL;
+    ST_double *xq = NULL;
+    ST_double *rsel = NULL;
+    ST_int *obs = NULL;
     ST_int *valid_idx = NULL;
     ST_int N_valid = 0;
+
+    *xq_out = NULL;
+    *rsel_out = NULL;
+    *obs_out = NULL;
 
     /* Count total variables to load via ctools infrastructure
      * Variables are ordered: y, x, controls..., absorb..., by, weights */
@@ -183,7 +241,12 @@ static ST_retcode load_data(
     num_vars_to_load += config->has_absorb ? config->num_absorb : 0;
     num_vars_to_load += config->has_by ? 1 : 0;
     num_vars_to_load += config->has_weights ? 1 : 0;
+    num_vars_to_load += config->has_xq ? 1 : 0;
+    num_vars_to_load += config->rand_mode > 0 ? 1 : 0;
     num_vars_to_load += (config->touse_mode == 1) ? 1 : 0;
+
+    /* genxq()'s variable follows every loaded one */
+    config->genxq_var = num_vars_to_load + 1;
 
     /* Build array of variable indices for all variables */
     int *var_indices = (int *)ctools_safe_malloc2(num_vars_to_load, sizeof(int));
@@ -224,6 +287,19 @@ static ST_retcode load_data(
         if (config->has_absorb) w_var += config->num_absorb;
         if (config->has_by) w_var += 1;
         var_indices[vidx++] = w_var;
+    }
+
+    /* xq(), then the random-subsample variable, follow the weight */
+    int xq_data_idx = -1, rsel_data_idx = -1;
+    if (config->has_xq) {
+        xq_data_idx = vidx;
+        var_indices[vidx] = vidx + 1;
+        vidx++;
+    }
+    if (config->rand_mode > 0) {
+        rsel_data_idx = vidx;
+        var_indices[vidx] = vidx + 1;
+        vidx++;
     }
 
     /* The sample marker follows every other variable */
@@ -353,10 +429,28 @@ static ST_retcode load_data(
         memcpy(weights, filtered.data.vars[weights_data_idx].data.dbl, N * sizeof(ST_double));
     }
 
+    /* xq(), the random-subsample variable (mode 2: the draws by rank, kept
+     * whole) and each row's observation number */
+    if (xq_data_idx >= 0 || rsel_data_idx >= 0 || config->genxq) {
+        if (xq_data_idx >= 0) xq = (ST_double *)ctools_safe_malloc2((size_t)N, sizeof(ST_double));
+        if (rsel_data_idx >= 0) rsel = (ST_double *)ctools_safe_malloc2((size_t)N, sizeof(ST_double));
+        obs = (ST_int *)ctools_safe_malloc2((size_t)N, sizeof(ST_int));
+        if ((xq_data_idx >= 0 && !xq) || (rsel_data_idx >= 0 && !rsel) || !obs) {
+            free(y); free(x); free(controls); free(fe_vars); free(fe_codes); free(by_groups); free(weights);
+            free(xq); free(rsel); free(obs);
+            ctools_filtered_data_free(&filtered);
+            return CBINSCATTER_ERR_MEMORY;
+        }
+        if (xq) memcpy(xq, filtered.data.vars[xq_data_idx].data.dbl, (size_t)N * sizeof(ST_double));
+        if (rsel) memcpy(rsel, filtered.data.vars[rsel_data_idx].data.dbl, (size_t)N * sizeof(ST_double));
+        for (i = 0; i < N; i++) obs[i] = filtered.obs_map ? (ST_int)filtered.obs_map[i] : i + 1;
+    }
+
     /* Allocate valid_idx array */
     valid_idx = (ST_int *)ctools_safe_malloc2((size_t)N, sizeof(ST_int));
     if (!valid_idx) {
         free(y); free(x); free(controls); free(fe_vars); free(fe_codes); free(by_groups); free(weights);
+        free(xq); free(rsel); free(obs);
         ctools_filtered_data_free(&filtered);
         return CBINSCATTER_ERR_MEMORY;
     }
@@ -401,6 +495,10 @@ static ST_retcode load_data(
             if (by_groups) {
                 for (r = i0; r < i1; r++) if (by_groups[r] < 0) valid_idx[r] = 0;
             }
+            /* binscatter marks out a missing xq() */
+            if (xq) {
+                for (r = i0; r < i1; r++) if (!(xq[r] < missval)) valid_idx[r] = 0;
+            }
             if (weights) {
                 for (r = i0; r < i1; r++) if (!(weights[r] < missval) || weights[r] <= 0) valid_idx[r] = 0;
             }
@@ -430,6 +528,7 @@ static ST_retcode load_data(
 
     if (negative_weight || fractional_fweight || N_requested == 0) {
         free(y); free(x); free(controls); free(fe_vars); free(fe_codes); free(by_groups); free(weights);
+        free(xq); free(rsel); free(obs);
         free(valid_idx);
         SF_scal_save("__cbinscatter_reported", 1.0);
         if (negative_weight) {
@@ -458,6 +557,10 @@ static ST_retcode load_data(
                 x[k] = x[src];
                 if (by_groups) by_groups[k] = by_groups[src];
                 if (weights) weights[k] = weights[src];
+                if (xq) xq[k] = xq[src];
+                /* mode 2 keeps the draws in observation order */
+                if (rsel && config->rand_mode == 1) rsel[k] = rsel[src];
+                if (obs) obs[k] = obs[src];
             }
         }
         /* Compact controls column-by-column.
@@ -492,7 +595,7 @@ static ST_retcode load_data(
                                 &fe_vars[(size_t)j * N_valid], &num_levels,
                                 &counts, NULL, NULL) != 0) {
                 free(y); free(x); free(controls); free(fe_vars); free(fe_codes);
-                free(by_groups); free(weights);
+                free(by_groups); free(weights); free(xq); free(rsel); free(obs);
                 return CBINSCATTER_ERR_MEMORY;
             }
             free(counts);
@@ -506,6 +609,9 @@ static ST_retcode load_data(
     *fe_vars_out = fe_vars;
     *by_groups_out = by_groups;
     *weights_out = weights;
+    *xq_out = xq;
+    *rsel_out = rsel;
+    *obs_out = obs;
     *N_out = (ST_int)N_requested;
     *N_valid_out = N_valid;
 
@@ -534,7 +640,7 @@ static ST_retcode store_results(
         for (b = 0; b < group->num_bins; b++) {
             BinStats *bin = &group->bins[b];
             { ST_retcode rc = (_stata_)->safematstore("__cbinscatter_bins", row, 1, (ST_double)group->by_group_id); if (rc) return rc; }
-            { ST_retcode rc = (_stata_)->safematstore("__cbinscatter_bins", row, 2, (ST_double)bin->bin_id); if (rc) return rc; }
+            { ST_retcode rc = (_stata_)->safematstore("__cbinscatter_bins", row, 2, (bin->external_id > 0 ? bin->external_id : (ST_double)bin->bin_id)); if (rc) return rc; }
             { ST_retcode rc = (_stata_)->safematstore("__cbinscatter_bins", row, 3, bin->x_mean); if (rc) return rc; }
             { ST_retcode rc = (_stata_)->safematstore("__cbinscatter_bins", row, 4, bin->y_mean); if (rc) return rc; }
             { ST_retcode rc = (_stata_)->safematstore("__cbinscatter_bins", row, 5, (ST_double)bin->n_obs); if (rc) return rc; }
@@ -543,8 +649,24 @@ static ST_retcode store_results(
     }
     { ST_retcode rc = SF_scal_save("__cbinscatter_bins_used", (ST_double)(row - 1)); if (rc) return rc; }
 
+    /* With rd(): one row per group and interval (missing rows stay missing) */
+    if (config->linetype > 0 && config->n_rd > 0 && results->rd_coefs) {
+        ST_int rows = results->num_by_groups * (config->n_rd + 1);
+        for (ST_int r = 0; r < rows; r++) {
+            for (ST_int j = 0; j < 4; j++) {
+                ST_double v = results->rd_coefs[(size_t)r * 4 + j];
+                if (SF_is_missing(v)) continue;
+                { ST_retcode rc = (_stata_)->safematstore("__cbinscatter_coefs", r + 1, j + 1, v); if (rc) return rc; }
+            }
+            for (ST_int j = 0; j < 2; j++) {
+                ST_double v = results->rd_stats[(size_t)r * 2 + j];
+                if (SF_is_missing(v)) continue;
+                { ST_retcode rc = (_stata_)->safematstore("__cbinscatter_fit_stats", r + 1, j + 1, v); if (rc) return rc; }
+            }
+        }
+    }
     /* Store fit coefficients if line fitting was done */
-    if (config->linetype > 0) {
+    else if (config->linetype > 0) {
         for (g = 0; g < results->num_by_groups; g++) {
             ByGroupResult *group = &results->groups[g];
             if (group->fit_coefs && group->fit_order > 0) {
@@ -569,11 +691,13 @@ static ST_retcode store_results(
  * and by (each column N long) by group: groups 1..G in order, rows with any
  * other id last, row order kept within each group. Blocks of rows are counted
  * and then scattered in parallel. start[g] (g = 0..G) is group g + 1's first
- * row and start[G] the end of the groups.
+ * row and start[G] the end of the groups. perm (N, or NULL) gets each new
+ * row's old row.
  */
 static ST_retcode partition_by_group(ST_double **y, ST_double **x, ST_double **w,
                                      ST_double **ctrl, ST_int K, ST_int **fe, ST_int F,
-                                     ST_int **by, ST_int N, ST_int G, ST_int *start)
+                                     ST_int **by, ST_int N, ST_int G, ST_int *start,
+                                     ST_int *perm)
 {
     const ST_int num_blocks = cbs_num_blocks(N);
     const ST_int nb = G + 1;  /* bucket G: ids outside 1..G */
@@ -629,6 +753,7 @@ static ST_retcode partition_by_group(ST_double **y, ST_double **x, ST_double **w
             for (ST_int k = 0; nc && k < K; k++) nc[(size_t)k * N + at] = c_in[(size_t)k * N + i];
             for (ST_int k = 0; nf && k < F; k++) nf[(size_t)k * N + at] = f_in[(size_t)k * N + i];
             nby[at] = b_in[i];
+            if (perm) perm[at] = i;
         }
     }
 
@@ -685,6 +810,15 @@ static int x_has_few_values(const ST_double *x, ST_int N, ST_int limit)
     return few;
 }
 
+/* Order of row indices by x (for the draws of randcut() without randvar()) */
+static const ST_double *g_rank_values;
+
+static int compare_rank(const void *a, const void *b)
+{
+    ST_double va = g_rank_values[*(const ST_int *)a], vb = g_rank_values[*(const ST_int *)b];
+    return (va > vb) - (va < vb);
+}
+
 /* ========================================================================
  * Main Computation Function
  * ======================================================================== */
@@ -704,6 +838,9 @@ static ST_retcode do_compute_bins(void) {
     ST_int *group_start = NULL;
     ST_double *pooled_cutpoints = NULL;
     ST_int pooled_nq = 0;
+    ST_double *xq = NULL, *rsel = NULL;
+    ST_int *obs = NULL, *perm = NULL;
+    unsigned char *sampled = NULL;
     ST_int N, N_valid;
 
     cbinscatter_results_init(&results);
@@ -718,7 +855,7 @@ static ST_retcode do_compute_bins(void) {
 
     /* Load data */
     rc = load_data(&config, &y, &x, &controls, &fe_vars, &by_groups, &weights,
-                   &N, &N_valid);
+                   &xq, &rsel, &obs, &N, &N_valid);
     if (rc != CBINSCATTER_OK) goto cleanup;
 
     t_load = ctools_timer_seconds();
@@ -767,6 +904,11 @@ static ST_retcode do_compute_bins(void) {
                 }
                 y_raw_mean /= N_valid;
                 x_raw_mean /= N_valid;
+            }
+            /* noaddmean: binscatter keeps the residuals themselves */
+            if (!config.addmean) {
+                y_raw_mean = 0.0;
+                x_raw_mean = 0.0;
             }
         }
 
@@ -914,10 +1056,40 @@ static ST_retcode do_compute_bins(void) {
             rc = CBINSCATTER_ERR_MEMORY;
             goto cleanup;
         }
+        if (xq || obs || (rsel && config.rand_mode == 1)) {
+            perm = (ST_int *)ctools_safe_malloc2((size_t)N_valid, sizeof(ST_int));
+            if (!perm) {
+                rc = CBINSCATTER_ERR_MEMORY;
+                goto cleanup;
+            }
+        }
         rc = partition_by_group(&y, &x, &weights, &controls, config.num_controls,
                                 &fe_vars, config.num_absorb, &by_groups, N_valid,
-                                num_groups, group_start);
+                                num_groups, group_start, perm);
         if (rc != CBINSCATTER_OK) goto cleanup;
+        /* The other row arrays follow the rows */
+        if (perm) {
+            ST_double *tmp_d = (ST_double *)ctools_safe_malloc2((size_t)N_valid, sizeof(ST_double));
+            ST_int *tmp_i = (ST_int *)ctools_safe_malloc2((size_t)N_valid, sizeof(ST_int));
+            if (!tmp_d || !tmp_i) {
+                free(tmp_d); free(tmp_i);
+                rc = CBINSCATTER_ERR_MEMORY;
+                goto cleanup;
+            }
+            if (xq) {
+                for (ST_int i = 0; i < N_valid; i++) tmp_d[i] = xq[perm[i]];
+                memcpy(xq, tmp_d, (size_t)N_valid * sizeof(ST_double));
+            }
+            if (rsel && config.rand_mode == 1) {
+                for (ST_int i = 0; i < N_valid; i++) tmp_d[i] = rsel[perm[i]];
+                memcpy(rsel, tmp_d, (size_t)N_valid * sizeof(ST_double));
+            }
+            if (obs) {
+                for (ST_int i = 0; i < N_valid; i++) tmp_i[i] = obs[perm[i]];
+                memcpy(obs, tmp_i, (size_t)N_valid * sizeof(ST_int));
+            }
+            free(tmp_d); free(tmp_i);
+        }
     }
 
     /* Binsreg method with controls/absorb fits each group's line jointly with
@@ -932,7 +1104,23 @@ static ST_retcode do_compute_bins(void) {
      * with no more distinct values than nquantiles is binned as with option
      * discrete, also under by() and weights: each group's own values become
      * its bins */
-    if (config.discrete) {
+    if (config.has_xq) {
+        /* binscatter takes xq()'s values as the bins, without the switch to
+         * discrete bins, and allows at most (sample size)/2 of them */
+        int few = x_has_few_values(xq, N_valid, N_valid / 2);
+        if (few < 0) {
+            rc = CBINSCATTER_ERR_MEMORY;
+            goto cleanup;
+        }
+        if (!few) {
+            SF_error("discrete specified, but number of unique values is > (sample size/2)\n");
+            SF_scal_save("__cbinscatter_reported", 1.0);
+            rc = 134;
+            goto cleanup;
+        }
+        config.discrete = 0;
+    }
+    else if (config.discrete) {
         int few = x_has_few_values(x, N_valid, N_valid / 2);
         if (few < 0) {
             rc = CBINSCATTER_ERR_MEMORY;
@@ -954,9 +1142,48 @@ static ST_retcode do_compute_bins(void) {
         config.discrete = few;
     }
 
+    SF_scal_save("__cbinscatter_discrete_used", (ST_double)config.discrete);
+
+    /* randvar()/randcut()/randn(): binscatter's fastxtile takes the quantile
+     * cutpoints of the pooled (residualized) x from a random subsample and
+     * bins every observation on them */
+    if (config.rand_mode > 0 && config.method == 0 && !config.discrete && !config.has_xq) {
+        sampled = (unsigned char *)calloc((size_t)N_valid + 1, 1);
+        if (!sampled) {
+            rc = CBINSCATTER_ERR_MEMORY;
+            goto cleanup;
+        }
+        if (config.rand_mode == 1) {
+            for (ST_int i = 0; i < N_valid; i++) sampled[i] = (rsel[i] != 0 && rsel[i] < SV_missval);
+        } else {
+            /* binscatter draws for the data sorted by x, so the observation
+             * of rank k (ascending x) has the k-th of the sample's draws;
+             * tied x are interchangeable */
+            ST_int *order = (ST_int *)ctools_safe_malloc2((size_t)N_valid, sizeof(ST_int));
+            if (!order) {
+                rc = CBINSCATTER_ERR_MEMORY;
+                goto cleanup;
+            }
+            for (ST_int i = 0; i < N_valid; i++) order[i] = i;
+            g_rank_values = x;
+            qsort(order, (size_t)N_valid, sizeof(ST_int), compare_rank);
+            for (ST_int k = 0; k < N_valid; k++) {
+                ST_double d = rsel[k];
+                sampled[order[k]] = (d < SV_missval && d <= config.randcut);
+            }
+            free(order);
+        }
+        rc = compute_sampled_cutpoints(x, weights, sampled, N_valid, config.nquantiles,
+                                       &pooled_cutpoints);
+        if (rc == CBINSCATTER_ERR_SYNTAX) SF_scal_save("__cbinscatter_reported", 1.0);
+        if (rc != CBINSCATTER_OK) goto cleanup;
+        pooled_nq = config.nquantiles;
+    }
+
     /* binscatter's by() bins every group on the quantiles of the pooled
      * (residualized) x; binsreg's method bins each group separately */
-    if (config.has_by && config.method == 0 && !config.discrete) {
+    if (config.has_by && config.method == 0 && !config.discrete && !config.has_xq &&
+        !pooled_cutpoints) {
         rc = compute_pooled_cutpoints(x, weights, N_valid, config.nquantiles,
                                       &pooled_cutpoints, &pooled_nq);
         if (rc != CBINSCATTER_OK) goto cleanup;
@@ -1029,9 +1256,10 @@ static ST_retcode do_compute_bins(void) {
             }
         }
 
-        /* The binsreg adjustments need each observation's bin */
+        /* The binsreg adjustments, medians and genxq() need each
+         * observation's bin */
         ST_int *bin_ids = NULL;
-        if (use_binsreg_ctrl || use_binsreg_hdfe) {
+        if (use_binsreg_ctrl || use_binsreg_hdfe || config.medians || config.genxq || config.has_xq) {
             bin_ids = (ST_int *)malloc((size_t)n_group * sizeof(ST_int));
             if (!bin_ids) {
                 free(c_group); free(fe_group);
@@ -1041,7 +1269,11 @@ static ST_retcode do_compute_bins(void) {
         }
 
         /* Compute bins (bin assignments and X means) */
-        if (config.discrete) {
+        if (config.has_xq) {
+            rc = compute_bins_by_key(y_group, x_group, xq + first, w_group, n_group,
+                                     config.compute_se, bin_capacity - bins_used,
+                                     group, bin_ids);
+        } else if (config.discrete) {
             rc = compute_bins_discrete(y_group, x_group, w_group, n_group,
                                        config.compute_se, bin_capacity - bins_used,
                                        group, bin_ids);
@@ -1061,9 +1293,32 @@ static ST_retcode do_compute_bins(void) {
             bins_used += group->num_bins;
         }
 
+        /* medians: the bin coordinates are medians (x's own values for
+         * discrete bins) */
+        if (rc == CBINSCATTER_OK && config.medians && bin_ids) {
+            rc = apply_bin_medians(y_group, x_group, w_group, n_group, bin_ids,
+                                   !config.discrete, group);
+        }
+
+        /* genxq(): each observation's quantile bin, as fastxtile numbers it */
+        if (rc == CBINSCATTER_OK && config.genxq && !config.discrete && bin_ids && obs) {
+            for (ST_int i = 0; i < n_group && rc == CBINSCATTER_OK; i++) {
+                if (bin_ids[i] < 1) continue;
+                /* The checked store: the unchecked one can write to another
+                 * variable (see ctools_transport_internal.h) */
+                rc = (_stata_)->safestore(config.genxq_var, obs[first + i], (ST_double)bin_ids[i]);
+            }
+        }
+
+        /* xq(): the bins are numbered by their xq() values */
+        if (rc == CBINSCATTER_OK && config.has_xq && bin_ids && group->bins) {
+            set_external_bin_ids(xq + first, bin_ids, n_group, group);
+        }
+
         /* Binsreg method: regression-adjust the Y-means of the bins assigned
          * above, discrete or quantile (renumbered to index group->bins) */
-        if (rc == CBINSCATTER_OK && bin_ids && group->bins != NULL && group->num_bins > 0) {
+        if (rc == CBINSCATTER_OK && (use_binsreg_ctrl || use_binsreg_hdfe) && bin_ids &&
+            group->bins != NULL && group->num_bins > 0) {
             rc = densify_bin_ids(bin_ids, n_group, group);
             if (rc == CBINSCATTER_OK && use_binsreg_hdfe) {
                 /* FWL-based HDFE adjustment (controls, if any, enter jointly) */
@@ -1111,7 +1366,12 @@ static ST_retcode do_compute_bins(void) {
     /* Fit lines if requested (on the mean-restored residuals for the classic
      * method with controls/absorb, as binscatter does) */
     t_fit = t_bins;
-    if (config.linetype > 0 && !binsreg_joint_fit) {
+    if (config.linetype > 0 && !binsreg_joint_fit && config.n_rd > 0) {
+        rc = fit_all_groups_rd(y, x, group_start, weights, N_valid, &config, &results);
+        if (rc != CBINSCATTER_OK) goto cleanup;
+        t_fit = ctools_timer_seconds();
+    }
+    else if (config.linetype > 0 && !binsreg_joint_fit) {
         rc = fit_all_groups(y, x, group_start, weights, N_valid, &config, &results);
         if (rc != CBINSCATTER_OK) goto cleanup;
 
@@ -1147,6 +1407,12 @@ cleanup:
     free(group_sizes);
     free(group_start);
     free(pooled_cutpoints);
+    free(xq);
+    free(rsel);
+    free(obs);
+    free(perm);
+    free(sampled);
+    free(config.rd);
     cbinscatter_results_free(&results);
 
     return rc;

@@ -23,6 +23,7 @@
 #include "civreghdfe_matrix.h"
 #include "civreghdfe_vce.h"
 #include "../ctools_config.h"
+#include "../ctools_spi.h"
 
 /* Shared OLS functions */
 #include "../ctools_ols.h"
@@ -676,6 +677,12 @@ ST_retcode civreghdfe_compute_underid_test(
         }
         if (ok) {
             ST_double min_eval = ev[0];
+            /* ivreg2's e(ccev): the squared canonical correlations, largest
+               first (into __civreghdfe_ccev when the caller created it) */
+            if (SF_row("__civreghdfe_ccev") == 1 && SF_col("__civreghdfe_ccev") >= K_endog) {
+                for (ST_int e = 0; e < K_endog && !trc; e++)
+                    trc = ctools_mat_store("__civreghdfe_ccev", 1, e + 1, ev[K_endog - 1 - e]);
+            }
             *underid_stat = (ST_double)N_eff * min_eval * lm_scale;
             if (min_eval > 0.0 && min_eval < 1.0)
                 *cd_f = min_eval / (1.0 - min_eval) * ((ST_double)df_resid / (ST_double)L);
@@ -954,12 +961,15 @@ ST_retcode civreghdfe_compute_cstat(
     const ST_double *S,
     ST_double J_full,
     const ST_int *orthog_indices,
-    ST_int n_orthog,
+    ST_int n_orthog_excl,
+    const ST_int *orthog_x,
+    ST_int n_orthog_x,
     ST_double *cstat,
     ST_int *cstat_df
 )
 {
     const ST_double *w = (weights && weight_type != 0) ? weights : NULL;
+    ST_int n_orthog = n_orthog_excl + n_orthog_x;
     ST_int K_rest = K_iv - n_orthog;  /* Instruments not being tested */
 
     *cstat = 0.0;
@@ -979,10 +989,19 @@ ST_retcode civreghdfe_compute_cstat(
     if (!keep) return 920;
     for (ST_int k = 0; k < K_iv; k++) keep[k] = 1;
     ST_int n_masked = 0;
-    for (ST_int i = 0; i < n_orthog; i++) {
+    for (ST_int i = 0; i < n_orthog_excl; i++) {
         ST_int idx = orthog_indices[i] - 1;
         if (idx >= 0 && idx < K_iv - K_exog && keep[K_exog + idx]) {
             keep[K_exog + idx] = 0;
+            n_masked++;
+        }
+    }
+    /* included instruments (ivreg2 treats them as endogenous in the
+       restricted model: they stay regressors and leave Z) */
+    for (ST_int i = 0; i < n_orthog_x; i++) {
+        ST_int idx = orthog_x[i] - 1;
+        if (idx >= 0 && idx < K_exog && keep[idx]) {
+            keep[idx] = 0;
             n_masked++;
         }
     }

@@ -50,20 +50,9 @@ int cio_excel_workbook(const char *kind)
                 rc = 610;
                 break;
             }
-            int r0 = 65536, c0 = 256, r1 = -1, c1 = -1;
-            for (int r = 0; r <= sheet->rows.lastrow; r++)
-                for (int c = 0; c <= sheet->rows.lastcol; c++)
-                    if (cio_xls_nonempty(xls_cell(sheet, (XLSWORD)r, (XLSWORD)c)))
-                    {
-                        if (r < r0)
-                            r0 = r;
-                        if (r > r1)
-                            r1 = r;
-                        if (c < c0)
-                            c0 = c;
-                        if (c > c1)
-                            c1 = c;
-                    }
+            /* The same used range as the import, formatted blanks included */
+            int r0, c0, r1, c1;
+            cio_xls_used_range(sheet, &r0, &c0, &r1, &c1);
             rc = cio_excel_sheet_info((int)j + 1, cio_xls_sheet_name(book, j), r1 < 0 ? 1 : r0 + 1,
                                       c0, r1 + 1, c1);
             xls_close_WS(sheet);

@@ -1,4 +1,6 @@
-*! version 1.2.4 20261103 github.com/mdroste/stata-ctools
+*! version 1.2.6 20261111 github.com/mdroste/stata-ctools
+* predict after cppmlhdfe, with ppmlhdfe_p's statistics, default (mu, with
+* its note), variable labels and notes on missing values
 program define cppmlhdfe_p
     version 14.1
     if "`e(cmd)'" != "cppmlhdfe" error 301
@@ -12,7 +14,10 @@ program define cppmlhdfe_p
     local opt `xb' `xbd' `d' `mu' `eta' `stdp' `anscombe' `cooksd' ///
         `deviance' `hat' `likelihood' `pearson' `response' `scores' `working'
     opts_exclusive "`opt'"
-    if "`opt'" == "" local opt mu
+    if "`opt'" == "" {
+        di as text "(option mu assumed; predicted mean of depvar)"
+        local opt mu
+    }
     if inlist("`opt'", "cooksd", "hat", "likelihood") {
         di as error "option not implemented: `opt'"
         exit 198
@@ -36,8 +41,9 @@ program define cppmlhdfe_p
         exit
     }
     if "`opt'" == "d" {
-        if "`e(d)'" == "" quietly generate double `varlist' = 0 `if' `in'
-        else quietly generate double `varlist' = `e(d)' `if' `in'
+        if "`e(d)'" == "" generate double `varlist' = 0 `if' `in'
+        else generate double `varlist' = `e(d)' `if' `in'
+        label variable `varlist' "d[`e(absvars)']"
         rename `varlist' `target'
         exit
     }
@@ -50,36 +56,56 @@ program define cppmlhdfe_p
         quietly replace `varlist' = `varlist' + `e(offset)' `if' `in'
     }
     if "`opt'" == "xb" {
+        label variable `varlist' "Linear prediction"
         rename `varlist' `target'
         exit
     }
     if "`e(absvars)'" != "_cons" {
         quietly replace `varlist' = `varlist' + `e(d)' `if' `in'
+        label variable `varlist' "Linear prediction: xb + d[`e(absvars)']"
     }
-    else if "`e(d)'" != "" {
-        quietly replace `varlist' = . if missing(`e(d)') & `touse'
+    else {
+        if "`e(d)'" != "" quietly replace `varlist' = . if missing(`e(d)') & `touse'
+        label variable `varlist' "Linear prediction: xb"
     }
     if inlist("`opt'", "xbd", "eta") {
         rename `varlist' `target'
         exit
     }
-    quietly replace `varlist' = exp(`varlist') `if' `in'
     if "`opt'" == "mu" {
+        quietly replace `varlist' = exp(`varlist') `if' `in'
+        label variable `varlist' "Predicted mean of `e(depvar)'"
         rename `varlist' `target'
         exit
     }
+    tempvar fitted
+    generate double `fitted' = exp(`varlist') `if' `in'
     local y `e(depvar)'
     quietly tsrevar `y'
     local y `r(varlist)'
-    if inlist("`opt'", "response", "scores") ///
-        quietly replace `varlist' = `y' - `varlist' `if' `in'
-    else if "`opt'" == "pearson" ///
-        quietly replace `varlist' = (`y' - `varlist') / sqrt(`varlist') `if' `in'
-    else if "`opt'" == "deviance" ///
-        quietly replace `varlist' = 2*cond(`y'>0, `varlist'-`y'+`y'*ln(`y'/`varlist'), `varlist') `if' `in'
-    else if "`opt'" == "anscombe" ///
-        quietly replace `varlist' = 1.5*(`y'^(2/3)-`varlist'^(2/3))/`varlist'^(1/6) `if' `in'
-    else if "`opt'" == "working" ///
-        quietly replace `varlist' = (`y'-`varlist')/`varlist' `if' `in'
+    if "`opt'" == "deviance" {
+        quietly replace `varlist' = 2*cond(`y'>0, `fitted'-`y'+`y'*ln(`y'/`fitted'), `fitted') `if' `in'
+        label variable `varlist' "deviance residual"
+    }
+    else if "`opt'" == "response" {
+        quietly replace `varlist' = `y' - `fitted' `if' `in'
+        label variable `varlist' "response residual"
+    }
+    else if "`opt'" == "pearson" {
+        quietly replace `varlist' = (`y' - `fitted') / sqrt(`fitted') `if' `in'
+        label variable `varlist' "Pearson residual"
+    }
+    else if "`opt'" == "anscombe" {
+        quietly replace `varlist' = 1.5*(`y'^(2/3)-`fitted'^(2/3))/`fitted'^(1/6) `if' `in'
+        label variable `varlist' "Anscombe residual"
+    }
+    else if "`opt'" == "scores" {
+        quietly replace `varlist' = `y' - `fitted' `if' `in'
+        label variable `varlist' "score residual"
+    }
+    else if "`opt'" == "working" {
+        quietly replace `varlist' = (`y' - `fitted') / `fitted' `if' `in'
+        label variable `varlist' "working residual"
+    }
     rename `varlist' `target'
 end

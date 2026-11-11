@@ -26,6 +26,7 @@ void cio_dataset_free(cio_dataset *d)
     }
     free(d->cols);
     free(d->labels);
+    free(d->select);
     memset(d, 0, sizeof(*d));
 }
 
@@ -152,6 +153,8 @@ int cio_reserve_rows(cio_dataset *d, size_t rows)
     for (int j = 0; j < d->nvar; j++)
     {
         cio_column *c = &d->cols[j];
+        if (c->skip)
+            continue;
         if (c->is_string)
         {
             char **p = cio_realloc(c->strings, cap, sizeof(char *));

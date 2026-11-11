@@ -27,11 +27,11 @@ d   cpsmatch        - Propensity score matching (ATT)
 d   cppmlhdfe       - PPML with high-dimensional fixed effects
 d   chdfe           - Partial out high-dimensional fixed effects
 d
-d Version: 1.2.4
+d Version: 1.2.6
 d
 d Requires: Stata 14.1 or later
 d
-d Distribution-Date: 20261103
+d Distribution-Date: 20261111
 
 f ctools.ado
 f ctools.sthlp
@@ -41,6 +41,7 @@ f csort.sthlp
 f cmerge.ado
 f cmerge.sthlp
 f _cio_import.ado
+f _cimport_parquet.ado
 f _cio_export.ado
 f _cio_shp_export.ado
 f cimport.ado
@@ -50,6 +51,8 @@ f cexport.sthlp
 f creghdfe.ado
 f creghdfe.sthlp
 f creghdfe_p.ado
+f _creghdfe_estat.ado
+f _creghdfe_footnote.ado
 f civreghdfe.ado
 f civreghdfe.sthlp
 f cqreg.ado
@@ -95,6 +98,7 @@ f LICENSE
 f THIRD_PARTY_NOTICES
 f _ctools_clock.ado
 f _ctools_cleanup.ado
+f _ctools_home.ado
 f _ctools_ebv.ado
 f _ctools_fvsplit.ado
 f _ctools_lap.ado
@@ -105,6 +109,9 @@ f _ctools_hdfe_absorb.ado
 f _ctools_hdfe_dof.ado
 f _ctools_hdfe_vce.ado
 f _ctools_hdfe_post.ado
+f _ctools_hdfe_boot.ado
+f _ctools_wild_table.ado
+f _ctools_strlkey.ado
 f _civreghdfe_fvstrip.ado
 f _civreghdfe_optflags.ado
 f _civreghdfe_collin.ado

@@ -1,4 +1,6 @@
 #include "cppmlhdfe_internal.h"
+#include <math.h>
+#include <stdio.h>
 
 /* Iterated rectifier separation uses equality-constrained weighted least squares
  * (Correia, Guimaraes and Zylkin). Positive-y rows receive the Van Loan penalty
@@ -85,7 +87,16 @@ ST_int ppml_relu_ex(const PPML_Options *options, HDFE_State *S, const ST_double 
                     const ST_double *X, ST_int N, ST_int K, ST_int *separated, ST_int nthreads,
                     ST_double *certificate)
 {
+    return ppml_relu_ex2(options, S, y, X, N, K, separated, nthreads, certificate, NULL);
+}
+
+ST_int ppml_relu_ex2(const PPML_Options *options, HDFE_State *S, const ST_double *y,
+                     const ST_double *X, ST_int N, ST_int K, ST_int *separated, ST_int nthreads,
+                     ST_double *certificate, ST_int *iterations)
+{
     ST_int zeros = 0, rank = 0, rc = 0;
+    if (iterations)
+        *iterations = 0;
     ST_double saved_tol = S->tolerance;
     const ST_double penalty = 67108864.0;
     memset(separated, 0, (size_t)N * sizeof(*separated));
@@ -136,6 +147,9 @@ ST_int ppml_relu_ex(const PPML_Options *options, HDFE_State *S, const ST_double 
     int candidates1 = -1, candidates2 = -1, stuck = 0;
     for (ST_int iter = 0; iter < options->relu_maxiter; iter++)
     {
+        if (ctools_cancel_requested()) { rc = -1; goto done; }
+        if (iterations)
+            *iterations = iter + 1;
         for (int i = 0; i < N; i++)
         {
             r[i] = u[i] + last[i] - last[(size_t)N + i];
@@ -246,4 +260,29 @@ ST_int ppml_relu(const PPML_Options *options, HDFE_State *S, const double *y, co
                  int N, int K, int *mask, int threads)
 {
     return ppml_relu_ex(options, S, y, X, N, K, mask, threads, NULL);
+}
+
+void ppml_format_small_g(char *buffer, size_t size, double value)
+{
+    /* Mata's %g of the small positive values ppmlhdfe reports: four
+     * decimals and a two-digit exponent (three decimals with three digits) */
+    if (!(value > 0) || !isfinite(value)) {
+        snprintf(buffer, size, "%g", value);
+        return;
+    }
+    int exponent = (int)floor(log10(value));
+    double mantissa = value / pow(10.0, exponent);
+    int digits = (exponent <= -100 || exponent >= 100) ? 3 : 4;
+    double scale = pow(10.0, digits);
+    mantissa = floor(mantissa * scale + 0.5) / scale;
+    if (mantissa >= 10.0) {
+        mantissa /= 10.0;
+        exponent++;
+    }
+    else if (mantissa < 1.0) {
+        mantissa *= 10.0;
+        exponent--;
+    }
+    snprintf(buffer, size, "%.*fe%c%0*d", digits, mantissa, exponent < 0 ? '-' : '+',
+             (exponent <= -100 || exponent >= 100) ? 3 : 2, exponent < 0 ? -exponent : exponent);
 }

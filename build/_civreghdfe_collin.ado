@@ -1,4 +1,4 @@
-*! version 1.2.4 20261103 github.com/mdroste/stata-ctools
+*! version 1.2.6 20261111 github.com/mdroste/stata-ctools
 *! civreghdfe: ivreg2's collinearity rules for the variable lists
 * _civreghdfe_collin, endo() endovars() inexog() inexogvars() exexog()
 *     exexogvars() touse() [wvar() wtype() noconstant]

@@ -146,7 +146,7 @@ program define print_summary
     di as text "  Skipped: " as result "$TESTS_SKIPPED"
     di as text "  Total:  " as result "$TESTS_TOTAL"
     di as text "{hline 45}"
-    if $TESTS_FAILED == 0 {
+    if $TESTS_FAILED == 0 & $TESTS_SKIPPED == 0 {
         di as result "  ALL TESTS PASSED"
     }
     else {
@@ -155,7 +155,7 @@ program define print_summary
     }
     di as text "{hline 45}"
     di as text ""
-    if $TESTS_FAILED > 0 exit 9
+    if $TESTS_FAILED > 0 | $TESTS_SKIPPED > 0 exit 9
 
 end
 
@@ -413,7 +413,7 @@ program define assert_strvar_equal
 end
 
 /*******************************************************************************
- * assert_data_equal - Compare two datasets (with optional sorting)
+ * assert_data_equal - Compare two datasets, including dimensions and row order
  ******************************************************************************/
 capture program drop assert_data_equal
 program define assert_data_equal
@@ -421,36 +421,21 @@ program define assert_data_equal
 
     preserve
 
-    * Try direct comparison first
+    * Never repair a wrong permutation by sorting it. Compare in both
+    * directions because cf _all alone ignores extra variables in using.
     capture quietly {
         use "`file1'", clear
+        local n = _N
+        local k = c(k)
         cf _all using "`file2'"
+        use "`file2'", clear
+        if _N != `n' | c(k) != `k' error 9
+        cf _all using "`file1'"
     }
     local rc = _rc
-
-    if `rc' == 0 {
-        restore
-        test_pass "`testname'"
-        exit
-    }
-
-    * Try sorted comparison
-    capture quietly {
-        use "`file1'", clear
-        ds
-        local allvars `r(varlist)'
-        sort `allvars'
-        tempfile sorted1
-        save `sorted1', replace
-
-        use "`file2'", clear
-        sort `allvars'
-        cf _all using `sorted1'
-    }
-    local rc2 = _rc
     restore
 
-    if `rc2' == 0 {
+    if `rc' == 0 {
         test_pass "`testname'"
     }
     else {
@@ -466,6 +451,7 @@ program define reset_counters
     global TESTS_PASSED = 0
     global TESTS_FAILED = 0
     global TESTS_TOTAL = 0
+    global TESTS_SKIPPED = 0
     global FAILURE_COUNT = 0
     forvalues i = 1/100 {
         global FAILURE_`i' = ""

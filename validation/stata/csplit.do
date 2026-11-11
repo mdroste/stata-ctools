@@ -117,6 +117,107 @@ csplit s, parse(",") destring generate(c)
 mata: st_local("same", strofreal(subinstr(st_global("r1[destring_cmd]"), "r1 r2 r3", "c1 c2 c3") == st_global("c1[destring_cmd]")))
 if `same' test_pass "DATA-10 destring_cmd characteristic"
 else test_fail "DATA-10 destring_cmd characteristic" "differs from split"
+* _ct_output runs a command and returns its output (r(text), lines joined
+* by |) and return code (r(rc)). _ct_same_output runs a native and a ctools
+* command on copies of the data in memory and passes when the output, return
+* code, variable names and types, and (unless "nodata") values agree.
+capture program drop _ct_output
+program define _ct_output, rclass
+    tempfile f
+    tempname fh
+    capture log close _ctout
+    quietly log using `"`f'"', text replace name(_ctout)
+    capture noisily `0'
+    local rc = _rc
+    quietly log close _ctout
+    local text
+    file open `fh' using `"`f'"', read text
+    file read `fh' line
+    while !r(eof) {
+        if `"`macval(line)'"' != "" & substr(`"`macval(line)'"', 1, 5) != "r; t=" {
+            local text `"`macval(text)'`macval(line)'|"'
+        }
+        file read `fh' line
+    }
+    file close `fh'
+    return local text `"`macval(text)'"'
+    return scalar rc = `rc'
+end
+capture program drop _ct_same_output
+program define _ct_same_output
+    args name native ctools nodata
+    tempfile want
+    preserve
+    _ct_output `native'
+    local want_text `"`r(text)'"'
+    local want_rc = r(rc)
+    local want_vars
+    local want_types
+    forvalues j = 1/`c(k)' {
+        mata: st_local("v", st_varname(`j'))
+        local want_vars `want_vars' `v'
+        local want_types `want_types' `: type `v''
+    }
+    capture quietly save `"`want'"', emptyok
+    restore, preserve
+    _ct_output `ctools'
+    local got_text `"`r(text)'"'
+    local got_rc = r(rc)
+    local got_vars
+    local got_types
+    forvalues j = 1/`c(k)' {
+        mata: st_local("v", st_varname(`j'))
+        local got_vars `got_vars' `v'
+        local got_types `got_types' `: type `v''
+    }
+    local same_data = 1
+    if "`nodata'" == "" & "`got_vars'" != "" {
+        capture cf _all using `"`want'"'
+        local same_data = !_rc
+    }
+    restore
+    if "`nodata'" != "" {
+        local want_vars
+        local got_vars
+        local want_types
+        local got_types
+    }
+    if `"`macval(want_text)'"' == `"`macval(got_text)'"' & `want_rc' == `got_rc' & ///
+        "`want_vars'" == "`got_vars'" & "`want_types'" == "`got_types'" & `same_data' {
+        test_pass "`name'"
+    }
+    else {
+        noisily di as error `"`name': ctools [`macval(got_text)'] rc `got_rc' vars `got_vars' (`got_types')"'
+        noisily di as error `"`name': native [`macval(want_text)'] rc `want_rc' vars `want_vars' (`want_types') same data `same_data'"'
+        test_fail "`name'" "output, return code, variables or data differ from the native command"
+    }
+end
+* SPLIT-01, SPLIT-02: split's report (variables created or born as string,
+* the ds listing, destring's messages) and r(varlist)
+clear
+input str20 s str10 one
+"1,2,a" "a b"
+"3,4,b" "c d"
+"5,,c" "e"
+end
+local i = 0
+foreach pair in `"s, parse(,) destring"' `"s, parse(,) gen(t)"' `"s, parse(,) gen(u) destring force"' ///
+    `"s, parse(,) gen(f) destring float force"' `"one, gen(q) limit(1)"' `"one, gen(q) destring"' ///
+    `"s, parse(,) gen(v) destring ignore("a" "b")"' `"s, parse(,) gen(w) destring ignore("a,b")"' ///
+    `"s, parse(,) gen(x) destring percent"' `"s, parse(,) gen(y) force"' `"s, parse(,) gen(y) float"' ///
+    `"s, parse(,) gen(y) ignore("a")"' `"s, parse(,) gen(y) percent"' ///
+    `"s, parse(,) gen(z) destring ignore(a,b)"' `"s, parse(,) gen(z) destring ignore("a", asbytes illegal)"' {
+    local ++i
+    _ct_same_output "SPLIT-01/02 output `i'" `"split `pair'"' `"csplit `pair'"'
+}
+split one, gen(ref) limit(1)
+local want `"`r(varlist)'"'
+local want_k = r(k_new)
+csplit one, gen(got) limit(1)
+if `"`r(varlist)'"' == subinstr(`"`want'"', "ref", "got", .) & r(k_new) == `want_k' {
+    test_pass "SPLIT-02 r(varlist) as split"
+}
+else test_fail "SPLIT-02 r(varlist) as split" `"[`r(varlist)'] vs [`want']"'
 }
 print_summary "csplit"
 global CTOOLS_COMPONENT_COMPLETE "csplit"

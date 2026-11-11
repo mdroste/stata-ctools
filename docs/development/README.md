@@ -25,6 +25,7 @@ See [build requirements](PLATFORMS.md) for compiler and library setup and the
 - [Quick Reference](#quick-reference)
 - [Tests and installation packages](#tests-and-installation-packages)
 - [Shared ado helpers and error handling](#shared-ado-helpers-and-error-handling)
+- [Bootstrap for the HDFE estimators](#bootstrap-for-the-hdfe-estimators)
 - [Interpolation, splitting, and interval joins](#interpolation-splitting-and-interval-joins)
 - [Maintaining shared code](#maintaining-shared-code)
 - [Repository conventions](#repository-conventions)
@@ -295,6 +296,47 @@ rc = ctools_store_filtered(values, N, var_idx, fd.obs_map);
 // Write with permutation mapping (for merge operations)
 rc = ctools_stream_var_permuted(var_idx, source_rows, output_nobs, obs1);
 ```
+
+### Writing a .dta File
+
+Include: `#include "formats/ctools_dta.h"`
+
+The SPI cannot store strL values, create variables or write labels. For a
+result that replaces the dataset, the plugin can instead write a format 118
+(or, past 32,767 variables, 119) `.dta` to a `tempfile` that the ado file
+loads with `use, clear`. Columns name their storage type and source: doubles,
+NUL-terminated strings, fixed-width slots, byte spans (binary-safe), or a
+producer that fills groups of rows on demand. An optional row map gathers
+through a permutation. The writer never calls the SPI. It validates names,
+formats and values (a value that does not fit its storage type is r(459)),
+and it removes the file on failure.
+
+```c
+ctools_dta_column cols[2] = {
+    {.name = "id", .type = CTOOLS_DTA_LONG, .source = CTOOLS_DTA_SRC_F64, .data = ids},
+    {.name = "text", .type = CTOOLS_DTA_STRL, .source = CTOOLS_DTA_SRC_SPAN, .data = spans},
+};
+ctools_dta_spec spec;
+ctools_dta_spec_init(&spec);
+spec.nobs = n;
+spec.ncols = 2;
+spec.cols = cols;
+spec.temporary = 1;              /* a short-lived tempfile */
+ctools_dta_result res;
+int rc = ctools_dta_write(path, &spec, &res);   /* res.message says why it failed */
+```
+
+`use` is slower than the SPI for numeric columns that already exist, so keep
+SPI stores for in-place updates. [DTA_WRITER.md](DTA_WRITER.md) records the
+format facts the writer relies on and the measurements behind this choice.
+The opt-in `tempdta` options of cimport (`cimport fulldta` and `cimport
+strldta`) and cmerge (merges with strL variables) use the writer. A strL
+column gathered through `rows` can set `CTOOLS_DTA_COL_SHARE`, so repeated
+source rows share one stored value, as in Stata's own files. Read strL
+values through the SPI on the calling thread only: rows of one strL variable
+read from several threads corrupted Stata's heap. The internal plugin command `dta`
+(`src/formats/ctools_dta_plugin.c`) drives the tests in
+`validation/stata/dta.do`.
 
 ### Moving Whole Observations
 
@@ -1436,6 +1478,7 @@ The estimation wrappers (`creghdfe`, `civreghdfe`, `cppmlhdfe`, `cqreg`,
 | `_ctools_fvsplit` | Splits an `fvexpand` list into the terms sent to the plugin and the base/omitted placeholders. A term is a placeholder only when every `#`-component carries a `b.` or `o.` marker (`1b.a#2.b` and `0b.foreign#c.weight` are estimated). |
 | `_ctools_ebv` | Builds `e(b)` and `e(V)` in Mata from the plugin's compact results: zeros for placeholders and dropped columns, `o.` names for dropped columns, optional `_cons`. The constant is read from its scalar, never through a local. |
 | `_ctools_cleanup` | Drops every scalar and matrix named `__<command>_*` or `_<command>_*`. Each wrapper calls it on entry, after a plugin error and on exit. |
+| `_ctools_home` | Sets a caller's local to a file name with a leading `~` read as the home directory (HOME, or USERPROFILE on Windows), as Stata's file commands read it. The import and export wrappers call it before the plugin opens the file. |
 | `_ctools_lap` | Measures time since the preceding `_ctools_lap` call or the initial `_ctools_clock` call, then restarts the clock. |
 | `_ctools_vce` | Classifies a `vce()` string (cluster, robust, unadjusted, ols, iid, bootstrap); which kinds a command accepts stays with the command. |
 | `_ctools_hdfe_absorb` | `absorb()` terms of `creghdfe` and `civreghdfe` as reghdfe accepts them (variables, string variables, `i.`, `a#b`): marks out the sample and returns each effect's name, variables and whether `_ctools_group` must number it. Slopes, `##` and `newvar=` are refused; `cppmlhdfe` keeps its own parser for them. |
@@ -1464,6 +1507,350 @@ ordinary allocations check for size overflow.
 accepts `CTOOLS_TEST_OPENMP_PREFIX` to test a limited number of OpenMP workers
 and `CTOOLS_SANITIZERS=address,undefined` to enable memory and undefined-behavior
 checks. The Stata tests are included in the full correctness run.
+
+## Bootstrap for the HDFE estimators
+
+`creghdfe`, `cppmlhdfe` and `civreghdfe` offer a pairs bootstrap of the
+coefficients (`vce(bootstrap)`) and of the saved fixed effects
+(`fevce(bootstrap)`), and a wild bootstrap of the coefficients
+(`wildbootstrap()`). [BOOTSTRAP_PLAN.md](BOOTSTRAP_PLAN.md) is the design record,
+with Stata's and boottest's conventions and the validation history. This
+section describes the code that maintainers change.
+
+### Where the code lives
+
+| File | Role |
+|------|------|
+| `src/hdfe/hdfe_boot.{h,c}` | Pairs engine: resampling frame (`hdfe_boot_design`), `draws(fast)` draws, `bsample`'s draw-to-unit mapping, scheduler (`hdfe_boot_run`), accumulators, the `_bs_sum` summary, fixed-effect SEs and percentile bounds |
+| `src/hdfe/hdfe_boot_stata.{h,c}` | The SPI side of the pairs engine: a chunk's draws read from the call's variables (`hdfe_boot_read_draws`) and replicate rows stored for `saving()` (`hdfe_boot_store_rows`) |
+| `src/hdfe/hdfe_wild.{h,c}` | Wild engine: WCR/WCU kernels (aggregate and projected paths), score bootstrap, enumeration, p-values, test inversion |
+| `src/civreghdfe/civreghdfe_wre.{h,c}` | WRE engine for the k-class estimators |
+| `src/hdfe/hdfe_fe_recover.{h,c}` | Fixed-effect recovery without the SPI (creghdfe's `savefe` and the creghdfe and civreghdfe replicates) |
+| `src/<cmd>/<cmd>_boot.{h,c}` | Per command: the retained model, the replicate fit, the `boot_*` and `wild_*` subcommands |
+| `src/ctools_runtime.c` | Phase rules that keep the retained model between plugin calls |
+| `build/_ctools_hdfe_boot.ado` | Shared ado helper: `parse`, `seed`, `uniforms`, `run`, `savefinish`, `wildparse`, `wilddraw`, `wildweights`, `wildclear` |
+| `build/_ctools_wild_table.ado` | The wild table of cppmlhdfe and civreghdfe (creghdfe keeps `_creghdfe_wild_table`) |
+
+`hdfe_boot.c`, `hdfe_wild.c` and `civreghdfe_wre.c` take arrays and callbacks
+and never call `SF_*`, so native tests compile them alone. All Stata reads and
+writes (variables, scalars, matrices, messages) happen on the Stata thread in
+`hdfe_boot_stata.c` and the `<cmd>_boot.c` subcommands, before or after the
+engine runs. Each fit reaches its `_boot.c` only through retain and release
+hooks that the command's dispatcher installs, so harnesses that compile the fit
+alone still link.
+
+### Phase protocol
+
+The model is fitted once. The plugin keeps the fit's compact columns, weights,
+levels, collinearity flags, b̂ and a frozen copy of the options the replicates
+read. Later calls run the replicates on that model:
+
+| Plugin call | Requires | Afterwards |
+|-------------|----------|------------|
+| `<cmd> full_regression retain` (`civreghdfe`: `iv_regression retain`) | — | phase 1, model kept |
+| `boot_chunk first=# count=# total=# ...` | phase 1 | phase 1 |
+| `boot_finish ...` | phase 1 | model freed |
+| `wild_setup`, `wild_chunk ...` | phase 1 | phase 1 |
+| `wild_finish ... [keep]` | phase 1 | freed; `keep` stays in phase 1 for the `fevce()` replicates |
+| `boot_release`, or any other call | — | model freed |
+
+- A call that requires phase 1 without it fails with r(198)
+  (`ctools_command_begin`). Any nonzero return code frees the model
+  (`ctools_command_finish`), and so does the cleanup function listed in
+  `ctools_commands.def`.
+- Order in the ado: fit with `retain`, then the wild bootstrap if requested,
+  then the pairs chunks, then `boot_finish`. Then the ado posts `e()`.
+  `wildbootstrap()` and `vce(bootstrap)` exclude each other; `wildbootstrap()`
+  and `fevce()` share one session through `wild_finish keep`.
+- **Data guard.** `retain` records `SF_nobs()`, and every later call fails with
+  r(459) when it differs. The finish call writes SE variables at the
+  observation numbers stored at retain. Between calls, the ado may add
+  variables (the helper adds its draw variables) but must not sort, add or drop
+  observations. Only the count is checked, so a sort goes undetected.
+- **Plugin registration.** `program ctools_plugin, plugin` is local to the
+  ado-file that defines it. `_ctools_hdfe_boot run` and each
+  `_<cmd>_bs_release` therefore call `_ctools_load` and register
+  `ctools_plugin` themselves. The shared library, and with it the retained
+  model, is the same for every caller.
+- **Break and failure.** Break takes effect between plugin calls, so between
+  chunks. On any error, Break included, the model must be released:
+  - creghdfe runs `_creghdfe_impl` inside `capture noisily break`. Its failure
+    path rolls back the data (`_ctools_undo` or the snapshot), clears `e()`
+    and calls `_creghdfe_bs_release`, which sends `boot_release`.
+  - cppmlhdfe and civreghdfe run their `_<cmd>_wild` and `_<cmd>_bootstrap`
+    steps under `capture noisily`. On a nonzero `_rc` they call
+    `_<cmd>_bs_release` and `_ctools_cleanup`.
+  - The helper drops its draw variables before it exits with an error.
+
+### Draws
+
+Stata's generator is the only source of randomness. `seed()` runs `set seed`.
+`e(rngstate)` is `c(rngstate)` before the first draw, and the RNG is left
+advanced past the draws, as the `bootstrap` prefix leaves it. A fit without a
+bootstrap takes no draw.
+
+- **`draws(fast)`**. `_ctools_hdfe_boot seed, fast` takes two
+  `runiform()` values as 31-bit halves, which `boot_chunk` receives as
+  `seedhi=`/`seedlo=` at `first=0`. Replicate r seeds its own generator from
+  the master seed and r (`hdfe_boot_draw_fast`) and draws the strata in order:
+  n units with replacement per stratum. For observation resampling with
+  fweights (`unit_freq`), it draws Multinomial(F, fw/F) by conditional
+  binomials. The draws do not depend on threads or chunking, and they are not
+  `bsample`'s.
+- **`draws(stata)`** (default) reproduces `bsample` as the prefix calls it. Per chunk,
+  `_ctools_hdfe_boot uniforms` draws in Mata, for each replicate, U uniforms
+  for the draws and then U for the tie-breaks, and packs them into double
+  variables `__ctools_bsu1, ...`. Value q is in variable `floor(q/_N)+1`,
+  observation `mod(q,_N)+1`. `boot_chunk ... stata` maps them in C
+  (`hdfe_boot_map_stata`).
+  - Unit order: strata ascending. Within a stratum, units are rows in data
+    order or clusters in ascending value, and a cluster that crosses strata is
+    a unit in each. The cluster mapping and the observation mapping differ.
+    Draws follow Stata's `int(u*n+1)` rounding.
+  - Fweighted rows (observations resampled): the observation mapping runs on
+    the fweight-expanded frame in the order `expand` leaves it. Within a
+    stratum, the first copy of each row comes first, then each row's further
+    copies, row by row. U (scalar `__<cmd>_bs_U`, set at retain) is then Σ fw.
+  - `strataobs`: when strata are resampled by observation, the prefix's
+    `bsample` takes U more uniforms per replicate that do not change the
+    sample (its strata sort check fails on `expand`'s unsorted data and it
+    redraws an order), but only when `expand` added rows, that is when a
+    stratum drew one of its units twice. The helper draws and discards them in
+    exactly those replicates, from the strata of two or more units that the
+    plugin saves at retain (`hdfe_boot_save_dup_strata`: scalars
+    `__<cmd>_bs_dupK`, `__<cmd>_bs_dupo#`, `__<cmd>_bs_dupn#`; with more than
+    64 such strata a replicate without a repeated draw has probability below
+    2^-64 and the extras are always taken), so that the final RNG state
+    matches. The wrappers pass `strataobs` when `strata()` is given without
+    `cluster()`.
+  - A chunk holds at most about 1,000 variables and about 2^26 values
+    (512 MB) of uniforms, but always at least one replicate; when one
+    replicate needs more than 1,000 variables, the command stops with
+    r(900).
+- **`_bsdraws(varlist)`** (hidden, for validation) takes one variable of
+  multiplicities per replicate, constant within a unit. With fweighted rows, a
+  row's value is the number of its observations drawn. `r(draws)` is then
+  `supplied`, and `hdfe_boot_read_draws` checks the values (r(198)).
+
+The workers receive the same `unit_mult` array from every source.
+
+### Replicate fits
+
+Each command implements `hdfe_boot_model_ops`:
+
+- `fit(model, ws, unit_mult, out)` runs on a worker thread. It must not call
+  the SPI, print or write globals. All of its inputs come from the retained
+  model.
+  - A statistical failure goes into `out->status` (`COLLINEAR`, `EMPTY`,
+    `NOCONV`, `OTHER`) and makes the replicate missing. Returning an error
+    code (920) aborts the run.
+  - The result must not depend on `out->threads`: use those threads only for
+    column parallelism, with each column on one thread.
+- `workspace_bytes` sizes a replicate in flight against the memory budget, and
+  the optional `thread_bytes` sizes each extra thread. The three commands
+  allocate their scratch inside `fit()`.
+
+A replicate:
+
+1. Keeps the drawn rows and weighs each by its multiplicity times the user's
+   weight. When fweighted rows are resampled through `unit_freq`, the weight is
+   the count drawn.
+2. Applies the command's singleton rule, and for PPML the separation
+   screening, to the drawn data. Each copy counts, as on expanded data (with
+   fweights, creghdfe counts copies × fw). cppmlhdfe refits after a separation
+   check removes rows, at most 10 passes.
+3. Builds factors on the full-sample level codes, so its effects map back to
+   full-sample levels without renumbering. Heterogeneous slopes are set up on
+   the drawn rows as the fit sets them up (`creghdfe_setup_slopes` under the
+   replicate weights; in cppmlhdfe the same slope arrays, centered when the
+   fit centers them), from the slope variables the retained model keeps.
+4. Starts warm. creghdfe and civreghdfe partial the full-sample *partialled*
+   columns (M_r(x − Dα̂) = M_r x). cppmlhdfe starts its IRLS from the full
+   fit's η̂.
+5. Applies the fit's collinearity rules. A pattern of omitted coefficients
+   that differs from the full fit's makes the replicate `COLLINEAR`, as in the
+   prefix.
+6. Estimates. creghdfe runs `creghdfe_ols`. cppmlhdfe runs the IRLS
+   (`ppml_irls_loop`). civreghdfe applies `partial()` by FWL, then
+   `ivest_fit_core` with the copy-aware S: each drawn copy is an observation,
+   and under clustered GMM each drawn copy of a cluster is its own cluster.
+7. With `fe`, recovers the replicate's effects (`hdfe_fe_recover`,
+   `ppml_fe_minnorm`). A level is estimable when it is drawn and its
+   full-sample connected set did not split. The set is over the intercept
+   effects jointly, and creghdfe and civreghdfe also check consecutive pairs.
+   A slope is estimable where the replicate's slope variable varies (it is
+   identified within its level, so the sets concern intercepts only). d is
+   the sum of the effects (slopes times their variable) on every row whose
+   levels are all estimable. With civreghdfe's `partial()`, the replicate
+   keeps the partialled columns' cross products before its FWL step and
+   recovers their coefficients, as the fit's savefe does by FWL.
+
+**Scheduling.** `hdfe_boot_run` runs P = `hdfe_boot_parallel()` replicates at
+once:
+
+- P = min(threads, budget / slot), with each slot holding a workspace, U ints
+  and the outputs. The budget is half of physical memory.
+- P < 1 stops the command with r(909) before any replicate runs.
+- Replicates are taken dynamically from a window. Threads left over go to each
+  replicate's column parallelism within `thread_bytes`, with nested OpenMP
+  enabled for the run.
+- Results fold into the accumulator in replicate order on the Stata thread,
+  so sums do not depend on the schedule.
+- Retain saves P as `__<cmd>_bs_par`. The helper sizes chunks as the multiple
+  of P nearest 50, at most 400, and at most `c(matsize)` with `saving()`.
+
+### Outputs
+
+- `boot_chunk` leaves each replicate's status in `__<cmd>_bs_status`. The
+  helper prints `.` for success and `x` for anything else.
+- `boot_finish coef` calls `hdfe_boot_summarize`, which follows `_bs_sum`:
+  - complete replicates only;
+  - V about the replicate mean, or about e(b) with `mse`;
+  - `b_bs`, `se`, `bias`, `z0`, and normal, percentile (`_pctile`) and
+    bias-corrected intervals;
+  - r(2000) with fewer than two complete replicates.
+
+  The ado posts what Stata's `vce(bootstrap)` posts (`_<cmd>_bootstrap_post`):
+  e(V) through `_ctools_ebv`, the fit's own VCE as e(V_modelbased), e(b_bs),
+  e(reps), e(se), e(bias), e(z0), e(ci_*), e(boot_status) (counts by status),
+  e(N_reps), e(N_misreps), e(bs_version), e(exp#), e(rngstate), e(draws),
+  e(prefix), the Wald chi2 and e(vce)/e(vcetype). `estat bootstrap` and replay
+  then work.
+- **Fixed effects.** Welford accumulators (count, mean, M2), updated in
+  replicate order, hold each level's effect and, with `dse()`, each row's d.
+  The SE is sqrt(M2/(n − 1)) for n ≥ 2. `boot_finish fe` writes the SE
+  variables on e(sample) (counts with `nreps`), `__<cmd>_bs_fe_table` and the
+  split count.
+  `fevce(bootstrap, ci)` keeps every replicate's effects as floats, L × R,
+  through `hdfe_boot_acc_keep_fe` at `first=0`. Above the budget the command
+  stops with r(909) and a message. The bounds use `_pctile`.
+- **`saving()`.**
+  1. The helper opens a `postfile` with `_r1 ... _rKb` (double) on a tempfile.
+  2. `boot_chunk ... rows` stores the chunk's coefficients in
+     `__<cmd>_bs_rows`, missing for failed replicates, and the helper posts
+     them.
+  3. After e(b) is posted, `_ctools_hdfe_boot savefinish` writes the file in
+     the format of `bootstrap`'s `saving()`: one variable per e(b) term
+     (zero for omitted and base terms, through `map()`), the prefix's names,
+     labels and characteristics, and floats unless `double`. `bstat` reads the
+     file.
+
+### Wild bootstrap
+
+| Command | Method | Engine | Work per call |
+|---------|--------|--------|---------------|
+| creghdfe | WCR, or WCU with `nonull` | `hdfe_wild_setup`/`_run` | `wild_chunk` computes each replicate's five numbers, so t*(b0) is closed-form for any b0 |
+| cppmlhdfe | score bootstrap | `hdfe_wild_score_*` | `wild_chunk` stores weights; `wild_finish` runs restricted IRLS fits under H0 and at each inversion point |
+| civreghdfe | WRE, or WUE with `nonull` | `civ_wre_*` | `wild_chunk` stores weights (one byte for discrete types); `wild_finish` prepares cross products and evaluates batches of b0 |
+
+- **Paths** (creghdfe and civreghdfe, scalar `__<cmd>_wb_path`):
+  - 0, nested: every absorbed effect is nested in the bootstrap clusters.
+    Aggregates over the (`vce()` cluster × bootstrap cluster) groups are exact.
+  - 1, projected: `fedgp(full)` with an effect that is not nested. A
+    `project()` callback partials the perturbed columns on the full sample's
+    factors, in batches sized by a quarter of RAM (capped at 2 GB in creghdfe
+    and 4 GB in civreghdfe).
+  - 2: `fedgp(partialled)`.
+  - 3: the projected path forced by the hidden `_projected` on a nested design,
+    for validation.
+- **Weights.** `wilddraw` draws in Mata exactly as boottest's
+  `MakeWildWeights` does: one C × (reps + 1) matrix (two for Webb), first
+  column dropped, unit variance. The draws stay in `_ctools_wild_v`.
+  `wildweights` packs 50 replicates per chunk into `__ctools_wbv#`, and
+  `wildclear` drops the draws.
+- **Enumeration.** Rademacher weights with C ln 2 < ln(reps) + 1e-6 (unless
+  `noenumerate`) are generated in the plugin in boottest's `count_binary`
+  order. The ado draws nothing, so the RNG state is unchanged.
+- **Statistics.** The observed statistic is the replicate with every weight 1,
+  through the same code, so v = ±1 ties with it exactly. p-values follow
+  boottest's `getp` over feasible replicates. A zero se* gives NaN, which is
+  counted in e(wb_misreps).
+- **Inversion.** creghdfe uses `hdfe_wild_invert` (65-point grid over
+  ±2z·se, widened by doubling to 1000·se, bisection to 1e-6·se). cppmlhdfe
+  and civreghdfe use `hdfe_wild_invert_batch`, which evaluates points side by
+  side and warm-starts chains. Bounds are the exact crossings (boottest stops
+  within one replicate step). Open, disjoint and empty sets go to
+  `__<cmd>_wb_cistat`. cppmlhdfe computes intervals only with `ci`.
+
+### Validation
+
+Each case of `validation/stata/bootstrap_reference.do` compares the commands
+with an independent reference on the same draws:
+
+| Case | Reference |
+|------|-----------|
+| `bootstrap_reference` | Stata only: the Mata `bsample` emulation and the prefix's conventions |
+| `bootstrap_helpers` | `_ctools_hdfe_boot` parsing, seeds, and uniforms that reproduce `bsample` and its final RNG state |
+| `creghdfe_bootstrap`, `cppmlhdfe_bootstrap` | `bootstrap _b:` around reghdfe or cppmlhdfe with `draws(stata)` and the same seed: summaries, N_reps, N_misreps, final RNG state |
+| `civreghdfe_bootstrap` | ivreghdfe on each replicate's expanded data (ivreghdfe cannot run under the prefix), with copy ids for clustered GMM2S |
+| `*_fe_bootstrap` | the command or reghdfe with `absorb(fe=...)` on each expanded replicate |
+| `wild_draws` | boottest's per-replicate statistics and p-value from the `wilddraw` weights, for every weight type and enumeration |
+| `creghdfe_wild`, `cppmlhdfe_wild`, `civreghdfe_wild` | boottest 4.5.5 p-values (after reghdfe/areg, after poisson with dummies, after ivreg2 with dummies), bounds through boottest's p just inside and outside, and Mata oracles where boottest cannot run |
+| `civreghdfe_savefe` | reghdfe and ivreghdfe saved effects |
+| `bootstrap_options` | `saving()` against the prefix's file and `bstat`; strata and fweighted `draws(stata)` against the prefix (and the RNG state); `_bsdraws()`; `ci` bounds against reghdfe, ppmlhdfe and civreghdfe on the same draws; slopes against reghdfe and ppmlhdfe, and the wild bootstrap against the slopes as regressors; civreghdfe `partial()` against the model without it |
+
+`validation/support/bootstrap_reference.do` holds the oracles:
+
+- `bsref_draws`: the prefix's draws, through `_bsref_obs` and `_bsref_clust`;
+- `_bsref_wild_t` and `_bsref_wild_t2`: replicate-by-replicate WCR;
+- `_bsref_wre_t`: the Mata WRE;
+- `_bsref_packed`: reads the packed variables.
+
+To run a case, use `python3 validation/run.py creghdfe_bootstrap`. Without the
+runner, from the repository root in Stata, run
+`do "validation/stata/bootstrap_reference.do" creghdfe_bootstrap`.
+`validate_setup.do` puts `build/` and `$CTOOLS_TEST_PLUGIN_DIR` on the adopath.
+The references need reghdfe, ppmlhdfe, ivreghdfe, ivreg2 and boottest.
+
+Native tests in `validation/native/boot.suite.c` run through
+`validation/native_contracts.py`:
+
+- `test_bootstrap_engine_native`:
+  - `bsample` fixtures generated by Stata for four designs;
+  - `draws(fast)` properties and binomial moments;
+  - a toy model through the scheduler, invariant to chunks and threads, with
+    supplied draws, casewise drops and the 198/909/2000 contracts;
+  - percentiles.
+- `test_wild_engine_native`:
+  - t* against a dense computation on both paths;
+  - determinism, exact ties and enumeration order;
+  - inversion and the score kernel.
+
+Both also run with OpenMP outside Windows.
+
+### Adding the bootstrap to another estimator
+
+1. Split the fit so that the coefficient step runs on in-memory arrays without
+   the SPI, with options read into a struct on the Stata thread. Check that
+   every `e()` result is bit for bit the same before and after the change.
+2. Write `<cmd>_boot.{h,c}`:
+   - a source struct that the fit hands to the retain hook;
+   - a retain function that copies the columns, records `SF_nobs()`, builds
+     the frame in `bsample`'s unit order (`unit_freq` for fweighted rows) and
+     saves `__<cmd>_bs_U`, `_S` and `_par`;
+   - the hooks, installed from the dispatcher, with release called from the
+     command's cleanup function.
+3. Implement `hdfe_boot_model_ops` under the worker rules above, with statuses
+   for failed replicates.
+4. Add `boot_chunk`, `boot_finish` and `boot_release` (and `wild_*`). Each
+   starts with the nobs check and uses `hdfe_boot_read_draws` and
+   `hdfe_boot_store_rows`. Name the matrices `__<cmd>_bs_*` so that
+   `_ctools_hdfe_boot run` finds them.
+5. Add the command's phase rules to `ctools_command_begin`.
+6. In the ado:
+   - parse with `_ctools_hdfe_boot parse`;
+   - mark out and number the cluster and strata variables (`_ctools_hdfe_vce`,
+     `_ctools_group`);
+   - add `retain`;
+   - call `_ctools_hdfe_boot run, cmd(<cmd>)`, with `strataobs` when it
+     applies;
+   - size the result matrices and call `boot_finish`;
+   - post `e()` as `_creghdfe_bootstrap_post` does and call `savefinish`;
+   - release the model in the wrapper's failure path.
+7. Add a `bootstrap_reference.do` case against the prefix or an expanded-data
+   oracle with `draws(stata)`. Update the seeds check, option evidence, help
+   files and command pages. When the plugin's argument format changes, change
+   the protocol in `config/release.json`.
 
 ## Interpolation, splitting, and interval joins
 

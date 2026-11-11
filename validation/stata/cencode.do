@@ -1683,19 +1683,11 @@ replace x = "b" * 240 in 2
 replace x = "c" * 240 in 3
 capture encode x, generate(code_stata)
 local stata_rc = _rc
-local stata_len = 0
-if `stata_rc' == 0 {
-    local stata_lbl : label (code_stata) 1
-    local stata_len = strlen("`stata_lbl'")
-}
 capture cencode x, generate(code_ctools)
 local cencode_rc = _rc
 if `stata_rc' == `cencode_rc' {
     if `cencode_rc' == 0 {
-        local ctools_lbl : label (code_ctools) 1
-        local ctools_len = strlen("`ctools_lbl'")
-        if `ctools_len' == `stata_len' test_pass "very long label text matches Stata"
-        else test_fail "long label text" "cencode len=`ctools_len' but encode len=`stata_len'"
+        benchmark_encode x, testname("very long label text and all codes match Stata")
     }
     else {
         test_pass "very long label text - both error (as expected)"
@@ -2367,6 +2359,109 @@ if _rc == `rc_native' & `rc_native' == 134 test_pass "DATA-12 too many values"
 else test_fail "DATA-12 too many values" "encode r(`rc_native'), cencode r(`=_rc')"
 
 * SUMMARY
+* _ct_output runs a command and returns its output (r(text), lines joined
+* by |) and return code (r(rc)). _ct_same_output runs a native and a ctools
+* command on copies of the data in memory and passes when the output, return
+* code, variable names and types, and (unless "nodata") values agree.
+capture program drop _ct_output
+program define _ct_output, rclass
+    tempfile f
+    tempname fh
+    capture log close _ctout
+    quietly log using `"`f'"', text replace name(_ctout)
+    capture noisily `0'
+    local rc = _rc
+    quietly log close _ctout
+    local text
+    file open `fh' using `"`f'"', read text
+    file read `fh' line
+    while !r(eof) {
+        if `"`macval(line)'"' != "" & substr(`"`macval(line)'"', 1, 5) != "r; t=" {
+            local text `"`macval(text)'`macval(line)'|"'
+        }
+        file read `fh' line
+    }
+    file close `fh'
+    return local text `"`macval(text)'"'
+    return scalar rc = `rc'
+end
+capture program drop _ct_same_output
+program define _ct_same_output
+    args name native ctools nodata
+    tempfile want
+    preserve
+    _ct_output `native'
+    local want_text `"`r(text)'"'
+    local want_rc = r(rc)
+    local want_vars
+    local want_types
+    forvalues j = 1/`c(k)' {
+        mata: st_local("v", st_varname(`j'))
+        local want_vars `want_vars' `v'
+        local want_types `want_types' `: type `v''
+    }
+    capture quietly save `"`want'"', emptyok
+    restore, preserve
+    _ct_output `ctools'
+    local got_text `"`r(text)'"'
+    local got_rc = r(rc)
+    local got_vars
+    local got_types
+    forvalues j = 1/`c(k)' {
+        mata: st_local("v", st_varname(`j'))
+        local got_vars `got_vars' `v'
+        local got_types `got_types' `: type `v''
+    }
+    local same_data = 1
+    if "`nodata'" == "" & "`got_vars'" != "" {
+        capture cf _all using `"`want'"'
+        local same_data = !_rc
+    }
+    restore
+    if "`nodata'" != "" {
+        local want_vars
+        local got_vars
+        local want_types
+        local got_types
+    }
+    if `"`macval(want_text)'"' == `"`macval(got_text)'"' & `want_rc' == `got_rc' & ///
+        "`want_vars'" == "`got_vars'" & "`want_types'" == "`got_types'" & `same_data' {
+        test_pass "`name'"
+    }
+    else {
+        noisily di as error `"`name': ctools [`macval(got_text)'] rc `got_rc' vars `got_vars' (`got_types')"'
+        noisily di as error `"`name': native [`macval(want_text)'] rc `want_rc' vars `want_vars' (`want_types') same data `same_data'"'
+        test_fail "`name'" "output, return code, variables or data differ from the native command"
+    }
+end
+* ENC-01: encode leaves the caller's r() in place; cencode keeps it and adds
+* r(N_unique) and r(N_vars). A failure leaves it too.
+sysuse auto, clear
+quietly summarize price
+local mean = r(mean)
+local sd = r(sd)
+encode make, gen(native_code)
+local native_ok = r(mean) == `mean' & r(sd) == `sd'
+quietly summarize price
+cencode make, gen(make_code)
+if `native_ok' & r(mean) == `mean' & r(sd) == `sd' & r(N_unique) == 74 & r(N_vars) == 1 {
+    test_pass "ENC-01 caller r() kept after cencode"
+}
+else test_fail "ENC-01 caller r() kept after cencode" "r(mean)=`r(mean)' r(N_unique)=`r(N_unique)'"
+quietly summarize price
+capture cencode price, gen(bad)
+local rc = _rc
+if `rc' == 107 & r(mean) == `mean' & r(sd) == `sd' test_pass "ENC-01 caller r() kept after a failure"
+else test_fail "ENC-01 caller r() kept after a failure" "rc=`rc' r(mean)=`r(mean)'"
+quietly summarize price
+cencode make if price > r(mean), gen(rich) label(rich)
+count if !missing(rich)
+local n_rich = r(N)
+count if price > `mean'
+if `n_rich' == r(N) test_pass "ENC-01 if may name the caller's r()"
+else test_fail "ENC-01 if may name the caller's r()" "`n_rich' encoded"
+drop native_code make_code rich
+_ct_same_output "ENC-01 numeric source message" "encode price, gen(bad)" "cencode price, gen(bad)"
 * End of cencode validation
 noi print_summary "cencode"
 }

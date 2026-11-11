@@ -157,6 +157,13 @@ typedef struct {
     cqreg_kernel_type kernel; /* Kernel method: kernel function */
     ST_double kfactor;        /* Kernel method: invnormal(q+h) - invnormal(q-h) */
     ST_double kbwidth;        /* Kernel method output: kernel bandwidth */
+
+    /* Weighted fits (set by the caller; NULL and 0 when unweighted) */
+    const ST_double *weights; /* Observation weights (N) */
+    ST_int fweights;          /* 1 for frequency weights: the residual method
+                                 removes one copy of each basis observation */
+    ST_double bw_n;           /* Size behind full_bandwidth: N, or the sum of
+                                 the frequency weights */
 } cqreg_sparsity_state;
 
 /* Main cqreg state - orchestrates the full regression */
@@ -177,6 +184,11 @@ typedef struct {
     ST_double *y;             /* Dependent variable (N) - points to data->vars[0] */
     ST_double *X;             /* Regressors (N x K), constant is last column - contiguous copy */
     ST_double *weights;       /* Observation weights (N), NULL if unweighted */
+    void *obs_map;            /* The loader's 1-based Stata observation of
+                                 row i (perm_idx_t, N), NULL for rows 1..N;
+                                 freed with ctools_aligned_free */
+    ST_int weight_type;       /* 0 none, 1 fweight, 2 iweight (qreg fits
+                                 pweights as iweights) */
     ST_int y_owned;           /* 1 if y is separately allocated, 0 if view into data */
     ST_int X_owned;           /* 1 if X is separately allocated, 0 if view into data */
 

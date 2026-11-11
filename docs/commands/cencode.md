@@ -104,7 +104,7 @@ cencode timing breakdown:
 
 ## Stored Results
 
-`cencode` stores the following in `r()`:
+`encode` leaves `r()` as it was. `cencode` keeps the results already in `r()` too, also when it fails, and adds the following:
 
 | Scalar | Description |
 |--------|-------------|

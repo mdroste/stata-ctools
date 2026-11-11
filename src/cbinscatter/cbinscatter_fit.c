@@ -454,3 +454,75 @@ ST_retcode fit_all_groups(
     }
     return CBINSCATTER_OK;
 }
+
+/* ========================================================================
+ * Fits Between rd() Break Points
+ * ======================================================================== */
+
+ST_retcode fit_all_groups_rd(
+    const ST_double *y,
+    const ST_double *x,
+    const ST_int *group_start,
+    const ST_double *weights,
+    ST_int N,
+    const BinscatterConfig *config,
+    BinscatterResults *results
+) {
+    const ST_int order = config->linetype;
+    const ST_int G = results->num_by_groups;
+    const ST_int nint = config->n_rd + 1;
+    size_t rows = (size_t)G * (size_t)nint;
+    results->rd_coefs = (ST_double *)malloc(rows * 4 * sizeof(ST_double) + 1);
+    results->rd_stats = (ST_double *)malloc(rows * 2 * sizeof(ST_double) + 1);
+    if (!results->rd_coefs || !results->rd_stats) return CBINSCATTER_ERR_MEMORY;
+    for (size_t k = 0; k < rows * 4; k++) results->rd_coefs[k] = SV_missval;
+    for (size_t k = 0; k < rows * 2; k++) results->rd_stats[k] = SV_missval;
+    if (order < 1 || order > 3) return CBINSCATTER_OK;
+
+    ST_double *ys = (ST_double *)malloc(((size_t)N + 1) * sizeof(ST_double));
+    ST_double *xs = (ST_double *)malloc(((size_t)N + 1) * sizeof(ST_double));
+    ST_double *ws = weights ? (ST_double *)malloc(((size_t)N + 1) * sizeof(ST_double)) : NULL;
+    ST_int *which = (ST_int *)malloc(((size_t)N + 1) * sizeof(ST_int));
+    if (!ys || !xs || !which || (weights && !ws)) {
+        free(ys); free(xs); free(ws); free(which);
+        return CBINSCATTER_ERR_MEMORY;
+    }
+
+    ST_retcode rc = CBINSCATTER_OK;
+    /* Each row's interval: the number of break points below its x */
+    for (ST_int i = 0; i < N; i++) {
+        ST_int k = 0;
+        while (k < config->n_rd && config->rd[k] < x[i]) k++;
+        which[i] = k;
+    }
+    for (ST_int g = 0; g < G && rc == CBINSCATTER_OK; g++) {
+        ST_int first = group_start ? group_start[g] : 0;
+        ST_int last = group_start ? group_start[g + 1] : N;
+        for (ST_int r = 0; r < nint; r++) {
+            ST_int n = 0;
+            for (ST_int i = first; i < last; i++) {
+                if (which[i] != r) continue;
+                ys[n] = y[i];
+                xs[n] = x[i];
+                if (ws) ws[n] = weights[i];
+                n++;
+            }
+            if (n == 0) continue;
+            if (n == 1) {
+                SF_error("insufficient observations\n");
+                SF_scal_save("__cbinscatter_reported", 1.0);
+                rc = 2001;
+                break;
+            }
+            ST_double coefs[4] = {0.0, 0.0, 0.0, 0.0}, r2 = 0.0;
+            rc = fit_polynomial_joint(ys, xs, ws, n, order, NULL, 0, NULL, 0, config, coefs, &r2);
+            if (rc != CBINSCATTER_OK) break;
+            size_t row = (size_t)g * nint + r;
+            for (ST_int j = 0; j <= order; j++) results->rd_coefs[row * 4 + j] = coefs[j];
+            results->rd_stats[row * 2] = r2;
+            results->rd_stats[row * 2 + 1] = (ST_double)n;
+        }
+    }
+    free(ys); free(xs); free(ws); free(which);
+    return rc;
+}

@@ -1,4 +1,4 @@
-*! version 1.2.4 20261103 github.com/mdroste/stata-ctools
+*! version 1.2.6 20261111 github.com/mdroste/stata-ctools
 *! C-accelerated distinct value counts
 program define cdistinct, rclass byable(recall)
     version 14.1
@@ -30,14 +30,23 @@ program define cdistinct, rclass byable(recall)
     if _rc != 0 & _rc != 110 exit 601
     local threadopt
     if `threads' local threadopt threads(`threads')
+    * strL values the plugin cannot read (binary, or over 2,045 bytes) are
+    * counted through stand-in ranks, "" getting a missing one
+    local stubs
+    foreach v of local varlist {
+        tempvar stub
+        local stubs `stubs' `stub'
+    }
+    _ctools_strlkey `varlist', generate(`stubs') missing
+    local keylist `__ctools_keys'
     local sets `varlist'
     if "`joint'" != "" local sets joint
     local ctools_count_N 0
     local ctools_count_distinct 0
     local index 0
     foreach v of local sets {
-        local keys `v'
-        if "`joint'" != "" local keys `varlist'
+        local keys : word `=`index'+1' of `keylist'
+        if "`joint'" != "" local keys `keylist'
         local nk : word count `keys'
         _ctools_strw `keys' `touse'
         if _N plugin call ctools_plugin `keys' `touse', ///

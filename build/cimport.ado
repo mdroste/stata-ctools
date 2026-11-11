@@ -1,4 +1,4 @@
-*! version 1.2.4 20261103 github.com/mdroste/stata-ctools
+*! version 1.2.6 20261111 github.com/mdroste/stata-ctools
 
 program define cimport, rclass
     version 14.1
@@ -11,30 +11,39 @@ program define cimport, rclass
     if "`subcmd'" == "sasxport" & _caller()<16 local subcmd "sasxport5"
     if inlist("`subcmd'","hav","have") local subcmd "haver"
     if inlist("`subcmd'","haverd","haverdi","haverdir","haverdire","haverdirec") local subcmd "haverdirect"
-    if inlist("`subcmd'","haver","haverdirect") & "`c(os)'"!="Windows" {
-        di as error "import `subcmd' is not supported on this platform."
-        exit 198
+
+    * FRED (a web API) and Haver (Haver Analytics' Windows DLX library) are
+    * online services, not file formats: Stata's own commands handle them,
+    * with every argument passed through unchanged. Options snapshot and fast
+    * do not apply; the native command manages the data in memory itself.
+    if inlist("`subcmd'","fred","haver","haverdirect") {
+        version `=_caller()': import `subcmd' `macval(0)'
+        return add
+        exit
+    }
+    * macval(): text such as sheet("Q1\$Rev") reaches the handler as typed,
+    * not with its $ or backquotes expanded a second time.
+    if inlist("`subcmd'", "sas", "spss", "sasxport5", "sasxport8", "dbase", "shp") {
+        _cio_import `subcmd' `macval(0)'
+        return add
+        exit
     }
 
-    if inlist("`subcmd'","fred","haver","haverdirect") {
-        di as error "cimport `subcmd': a C provider adapter is not yet available"
-        exit 198
-    }
-    if inlist("`subcmd'", "sas", "spss", "sasxport5", "sasxport8", "dbase", "shp") {
-        _cio_import `subcmd' `0'
+    if "`subcmd'" == "parquet" {
+        _cimport_parquet `macval(0)'
         return add
         exit
     }
 
     if "`subcmd'" == "excel" {
         * Dispatch to Excel import handler
-        cimport_excel `0'
+        cimport_excel `macval(0)'
         return add
         exit
     }
     else if "`subcmd'" != "delimited" {
         di as error "cimport: unknown subcommand `subcmd'"
-        di as error "Supported file formats: delimited, excel, sas, spss, sasxport5, sasxport8, dbase, shp"
+        di as error "Supported file formats: delimited, excel, parquet, sas, spss, sasxport5, sasxport8, dbase, shp"
         exit 198
     }
 
@@ -44,10 +53,10 @@ program define cimport, rclass
         CASE(string) ENCoding(string) BINDQuotes(string) ///
         STRIPQuotes(string) ROWRange(string) COLRange(string) Verbose THReads(integer 0) ///
         ASFloat ASDOUBle NUMERICcols(string) STRINGcols(string) ///
-        DECIMALSEParator(string) GROUPSEParator(string) ///
+        DECIMALSeparator(string) GROUPSeparator(string) ///
         MAXQUOTEDrows(string) EMPTYlines(string) ///
         PARSELocale(string) CHARSET(string) FAVORSTRFixed COLLAPSEDelimiters ///
-        SNAPshot FAST]
+        SNAPshot FAST TEMPDTA]
     if "`snapshot'" != "" & "`fast'" != "" {
         di as error "options snapshot and fast may not be combined"
         exit 198
@@ -65,11 +74,19 @@ program define cimport, rclass
     if "`maxquotedrows'" == "" local maxquotedrows 20
     if "`maxquotedrows'" == "unlimited" local maxquotedrows 0
     capture confirm integer number `maxquotedrows'
-    if _rc exit 198
-    if `maxquotedrows'<0 exit 198
+    if _rc | `"`maxquotedrows'"' == "" {
+        di as error "option {bf:maxquotedrows()} incorrectly specified."
+        exit 198
+    }
+    * Native accepts any integer: a negative one, like 0, sets no limit
+    if `maxquotedrows'<0 local maxquotedrows 0
     foreach opt in numericcols stringcols {
         if "``opt''" != "" & "``opt''" != "_all" {
-            numlist "``opt''", integer range(>0) sort
+            capture numlist "``opt''", integer range(>0) sort
+            if _rc {
+                di as error "{bf:``opt''}: invalid numlist in {bf:`opt'()} option"
+                exit 198
+            }
             local `opt' "`r(numlist)'"
         }
     }
@@ -97,11 +114,31 @@ program define cimport, rclass
         exit 198
     }
 
-    * Native delimited import supplies .csv when no extension is given.
-    mata: st_local("__basename", pathbasename(st_local("using")))
-    if !strpos(`"`__basename'"', ".") local using `"`using'.csv"'
+    * As import delimited does, a URL is copied to a temporary file first, as
+    * it is: no .csv is added to it, and r(filename) reports the URL.
+    local __cimport_source `"`macval(using)'"'
+    mata: st_local("__isurl", strofreal(pathisurl(st_local("using"))))
+    if `__isurl' {
+        tempfile __urlcopy
+        capture copy `"`macval(using)'"' `"`__urlcopy'"'
+        if _rc {
+            di as error "could not open url"
+            exit 603
+        }
+        local using `"`__urlcopy'"'
+    }
+    else {
+        * ~ is the home directory, as for Stata's own file commands
+        _ctools_home using `"`macval(using)'"'
+        * Native delimited import supplies .csv when no extension is given.
+        mata: st_local("__basename", pathbasename(st_local("using")))
+        if !strpos(`"`macval(__basename)'"', ".") {
+            local using `"`macval(using)'.csv"'
+        }
+        local __cimport_source `"`macval(using)'"'
+    }
     * Validate file exists
-    confirm file `"`using'"'
+    confirm file `"`macval(using)'"'
 
     * Like native, explicit names must be valid; they rename variables
     * 1..k after the import, so header detection stays automatic.
@@ -214,7 +251,7 @@ program define cimport, rclass
     local startrow = 0
     local endrow = 0
     if "`rowrange'" != "" {
-        _cimport_range `"`rowrange'"'
+        _cimport_range `"`rowrange'"' row
         local startrow = r(first)
         local endrow = r(last)
     }
@@ -225,7 +262,7 @@ program define cimport, rclass
     local startcol = 0
     local endcol = 0
     if "`colrange'" != "" {
-        _cimport_range `"`colrange'"'
+        _cimport_range `"`colrange'"' column
         local startcol = r(first)
         local endcol = r(last)
     }
@@ -259,17 +296,16 @@ program define cimport, rclass
         local groupsep `"`groupseparator'"'
     }
 
-    * Parse emptylines option - default is skip
-    if "`emptylines'" == "include" local emptylines "fill"
-    if "`emptylines'" != "" {
-        if !inlist("`emptylines'", "skip", "fill") {
-            di as error "cimport: emptylines() must be skip or fill"
-            exit 198
-        }
+    * emptylines(): native accepts exactly skip or include. Its reader follows
+    * the caller's version: from version 17, include keeps each empty line
+    * as an observation (the plugin's emptylines=fill); before 17 the older
+    * reader reads include as skip.
+    if !inlist(`"`emptylines'"', "", "skip", "include") {
+        di as error `"{bf:`emptylines'} is an invalid {bf:emptylines()} argument; use {bf:skip}, or {bf:include}"'
+        exit 198
     }
-    else {
-        local emptylines "skip"
-    }
+    if "`emptylines'" == "include" & _caller() >= 17 local emptylines "fill"
+    else local emptylines "skip"
 
     * Numeric locale profiles and Unicode digits are interpreted entirely in C.
     local __cimport_parselocale "`parselocale'"
@@ -323,27 +359,30 @@ program define cimport, rclass
         local threads_code "threads(`threads')"
     }
 
-    * Record start time
-    local __ct_elapsed99 = 0
-    if "`__ct_elapsed99'" == "" local __ct_elapsed99 = 0
-    quietly _ctools_clock __ct_start99
+    * Header and transfer globals of an earlier, interrupted import
+    capture macro drop _cimport_label_* _cimport_blob*
+    * Timing scalars come only from a load: none may be left by an earlier run
+    capture scalar drop _cimport_time_mmap _cimport_time_encoding _cimport_time_parse _cimport_time_infer
+    capture scalar drop _cimport_time_cache _cimport_time_store _cimport_time_total
+    capture scalar drop _cimport_threads_max _cimport_openmp_enabled
+
+    * Record start time (the plugin is loaded, so its clock is called directly)
+    plugin call ctools_plugin, "clock"
+    local __ct_start99 `ctools_clock_value'
 
 
     * =========================================================================
     * PHASE 1: Scan the CSV to get metadata
     * =========================================================================
 
-    if "`__ct_elapsed11'" == "" local __ct_elapsed11 = 0
-
-    quietly _ctools_clock __ct_start11
-
-    local __cimport_filename `"`using'"'
+    local __cimport_filename `"`macval(using)'"'
     capture noisily plugin call ctools_plugin, ///
         "cimport `threads_code' scan @filename `plugin_delim' `opt_noheader' `opt_headerrow' `opt_verbose' `opt_bindquotes' `opt_asfloat' `opt_asdouble' `opt_decimalsep' `opt_groupsep' `opt_emptylines' `opt_maxquotedrows' `encoding_opt'"
 
     local scan_rc = _rc
     if `scan_rc' {
         di as error "Error scanning CSV file (rc=`scan_rc')"
+        capture macro drop _cimport_label_*
         exit `scan_rc'
     }
 
@@ -355,13 +394,14 @@ program define cimport, rclass
     local numtypes ${_cimport_numtypes}
     local strlens ${_cimport_strlens}
     local longtypes ${_cimport_longtypes}
+    local strlbytes ${_cimport_strlbytes}
     local hasheader = 0${_cimport_hasheader}
     mata: st_local("returned_encoding",st_global("_cimport_encoding"))
     mata: st_local("returned_delimiters",subinstr(st_global("_cimport_delimiters"),char(9),char(92)+"t"))
 
     * Clean up global macros
     macro drop _cimport_nobs _cimport_nvar _cimport_varnames ///
-               _cimport_vartypes _cimport_numtypes _cimport_strlens _cimport_longtypes ///
+               _cimport_vartypes _cimport_numtypes _cimport_strlens _cimport_longtypes _cimport_strlbytes ///
                _cimport_encoding _cimport_delimiters _cimport_hasheader
 
     * Like import delimited, name the charset only when it was detected.
@@ -379,12 +419,14 @@ program define cimport, rclass
     if `: word count `explicit_names'' > `nvar' {
         di as error "too many variables specified"
         capture plugin call ctools_plugin, "cimport clear"
+        capture macro drop _cimport_label_*
         exit 103
     }
     if `nobs' > 2147483647 {
         di as error "ctools does not support datasets exceeding 2^31 (2.147 billion) observations"
         di as error "This is a limitation of Stata's plugin API"
         capture plugin call ctools_plugin, "cimport clear"
+        capture macro drop _cimport_label_*
         exit 920
     }
     * A failed or interrupted import leaves the data in memory as they were.
@@ -402,6 +444,10 @@ program define cimport, rclass
     * frame belong to this program, so these steps are inline.
     local __cimport_frame ""
     local __cimport_snap 0
+    * The strL transfer makes a frame of its own current while it copies a
+    * block; a Break there must not restore into that frame.
+    local __cimport_home ""
+    if c(stata_version) >= 16 local __cimport_home = c(frame)
     if "`fast'" == "" {
         if "`snapshot'" == "" & c(stata_version) >= 16 & (_N > 0 | c(k) > 0) {
             tempname __cimport_frame
@@ -414,6 +460,7 @@ program define cimport, rclass
         if _rc {
             local rc = _rc
             capture plugin call ctools_plugin, "cimport clear"
+            capture macro drop _cimport_label_*
             exit `rc'
         }
     }
@@ -422,28 +469,19 @@ program define cimport, rclass
     * Handle empty file or file with header only - match Stata's behavior (rc=0, N=0, k=0)
     if `nvar' == 0 {
         capture plugin call ctools_plugin, "cimport clear"
-        quietly _ctools_clock __ct_now
-        local __ct_elapsed11 = `__ct_elapsed11' + (`__ct_now' - `__ct_start11')
-        quietly _ctools_clock __ct_now
-        local __ct_elapsed99 = `__ct_elapsed99' + (`__ct_now' - `__ct_start99')
-        * Elapsed seconds are held in caller-local timing state.
-        local elapsed = `__ct_elapsed99'
+        plugin call ctools_plugin, "clock"
+        local elapsed = `ctools_clock_value' - `__ct_start99'
         di as text "(0 vars, 0 obs)"
-        local __ct_elapsed11 = 0
-        local __ct_elapsed99 = 0
         return scalar N = 0
         return scalar k = 0
         return scalar time = `elapsed'
-        return local filename `"`using'"'
+        return local filename `"`macval(__cimport_source)'"'
         return local encoding `"`macval(returned_encoding)'"'
         return local delimiters `"`macval(returned_delimiters)'"'
         if "`__cimport_frame'" != "" frame drop `__cimport_frame'
         else if `__cimport_snap' restore, not
         exit 0
     }
-    quietly _ctools_clock __ct_now
-    local __ct_elapsed11 = `__ct_elapsed11' + (`__ct_now' - `__ct_start11')
-
     * Phases 2 and 3 run as one block: a failure or Break in them restores
     * the data in memory
     capture noisily {
@@ -453,144 +491,114 @@ program define cimport, rclass
     * PHASE 2: Create variables in Stata
     * =========================================================================
 
-    if "`__ct_elapsed12'" == "" local __ct_elapsed12 = 0
-
-    quietly _ctools_clock __ct_start12
-
-    * Set number of observations as 1 to create empty variables, change after
-    quietly set obs 1
-
-    * Create variables with appropriate types
-    * Numeric subtypes: 0=double, 1=float, 2=long, 3=int, 4=byte
-    local i = 1
-    foreach vname of local varnames {
-        * Taken from the front of each list: word `i' of costs O(i) per column.
-        gettoken vtype vartypes : vartypes
-        gettoken ntype numtypes : numtypes
-        gettoken vlen strlens : strlens
-        gettoken vlong longtypes : longtypes
-
-        * The plugin names ASCII headers. A header with other characters is
-        * named in Mata as native does: Unicode letters, decimal digits (not
-        * leading) and underscores, cut to 32 characters.
-        mata: st_local("vname", _cimport_name(st_local("vname"), st_global("_cimport_label_`i'")))
-        if "`vname'" == "" local vname "v`i'"
-        * Apply case transformation (after the cut, as native)
-        local vprefix "v"
-        if "`case'" == "lower" {
-            local vname = ustrlower("`vname'")
-        }
-        else if "`case'" == "upper" {
-            local vname = ustrupper("`vname'")
-            local vprefix "V"
-        }
-
-        * The data hold only the variables named so far, so a name is taken
-        * when a variable has exactly that name (a name list costs O(k) each).
-        mata: st_local("taken", strofreal(_st_varindex(st_local("vname")) < .))
-        if `taken' {
-            local vname "`vprefix'`i'"
-            local suffix = 0
-            mata: st_local("taken", strofreal(_st_varindex(st_local("vname")) < .))
-            while `taken' {
-                local ++suffix
-                local vname "`vprefix'`i'_`suffix'"
-                mata: st_local("taken", strofreal(_st_varindex(st_local("vname")) < .))
-            }
-        }
-
-        local storage "double"
-        if `vtype' == 1 {
-            local storage "str`=max(1,`vlen')'"
-            if `vlong' {
-                local storage "strL"
-                local longcolumns `longcolumns' `i'
-            }
-        }
-        else if `ntype' == 4 local storage "byte"
-        else if `ntype' == 3 local storage "int"
-        else if `ntype' == 2 local storage "long"
-        else if `ntype' == 1 local storage "float"
-
-        * _all is legal in imported data but gen treats it as a varlist token.
-        if "`vname'" == "_all" {
-            quietly mata: st_addvar(st_local("storage"), st_local("vname"))
-        }
-        else {
-            if `vtype' == 1 capture quietly gen `storage' `vname' = ""
-            else capture quietly gen `storage' `vname' = .
-            if _rc {
-                local vname "`vprefix'`i'"
-                local suffix = 0
-                mata: st_local("taken", strofreal(_st_varindex(st_local("vname")) < .))
-                while `taken' {
-                    local ++suffix
-                    local vname "`vprefix'`i'_`suffix'"
-                    mata: st_local("taken", strofreal(_st_varindex(st_local("vname")) < .))
-                }
-                if `vtype' == 1 quietly gen `storage' `vname' = ""
-                else quietly gen `storage' `vname' = .
-            }
-        }
-
-        * Header text comes from the file: it is compared and stored in Mata
-        * only, never pasted into a Stata expression or command line.
-        * (A new variable has no label, so "" leaves it as it is.)
-        mata: st_varlabel(st_local("vname"), st_global("_cimport_label_`i'") != st_local("vname") ? st_global("_cimport_label_`i'") : "")
-        capture macro drop _cimport_label_`i'
-        if `vtype' == 1 format `vname' %`=cond(`vlong',9,max(9,`vlen'))'s
-        else {
-            local storage : type `vname'
-            if inlist("`storage'", "byte", "int") format `vname' %8.0g
-            else if "`storage'" == "long" format `vname' %12.0g
-            else if "`storage'" == "double" format `vname' %10.0g
-        }
-        local i = `i' + 1
+    * Names, types, labels and formats are settled in Mata and all variables
+    * are created in one call; strL columns are returned in local longcolumns.
+    * With tempdta, when the import may replace the dataset outright, with
+    * nothing in memory that use would discard (value labels, a data label or
+    * dataset characteristics of an empty dataset kept without clear), and
+    * strL text dominates the data, the plugin writes a temporary .dta that
+    * use loads: the whole dataset (cimport fulldta), or failing that its strL
+    * columns (cimport strldta), several times faster than Mata can store
+    * strLs. tempdta is an option because the file, about the size of the
+    * imported data, may reach the disk. c(filename) and c(filedate) stay as
+    * they were.
+    local longcolumns ""
+    local __cimport_dta 0
+    local __cimport_full 0
+    local __cimport_loaded 0
+    local __cimport_viadta 0
+    if `nobs' & "`tempdta'" != "" {
+        quietly label dir
+        local __cimport_keep `"`r(names)'"'
+        local __cimport_label : data label
+        local __cimport_chars : char _dta[]
+        if `"`__cimport_keep'`__cimport_label'`__cimport_chars'"' == "" local __cimport_viadta 1
     }
-
-    * Set number of observations
-    if `nobs' quietly set obs `nobs'
-    else quietly drop in 1
-
-    quietly _ctools_clock __ct_now
-
-    local __ct_elapsed12 = `__ct_elapsed12' + (`__ct_now' - `__ct_start12')
+    mata: _cimport_addvars(st_local("case"), `__cimport_viadta')
+    if `__cimport_full' {
+        tempfile __cimport_blobpath
+        mata: st_local("__cimport_fullnames_len", strofreal(strlen(st_local("__cimport_fullnames"))))
+        mata: st_local("__cimport_fulltypes_len", strofreal(strlen(st_local("__cimport_fulltypes"))))
+        * A refusal or a failed write leaves the scan for the next route.
+        * Validation hook: fulldta refuses, as it does when it cannot
+        * group the rows.
+        if "$CTOOLS_cimport_fault" == "fulldta" local __cimport_fullrc 459
+        else {
+            plugin call ctools_plugin, "cimport `threads_code' fulldta"
+            local __cimport_fullrc = 0${_cimport_fullrc}
+            capture macro drop _cimport_fullrc
+        }
+        if `__cimport_fullrc' == 1 exit 1
+        if !`__cimport_fullrc' {
+            mata: st_local("__cimport_fn", st_global("S_FN")); st_local("__cimport_fndate", st_global("S_FNDATE"))
+            quietly use `"`__cimport_blobpath'"', clear
+            mata: st_global("S_FN", st_local("__cimport_fn")); st_global("S_FNDATE", st_local("__cimport_fndate"))
+            capture erase `"`__cimport_blobpath'"'
+            plugin call ctools_plugin, "cimport clear"
+            mata: _cimport_addvars(st_local("case"), 3)
+            local __cimport_loaded 1
+            local __cimport_dta 0
+        }
+        else {
+            capture erase `"`__cimport_blobpath'"'
+            * Nothing was created: take the next route.
+            if !`__cimport_dta' mata: _cimport_addvars(st_local("case"), 0)
+        }
+    }
+    if `__cimport_dta' {
+        tempfile __cimport_blobpath
+        local __cimport_longcolumns "`longcolumns'"
+        mata: st_local("__cimport_longcolumns_len", strofreal(strlen(st_local("longcolumns"))))
+        mata: st_local("__cimport_strlnames_len", strofreal(strlen(st_local("__cimport_strlnames"))))
+        plugin call ctools_plugin, "cimport `threads_code' strldta"
+        mata: st_local("__cimport_fn", st_global("S_FN")); st_local("__cimport_fndate", st_global("S_FNDATE"))
+        quietly use `"`__cimport_blobpath'"', clear
+        mata: st_global("S_FN", st_local("__cimport_fn")); st_global("S_FNDATE", st_local("__cimport_fndate"))
+        capture erase `"`__cimport_blobpath'"'
+        mata: _cimport_addvars(st_local("case"), 2)
+    }
+    else if `nobs' & !`__cimport_loaded' quietly set obs `nobs'
 
     * =========================================================================
     * PHASE 3: Load data into variables
     * =========================================================================
 
-    if "`__ct_elapsed13'" == "" local __ct_elapsed13 = 0
-
-    quietly _ctools_clock __ct_start13
-
-    * Get list of all variables we just created (in order)
-    unab allvars : *
-
-    * Each strL column arrives in one plugin call, through a file of
-    * length-prefixed values read in Mata.
-    if `nobs' & "`longcolumns'" != "" {
-        tempfile __cimport_blobpath
-        foreach column of local longcolumns {
-            plugin call ctools_plugin, "cimport blobfile `column'"
-            mata: _cimport_read_blobs(st_local("__cimport_blobpath"), `column', `nobs')
+    * strL columns arrive a block of rows at a time and are stored in Mata.
+    * Values found in the source, verbatim or with doubled quotes or CR LF to
+    * undo, travel as positions, which Mata cuts from the source itself. From
+    * Stata 16 the positions come through a frame, with nothing written to a
+    * file (see _cimport_read_blobmem); otherwise, or when the source cannot
+    * be cut in place, through a short-lived file of blocks.
+    if `nobs' & "`longcolumns'" != "" & !`__cimport_dta' & !`__cimport_loaded' {
+        local __cimport_longcolumns "`longcolumns'"
+        mata: st_local("__cimport_longcolumns_len", strofreal(strlen(st_local("longcolumns"))))
+        mata: st_local("__cimport_blobdirect", strofreal(_cimport_canopen(st_local("__cimport_filename"))))
+        local __cimport_memrc 459
+        * (Validation hook: blobmem takes the file transfer.)
+        if c(stata_version) >= 16 & `__cimport_blobdirect' & "$CTOOLS_cimport_fault" != "blobmem" {
+            plugin call ctools_plugin, "cimport `threads_code' blobmem"
+            local __cimport_memrc = 0${_cimport_blobmemrc}
+            if !`__cimport_memrc' mata: _cimport_read_blobmem(st_local("__cimport_filename"), strtoreal(tokens(st_local("longcolumns"))), `nobs')
+            capture macro drop _cimport_blobmemrc _cimport_blobblocks _cimport_blobmax _cimport_blobsource ///
+                _cimport_blobinfo _cimport_blobcounts _cimport_blobtext _cimport_blobnext
         }
-        capture erase `"`__cimport_blobpath'"'
+        if `__cimport_memrc' {
+            tempfile __cimport_blobpath
+            plugin call ctools_plugin, "cimport `threads_code' blobs"
+            mata: _cimport_read_blobs(st_local("__cimport_blobpath"), strtoreal(tokens(st_local("longcolumns"))), `nobs')
+            capture erase `"`__cimport_blobpath'"'
+        }
     }
 
     if !`nobs' plugin call ctools_plugin, "cimport clear"
-    if `nobs' capture noisily plugin call ctools_plugin *, ///
+    if `nobs' & !`__cimport_loaded' capture noisily plugin call ctools_plugin *, ///
         "cimport `threads_code' load @filename `plugin_delim' `opt_noheader' `opt_headerrow' `opt_verbose' `opt_bindquotes' `opt_asfloat' `opt_asdouble' `opt_decimalsep' `opt_groupsep' `opt_emptylines' `opt_maxquotedrows' `encoding_opt'"
 
-    local load_rc = _rc
+    local load_rc = cond(`__cimport_loaded', 0, _rc)
     if `load_rc' {
         di as error "Error loading CSV data (rc=`load_rc'); imported data are incomplete"
         exit `load_rc'
     }
-
-    quietly _ctools_clock __ct_now
-
-    local __ct_elapsed13 = `__ct_elapsed13' + (`__ct_now' - `__ct_start13')
 
     * Native shows a numeric column in the format of the type it infers from
     * a sample of lines (see _cimport_sample_formats), whatever the final
@@ -622,18 +630,17 @@ program define cimport, rclass
     if `rc' {
         * Release the scanned file first; the restore may need the memory
         capture plugin call ctools_plugin, "cimport clear"
+        capture macro drop _cimport_label_* _cimport_blob*
         nobreak {
+            if "`__cimport_home'" != "" capture frame change `__cimport_home'
             if "`__cimport_frame'" != "" frame copy `__cimport_frame' `c(frame)', replace
             else if `__cimport_snap' restore
         }
         exit `rc'
     }
 
-    quietly _ctools_clock __ct_now
-
-    local __ct_elapsed99 = `__ct_elapsed99' + (`__ct_now' - `__ct_start99')
-    * Elapsed seconds are held in caller-local timing state.
-    local elapsed = `__ct_elapsed99'
+    plugin call ctools_plugin, "clock"
+    local elapsed = `ctools_clock_value' - `__ct_start99'
 
     * Display summary (matching import delimited output format)
     di as text "(" strtrim(string(c(k),"%20.0fc")) " var" cond(c(k)==1,"","s") ", " strtrim(string(_N,"%20.0fc")) " obs)"
@@ -649,16 +656,20 @@ program define cimport, rclass
         di as text "{hline 55}"
         di as text "cimport timing breakdown:"
         di as text "{hline 55}"
-        di as text "  C plugin internals:"
-        di as text "    Memory map file:        " as result %8.4f _cimport_time_mmap " sec"
-        di as text "    Encoding conversion:    " as result %8.4f _cimport_time_encoding " sec"
-        di as text "    Parse CSV:              " as result %8.4f _cimport_time_parse " sec"
-        di as text "    Type inference:         " as result %8.4f _cimport_time_infer " sec"
-        di as text "    Cache conversion:       " as result %8.4f _cimport_time_cache " sec"
-        di as text "    Store to Stata:         " as result %8.4f _cimport_time_store " sec"
-        di as text "  {hline 53}"
-        di as text "    C plugin total:         " as result %8.4f _cimport_time_total " sec"
-        di as text "  {hline 53}"
+        * Without rows to load (a header-only file) no load ran to time
+        capture confirm scalar _cimport_time_total
+        if !_rc {
+            di as text "  C plugin internals:"
+            di as text "    Memory map file:        " as result %8.4f _cimport_time_mmap " sec"
+            di as text "    Encoding conversion:    " as result %8.4f _cimport_time_encoding " sec"
+            di as text "    Parse CSV:              " as result %8.4f _cimport_time_parse " sec"
+            di as text "    Type inference:         " as result %8.4f _cimport_time_infer " sec"
+            di as text "    Cache conversion:       " as result %8.4f _cimport_time_cache " sec"
+            di as text "    Store to Stata:         " as result %8.4f _cimport_time_store " sec"
+            di as text "  {hline 53}"
+            di as text "    C plugin total:         " as result %8.4f _cimport_time_total " sec"
+            di as text "  {hline 53}"
+        }
         di as text "  Stata overhead:           " as result %8.4f `__stata_overhead' " sec"
         di as text "{hline 55}"
         di as text "    Wall clock total:       " as result %8.4f `elapsed' " sec"
@@ -686,17 +697,11 @@ program define cimport, rclass
             di as text "    Max threads available:  " as result %8.0f `__threads_max'
             di as text "{hline 55}"
         }
-
-        * Clean up timing scalars
-        capture scalar drop _cimport_time_mmap _cimport_time_encoding _cimport_time_parse _cimport_time_infer
-        capture scalar drop _cimport_time_cache _cimport_time_store _cimport_time_total
-        capture scalar drop _cimport_threads_max _cimport_openmp_enabled
     }
-
-    local __ct_elapsed11 = 0
-    local __ct_elapsed12 = 0
-    local __ct_elapsed13 = 0
-    local __ct_elapsed99 = 0
+    * Clean up timing scalars (written by every load, shown only with verbose)
+    capture scalar drop _cimport_time_mmap _cimport_time_encoding _cimport_time_parse _cimport_time_infer
+    capture scalar drop _cimport_time_cache _cimport_time_store _cimport_time_total
+    capture scalar drop _cimport_threads_max _cimport_openmp_enabled
 
     if "`__cimport_frame'" != "" frame drop `__cimport_frame'
     else if `__cimport_snap' restore, not
@@ -705,7 +710,7 @@ program define cimport, rclass
     return scalar N = _N
     return scalar k = c(k)
     return scalar time = `elapsed'
-    return local filename `"`using'"'
+    return local filename `"`macval(__cimport_source)'"'
     return local encoding `"`macval(returned_encoding)'"'
     return local delimiters `"`macval(returned_delimiters)'"'
 
@@ -733,21 +738,33 @@ program define cimport_excel, rclass
     capture syntax [anything(equalok)] [using/] [, ALLSTRING(string) *]
     local allfmt `"`allstring'"'
     local 0 `"`macval(original0)'"'
-    syntax [anything(equalok)] [using/] [, SHEET(string) CELLRange(string) FIRSTrow ///
-        ALLSTRING(string) ALLString CASE(string) CLEAR Verbose DEScribe LOCALE(string) DETAIL ///
+    * The same two declarations as native: all and allstri are allstring, and
+    * only the full allstring(format) carries a format (all(format) is read
+    * as neither, as native reads it).
+    syntax [anything(equalok)] [using/] [, SHeet(string) CELLRange(string) FIRSTrow ///
+        ALLstring(string) ALLstring CASE(string) CLEAR Verbose DEScribe LOCALE(string) DETAIL ///
         SNAPshot FAST]
 
     * Native describe is an exclusive workbook-inspection syntax.
-    if "`describe'"!="" & (`"`sheet'`cellrange'`firstrow'`allstring'`case'`clear'`locale'`detail'"'!="") exit 198
+    if "`describe'"!="" & (`"`macval(sheet)'`cellrange'`firstrow'`allstring'`macval(allfmt)'`case'`clear'`locale'`detail'"'!="") {
+        di as error "option {bf:describe} not allowed"
+        exit 198
+    }
 
     if `"`allfmt'"' != "" {
-        if "`allstring'" == "allstring" exit 198
+        if "`allstring'" == "allstring" opts_exclusive "allstring allstring()"
         mata: st_local("fmtvalid",strofreal(st_isnumfmt(st_local("allfmt"))))
-        if !`fmtvalid' exit 198
+        if !`fmtvalid' {
+            di as error `"`macval(allfmt)': invalid numeric display format in option {bf:allstring()}"'
+            exit 198
+        }
         local allstring "allstring"
     }
 
-    if substr("`cellrange'",-1,1)==":" exit 198
+    if substr("`cellrange'",-1,1)==":" {
+        di as error "invalid lower right cell range in option {bf:cellrange()}"
+        exit 198
+    }
 
     * Handle filename - can come from using/ or as first positional argument
     local extvarlist ""
@@ -764,57 +781,128 @@ program define cimport_excel, rclass
         di as error "Syntax: cimport excel [using] filename [, options]"
         exit 198
     }
-    if "`describe'"!="" & `"`extvarlist'"'!="" exit 198
-
-    * With no extension, native import tries .xls before .xlsx.
-    mata: st_local("base",pathbasename(st_local("using")))
-    if !strpos(`"`base'"',".") {
-        capture confirm file `"`using'.xls"'
-        if !_rc local using `"`using'.xls"'
-        else local using `"`using'.xlsx"'
-    }
-    confirm file `"`using'"'
-    if `"`extvarlist'"' != "" & ("`case'" != "" | "`firstrow'" != "") exit 198
-
-    if lower(substr(`"`using'"',-4,4)) == ".xls" {
-        local opts ""
-        if `"`allfmt'"' != "" local opts `"allstringfmt(`"`allfmt'"')"'
-        if `"`sheet'"' != "" local opts `"`opts' sheet(`"`sheet'"')"'
-        if "`cellrange'" != "" local opts "`opts' cellrange(`cellrange')"
-        if "`case'" != "" local opts "`opts' case(`case')"
-        _cio_import xls `extvarlist' using `"`using'"', `firstrow' `allstring' `clear' `describe' `snapshot' `fast' `opts'
-        return add
-        exit
-    }
-
-    * Validate .xlsx extension
-    local ext = substr(`"`using'"', -5, 5)
-    if lower("`ext'") != ".xlsx" {
-        di as error "cimport excel: file must have .xlsx extension"
+    if "`describe'"!="" & `"`extvarlist'"'!="" {
+        di as error "option {bf:describe} not allowed"
         exit 198
     }
 
+    * As native import excel does, a URL is first copied to a temporary file,
+    * which keeps the URL's .xls, .xlsx or .xlsm (the reader follows it).
+    local source `"`macval(using)'"'
+    local urlcopy ""
+    mata: st_local("isurl", strofreal(pathisurl(st_local("using"))))
+    if `isurl' {
+        mata: st_local("urlext", strlower(pathsuffix(st_local("using"))))
+        if !inlist("`urlext'", ".xls", ".xlsx", ".xlsm") local urlext ".xlsx"
+        tempfile urlbase
+        local urlcopy `"`urlbase'`urlext'"'
+        capture copy `"`macval(using)'"' `"`urlcopy'"'
+        if _rc {
+            capture erase `"`urlcopy'"'
+            di as error "could not open url"
+            exit 603
+        }
+        local using `"`urlcopy'"'
+    }
+    else {
+        * ~ is the home directory, as for Stata's own file commands
+        _ctools_home using `"`macval(using)'"'
+        * With no extension, native import tries .xls before .xlsx.
+        mata: st_local("base",pathbasename(st_local("using")))
+        if !strpos(`"`macval(base)'"',".") {
+            capture confirm file `"`macval(using)'.xls"'
+            if !_rc {
+                local using `"`macval(using)'.xls"'
+            }
+            else {
+                local using `"`macval(using)'.xlsx"'
+            }
+        }
+        local source `"`macval(using)'"'
+    }
+    capture noisily confirm file `"`macval(using)'"'
+    if _rc {
+        local rc = _rc
+        if `"`urlcopy'"' != "" capture erase `"`urlcopy'"'
+        exit `rc'
+    }
+    if `"`extvarlist'"' != "" & ("`case'" != "" | "`firstrow'" != "") {
+        if `"`urlcopy'"' != "" capture erase `"`urlcopy'"'
+        * As native: its syntax with a list of variables has no case()
+        if "`firstrow'" != "" {
+            di as error "option {bf:firstrow} not allowed with extvarlist; specify option {bf:cellrange()} to skip the first row"
+        }
+        else di as error "option {bf:case()} not allowed"
+        exit 198
+    }
+
+    * As native, the workbook kind comes from the file's first bytes, not its
+    * name: an Office Open XML package (.xlsx, .xlsm, .xltx or any other
+    * name; macros are not read) or a binary (BIFF) workbook. Other content
+    * keeps the kind its extension names, so the reader reports the damage;
+    * with neither, it fails as native does.
+    mata: st_local("kind", _cimport_excel_kind(st_local("using")))
+    if "`kind'" == "" {
+        if lower(substr(`"`macval(using)'"',-4,4)) == ".xls" local kind "xls"
+        if inlist(lower(substr(`"`macval(using)'"',-5,5)), ".xlsx", ".xlsm") local kind "xlsx"
+    }
+    if "`kind'" == "" {
+        if `"`urlcopy'"' != "" capture erase `"`urlcopy'"'
+        mata: printf("{err}file %s could not be loaded\n", st_local("source"))
+        exit 603
+    }
+
+    * macval(): a sheet name or file name holding $ or ` reaches the reader as
+    * typed. Blocks, not one-line ifs: Stata expands the command of a one-line
+    * if a second time, macval() or not.
     local opts ""
-        if `"`allfmt'"' != "" local opts `"allstringfmt(`"`allfmt'"')"'
-    if `"`sheet'"' != "" local opts `"`opts' sheet(`"`sheet'"')"'
-    if "`cellrange'" != "" local opts "`opts' cellrange(`cellrange')"
-    if "`case'" != "" local opts "`opts' case(`case')"
-    _cio_import xlsx `extvarlist' using `"`using'"', `firstrow' `allstring' `clear' `describe' `snapshot' `fast' `opts'
+    if `"`macval(allfmt)'"' != "" {
+        local opts `"allstringfmt(`"`macval(allfmt)'"')"'
+    }
+    if `"`macval(sheet)'"' != "" {
+        local opts `"`macval(opts)' sheet(`"`macval(sheet)'"')"'
+    }
+    if "`cellrange'" != "" {
+        local opts `"`macval(opts)' cellrange(`cellrange')"'
+    }
+    if "`case'" != "" {
+        local opts `"`macval(opts)' case(`case')"'
+    }
+    capture noisily _cio_import `kind' `extvarlist' using `"`macval(using)'"', ///
+        `firstrow' `allstring' `clear' `describe' `snapshot' `fast' `macval(opts)'
+    local rc = _rc
+    if `"`urlcopy'"' != "" capture erase `"`urlcopy'"'
+    if `rc' exit `rc'
     return add
+    return local filename `"`macval(source)'"'
     exit
 
 end
 
 program define _cimport_delimiters, rclass
     version 14.1
-    syntax anything(name=delimiters) [, COLLApse ASSTRing]
-    if "`collapse'"!="" & "`asstring'"!="" exit 198
+    * Messages as native import delimited gives them
+    capture syntax anything(name=delimiters) [, COLLApse ASSTRing]
+    if _rc {
+        di as error "invalid {bf:delimiter()} argument"
+        exit 198
+    }
+    if "`collapse'"!="" & "`asstring'"!="" {
+        di as error "invalid {bf:delimiter()} argument"
+        exit 198
+    }
     local quoted = strpos(`"`macval(delimiters)'"',char(34))>0
     gettoken delimiters extra : delimiters
-    if strtrim(`"`extra'"')!="" | `"`delimiters'"'=="" exit 198
+    if strtrim(`"`extra'"')!="" | `"`delimiters'"'=="" {
+        di as error "invalid {bf:delimiter()} argument"
+        exit 198
+    }
     local delimiters = subinstr(`"`macval(delimiters)'"',"\t",char(9),.)
     if !`quoted' {
-        if !inlist("`delimiters'","tab","comma","space","whitespace",char(9),",") exit 198
+        if !inlist("`delimiters'","tab","comma","space","whitespace",char(9),",") {
+            di as error `"{bf:`delimiters'}: invalid {bf:delimiter()} shortcut"'
+            exit 198
+        }
         if "`delimiters'"=="tab" local delimiters=char(9)
         if "`delimiters'"=="comma" local delimiters=","
         if "`delimiters'"=="space" local delimiters=" "
@@ -826,6 +914,20 @@ program define _cimport_delimiters, rclass
 end
 
 mata:
+/* "xlsx" for a zip package (Office Open XML), "xls" for an OLE2 compound
+   file (BIFF), "" otherwise or when the file cannot be read. */
+string scalar _cimport_excel_kind(string scalar path) {
+    real scalar fh
+    string scalar head
+    fh = _fopen(path, "r")
+    if (fh < 0) return("")
+    head = fread(fh, 8)
+    fclose(fh)
+    if (head == J(0, 0, "")) return("")
+    if (substr(head, 1, 4) == "PK" + char((3, 4))) return("xlsx")
+    if (head == char((208, 207, 17, 224, 161, 177, 26, 225))) return("xls")
+    return("")
+}
 /* cname is the plugin's name for an ASCII header. Other headers keep only
    Unicode letters, decimal digits and underscores, drop leading digits and
    are cut to 32 characters, as native import delimited names them. */
@@ -835,15 +937,170 @@ string scalar _cimport_name(string scalar cname, string scalar header) {
     name = ustrregexrf(ustrregexra(header, "[^\p{L}\p{Nd}_]", ""), "^\p{Nd}+", "")
     return(usubstr(name, 1, 32))
 }
+/* Creates the scanned columns as variables in one st_addvar() call. The scan
+   leaves the plugin's names and the column types in locals varnames,
+   vartypes (1 = string), numtypes (0 double, 1 float, 2 long, 3 int, 4 byte),
+   strlens and longtypes (1 = strL), and each header in global
+   _cimport_label_#. A name already used, or one that is not a valid variable
+   name, becomes v# (V# with case(upper)), then v#_1, v#_2, ...; as in native,
+   _all and _skip are valid. A header that differs from its name becomes the
+   label. The strL column numbers are left in local longcolumns.
+
+   mode 0 creates every variable. mode 1 (option tempdta) may create nothing
+   instead, when there are strL columns and no name is one a varlist reads
+   otherwise (_all, _skip), for a temporary .dta that use loads. It leaves 1
+   in local __cimport_full, with every name and type in locals
+   __cimport_fullnames and __cimport_fulltypes, when at most 32,767
+   variables can go in a format-118 dataset (cimport fulldta writes it; mode
+   3 then sets formats and labels). It leaves 1 in local __cimport_dta, with
+   the strL names in local __cimport_strlnames, when other variables exist
+   and a single order command can name them all (cimport strldta writes the
+   strL columns; mode 2 then creates the other variables and puts all in file
+   order, which rewrites the observations twice). Either route copies the
+   other variables' data through a file and use, which costs more than
+   storing them through the SPI, so mode 1 takes one only when the strL text
+   (local strlbytes, from the scan) is at least as large as the other
+   variables' data (local nobs times their width); otherwise Mata storing the
+   strLs costs less. */
+void _cimport_addvars(string scalar lettercase, real scalar mode)
+{
+    string rowvector names, vtype, ntype, vlen, vlong, types, formats, labels, longcols
+    string scalar name, prefix, label
+    real scalar k, i, suffix, width, strl, nostrl, rowwidth, worth
+    string scalar tag
+    real rowvector index
+    transmorphic scalar used
+
+    names = tokens(st_local("varnames"))
+    vtype = tokens(st_local("vartypes"))
+    ntype = tokens(st_local("numtypes"))
+    vlen = tokens(st_local("strlens"))
+    vlong = tokens(st_local("longtypes"))
+    k = cols(names)
+    if (!k) return
+    types = formats = labels = J(1, k, "")
+    longcols = J(1, 0, "")
+    prefix = lettercase == "upper" ? "V" : "v"
+    used = asarray_create()
+    for (i = 1; i <= k; i++) {
+        /* The plugin names ASCII headers. A header with other characters is
+           named as native does (see _cimport_name), then the case applies. */
+        label = st_global("_cimport_label_" + strofreal(i))
+        if (mode != 1) st_global("_cimport_label_" + strofreal(i), "")
+        name = _cimport_name(names[i], label)
+        if (name == "") name = "v" + strofreal(i)
+        if (lettercase == "lower") name = ustrlower(name)
+        else if (lettercase == "upper") name = ustrupper(name)
+        if (asarray_contains(used, name) | !st_isvarname(name)) {
+            name = prefix + strofreal(i)
+            for (suffix = 1; asarray_contains(used, name); suffix++) {
+                name = prefix + strofreal(i) + "_" + strofreal(suffix)
+            }
+        }
+        asarray(used, name, 1)
+        names[i] = name
+        /* Header text from the file is stored in Mata only, never pasted
+           into a Stata command line. */
+        if (label != name) labels[i] = label
+        if (vtype[i] == "1") {
+            width = strtoreal(vlen[i])
+            if (vlong[i] == "1") {
+                types[i] = "strL"
+                formats[i] = "%9s"
+                longcols = longcols, strofreal(i)
+            }
+            else {
+                types[i] = "str" + strofreal(max((1, width)))
+                formats[i] = "%" + strofreal(max((9, width))) + "s"
+            }
+        }
+        else if (ntype[i] == "4") {
+            types[i] = "byte"
+            formats[i] = "%8.0g"
+        }
+        else if (ntype[i] == "3") {
+            types[i] = "int"
+            formats[i] = "%8.0g"
+        }
+        else if (ntype[i] == "2") {
+            types[i] = "long"
+            formats[i] = "%12.0g"
+        }
+        else if (ntype[i] == "1") {
+            types[i] = "float"
+            formats[i] = "%9.0g"
+        }
+        else {
+            types[i] = "double"
+            formats[i] = "%10.0g"
+        }
+    }
+    st_local("longcolumns", invtokens(longcols))
+    strl = types :== "strL"
+    if (mode == 1) {
+        rowwidth = 0
+        for (i = 1; i <= k; i++) {
+            if (strl[i]) continue
+            if (substr(types[i], 1, 3) == "str") rowwidth = rowwidth + strtoreal(substr(types[i], 4, .))
+            else if (types[i] == "byte") rowwidth = rowwidth + 1
+            else if (types[i] == "int") rowwidth = rowwidth + 2
+            else if (types[i] == "double") rowwidth = rowwidth + 8
+            else rowwidth = rowwidth + 4
+        }
+        worth = any(strl) & !anyof(names, "_all") & !anyof(names, "_skip") &
+            strtoreal(st_local("strlbytes")) >= strtoreal(st_local("nobs")) * rowwidth
+        if (worth & k <= 32767) {
+            st_local("__cimport_fullnames", invtokens(names))
+            st_local("__cimport_fulltypes", invtokens(types))
+            st_local("__cimport_full", "1")
+        }
+        if (worth & !all(strl) & sum(strl) <= 32767 & strlen(invtokens(names)) < c("max_cmdlen") - 16) {
+            st_local("__cimport_strlnames", invtokens(select(names, strl)))
+            st_local("__cimport_dta", "1")
+        }
+        if (st_local("__cimport_full") == "1" | st_local("__cimport_dta") == "1") return
+        for (i = 1; i <= k; i++) st_global("_cimport_label_" + strofreal(i), "")
+    }
+    if (mode == 3) {
+        /* Every variable came from the file, in order. Creating variables
+           marks the data changed, so a variable is added and dropped: under
+           version 14 neither characteristics nor labels do, nor a variable
+           with a temporary name (about a millisecond on 75,000 rows). */
+        for (i = 1; i <= k; i++) {
+            st_varformat(i, formats[i])
+            if (labels[i] != "") st_varlabel(i, labels[i])
+        }
+        tag = "cimport_changed"
+        for (suffix = 1; _st_varindex(tag) < .; suffix++) tag = "cimport_changed" + strofreal(suffix)
+        st_dropvar(st_addvar("byte", tag))
+        return
+    }
+    if (mode == 2) {
+        /* The strL variables are in memory, in file order. */
+        nostrl = !strl
+        (void) st_addvar(select(types, nostrl), select(names, nostrl))
+        stata("order " + invtokens(names))
+        index = st_varindex(names)
+    }
+    else index = st_addvar(types, names)
+    for (i = 1; i <= k; i++) {
+        st_varformat(index[i], formats[i])
+        if (labels[i] != "") st_varlabel(index[i], labels[i])
+    }
+}
 /* Native infers display formats from a sample of the file's lines: the
    first 513 (header included), then the later lines in groups of 512 counted
    from the second line, group b when b is a power of two from 2, and a last
    group that is not full. Integers there display as %8.0g, or %12.0g in long
    range; a non-integer as float (%9.0g), or double (%10.0g) with asdouble or
-   an integer beyond long range in the sample. */
-void _cimport_sample_formats(real scalar hasheader, real scalar asdouble) {
-    real scalar j, n, b, last, lo, hi
-    real colvector obs, x, y
+   an integer beyond long range in the sample. The sample is read 256 numeric
+   variables at a time. */
+void _cimport_sample_formats(real scalar hasheader, real scalar asdouble)
+{
+    real scalar j, n, b, last, first, stop
+    real colvector obs
+    real rowvector numvars, idx, count, nonint, nint, lo, hi
+    real matrix x, isint
     n = st_nobs()
     if (n < 1) return
     obs = 1::min((n, 513 - hasheader))
@@ -853,29 +1110,233 @@ void _cimport_sample_formats(real scalar hasheader, real scalar asdouble) {
     last = n - 2 + hasheader
     if (last >= 512 & mod(last + 1, 512)) obs = obs \ ((512 * floor(last / 512) + 2 - hasheader)::n)
     obs = uniqrows(obs)
+    numvars = J(1, 0, .)
     for (j = 1; j <= st_nvar(); j++) {
-        if (!st_isnumvar(j)) continue
-        x = st_data(obs, j)
-        x = select(x, x :< .)
-        if (!length(x)) continue
-        y = select(x, x :== floor(x))
-        lo = length(y) ? min(y) : 0
-        hi = length(y) ? max(y) : 0
-        if (any(x :!= floor(x))) st_varformat(j, asdouble | lo < -2147483647 | hi > 2147483620 ? "%10.0g" : "%9.0g")
-        else if (lo >= -32767 & hi <= 32740) st_varformat(j, "%8.0g")
-        else if (lo >= -2147483647 & hi <= 2147483620) st_varformat(j, "%12.0g")
-        else st_varformat(j, "%10.0g")
+        if (st_isnumvar(j)) numvars = numvars, j
+    }
+    for (first = 1; first <= cols(numvars); first = stop + 1) {
+        stop = min((first + 255, cols(numvars)))
+        idx = numvars[|first \ stop|]
+        x = st_data(obs, idx)
+        count = colsum(x :< .)
+        isint = (x :< .) :& (x :== floor(x))
+        nint = colsum(isint)
+        nonint = count - nint
+        x = editmissing(x, 0)
+        lo = colmin(isint :* x + (!isint) :* maxdouble())
+        hi = colmax(isint :* x - (!isint) :* maxdouble())
+        for (j = 1; j <= cols(idx); j++) {
+            if (!count[j]) continue
+            if (!nint[j]) lo[j] = hi[j] = 0
+            if (nonint[j]) st_varformat(idx[j], asdouble | lo[j] < -2147483647 | hi[j] > 2147483620 ? "%10.0g" : "%9.0g")
+            else if (lo[j] >= -32767 & hi[j] <= 32740) st_varformat(idx[j], "%8.0g")
+            else if (lo[j] >= -2147483647 & hi[j] <= 2147483620) st_varformat(idx[j], "%12.0g")
+            else st_varformat(idx[j], "%10.0g")
+        }
     }
 }
-void _cimport_read_blobs(string scalar path, real scalar col, real scalar n) {
-    real scalar fh, i, length
-    real colvector io
+/* 1 if Mata can open the file for reading. */
+real scalar _cimport_canopen(string scalar path)
+{
+    real scalar fh
+    fh = _fopen(path, "r")
+    if (fh < 0) return(0)
+    fclose(fh)
+    return(1)
+}
+/* The next values of the strL transfer file: their lengths, then their bytes
+   cut with one substr(). */
+string colvector _cimport_blob_cut(real scalar fh, real colvector len)
+{
+    real scalar total
+    string scalar buf
+    total = sum(len)
+    if (!total) return(J(rows(len), 1, ""))
+    buf = fread(fh, total)
+    if (strlen(buf) != total) _error(692, "cimport: damaged strL transfer file")
+    return(substr(buf, runningsum(len) - len :+ 1, len))
+}
+/* Stores the strL values of cimport blobmem (src/cimport/cimport_impl.c), a
+   block of rows at a time, with nothing written to a file. For each block,
+   cimport blobfill stores the block's nonempty values in a frame of this
+   function's: their rows, positions and lengths, and their kind (0 the
+   source bytes, 1 with "" undone to ", 2 with CR LF undone to CR, 3 both, 8
+   bytes of the block's text). Mata reads the block's byte range of the
+   source once and cuts the values from it, or from the text, which arrives
+   in global macros. A column more than half full lists every row of the
+   block (empty ones with length 0) and is stored as one range; otherwise its
+   empty values are not stored, as the variables were created with every
+   observation empty. Frames need Stata 16; the
+   frame commands are run as strings so that this file still compiles in
+   Stata 14 and 15, which use _cimport_read_blobs instead. */
+void _cimport_read_blobmem(string scalar path, real rowvector vars, real scalar n)
+{
+    real scalar src, nb, most, g, row, b, start, rlen, ntext, nent, k, c, off, at, rc, piece
+    real rowvector info, counts
+    real matrix X, E
+    real colvector t, sel
+    string scalar region, text, fr, home, q, cmd
+    string colvector parts, s
+
+    nb = strtoreal(st_global("_cimport_blobblocks"))
+    most = strtoreal(st_global("_cimport_blobmax"))
+    if (nb >= . | most >= .) _error(692, "cimport: damaged strL transfer")
+    if (!most) return
+    src = _fopen(path, "r")
+    if (src < 0) _error(603, "cimport: could not reopen the file to read its strL values")
+    fseek(src, 0, 1)
+    if (ftell(src) != strtoreal(st_global("_cimport_blobsource"))) {
+        fclose(src)
+        _error(692, "cimport: the file changed while it was imported")
+    }
+    q = char(34)
+    piece = max((1024, c("macrolen") - 64))
+    home = c("frame")
+    fr = st_tempname()
+    rc = _stata("version 16: frame create " + fr)
+    if (!rc) rc = _stata("version 16: frame " + fr + ": quietly set obs " + strofreal(most, "%20.0f"))
+    if (!rc) rc = _stata("version 16: frame " + fr + ": quietly generate long r = .")
+    if (!rc) rc = _stata("version 16: frame " + fr + ": quietly generate long p = .")
+    if (!rc) rc = _stata("version 16: frame " + fr + ": quietly generate long n = .")
+    if (!rc) rc = _stata("version 16: frame " + fr + ": quietly generate byte t = .")
+    row = 1
+    for (g = 0; g < nb & !rc; g++) {
+        cmd = "version 16: frame " + fr + ": plugin call ctools_plugin r p n t, " + q + "cimport " +
+              st_local("threads_code") + " blobfill " + strofreal(g) + q
+        rc = _stata(cmd)
+        if (rc) break
+        info = strtoreal(tokens(st_global("_cimport_blobinfo")))
+        counts = strtoreal(tokens(st_global("_cimport_blobcounts")))
+        if (cols(info) != 5 | cols(counts) != cols(vars)) { rc = 692; break; }
+        b = info[1]; start = info[2]; rlen = info[3]; ntext = info[4]; nent = info[5]
+        if (b < 1 | row + b - 1 > n | sum(counts) != nent) { rc = 692; break; }
+        if (nent) {
+            /* The current frame is changed only to copy the block. */
+            rc = _stata("version 16: frame change " + fr)
+            if (rc) break
+            X = st_data((1, nent), (1, 2, 3, 4))
+            rc = _stata("version 16: frame change " + home)
+            if (rc) break
+        }
+        region = ""
+        if (rlen) {
+            fseek(src, start, -1)
+            region = fread(src, rlen)
+            if (strlen(region) != rlen) { rc = 692; break; }
+        }
+        text = ""
+        if (ntext) {
+            parts = J(0, 1, "")
+            for (at = 0; at < ntext; at = strtoreal(st_global("_cimport_blobnext"))) {
+                rc = _stata("plugin call ctools_plugin, " + q + "cimport blobtext " + strofreal(g) + " " +
+                            strofreal(at, "%20.0f") + " " + strofreal(piece) + q)
+                if (rc) break
+                parts = parts \ st_global("_cimport_blobtext")
+            }
+            if (rc) break
+            text = invtokens(parts', "")
+            if (strlen(text) != ntext) { rc = 692; break; }
+        }
+        off = 0
+        for (k = 1; k <= cols(vars); k++) {
+            c = counts[k]
+            if (!c) continue
+            E = X[|off + 1, 1 \ off + c, 4|]
+            off = off + c
+            t = E[., 4]
+            s = substr(region, E[., 2], E[., 3])
+            sel = selectindex(t :== 8)
+            if (length(sel)) s[sel] = substr(text, E[sel, 2], E[sel, 3])
+            sel = selectindex(t :== 1 :| t :== 3)
+            if (length(sel)) s[sel] = subinstr(s[sel], q + q, q, .)
+            sel = selectindex(t :== 2 :| t :== 3)
+            if (length(sel)) s[sel] = subinstr(s[sel], char(13) + char(10), char(13), .)
+            /* A column more than half full lists every row, in order. */
+            if (c == b) st_sstore(row::row + b - 1, vars[k], s)
+            else st_sstore((row - 1) :+ E[., 1], vars[k], s)
+        }
+        row = row + b
+    }
+    fclose(src)
+    if (c("frame") != home) (void) _stata("version 16: frame change " + home)
+    (void) _stata("version 16: frame drop " + fr)
+    if (rc) _error(rc, "cimport: the strL transfer failed")
+    if (row - 1 != n) _error(692, "cimport: damaged strL transfer")
+}
+/* Reads the strL transfer file of cimport_blobs (src/cimport/cimport_impl.c),
+   which describes its layout. Per block of rows, the block's byte range of the
+   source file is read once; each strL variable's values are cut from it with
+   one substr(), apart from values decoding changed, which follow as bytes;
+   then each variable's block is stored with one st_sstore(). Empty values
+   are not stored when the file lists the nonempty rows: the variables were
+   created with every observation empty. */
+void _cimport_read_blobs(string scalar path, real rowvector vars, real scalar n)
+{
+    real scalar fh, src, k, row, b, start, rlen, mode, p, format, ncols, direct, size, plen, m
+    real colvector io, pos, len, idx, rows
+    string scalar region, source
+    string colvector s
     fh = fopen(path, "r")
     io = bufio()
-    for (i = 1; i <= n; i++) {
-        length = fbufget(io, fh, "%4bu")
-        st_sstore(i, col, length ? fread(fh, length) : "")
+    format = fbufget(io, fh, "%4bu")
+    ncols = fbufget(io, fh, "%4bu")
+    direct = fbufget(io, fh, "%4bu")
+    size = fbufget(io, fh, "%8z")
+    plen = fbufget(io, fh, "%4bu")
+    if (format != 3 | ncols != cols(vars)) _error(692, "cimport: damaged strL transfer file")
+    src = -1
+    if (direct) {
+        source = plen ? fread(fh, plen) : ""
+        if (strlen(source) != plen) _error(692, "cimport: damaged strL transfer file")
+        src = _fopen(source, "r")
+        if (src < 0) _error(603, "cimport: could not reopen the file to read its strL values")
+        fseek(src, 0, 1)
+        if (ftell(src) != size) _error(692, "cimport: the file changed while it was imported")
     }
+    for (row = 1; row <= n; row = row + b) {
+        b = fbufget(io, fh, "%4bu")
+        if (b < 1 | row + b - 1 > n) _error(692, "cimport: damaged strL transfer file")
+        start = fbufget(io, fh, "%8z")
+        rlen = fbufget(io, fh, "%8z")
+        region = ""
+        if (rlen) {
+            if (src < 0) _error(692, "cimport: damaged strL transfer file")
+            fseek(src, start, -1)
+            region = fread(src, rlen)
+            if (strlen(region) != rlen) _error(692, "cimport: the file changed while it was imported")
+        }
+        for (k = 1; k <= cols(vars); k++) {
+            mode = fbufget(io, fh, "%4bu")
+            if (mode == 2) continue
+            m = b
+            rows = row::row + b - 1
+            if (mode >= 4) {
+                mode = mode - 4
+                m = fbufget(io, fh, "%4bu")
+                if (m < 1 | m > b) _error(692, "cimport: damaged strL transfer file")
+                idx = fbufget(io, fh, "%4bu", m, 1)
+                if (min(idx) < 1 | max(idx) > b) _error(692, "cimport: damaged strL transfer file")
+                rows = (row - 1) :+ idx
+            }
+            if (mode == 0) {
+                s = _cimport_blob_cut(fh, fbufget(io, fh, "%4bu", m, 1))
+            }
+            else if (mode == 1) {
+                pos = fbufget(io, fh, "%4bu", m, 1)
+                len = fbufget(io, fh, "%4bu", m, 1)
+                s = substr(region, pos, len)
+                p = fbufget(io, fh, "%4bu")
+                if (p) {
+                    idx = fbufget(io, fh, "%4bu", p, 1)
+                    if (min(idx) < 1 | max(idx) > m) _error(692, "cimport: damaged strL transfer file")
+                    s[idx] = _cimport_blob_cut(fh, fbufget(io, fh, "%4bu", p, 1))
+                }
+            }
+            else _error(692, "cimport: damaged strL transfer file")
+            st_sstore(rows, vars[k], s)
+        }
+    }
+    if (src >= 0) fclose(src)
     fclose(fh)
 }
 end
@@ -883,7 +1344,10 @@ end
 * Native row/column ranges support f:l as well as omitted bounds.
 program define _cimport_range, rclass
     version 14.1
-    args range
+    * kind is row (rowrange()) or column (colrange()); messages as native's
+    args range kind
+    local opt = cond("`kind'" == "column", "colrange", "rowrange")
+    local short = cond("`kind'" == "column", "col", "row")
     local colon = strpos("`range'",":")
     local first 0
     local last 0
@@ -893,18 +1357,31 @@ program define _cimport_range, rclass
         if "`left'"=="f" local left "1"
         if "`left'"!="" {
             local first = real("`left'")
-            if missing(`first') | `first'<1 | strpos("`left'",".") exit 198
+            if missing(`first') | `first'<1 | strpos("`left'",".") {
+                di as error "{bf:`left'} is an invalid start `kind' in {bf:`opt'()} option"
+                exit 198
+            }
         }
         if inlist("`right'","","l") & "`left'"!="" local last 0
         else {
             local last = real("`right'")
-            if missing(`last') | `last'<1 | (`colon'==1 & strpos("`right'",".")) exit 198
+            if missing(`last') | `last'<1 | (`colon'==1 & strpos("`right'",".")) {
+                di as error "{bf:`right'}: invalid end `short' in {bf:`opt'()} option"
+                exit 198
+            }
         }
-        if `last' & `first'>`last' exit 198
+        if `last' & `first'>`last' {
+            di as error "{bf:`range'} is an invalid `kind' range in {bf:`opt'()} option"
+            di as error "start `kind' is greater than end `kind'"
+            exit 198
+        }
     }
     else {
         local first = real("`range'")
-        if missing(`first') | `first'<1 | strpos("`range'",".") exit 198
+        if missing(`first') | `first'<1 | strpos("`range'",".") {
+            di as error "{bf:`range'} is an invalid start `kind' in {bf:`opt'()} option"
+            exit 198
+        }
     }
     return scalar first=`first'
     return scalar last=`last'

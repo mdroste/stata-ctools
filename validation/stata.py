@@ -26,13 +26,28 @@ def benchmark_data(out, *, keep=False):
             yield Path(tmp)
 
 
+def link_directory(link, target):
+    """Symlink a directory; on Windows without the symlink privilege, a junction.
+
+    Removing a junction (as TemporaryDirectory's cleanup does) leaves the target alone.
+    """
+    try:
+        Path(link).symlink_to(target, target_is_directory=True)
+    except OSError:
+        if os.name != "nt":
+            raise
+        import _winapi
+
+        _winapi.CreateJunction(str(Path(target).resolve()), str(link))
+
+
 @contextmanager
 def io_workspace():
     """Give legacy relative-path I/O tests disposable data, retaining external logs."""
     with tempfile.TemporaryDirectory(prefix="ctools-io-") as tmp:
         workspace = Path(tmp)
         for name in ("build", "validation"):
-            (workspace / name).symlink_to(ROOT / name, target_is_directory=True)
+            link_directory(workspace / name, ROOT / name)
         # cio_export_test shares these output paths across the option suites.
         for name in ("native", "result"):
             (workspace / "temp/io_allformats" / name).mkdir(parents=True)
@@ -139,7 +154,7 @@ def cases():
     called = set()
     pattern = re.compile(r'^if "`__case\'" == "([a-z0-9_]+)" \{\n', re.M)
     for path in sorted((ROOT / "validation/stata").glob("*.do")):
-        source = path.read_text()
+        source = path.read_text(encoding="utf-8")
         sections = list(pattern.finditer(source))
         for i, match in enumerate(sections):
             name = match[1]
@@ -175,7 +190,7 @@ def validate_results(text, expected):
         )
     for name, counted in expected.items():
         passed, failed, skipped, rc, complete = found[name]
-        if rc or complete != name or (counted and (not passed or failed or skipped)):
+        if rc or complete != name or failed or skipped or (counted and not passed):
             raise ValueError(f"Failed or incomplete {name}: {found[name]}")
     return found
 
@@ -234,8 +249,9 @@ def run_groups(names, out, *, fixture_args=None, cwd=ROOT):
             f'di "TEST_RESULT {name} PASSED=$TESTS_PASSED FAILED=$TESTS_FAILED SKIPPED=$TESTS_SKIPPED RC=`case_rc\' COMPLETE=$CTOOLS_CASE_COMPLETE"',
             f'if `case_rc\' | "$CTOOLS_CASE_COMPLETE" != "{name}" local rc = 9',
         ]
+        lines += ["if $TESTS_FAILED | $TESTS_SKIPPED local rc = 9"]
         if counted:
-            lines += ["if $TESTS_PASSED == 0 | $TESTS_FAILED | $TESTS_SKIPPED local rc = 9"]
+            lines += ["if $TESTS_PASSED == 0 local rc = 9"]
     lines += ["}", "log close", "exit, clear"]
     with tempfile.TemporaryDirectory(prefix="driver-", dir=out) as temporary:
         driver = Path(temporary) / "run.do"

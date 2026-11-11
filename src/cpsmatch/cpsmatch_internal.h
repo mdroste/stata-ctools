@@ -85,7 +85,20 @@ typedef struct
     int descending;        /* Process in descending pscore order */
     int verbose;           /* Verbose output */
     int touse;             /* Last plugin variable is the sample marker */
-    int statistics;        /* Stored _treated follows _nn, before the marker */
+    int statistics;        /* Save the outcome's sufficient statistics */
+    /* Optional variables (1-based plugin positions, 0 = absent). Without
+     * presupport the plugin imposes common() itself; without arm the
+     * treatment variable gives the arms. */
+    int presupport_idx;    /* support before matching (read) */
+    int arm_idx;           /* stored byte _treated (read) */
+    int neighbor_ids_idx;  /* _n1, the first of n_neighbors (write) */
+    int pdif_idx;          /* _pdif (write) */
+    int matched_idx;       /* _<outcome>, the matched outcome (write) */
+    int self_idx;          /* _self_<outcome> for ai() (write) */
+    int ate;               /* also match the controls to the treated */
+    int ai;                /* neighbors of the ai() same-arm matching (0 = none) */
+    int altvariance;       /* ai(): Abadie et al. (2004) conditional variance */
+    int float_squares;     /* statistics: squared weights stored as float */
 } cpsmatch_options;
 
 /* Match result for a single observation */
@@ -134,11 +147,6 @@ typedef struct
     double pscore;   /* Propensity score for binary search */
 } sorted_control_t;
 
-/* Sort by pscore, then by observation index for stability (matches psmatch2 behavior) */
-
-/* Binary search to find leftmost index where pscore >= target */
-
-/* Binary search to find rightmost index where pscore <= target */
 
 /* ============================================================================
  * Argument Parsing
@@ -192,12 +200,7 @@ double cpsmatch_kernel_tricube(double u);
 double cpsmatch_apply_kernel(double u, kernel_type_t kernel);
 void cpsmatch_match_workspace_init(match_workspace *ws, size_t initial_cap);
 void cpsmatch_match_workspace_free(match_workspace *ws);
-int cpsmatch_match_workspace_ensure_candidates(match_workspace *ws, size_t needed);
 int cpsmatch_match_workspace_ensure_match(match_workspace *ws, size_t needed);
-int cpsmatch_compare_by_pscore(const void *a, const void *b);
-int cpsmatch_compare_by_pscore_desc(const void *a, const void *b);
-size_t cpsmatch_binary_search_left(const sorted_control_t *sorted, size_t n, double target);
-size_t cpsmatch_binary_search_right(const sorted_control_t *sorted, size_t n, double target);
 int cpsmatch_parse_options(const char *args, cpsmatch_options *opts);
 /* Radius outputs use filtered-row indices; controls and endpoints are sorted.
  * No host callbacks occur here. Allocation failures return 920 before writes. */
@@ -206,17 +209,10 @@ int cpsmatch_match_radius(const sorted_control_t *controls, size_t n_controls,
                          const size_t *control_idx, const perm_idx_t *obs_map,
                          double radius, int common, double common_min, double common_max,
                          double *out_weight, double *out_match, double *out_nn, double *out_support,
-                         int *n_matched, int *n_off);
-int cpsmatch_find_nearest_neighbors_fast(double pscore_treated,
-                                         const sorted_control_t *sorted_controls,
-                                         size_t *control_indices, size_t n_controls,
-                                         int n_neighbors, double caliper, int handle_ties,
-                                         match_workspace *ws, match_result *result);
+                         int *n_matched, int *n_off, perm_idx_t *out_start);
+/* The run of sorted controls within |c - p| <= r: [*start, *end) */
+void cpsmatch_distance_window(const sorted_control_t *sorted, size_t n, double p, double r,
+                              size_t *start, size_t *end);
 void cpsmatch_find_radius_range_fast(double pscore_treated, const sorted_control_t *sorted_controls,
                                      size_t n_controls, double radius, radius_match_info *info);
-int cpsmatch_find_kernel_matches_fast(double pscore_treated,
-                                      const sorted_control_t *sorted_controls,
-                                      size_t *control_indices, size_t n_controls, double bandwidth,
-                                      kernel_type_t kernel, double caliper, match_workspace *ws,
-                                      match_result *result);
 #endif

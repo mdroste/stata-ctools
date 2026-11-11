@@ -68,6 +68,20 @@ static size_t find_group(size_t m)
 
 /* Write the master observations back over the first rows of the master
  * variables, which lead the plugin varlist. */
+/* Count before resizing Stata or allocating output. Kept separate so the
+ * INT_MAX boundary can be tested with small synthetic ranges. */
+static int rangejoin_offsets(const size_t *lo, const size_t *hi, size_t n, size_t *offset)
+{
+    offset[0] = 0;
+    for (size_t i = 0; i < n; i++) {
+        size_t count = hi[i] - lo[i];
+        if (!count) count = 1;
+        if (count > INT_MAX - offset[i]) return 920;
+        offset[i + 1] = offset[i] + count;
+    }
+    return 0;
+}
+
 static int restore_master(void)
 {
     size_t n = state.master.data.nobs;
@@ -190,15 +204,9 @@ ST_retcode crangejoin_main(const char *args)
                 }
             }
         }
-        state.offset[0] = 0;
-        for (size_t i = 0; i < n; i++) {
-            size_t count = state.hi[i] - state.lo[i];
-            if (!count) count = 1;
-            if (count > INT_MAX - state.offset[i]) {
-                ctools_error("crangejoin", "joined output exceeds the Stata plugin observation limit");
-                rc = 920; goto fail;
-            }
-            state.offset[i+1] = state.offset[i] + count;
+        if ((rc = rangejoin_offsets(state.lo, state.hi, n, state.offset))) {
+            ctools_error("crangejoin", "joined output exceeds the Stata plugin observation limit");
+            goto fail;
         }
         state.nout = state.offset[n];
         char result[32]; snprintf(result, sizeof(result), "%zu", state.nout);

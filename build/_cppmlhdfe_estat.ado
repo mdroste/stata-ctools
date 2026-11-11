@@ -1,4 +1,4 @@
-*! version 1.2.4 20261103 github.com/mdroste/stata-ctools
+*! version 1.2.6 20261111 github.com/mdroste/stata-ctools
 * estat after cppmlhdfe, named in e(estat_cmd), with the subcommands and
 * conventions of ppmlhdfe's (reghdfe's) estat: summarize, vce, and ic with
 * e(df_m) + 1 degrees of freedom.
@@ -14,6 +14,11 @@ program define _cppmlhdfe_estat, rclass
     }
     else if `"`key'"' == "vce" {
         vce `0'
+    }
+    else if `"`key'"' == substr("bootstrap", 1, max(4, `lkey')) {
+        * after vce(bootstrap): Stata's normal, percentile and bias-corrected
+        * intervals from the e() results it posts
+        estat_default bootstrap `0'
     }
     else if `"`key'"' == "ic" {
         syntax [, *]

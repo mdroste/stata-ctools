@@ -264,6 +264,98 @@ static ST_double cqreg_stata_pctile(ST_double *values, ST_int n, ST_double pct)
  * Main Sparsity Estimation
  * ============================================================================ */
 
+/* Bandwidth for n observations, rescaling the bandwidth Stata computed for
+ * sp->bw_n observations (full_bandwidth) to keep Stata's invnormal() values:
+ * h is proportional to n^(-1/3) (Hall-Sheather), n^(-1/5) (Bofinger) or
+ * n^(-1/2) (Chamberlain). */
+static ST_double cqreg_rescaled_bandwidth(const cqreg_sparsity_state *sp, ST_double n)
+{
+    if (sp->full_bandwidth > 0.0) {
+        ST_double power = (sp->bw_method == CQREG_BW_BOFINGER) ? 0.2 :
+                          (sp->bw_method == CQREG_BW_CHAMBERLAIN) ? 0.5 : 1.0 / 3.0;
+        ST_double full_n = (sp->bw_n > 0.0) ? sp->bw_n : (ST_double)sp->N;
+        return sp->full_bandwidth * pow(full_n / n, power);
+    }
+    return cqreg_compute_bandwidth((ST_int)n, sp->quantile, sp->bw_method);
+}
+
+/*
+ * The residual method of a weighted fit (qreg's GetVCE). With frequency
+ * weights each basis observation loses one copy (and drops out when none is
+ * left) and the bandwidth uses the remaining sum of weights; with iweights
+ * (and pweights) the basis observations are dropped and the bandwidth uses
+ * the number of remaining observations. The percentiles are weighted.
+ */
+static ST_double cqreg_estimate_sparsity_weighted(cqreg_sparsity_state *sp,
+                                                  const ST_double *residuals)
+{
+    ST_int N = sp->N;
+    ST_double q = sp->quantile;
+    ST_double *w_adj = (ST_double *)malloc((size_t)N * sizeof(ST_double));
+    ST_double *r_use = (ST_double *)malloc((size_t)N * sizeof(ST_double));
+    unsigned char *in_basis = (unsigned char *)calloc((size_t)N, 1);
+    if (w_adj == NULL || r_use == NULL || in_basis == NULL) {
+        free(w_adj); free(r_use); free(in_basis);
+        ctools_error("cqreg", "memory allocation failed");
+        sp->status = 920;
+        return sp->sparsity;
+    }
+    for (ST_int j = 0; j < sp->n_basis; j++) {
+        if (sp->basis[j] >= 0 && sp->basis[j] < N) in_basis[sp->basis[j]] = 1;
+    }
+
+    ST_int n_use = 0;
+    ST_double n_bw = 0.0;
+    for (ST_int i = 0; i < N; i++) {
+        ST_double w = sp->weights[i];
+        if (in_basis[i]) {
+            if (!sp->fweights) continue;
+            w -= 1.0;
+            if (!(w > 0.0)) continue;
+        }
+        r_use[n_use] = residuals[i];
+        w_adj[n_use] = w;
+        n_use++;
+        n_bw += sp->fweights ? w : 1.0;
+    }
+    free(in_basis);
+
+    if (n_use == 0) {
+        free(w_adj); free(r_use);
+        ctools_error("cqreg", "no observations remain after dropping residuals "
+                     "associated with the linear programming basis");
+        sp->status = 2000;
+        return sp->sparsity;
+    }
+
+    ST_double h_prob = cqreg_rescaled_bandwidth(sp, n_bw);
+    sp->bandwidth = h_prob;
+    if (q - h_prob < 0.0 || q + h_prob > 1.0) {
+        free(w_adj); free(r_use);
+        ctools_error("cqreg", "VCE computation failed; try a different bandwidth or bsqreg");
+        sp->status = 498;
+        return sp->sparsity;
+    }
+
+    ST_double pct[2] = { 100.0 * (q - h_prob), 100.0 * (q + h_prob) };
+    ST_double x[2];
+    ST_int rc = cqreg_weighted_pctiles(r_use, w_adj, n_use, pct, 2, x);
+    free(w_adj); free(r_use);
+    if (rc) {
+        ctools_error("cqreg", "memory allocation failed");
+        sp->status = 920;
+        return sp->sparsity;
+    }
+
+    sp->sparsity = (x[1] - x[0]) / (2.0 * h_prob);
+    if (!(sp->sparsity >= DBL_EPSILON)) {
+        ctools_error("cqreg", "sparsity estimate of %g is too small; computation "
+                     "of coefficient standard errors cannot be completed", sp->sparsity);
+        sp->status = 498;
+    }
+    return sp->sparsity;
+}
+
 ST_double cqreg_estimate_sparsity(cqreg_sparsity_state *sp,
                                   const ST_double *residuals)
 {
@@ -288,6 +380,8 @@ ST_double cqreg_estimate_sparsity(cqreg_sparsity_state *sp,
      */
     sp->status = 0;
     sp->sparsity = 0.0;
+
+    if (sp->weights != NULL) return cqreg_estimate_sparsity_weighted(sp, residuals);
 
     ST_int *drop = NULL;
     ST_int n_drop = (sp->basis != NULL && sp->n_basis > 0) ? sp->n_basis : 0;
@@ -323,14 +417,7 @@ ST_double cqreg_estimate_sparsity(cqreg_sparsity_state *sp,
      * h is proportional to n^(-1/3) (Hall-Sheather), n^(-1/5) (Bofinger)
      * or n^(-1/2) (Chamberlain), so the bandwidth that Stata computed for
      * all N observations is rescaled, keeping Stata's invnormal() values. */
-    ST_double h_prob;
-    if (sp->full_bandwidth > 0.0) {
-        ST_double power = (sp->bw_method == CQREG_BW_BOFINGER) ? 0.2 :
-                          (sp->bw_method == CQREG_BW_CHAMBERLAIN) ? 0.5 : 1.0 / 3.0;
-        h_prob = sp->full_bandwidth * pow((ST_double)N / (ST_double)N_adj, power);
-    } else {
-        h_prob = cqreg_compute_bandwidth(N_adj, q, sp->bw_method);
-    }
+    ST_double h_prob = cqreg_rescaled_bandwidth(sp, (ST_double)N_adj);
     sp->bandwidth = h_prob;
 
     /* Compute bounds of the bandwidth region */
@@ -366,6 +453,70 @@ ST_double cqreg_estimate_sparsity(cqreg_sparsity_state *sp,
  * Kernel Density Method
  * ============================================================================ */
 
+/*
+ * The kernel method of a weighted fit (qreg's VCE_kernel and _qreg_kernel):
+ * the weighted mean and standard deviation (denominator W - 1, as summarize
+ * with fweights or iweights), the weighted interquartile range, and the iid
+ * sparsity kband / (sum w_i kval_i / W). The caller has checked kfactor.
+ */
+static ST_double cqreg_estimate_kernel_sparsity_weighted(cqreg_sparsity_state *sp,
+                                                         const ST_double *residuals,
+                                                         ST_double *kval)
+{
+    ST_int N = sp->N;
+    const ST_double *w = sp->weights;
+    ST_int i;
+
+    ST_double W = 0.0, sum = 0.0, comp = 0.0;
+    for (i = 0; i < N; i++) {
+        W += w[i];
+        ST_double yk = w[i] * residuals[i] - comp;
+        ST_double t = sum + yk;
+        comp = (t - sum) - yk;
+        sum = t;
+    }
+    ST_double mean = sum / W;
+    sum = 0.0; comp = 0.0;
+    for (i = 0; i < N; i++) {
+        ST_double dev = residuals[i] - mean;
+        ST_double yk = w[i] * dev * dev - comp;
+        ST_double t = sum + yk;
+        comp = (t - sum) - yk;
+        sum = t;
+    }
+    /* Missing in Stata when W <= 1; the comparison below then takes the
+     * interquartile range, as qreg's cond(sd < sr, sd, sr) */
+    ST_double sd = (W > 1.0) ? sqrt(sum / (W - 1.0)) : NAN;
+
+    ST_double pct[2] = { 25.0, 75.0 }, x[2];
+    if (cqreg_weighted_pctiles(residuals, w, N, pct, 2, x) != 0) {
+        ctools_error("cqreg", "memory allocation failed");
+        sp->status = 920;
+        return sp->sparsity;
+    }
+    ST_double sr = (x[1] - x[0]) / 1.34;
+
+    ST_double kband = ((sd < sr) ? sd : sr) * sp->kfactor;
+    sp->kbwidth = kband;
+    if (!(kband > 0.0) || !isfinite(kband)) {
+        ctools_error("cqreg", "kernel bandwidth of %g is not positive; computation "
+                     "of coefficient standard errors cannot be completed", kband);
+        sp->status = 498;
+        return sp->sparsity;
+    }
+
+    sum = 0.0; comp = 0.0;
+    for (i = 0; i < N; i++) {
+        kval[i] = cqreg_kernel_weight(sp->kernel, residuals[i] / kband);
+        ST_double yk = w[i] * kval[i] - comp;
+        ST_double t = sum + yk;
+        comp = (t - sum) - yk;
+        sum = t;
+    }
+    sp->sparsity = kband / (sum / W);
+    return sp->sparsity;
+}
+
 ST_double cqreg_estimate_kernel_sparsity(cqreg_sparsity_state *sp,
                                          const ST_double *residuals,
                                          ST_double *kval)
@@ -395,6 +546,8 @@ ST_double cqreg_estimate_kernel_sparsity(cqreg_sparsity_state *sp,
         sp->status = 498;
         return sp->sparsity;
     }
+
+    if (sp->weights != NULL) return cqreg_estimate_kernel_sparsity_weighted(sp, residuals, kval);
 
     /* Mean and standard deviation (denominator N-1) */
     ST_double sum = 0.0, comp = 0.0;

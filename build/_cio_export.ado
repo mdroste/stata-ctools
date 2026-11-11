@@ -1,17 +1,27 @@
-*! version 1.2.4 20261103 github.com/mdroste/stata-ctools
+*! version 1.2.6 20261111 github.com/mdroste/stata-ctools
 *! Binary statistical writers; serialization is provided by C.
 program define _cio_export, rclass
     version 14.1
     gettoken kind 0 : 0
     local options "REPLACE"
     if "`kind'"=="spss" local options "`options' NOVALLabels"
-    if "`kind'"=="sasxport5" local options "`options' REName VALLabfile(string)"
+    * export sasxport5 takes val() for vallabfile()
+    if "`kind'"=="sasxport5" local options "`options' REName VALlabfile(string)"
     if "`kind'"=="sasxport8" local options "`options' VALLabfile"
     if "`kind'"=="dbase" local options "`options' VERsion(string) DATAFmt ORIGDBFDATE"
     capture syntax [varlist] [if] [in] using/ [, `options']
     if _rc {
         local 0 `"using `0'"'
         syntax [if] [in] using/ [, `options']
+    }
+    * Stata answers an if one observation at a time. Without one the plugin
+    * takes every observation in range; an if is marked and passed last, as a
+    * sample marker the plugin reads in parallel. The plugin reports the count.
+    local touse ""
+    local __cio_select "skipif"
+    if `"`if'"' != "" {
+        marksample touse, novarlist
+        local __cio_select "touse"
     }
     if "`varlist'" == "" unab varlist : _all
     * dBase limits, checked as export dbase does: the variable count of the
@@ -51,6 +61,8 @@ program define _cio_export, rclass
     if "`kind'" == "spss" local ext ".sav"
     if "`kind'" == "sasxport5" local ext ".xpt"
     if "`kind'" == "sasxport8" local ext ".v8xpt"
+    * ~ is the home directory, as for Stata's own file commands
+    _ctools_home using `"`macval(using)'"'
     mata: st_local("base",pathbasename(st_local("using")))
     if !strpos(`"`base'"',".") local using `"`using'`ext'"'
     if "`replace'" == "" confirm new file `"`using'"'
@@ -163,15 +175,6 @@ program define _cio_export, rclass
             }
         }
         local exportvars `exportvars' `formatted'
-    }
-    * Stata answers an if one observation at a time. Without one the plugin
-    * takes every observation in range; an if is marked and passed last, as a
-    * sample marker the plugin reads in parallel. The plugin reports the count.
-    local touse ""
-    local __cio_select "skipif"
-    if `"`if'"' != "" {
-        marksample touse, novarlist
-        local __cio_select "touse"
     }
     _ctools_load
     capture program ctools_plugin, plugin using("`__ctools_plugin'")

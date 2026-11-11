@@ -172,6 +172,8 @@ ST_retcode civreghdfe_compute_cstat(
     ST_double J_full,
     const ST_int *orthog_indices,
     ST_int n_orthog,
+    const ST_int *orthog_x,
+    ST_int n_orthog_x,
     ST_double *cstat,
     ST_int *cstat_df
 );

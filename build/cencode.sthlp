@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.4 20261103}{...}
+{* *! version 1.2.6 20261111}{...}
 {viewerjumpto "Syntax" "cencode##syntax"}{...}
 {viewerjumpto "Description" "cencode##description"}{...}
 {viewerjumpto "Options" "cencode##options"}{...}
@@ -131,7 +131,8 @@ fails, the original variables and value labels are restored.
 {title:Stored results}
 
 {pstd}
-{cmd:cencode} stores the following in {cmd:r()}:
+{cmd:encode} leaves {cmd:r()} as it was. {cmd:cencode} keeps the results
+already in {cmd:r()} too, also when it fails, and adds the following:
 
 {synoptset 24 tabbed}{...}
 {p2col 5 24 28 2: Scalars}{p_end}

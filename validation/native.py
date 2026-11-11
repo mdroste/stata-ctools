@@ -22,7 +22,13 @@ COMPANIONS = {
         "civreghdfe/civreghdfe_result.c",
         "civreghdfe/civreghdfe_input.c",
     ],
-    "creghdfe/creghdfe_regress.c": ["creghdfe/creghdfe_result.c", "creghdfe/creghdfe_input.c"],
+    "creghdfe/creghdfe_regress.c": [
+        "creghdfe/creghdfe_result.c",
+        "creghdfe/creghdfe_input.c",
+        "creghdfe/creghdfe_core.c",
+        "hdfe/hdfe_fe_recover.c",
+        "hdfe/hdfe_indiv.c",
+    ],
     "crangestat/crangestat_impl.c": ["crangestat/crangestat_kernels.c"],
     "cpsmatch/cpsmatch_impl.c": [
         "cpsmatch/cpsmatch_kernels.c",
@@ -83,6 +89,10 @@ def included_sources(path, includes, seen=None):
 def compile_native(command, **kwargs):
     provided = kwargs.pop("provided", ())
     command = list(map(str, command))
+    # A sanitizer diagnostic must fail the executable, not merely print to a
+    # log while subprocess.run(check=True) reports success. Keep C assertions
+    # active even when a caller supplies release-build flags.
+    command += ["-UNDEBUG", "-fno-sanitize-recover=all"]
     source_root = Path(os.environ.get("CTOOLS_TEST_SOURCE", SRC)).resolve()
     includes = []
     for i, part in enumerate(command):
@@ -96,6 +106,12 @@ def compile_native(command, **kwargs):
     ]
     all_present = set().union(*(included_sources(p, includes) for _, p in sources))
     all_present.update((source_root / p).resolve() for p in provided)
+    # Cancellation is an SPI-free command service used by all HDFE consumers.
+    # Link it separately so allocator-interposition harnesses do not duplicate
+    # its command-local state when they include several solver modules.
+    cancel = (source_root / "ctools_cancel.c").resolve()
+    if cancel not in all_present and cancel.is_file():
+        command.append(str(cancel))
     with tempfile.TemporaryDirectory(prefix="ctools-native-modules-") as tmp:
         for index, path in sources:
             present = included_sources(path, includes)
@@ -119,7 +135,7 @@ def compile_native(command, **kwargs):
                             # Inject companions before the harness undefines its
                             # allocator/SPI macros, not at the end of the file.
                             return "\n".join(
-                                f'#include "{p}"'
+                                f'#include "{Path(p).as_posix()}"'
                                 for p in [candidate, *additions.pop(candidate, [])]
                             )
                     return match[0]
@@ -129,10 +145,10 @@ def compile_native(command, **kwargs):
                 )
                 tail = [p for group in additions.values() for p in group]
                 wrapper.write_text(
-                    f'#line 1 "{path.resolve()}"\n'
+                    f'#line 1 "{path.resolve().as_posix()}"\n'
                     + source
                     + "\n"
-                    + "\n".join(f'#include "{p}"' for p in tail)
+                    + "\n".join(f'#include "{Path(p).as_posix()}"' for p in tail)
                     + "\n",
                     encoding="utf-8",
                 )
@@ -164,7 +180,7 @@ def run_test(directory, name, source, modules=(), openmp=False):
         "-DSD_FASTMODE",
         "-fno-fast-math",
         "-ffp-contract=off",
-        "-fsanitize=undefined",
+        "-fsanitize=" + os.environ.get("CTOOLS_SANITIZERS", "undefined"),
         "-fno-omit-frame-pointer",
         "-pthread",
     ]
@@ -222,7 +238,7 @@ def harness(name):
         "sort_keys_native": "sort_reference.h",
     }
     if name in shared:
-        return f'#include "{ROOT / "validation/native" / shared[name]}"\n'
+        return f'#include "{(ROOT / "validation/native" / shared[name]).as_posix()}"\n'
     matches = [
         p
         for p in (ROOT / "validation/native").glob("*.suite.c")
@@ -230,7 +246,7 @@ def harness(name):
     ]
     if len(matches) != 1:
         raise ValueError(f"Native case {name}: expected one source, found {matches}")
-    return f'#define CTOOLS_CASE_{name}\n#include "{matches[0]}"\n#undef CTOOLS_CASE_{name}\n'
+    return f'#define CTOOLS_CASE_{name}\n#include "{matches[0].as_posix()}"\n#undef CTOOLS_CASE_{name}\n'
 
 
 def unit(directory, name):
@@ -249,7 +265,7 @@ def sort_source(algorithm, numeric=None, string=None):
     return definitions + harness("sep24_native_sort")
 
 
-SPI = f'#include "{ROOT / "validation/native/spi_mock.h"}"\n'
+SPI = f'#include "{(ROOT / "validation/native/spi_mock.h").as_posix()}"\n'
 
 
 def run_transfer(name, *, passive=False):

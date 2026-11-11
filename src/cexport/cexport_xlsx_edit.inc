@@ -423,27 +423,90 @@ static char *xedit_worksheet(const char *oldxml, const char *newxml, int keep,
   }
   return sb.data;
 }
-/* Append our cell styles, one per CEXPORT_STYLE_* code in order, while
-   retaining every existing style index. */
+/* The number format of a cell format that sets nothing else (font, fill,
+   border and parent style 0, no alignment or protection), or UINT_MAX. */
+static unsigned xedit_plain_xf(const xedit_node *xf) {
+  static const char *const keys[] = {"numFmtId", "fontId", "fillId",
+                                     "borderId", "xfId"};
+  unsigned values[5];
+  if (!xf->empty)
+    return UINT_MAX;
+  for (int k = 0; k < 5; k++) {
+    char *v = xedit_attr(xf, keys[k]);
+    values[k] = v ? (unsigned)strtoul(v, NULL, 10) : 0;
+    free(v);
+  }
+  return values[1] || values[2] || values[3] || values[4] ? UINT_MAX
+                                                          : values[0];
+}
+/* Excel may escape the format code's literals when it saves the workbook. */
+static int xedit_same_format(const char *code, const char *ours) {
+  for (; *code; code++) {
+    if (*code == '\\')
+      continue;
+    if (*code != *ours++)
+      return 0;
+  }
+  return !*ours;
+}
+/* Our cell styles, one per CEXPORT_STYLE_* code in order, at *base. A run of
+   them already in the workbook (one that ctools wrote, or added by an
+   earlier edit) is reused, as is our date-time format; otherwise they are
+   appended, retaining every existing style index. Appending on every edit
+   would pass Excel's limits on cell formats and custom number formats. */
 static char *xedit_styles(char *xml, unsigned *base) {
+  static const char ours[] = "yyyy-mm-dd hh:mm:ss.000";
   xedit_node xfs, xf, nfmt;
   if (!xedit_find(xml, xml + strlen(xml), "cellXfs", &xfs))
     return NULL;
+  unsigned fmt = 164, have_fmt = 0, found_fmt = 0;
+  const char *p = xml, *xml_end = xml + strlen(xml);
+  while (xedit_find(p, xml_end, "numFmt", &nfmt)) {
+    char *id = xedit_attr(&nfmt, "numFmtId"), *code = xedit_attr(&nfmt, "formatCode");
+    if (id && strtoul(id, NULL, 10) >= fmt)
+      fmt = (unsigned)strtoul(id, NULL, 10) + 1;
+    if (id && code && !have_fmt && xedit_same_format(code, ours)) {
+      found_fmt = (unsigned)strtoul(id, NULL, 10);
+      have_fmt = 1;
+    }
+    free(id);
+    free(code);
+    p = nfmt.end;
+  }
+  if (have_fmt)
+    fmt = found_fmt;
+  const unsigned ids[CEXPORT_STYLE_COUNT] = {0, 14, fmt, 22, 19, 1, 1, 2, 3, 4, 11};
   *base = 0;
-  const char *p = xfs.open_end;
+  size_t cap = 0;
+  unsigned *plain = NULL;
+  p = xfs.open_end;
   while (!xfs.empty && xedit_find(p, xfs.close, "xf", &xf)) {
+    if (have_fmt && *base == cap) {
+      size_t grown_cap = cap ? 2 * cap : 64;
+      unsigned *grown = realloc(plain, grown_cap * sizeof(*grown));
+      if (!grown) {
+        free(plain);
+        return NULL;
+      }
+      plain = grown;
+      cap = grown_cap;
+    }
+    if (have_fmt)
+      plain[*base] = xedit_plain_xf(&xf);
     (*base)++;
     p = xf.end;
   }
-  unsigned fmt = 164;
-  p = xml;
-  while (xedit_find(p, xml + strlen(xml), "numFmt", &nfmt)) {
-    char *id = xedit_attr(&nfmt, "numFmtId");
-    if (id && strtoul(id, NULL, 10) >= fmt)
-      fmt = (unsigned)strtoul(id, NULL, 10) + 1;
-    free(id);
-    p = nfmt.end;
+  for (unsigned k = 0; have_fmt && k + CEXPORT_STYLE_COUNT <= *base; k++) {
+    int j = 0;
+    while (j < CEXPORT_STYLE_COUNT && plain[k + (unsigned)j] == ids[j])
+      j++;
+    if (j == CEXPORT_STYLE_COUNT) {
+      free(plain);
+      *base = k;
+      return strdup(xml);
+    }
   }
+  free(plain);
   char child[512];
   snprintf(
       child, sizeof(child),
@@ -452,7 +515,9 @@ static char *xedit_styles(char *xml, unsigned *base) {
       "numFmtId=\"%u\" formatCode=\"yyyy-mm-dd hh:mm:ss.000\"/>",
       fmt);
   char *result;
-  if (xedit_find(xml, xml + strlen(xml), "numFmts", &nfmt)) {
+  if (have_fmt)
+    result = strdup(xml);
+  else if (xedit_find(xml, xml + strlen(xml), "numFmts", &nfmt)) {
     char *count = xedit_attr(&nfmt, "count");
     unsigned total = count ? (unsigned)strtoul(count, NULL, 10) : 0;
     free(count);
@@ -502,7 +567,6 @@ static char *xedit_styles(char *xml, unsigned *base) {
   free(result);
   if (!updated)
     return NULL;
-  const unsigned ids[CEXPORT_STYLE_COUNT] = {0, 14, fmt, 22, 19, 1, 1, 2, 3, 4, 11};
   StringBuffer cells;
   if (!strbuf_init(&cells, 1536)) {
     free(updated);
@@ -518,6 +582,128 @@ static char *xedit_styles(char *xml, unsigned *base) {
   free(cells.data);
   free(updated);
   return result;
+}
+
+/* Simple Unicode case folding for the scripts sheet names mostly use: ASCII,
+   Latin-1, Latin Extended-A, Greek and Cyrillic. */
+static unsigned xedit_fold(unsigned c) {
+  if ((c >= 'A' && c <= 'Z') || (c >= 0xC0 && c <= 0xDE && c != 0xD7) ||
+      (c >= 0x391 && c <= 0x3A9 && c != 0x3A2) || (c >= 0x410 && c <= 0x42F))
+    return c + 0x20;
+  if (c >= 0x400 && c <= 0x40F)
+    return c + 0x50;
+  if (c == 0x178)
+    return 0xFF;
+  if (c == 0x17F)
+    return 's';
+  if (((c >= 0x100 && c <= 0x12F) || (c >= 0x132 && c <= 0x137) ||
+       (c >= 0x14A && c <= 0x177)) && !(c & 1))
+    return c + 1;
+  if (((c >= 0x139 && c <= 0x148) || (c >= 0x179 && c <= 0x17E)) && (c & 1))
+    return c + 1;
+  return c;
+}
+static unsigned xedit_next_codepoint(const unsigned char **s) {
+  const unsigned char *p = *s;
+  unsigned c = *p++;
+  int more = c >= 0xF0 ? 3 : c >= 0xE0 ? 2 : c >= 0xC0 ? 1 : 0;
+  if (more)
+    c &= 0x3F >> more;
+  while (more-- && (*p & 0xC0) == 0x80)
+    c = (c << 6) | (*p++ & 0x3F);
+  *s = p;
+  return c;
+}
+/* Whether two UTF-8 sheet names are equal ignoring case, as Excel compares
+   them: it refuses a sheet whose name differs from another only in case. */
+static int xedit_same_name(const char *a, const char *b) {
+  const unsigned char *p = (const unsigned char *)a, *q = (const unsigned char *)b;
+  while (*p && *q)
+    if (xedit_fold(xedit_next_codepoint(&p)) != xedit_fold(xedit_next_codepoint(&q)))
+      return 0;
+  return !*p && !*q;
+}
+/* The sheet element's relationship id: r:id, or the id attribute under
+   another prefix bound to the relationships namespace (ns1:id), as some
+   writers declare it. A sheet's only prefixed id attribute is that one. */
+static char *xedit_rel_id(const xedit_node *n) {
+  char *r = xedit_attr(n, "r:id");
+  if (r)
+    return r;
+  for (const char *p = n->name + n->name_len; p + 3 <= n->open_end; p++) {
+    if (memcmp(p, ":id", 3))
+      continue;
+    const char *q = p + 3;
+    while (q < n->open_end && isspace((unsigned char)*q))
+      q++;
+    if (q >= n->open_end || *q != '=')
+      continue;
+    const char *s = p;
+    while (s > n->start && !isspace((unsigned char)s[-1]))
+      s--;
+    if (s == p || p - s > 32)
+      continue;
+    char key[40];
+    snprintf(key, sizeof(key), "%.*s:id", (int)(p - s), s);
+    return xedit_attr(n, key);
+  }
+  return NULL;
+}
+/* Whether the workbook relationship rid is a worksheet rather than a chart,
+   dialog or macro sheet, whose parts hold no sheetData. A relationship that
+   rels does not list counts as a worksheet: the target lookup reports it. */
+static int xedit_rel_worksheet(const char *rels, const char *rid) {
+  const char *p = rels, *end = rels + strlen(rels);
+  xedit_node node;
+  while (xedit_find(p, end, "Relationship", &node)) {
+    char *id = xedit_attr(&node, "Id");
+    int match = id && !strcmp(id, rid);
+    free(id);
+    if (match) {
+      char *type = xedit_attr(&node, "Type");
+      size_t n = type ? strlen(type) : 0;
+      int worksheet = !type || (n >= 10 && !strcmp(type + n - 10, "/worksheet"));
+      free(type);
+      return worksheet;
+    }
+    p = node.end;
+  }
+  return 1;
+}
+/* Strict Open XML packages name the same elements in other namespaces; the
+   parts written here (injected elements declare the transitional ones) then
+   take the package's own. OPC namespaces (content types, package
+   relationships) are the same in both. */
+static char *xedit_strict(char *xml) {
+  static const char *const from[] = {
+      "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+      "http://schemas.openxmlformats.org/officeDocument/2006/relationships"};
+  static const char *const to[] = {
+      "http://purl.oclc.org/ooxml/spreadsheetml/main",
+      "http://purl.oclc.org/ooxml/officeDocument/relationships"};
+  StringBuffer sb;
+  if (!strbuf_init(&sb, strlen(xml) + 64))
+    return NULL;
+  const char *p = xml;
+  while (*p) {
+    int k = -1;
+    const char *hit = NULL;
+    for (int j = 0; j < 2; j++) {
+      const char *h = strstr(p, from[j]);
+      if (h && (!hit || h < hit)) {
+        hit = h;
+        k = j;
+      }
+    }
+    if (!hit) {
+      strbuf_append(&sb, p);
+      break;
+    }
+    strbuf_append_n(&sb, p, (size_t)(hit - p));
+    strbuf_append(&sb, to[k]);
+    p = hit + strlen(from[k]);
+  }
+  return sb.data;
 }
 
 static ST_retcode xlsx_edit_file(XLSXExportContext *ctx,
@@ -573,23 +759,49 @@ static ST_retcode xlsx_edit_file(XLSXExportContext *ctx,
     char *name = xedit_attr(&node, "name"), *id = xedit_attr(&node, "sheetId");
     if (id && strtoul(id, NULL, 10) > maxid)
       maxid = (unsigned)strtoul(id, NULL, 10);
-    /* Without sheet(), native export edits the first sheet, whatever its
-     * name; a later sheet named Sheet1 is not a second match. */
-    if (name && (ctx->sheet_specified ? !strcasecmp(name, ctx->sheet_name)
-                                      : first)) {
-      char *r = xedit_attr(&node, "r:id");
+    /* Without sheet(), native export edits the first worksheet, whatever its
+     * name; a later sheet named Sheet1 is not a second match. Chart, dialog
+     * and macro sheets are no worksheets: skipped here, refused by name. */
+    int named = name && ctx->sheet_specified && !strcasecmp(name, ctx->sheet_name);
+    /* A name equal to another only ignoring the case of non-ASCII letters
+     * (Données, DONNÉES) is neither that sheet nor a new one: Excel would
+     * repair the workbook, and native export fails (r(9901)). */
+    if (name && ctx->sheet_specified && !named && xedit_same_name(name, ctx->sheet_name)) {
+      rc = 9901;
+      snprintf(ctx->error_message, sizeof(ctx->error_message),
+               "worksheet name %.150s differs from the existing worksheet "
+               "%.150s only in case\n",
+               ctx->sheet_name, name);
+      free(name);
+      free(id);
+      goto done;
+    }
+    if (name && (named || (!ctx->sheet_specified && first))) {
+      char *r = xedit_rel_id(&node);
       if (!r) {
         free(name);
         free(id);
         goto done;
       }
-      snprintf(rid, sizeof(rid), "%s", r);
+      if (xedit_rel_worksheet(rels, r)) {
+        snprintf(rid, sizeof(rid), "%s", r);
+        first = 0;
+      } else if (named) {
+        rc = 601;
+        snprintf(ctx->error_message, sizeof(ctx->error_message),
+                 "sheet %.150s is a chart, dialog or macro sheet, not a "
+                 "worksheet\n",
+                 ctx->sheet_name);
+        free(r);
+        free(name);
+        free(id);
+        goto done;
+      }
       free(r);
     }
     free(name);
     free(id);
     p = node.end;
-    first = 0;
   }
   if (rid[0] && !ctx->sheet_action) {
     rc = 602;
@@ -600,7 +812,8 @@ static ST_retcode xlsx_edit_file(XLSXExportContext *ctx,
   }
   if (rid[0]) {
     p = rels;
-    while (xedit_find(p, rels + strlen(rels), "Relationship", &node)) {
+    const char *rels_end = rels + strlen(rels);
+    while (xedit_find(p, rels_end, "Relationship", &node)) {
       char *id = xedit_attr(&node, "Id"), *t = xedit_attr(&node, "Target");
       if (id && t && !strcmp(id, rid)) {
         if (*t == '/')
@@ -617,6 +830,12 @@ static ST_retcode xlsx_edit_file(XLSXExportContext *ctx,
     sheet = xedit_zip_text(&in, target);
     if (!sheet)
       goto done;
+    xedit_node data;
+    if (!xedit_find(sheet, sheet + strlen(sheet), "sheetData", &data)) {
+      snprintf(ctx->error_message, sizeof(ctx->error_message),
+               "worksheet part %.300s holds no sheetData\n", target);
+      goto done;
+    }
     char *positioned = xedit_explicit_positions(sheet);
     if (!positioned) {
       rc = 920;
@@ -685,8 +904,9 @@ static ST_retcode xlsx_edit_file(XLSXExportContext *ctx,
     }
     char *old=found ? xedit_zip_text(&in,shared_path) : strdup(SHARED_STRINGS_XML);
     if(!old || !xlsx_xml_validate_document(old,strlen(old),"sst")) {free(old);goto done;}
-    const char *sp=old;
-    while(xedit_find(sp,old+strlen(old),"si",&node)) {ctx->shared_offset++;sp=node.end;}
+    /* The end is found once: rescanning it for every item is quadratic. */
+    const char *sp=old, *old_end=old+strlen(old);
+    while(xedit_find(sp,old_end,"si",&node)) {ctx->shared_offset++;sp=node.end;}
     char *items=xlsx_shared_items(ctx);
     if(!items) {free(old);rc=920;goto done;}
     newshared=xedit_insert(old,"sst",items);
@@ -834,6 +1054,22 @@ static ST_retcode xlsx_edit_file(XLSXExportContext *ctx,
   }
   free(newbook);
   newbook = recalculate;
+  /* A Strict Open XML workbook: the parts written take its namespaces, or
+   * injected rows and cells would leave the sheet's namespace. */
+  if (strstr(book, "http://purl.oclc.org/ooxml/spreadsheetml/main")) {
+    char **parts[] = {&newbook, &newrels, &newstyles, &merged, &newshared};
+    for (int j = 0; j < 5; j++) {
+      if (!*parts[j])
+        continue;
+      char *converted = xedit_strict(*parts[j]);
+      if (!converted) {
+        rc = 920;
+        goto done;
+      }
+      free(*parts[j]);
+      *parts[j] = converted;
+    }
+  }
   rc = 603;
   if (!mz_zip_writer_init_file(&out, ctx->filename, 0))
     goto done;
@@ -861,6 +1097,15 @@ static ST_retcode xlsx_edit_file(XLSXExportContext *ctx,
     goto done;
   rc = 0;
 done:
+  /* Every failure says what failed: a missing or malformed part (r(610)),
+   * memory (r(920)) or the output (r(603)). */
+  if (rc && !ctx->error_message[0])
+    snprintf(ctx->error_message, sizeof(ctx->error_message),
+             rc == 920   ? "not enough memory to edit workbook %.400s\n"
+             : rc == 603 ? "could not write the edited workbook %.400s\n"
+                         : "workbook %.400s has a missing or malformed part "
+                           "that cexport excel cannot edit\n",
+             ctx->input_filename);
   if (out.m_pState)
     mz_zip_writer_end(&out);
   if (in.m_pState)

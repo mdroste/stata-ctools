@@ -15,41 +15,36 @@
 #include "hdfe/hdfe_sample.h"
 #include "creghdfe_hdfe.h"
 #include "hdfe/hdfe_solver.h"
+#include "hdfe/hdfe_fe_recover.h"
+#include "hdfe/hdfe_indiv.h"
 #include "../ctools_ols.h"
 #include "../ctools_matrix.h"
 #include "creghdfe_vce.h"
+#include "creghdfe_core.h"
+#include "creghdfe_boot.h" /* types only; called through creghdfe_boot_retain_hook */
 #include "../ctools_hdfe_utils.h"
 #include "../ctools_config.h"
 #include "../ctools_types.h"  /* For ctools_data_load */
 #include "../ctools_spi.h"  /* Error-checking SPI wrappers */
 
-/* Recover the additive FE component d = y - Xb - residual, not the already
- * orthogonal regression residual, as reghdfe's store_alphas does for its
- * default solver: forward Kaczmarz sweeps over the effects accelerated by
- * steepest descent, with each sweep's level means accumulated into the
- * coefficients. Starting from zero, every effect after the first then has a
- * zero (weighted) sum within each connected component it forms with the
- * effect before it, which fixes the normalization reghdfe reports. The
- * iteration stops when the weighted mean of |step| / (|d| + scale) is at
- * most the projection tolerance, reghdfe's convergence measure with its 1
- * replaced by scale = max(1, max |d|) so that it does not depend on the units
- * of y; it fails with 430 after maxiter() steps. */
+/* Recover the fixed effects from the FE component d = y - Xb - _cons -
+ * residual (not the already orthogonal regression residual) with
+ * hdfe_fe_recover (reghdfe's store_alphas normalization), reading y and X
+ * back from Stata and storing each observation's level effect in variables
+ * first_var .. first_var + G - 1. */
 static ST_retcode store_fixed_effects(HDFE_State *S, const perm_idx_t *obs_map,
     const ST_int *mask, ST_int N_orig, ST_int K_keep, const ST_int *keep_idx,
-    const ST_double *beta, const ST_double *resid, ST_int first_var)
+    const ST_double *beta, const ST_double *resid, ST_int first_var,
+    const creghdfe_input *in)
 {
     ST_int N = S->N, G = S->G, idx = 0;
     ST_retcode rc = 0;
     ST_double *error = malloc((size_t)N * sizeof(*error));
-    ST_double *proj = malloc((size_t)N * sizeof(*proj));
     ST_double **alpha = calloc((size_t)G, sizeof(*alpha));
-    ST_double **update = calloc((size_t)G, sizeof(*update));
-    ST_double scale = 1.0;
-    if (!error || !proj || !alpha || !update) { rc = 920; goto cleanup; }
+    if (!error || !alpha) { rc = 920; goto cleanup; }
     for (ST_int g = 0; g < G; g++) {
         alpha[g] = calloc((size_t)S->factors[g].num_levels, sizeof(**alpha));
-        update[g] = calloc((size_t)S->factors[g].num_levels, sizeof(**update));
-        if (!alpha[g] || !update[g]) { rc = 920; goto cleanup; }
+        if (!alpha[g]) { rc = 920; goto cleanup; }
     }
     for (ST_int row = 0; row < N_orig; row++) {
         if (!mask[row]) continue;
@@ -62,53 +57,15 @@ static ST_retcode store_fixed_effects(HDFE_State *S, const perm_idx_t *obs_map,
             if (rc) goto cleanup;
             error[idx] -= beta[k] * x;
         }
-        if (fabs(error[idx]) > scale) scale = fabs(error[idx]);
         idx++;
     }
-    ST_double sum_w = 0.0;
-    for (ST_int i = 0; i < N; i++) sum_w += S->weights ? S->weights[i] : 1.0;
-    ST_int converged = 0;
-    for (ST_int iteration = 0; iteration < S->maxiter; iteration++) {
-        /* One forward sweep on the current error: proj = error - the error
-         * left after projecting out each effect in turn */
-        memcpy(proj, error, (size_t)N * sizeof(*proj));
-        for (ST_int g = 0; g < G; g++) {
-            FE_Factor *f = &S->factors[g];
-            memset(update[g], 0, (size_t)f->num_levels * sizeof(**update));
-            for (ST_int i = 0; i < N; i++) {
-                ST_double weight = S->weights ? S->weights[i] : 1.0;
-                update[g][f->levels[i] - 1] += weight * proj[i];
-            }
-            for (ST_int level = 0; level < f->num_levels; level++) {
-                ST_double count = S->weights ? f->weighted_counts[level] : f->counts[level];
-                update[g][level] = count > 0 ? update[g][level] / count : 0;
-            }
-            for (ST_int i = 0; i < N; i++) proj[i] -= update[g][f->levels[i] - 1];
-        }
-        ST_double num = 0.0, den = 0.0, change = 0.0;
-        for (ST_int i = 0; i < N; i++) {
-            ST_double weight = S->weights ? S->weights[i] : 1.0;
-            ST_double step = error[i] - proj[i];
-            proj[i] = step;
-            num += weight * error[i] * step;
-            den += weight * step * step;
-            change += weight * fabs(step) / (fabs(error[i]) + scale);
-        }
-        if (change / sum_w <= S->tolerance) { converged = 1; break; }
-        /* Steepest-descent step length along the sweep */
-        ST_double t = den > 0.0 ? num / den : 1.0;
-        if (!isfinite(t)) t = 1.0;
-        for (ST_int i = 0; i < N; i++) error[i] -= t * proj[i];
-        for (ST_int g = 0; g < G; g++) {
-            for (ST_int level = 0; level < S->factors[g].num_levels; level++)
-                alpha[g][level] += t * update[g][level];
-        }
-    }
-    if (!converged) {
+    /* With slopes, each absorbed effect's intercept and slopes are fitted
+     * together (creghdfe_hdfe.c); a slope factor stores its coefficient */
+    rc = in->num_slopes ? creghdfe_fe_recover_slopes(S, in, error, alpha)
+                        : hdfe_fe_recover(S, error, alpha);
+    if (rc == 430)
         SF_error("creghdfe: the fixed effects for savefe did not converge; try a larger iterate()\n");
-        rc = 430;
-        goto cleanup;
-    }
+    if (rc) goto cleanup;
     for (ST_int g = 0; g < G; g++) {
         idx = 0;
         for (ST_int row = 0; row < N_orig; row++) {
@@ -118,11 +75,8 @@ static ST_retcode store_fixed_effects(HDFE_State *S, const perm_idx_t *obs_map,
         }
     }
 cleanup:
-    for (ST_int g = 0; g < G; g++) {
-        if (alpha) free(alpha[g]);
-        if (update) free(update[g]);
-    }
-    free(alpha); free(update); free(error); free(proj);
+    for (ST_int g = 0; alpha && g < G; g++) free(alpha[g]);
+    free(alpha); free(error);
     return rc;
 }
 
@@ -213,7 +167,7 @@ static ST_retcode build_groupvar(const HDFE_State *S, ST_int ga, ST_int gb,
  *   __creghdfe_mobility_groups: mobility groups (if G>=2)
  *   __creghdfe_ols_N, __creghdfe_K_keep, etc.: OLS results
  */
-ST_retcode do_full_regression(int argc, char *argv[])
+ST_retcode creghdfe_full_regression(int retain)
 {
     ST_int K, G, N_orig, N, in1, in2;
     ST_int k, g, i, j, idx;
@@ -222,6 +176,9 @@ ST_retcode do_full_regression(int argc, char *argv[])
     ST_int num_singletons;
     ST_int *mask = NULL;  /* 1 = keep, 0 = drop */
     FactorData *factors = NULL;
+    /* group() and individual(): the individual effect of each row's group */
+    HDFE_Indiv indiv;
+    memset(&indiv, 0, sizeof(indiv));
     char scalar_name[64];
     double t_start, t_load, t_copy, t_remap, t_singleton, t_dof, t_partial, t_ols, t_vce;
     ST_int mobility_groups = 1;
@@ -234,6 +191,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
     ST_double *data = NULL;  /* N x K matrix (column-major) */
     ST_double *xtx = NULL, *xtx_keep = NULL, *xty_keep = NULL;
     ST_double *beta_keep = NULL, *inv_xx_keep = NULL, *V_keep = NULL;
+    ST_double *V_psd = NULL;    /* reghdfe's corrected V made PSD, when it is indefinite */
+    ST_int psd_made = 0;
     ST_double *data_keep = NULL;
     ST_int *is_collinear = NULL, *keep_idx = NULL;
     ST_int num_collinear, K_keep, K_x, vcetype;
@@ -261,9 +220,12 @@ ST_retcode do_full_regression(int argc, char *argv[])
     ST_double *data_with_cons = NULL;
     double *cluster_values_compact = NULL;
     ST_double *resid = NULL;
+    ST_double *bs_raw = NULL, *bs_tilde = NULL, *bs_ones = NULL; /* vce(bootstrap) */
+    ST_int *cluster_ids_all = NULL; /* multi-way clustering: one column per dimension */
+    ST_double *means_zero = NULL;   /* slopes only: the regression has no constant */
+    ST_int num_clusters_dim[10] = {0};
+    ST_int exact[10] = {0};
 
-    (void)argc;  /* Unused */
-    (void)argv;  /* Unused */
 
     t_start = get_time_sec();
 
@@ -273,6 +235,7 @@ ST_retcode do_full_regression(int argc, char *argv[])
     creghdfe_input input;
     ST_retcode input_rc = creghdfe_read_input(&input);
     if (input_rc) return input_rc;
+    input.bs_retain = retain;
     K = input.K;
     G = input.G;
     drop_singletons = input.drop_singletons;
@@ -295,8 +258,19 @@ ST_retcode do_full_regression(int argc, char *argv[])
     ST_double tolerance = input.tolerance;
     df_a_nested = input.df_a_nested;
 
-    if (G < 1 || G > 10) {
+    /* With an individual effect the other effects may be none */
+    if (G < (input.indiv ? 0 : 1) || G > 10) {
         SF_error("creghdfe: invalid number of FE groups (must be 1-10)\n");
+        return 198;
+    }
+    /* Cluster variables after the FE variables: the dimensions of
+     * vce(cluster) (vce type 2), or the time variable of vce(dkraay) (3) */
+    const ST_int ncl = vcetype >= 2 ? input.num_cluster : 0;
+    /* Every absorbed factor a slope (absorb(id#c.x) alone): nothing absorbs
+     * the constant, and reghdfe then fits without one */
+    const ST_int no_intercept = input.num_slopes == G && !input.indiv;
+    if (ncl > 10 || (vcetype == 3 && ncl != 1)) {
+        SF_error("creghdfe: invalid number of cluster variables\n");
         return 198;
     }
     if (K < 1) {
@@ -313,9 +287,11 @@ ST_retcode do_full_regression(int argc, char *argv[])
      * vars], final-sample flag, [sample marker]. Refuse any other length
      * rather than read or write the wrong variables. */
     {
-        ST_int expected_nvars = K + G + (vcetype == 2) + (has_weights != 0) +
+        ST_int expected_nvars = K + G + ncl + (has_weights != 0) +
                                 (compute_resid != 0) + (compute_groupvar != 0) +
-                                (savefe ? G : 0) + 1 + input.touse;
+                                (savefe ? G : 0) + 1 + input.touse +
+                                (input.bs_unit_idx > 0) + (input.bs_strata_idx > 0) +
+                                input.num_slopes + (input.indiv ? 3 : 0);
         if (SF_nvars() != expected_nvars) {
             char msg[160];
             snprintf(msg, sizeof(msg),
@@ -341,8 +317,9 @@ ST_retcode do_full_regression(int argc, char *argv[])
      * ================================================================ */
 
     /* Calculate total variables to load:
-     * K numeric (depvar + indepvars) + G FE vars + (1 cluster if vcetype==2) + (1 weight if has_weights) */
-    ST_int total_vars = K + G + (vcetype == 2 ? 1 : 0) + (has_weights ? 1 : 0);
+     * K numeric (depvar + indepvars) + G FE vars + ncl cluster vars + (1 weight if has_weights),
+     * then the slope variables of slope factors */
+    ST_int total_vars = K + G + ncl + (has_weights ? 1 : 0) + input.num_slopes + (input.indiv ? 1 : 0);
 
     /* Build variable indices array (1-based for Stata) */
     int *var_indices = (int *)malloc(total_vars * sizeof(int));
@@ -352,9 +329,14 @@ ST_retcode do_full_regression(int argc, char *argv[])
     }
 
     /* Variables 1..K are numeric data, K+1..K+G are FE vars */
-    for (i = 0; i < total_vars; i++) {
+    for (i = 0; i < total_vars - input.num_slopes - (input.indiv ? 1 : 0); i++) {
         var_indices[i] = i + 1;
     }
+    for (g = 0; g < G; g++) {
+        if (input.slope_idx[g]) var_indices[i++] = input.slope_idx[g];
+    }
+    /* the group number of each row, last */
+    if (input.indiv) var_indices[i++] = input.indiv_gidx;
 
     /* Load all variables in parallel with if/in filtering */
     ctools_filtered_data filtered;
@@ -405,6 +387,17 @@ ST_retcode do_full_regression(int argc, char *argv[])
     t_load = get_time_sec();
 
     filtered.obs_map = NULL;  /* obs_map is now owned by this command. */
+    /* The individuals of each row's group, read over the whole dataset */
+    if (input.indiv) {
+        output_rc = hdfe_indiv_load(&indiv, filtered.data.vars[total_vars - 1].data.dbl, N_orig,
+                                    input.indiv_gidx, input.indiv_iidx, input.indiv_tidx,
+                                    input.indiv_mean);
+        if (output_rc) {
+            SF_error(output_rc == 198 ? "creghdfe: group() numbers the groups wrongly\n"
+                                      : "creghdfe: memory allocation failed for the individual effect\n");
+            goto cleanup;
+        }
+    }
     /* Allocate factor structures (no hash tables needed with sort-based remapping) */
     factors = (FactorData *)calloc(G, sizeof(FactorData));
     mask = (ST_int *)ctools_safe_malloc2((size_t)N_orig, sizeof(ST_int));
@@ -432,7 +425,7 @@ ST_retcode do_full_regression(int argc, char *argv[])
     /* Initialize */
     for (i = 0; i < N_orig; i++) mask[i] = 1;
     if (has_weights) {
-        ST_int weight_var_pos = K + G + (vcetype == 2 ? 1 : 0);
+        ST_int weight_var_pos = K + G + ncl;
         memcpy(weights, filtered.data.vars[weight_var_pos].data.dbl, N_orig * sizeof(ST_double));
     }
 
@@ -451,16 +444,20 @@ ST_retcode do_full_regression(int argc, char *argv[])
 
     ST_int cluster_matches_fe = -1;  /* -1 = no match, 0..G-1 = which FE it matches */
 
-    if (vcetype == 2) {
-        /* Cluster variable is at position K+G in filtered.data */
-        cluster_raw_values = (double *)malloc(N_orig * sizeof(double));
+    if (vcetype >= 2) {
+        /* Cluster variables are at positions K+G.. in filtered.data */
+        cluster_raw_values = (double *)ctools_safe_malloc3((size_t)N_orig, (size_t)ncl, sizeof(double));
         if (cluster_raw_values) {
             /* Extract cluster values - direct copy since data is filtered */
-            memcpy(cluster_raw_values, filtered.data.vars[K + G].data.dbl, N_orig * sizeof(double));
+            for (ST_int d = 0; d < ncl; d++)
+                memcpy(cluster_raw_values + (size_t)d * N_orig, filtered.data.vars[K + G + d].data.dbl,
+                       N_orig * sizeof(double));
 
-            /* Check if cluster values match any FE variable (common case: vce(cluster i) with absorb(i t)). */
+            /* Check if cluster values match any FE variable (common case: vce(cluster i) with absorb(i t)).
+             * One-way clustering only: dkraay numbers its periods in time order. */
             double *cluster_data = filtered.data.vars[K + G].data.dbl;
-            for (g = 0; g < G; g++) {
+            for (g = 0; g < G && vcetype == 2 && ncl == 1; g++) {
+                if (input.slope_idx[g]) continue;
                 double *fe_data = filtered.data.vars[K + g].data.dbl;
 
                 /* Quick rejection: check first, middle, and last values */
@@ -514,8 +511,12 @@ ST_retcode do_full_regression(int argc, char *argv[])
 
             /* As in reghdfe, fweights drop only levels whose total weight is 1;
              * aweights and pweights use the unweighted rule. */
-            num_singletons = ctools_remove_singletons(fe_levels, G, N_orig, mask,
-                (has_weights && weight_type == 2) ? weights : NULL, (verbose >= 1));
+            /* With an individual effect, also the groups of an individual
+             * found in no other group (fweights are refused there) */
+            num_singletons = input.indiv
+                ? hdfe_indiv_singletons(fe_levels, G, &indiv, mask)
+                : ctools_remove_singletons(fe_levels, G, N_orig, mask,
+                      (has_weights && weight_type == 2) ? weights : NULL, (verbose >= 1));
             free(fe_levels);
         }
 
@@ -541,6 +542,12 @@ ST_retcode do_full_regression(int argc, char *argv[])
 
         output_rc = num_singletons >= 0 ? 2001 : 920;
         goto cleanup;  /* 2001: all singletons */
+    }
+
+    /* The individual effect on the rows kept */
+    if (input.indiv) {
+        if ((output_rc = hdfe_indiv_compact(&indiv, mask))) goto cleanup;
+        if ((output_rc = ctools_scal_save("__creghdfe_indiv_levels", (ST_double)indiv.NI))) goto cleanup;
     }
 
     t_singleton = get_time_sec();
@@ -592,9 +599,21 @@ ST_retcode do_full_regression(int argc, char *argv[])
             goto cleanup;
         }
     }
+    /* Heterogeneous slopes: their variables follow the weight in the
+     * loaded columns */
+    if (input.num_slopes) {
+        const ST_double *slope_cols[10] = {0};
+        ST_int pos = K + G + ncl + (has_weights ? 1 : 0);
+        for (g = 0; g < G; g++)
+            if (input.slope_idx[g]) slope_cols[g] = filtered.data.vars[pos++].data.dbl;
+        if ((output_rc = creghdfe_setup_slopes(g_state, &input, slope_cols, mask, N_orig,
+                                               has_weights ? weights : NULL))) goto cleanup;
+    }
 
-    /* Levels left after singleton removal */
-    df_a = 0;
+    /* Levels left after singleton removal; the individual effect has one
+     * coefficient per individual, none counted as redundant (reghdfe's
+     * dof_update_individual_fe() counts none) */
+    df_a = input.indiv ? indiv.NI : 0;
     for (g = 0; g < G; g++) {
         factors[g].num_levels = g_state->factors[g].num_levels;
         df_a += factors[g].num_levels;
@@ -607,10 +626,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
     ST_int dof_pairs = dof_adjust_type == 1 ? 0 :
         dof_adjust_type == 2 ? CTOOLS_DOF_FIRSTPAIR : CTOOLS_DOF_PAIRWISE;
     if (compute_dof || !dof_pairs) {
-        if (ctools_hdfe_redundant_intercepts(g_state->factors, G, N, NULL, dof_pairs, redundant)) {
-            output_rc = 920;
+        if ((output_rc = creghdfe_redundant(g_state, &input, NULL, dof_pairs, redundant, exact)))
             goto cleanup;
-        }
         for (g = 0; g < G; g++) df_a -= redundant[g];
     }
 
@@ -636,6 +653,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
     for (g = 0; g < G; g++) {
         snprintf(scalar_name, sizeof(scalar_name), "__creghdfe_fe_redundant_%d", g + 1);
         if ((output_rc = ctools_scal_save(scalar_name, (ST_double)redundant[g]))) goto cleanup;
+        snprintf(scalar_name, sizeof(scalar_name), "__creghdfe_fe_exact_%d", g + 1);
+        if ((output_rc = ctools_scal_save(scalar_name, (ST_double)exact[g]))) goto cleanup;
     }
 
     g_state->df_a = df_a;
@@ -719,6 +738,12 @@ ST_retcode do_full_regression(int argc, char *argv[])
     data = data_compact; data_compact = NULL;
     free(means);
     means = means_compact; means_compact = NULL;
+    /* vce(bootstrap) refits from the unstandardized, unpartialled columns */
+    if (input.bs_retain) {
+        bs_raw = (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)K, sizeof(ST_double));
+        if (!bs_raw) { output_rc = 920; goto cleanup; }
+        memcpy(bs_raw, data, (size_t)N * K * sizeof(ST_double));
+    }
 
     /* Compact weights and assign to g_state */
     if (has_weights) {
@@ -825,6 +850,20 @@ ST_retcode do_full_regression(int argc, char *argv[])
             stdevs[k] = sqrt(ss / (N - 1));
         }
         if (stdevs[k] < 1e-30) stdevs[k] = 1.0;
+        /* Without a constant the total sum of squares is uncentered, as in
+         * reghdfe (the standard deviations stay centered) */
+        if (no_intercept) {
+            ST_double kc = 0.0;
+            ss = 0.0;
+            for (idx = 0; idx < N; idx++) {
+                ST_double sq = col[idx] * col[idx];
+                ST_double wsq = (has_weights && g_state->weights) ? g_state->weights[idx] * sq : sq;
+                ST_double t = ss + wsq;
+                kc += (ss - t) + wsq;
+                ss = t;
+            }
+            tss[k] = ss + kc;
+        }
     }
 
     /* ================================================================
@@ -853,14 +892,46 @@ ST_retcode do_full_regression(int argc, char *argv[])
     }
 
     /* Partial out via CG solver using shared helper */
-    HDFE_SolveResult projection = partial_out_columns(g_state, data, N, K, num_threads);
+    HDFE_SolveResult projection = {0, 1, 0};
+    if (input.indiv) {
+        /* reghdfe projects on the individual effect with LSMR; solved here
+         * a hundred times tighter than tolerance(), its atol and btol */
+        projection.status = hdfe_indiv_partial_out(g_state, &indiv, data, N, K, tolerance / 100.0,
+                                                   maxiter, &projection.iterations);
+    } else if (input.transform != 0 || input.acceleration != 1) {
+        /* transform() and acceleration() other than reghdfe's defaults */
+        projection = partial_out_columns_options(g_state, data, N, K, input.transform,
+                                                 input.acceleration);
+    } else {
+        projection = partial_out_columns(g_state, data, N, K, num_threads);
+    }
+    if (projection.status == 920) {
+        SF_error("creghdfe: memory allocation failed in the fixed-effect projection\n");
+        output_rc = 920;
+        goto cleanup;
+    }
+    /* abort(0): as reghdfe, the projection after iterate() iterations stands
+     * and e(converged) is 0 */
+    ST_int projection_converged = 1;
+    if (projection.status == 430 && !input.abort_nonconv) {
+        projection.status = 0;
+        projection_converged = 0;
+    }
+    if ((output_rc = ctools_scal_save("__creghdfe_converged", (ST_double)projection_converged)))
+        goto cleanup;
     if (projection.status) {
-        SF_error("creghdfe: fixed-effect projection did not converge\n");
+        if (projection.status != 1) SF_error("creghdfe: fixed-effect projection did not converge\n");
 
         output_rc = projection.status;
         goto cleanup;
     }
     ST_int max_iters = projection.iterations;
+    /* ... and starts its projections from the partialled columns */
+    if (input.bs_retain) {
+        bs_tilde = (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)K, sizeof(ST_double));
+        if (!bs_tilde) { output_rc = 920; goto cleanup; }
+        memcpy(bs_tilde, data, (size_t)N * K * sizeof(ST_double));
+    }
 
     /* Save iteration count to Stata scalar */
     if ((output_rc = ctools_scal_save("__creghdfe_iterations", (ST_double)max_iters))) goto cleanup;
@@ -889,92 +960,25 @@ ST_retcode do_full_regression(int argc, char *argv[])
 
     memset(is_collinear, 0, K_x_alloc * sizeof(ST_int));
 
-    /* Columns collinear with the fixed effects, by reghdfe's rule
-     * (check_collinear_with_fe): the partialled sum of squares is at most
-     * collinear_tol = min(1e-6, tolerance()/10) times the uncentered sum of
-     * squares before partialling (both unweighted, so the rule does not
-     * depend on the units or on standardization). Such a regressor is
-     * omitted. A dependent variable that passes the rule is perfectly
-     * explained by the effects; it is zeroed, as reghdfe does, so its
-     * coefficients, rss and tss_within are exactly zero. */
+    /* Collinearity: reghdfe's rule for regressors collinear with the fixed
+     * effects (a depvar they explain is zeroed), then reghdfe_rmcoll's
+     * invsym rule (creghdfe_core.c) */
     ST_int depvar_explained = 0;
-    ST_int num_fe_collinear = 0;
-    for (k = 0; k < K; k++) {
-        ST_double *col = &data[(size_t)k * N];
-        ST_double ratio = fast_dot(col, col, N) / norm2[k];
-        ST_int flagged = (ratio <= input.collinear_tol);
-        if (k == 0) {
-            if (flagged) {
-                memset(col, 0, (size_t)N * sizeof(ST_double));
-                depvar_explained = 1;
-            }
-            continue;
-        }
-        if (flagged) {
-            is_collinear[k - 1] = 1;
-            num_fe_collinear++;
-        }
+    ST_int *fe_flagged = (ST_int *)calloc(K_x_alloc, sizeof(ST_int));
+    if (!fe_flagged) {
+        output_rc = 920;
+        goto cleanup;
+    }
+    output_rc = creghdfe_collinear(data, N, K, norm2, NULL, has_weights ? g_state->weights : NULL,
+                                   weight_type, input.collinear_tol, fe_flagged, is_collinear,
+                                   &depvar_explained, xtx, xty_all, inv_rmcoll);
+    for (k = 1; k < K && !output_rc; k++) {
         snprintf(scalar_name, sizeof(scalar_name), "__creghdfe_fe_collinear_%d", k);
-        if ((output_rc = ctools_scal_save(scalar_name, (ST_double)flagged))) goto cleanup;
+        output_rc = ctools_scal_save(scalar_name, (ST_double)fe_flagged[k - 1]);
     }
+    free(fe_flagged);
+    if (output_rc) goto cleanup;
     if ((output_rc = ctools_scal_save("__creghdfe_depvar_explained", (ST_double)depvar_explained))) goto cleanup;
-
-    /* The remaining collinearity as reghdfe_rmcoll: Mata's invsym() of the
-     * (weighted) cross products of the partialled regressors, sweeping them
-     * in order, and invsym() pivoting on the largest diagonal instead when
-     * that drops a different number of them. A regressor is collinear when
-     * its diagonal of the generalized inverse is zero. */
-    if (K_x > 0) {
-        if (has_weights) {
-            compute_xtx_xty_weighted(data, g_state->weights, weight_type, N, K, xtx, xty_all);
-        } else {
-            compute_xtx_xty(data, N, K, xtx, xty_all);
-        }
-        ST_double *xx_rm = xtx;
-        if (num_fe_collinear > 0) {
-            /* Those columns leave the cross products, as reghdfe trims them */
-            xx_rm = inv_rmcoll;
-            memcpy(xx_rm, xtx, (size_t)K_x * K_x * sizeof(ST_double));
-            for (k = 0; k < K_x; k++) {
-                if (!is_collinear[k]) continue;
-                for (j = 0; j < K_x; j++) {
-                    xx_rm[(size_t)k * K_x + j] = 0.0;
-                    xx_rm[(size_t)j * K_x + k] = 0.0;
-                }
-            }
-        }
-        ST_double *ginv = (ST_double *)malloc((size_t)K_x * K_x * sizeof(ST_double));
-        if (!ginv) {
-            output_rc = 920;
-            goto cleanup;
-        }
-        ST_int rank_ordered = 0, rank_pivoted = 0;
-        ST_int inv_rc = ctools_invsym_ordered(xx_rm, K_x, ginv, &rank_ordered);
-        if (!inv_rc && rank_ordered < K_x - num_fe_collinear) {
-            ST_double *ginv_alt = (ST_double *)malloc((size_t)K_x * K_x * sizeof(ST_double));
-            if (!ginv_alt) {
-                free(ginv);
-                output_rc = 920;
-                goto cleanup;
-            }
-            inv_rc = ctools_invsym(xx_rm, K_x, ginv_alt, &rank_pivoted);
-            if (!inv_rc && rank_pivoted != rank_ordered) {
-                free(ginv);
-                ginv = ginv_alt;
-            } else {
-                free(ginv_alt);
-            }
-        }
-        if (inv_rc) {
-            free(ginv);
-            output_rc = 920;
-            goto cleanup;
-        }
-        for (k = 0; k < K_x; k++) {
-            if (ginv[(size_t)k * K_x + k] == 0.0) is_collinear[k] = 1;
-        }
-        free(ginv);
-    }
 
     /* Recount collinear */
     num_collinear = 0;
@@ -1002,153 +1006,65 @@ ST_retcode do_full_regression(int argc, char *argv[])
 
     if (output_rc) goto cleanup;
 
-    /* K_keep == 0 (every regressor omitted) continues through the same path,
-     * as reghdfe does: the model is then the fixed effects and the constant.
-     * K_alloc keeps the K_keep-sized allocations nonempty in that case. */
-    const size_t K_alloc = (K_keep > 0) ? (size_t)K_keep : 1;
-
-    /* Build index of non-collinear variables */
-    keep_idx = (ST_int *)malloc(K_alloc * sizeof(ST_int));
-    if (!keep_idx) {
-        output_rc = 920;
-        goto cleanup;
-    }
-
-    idx = 0;
-    for (k = 0; k < K_x; k++) {
-        if (!is_collinear[k]) {
-            keep_idx[idx++] = k + 1;  /* +1 to skip y */
+    /* OLS of y on the kept regressors and the constant (creghdfe_core.c);
+     * its arrays become this function's, freed at cleanup */
+    {
+        /* Without a constant, the regression through the origin: with zero
+         * means creghdfe_ols's constant is zero and its inverse is the
+         * regressors' own, bordered by the constant (cleared below) */
+        if (no_intercept) {
+            means_zero = (ST_double *)calloc((size_t)K, sizeof(ST_double));
+            if (!means_zero) { output_rc = 920; goto cleanup; }
+        }
+        creghdfe_ols_in ols_in = {
+            .data = data, .N = N, .K = K, .is_collinear = is_collinear,
+            .xtx = xtx, .xty_all = xty_all,
+            .weights = has_weights ? g_state->weights : NULL, .weight_type = weight_type,
+            .sum_weights = has_weights ? g_state->sum_weights : 0.0,
+            .means = no_intercept ? means_zero : means, .stdevs = stdevs,
+            .standardize = standardize, .use_quad = use_quad,
+        };
+        creghdfe_ols_out ols;
+        ST_retcode ols_rc = creghdfe_ols(&ols_in, &ols);
+        keep_idx = ols.keep_idx;
+        data_keep = ols.data_keep;
+        xtx_keep = ols.xtx_keep;
+        xty_keep = ols.xty_keep;
+        beta_keep = ols.beta_keep;
+        inv_xx_keep = ols.inv_xx_keep;
+        means_x = ols.means_x;
+        tss_within = ols.tss_within;
+        rss = ols.rss;
+        if (ols_rc == 198) SF_error("creghdfe: X'X not positive definite\n");
+        if (ols_rc) {
+            output_rc = ols_rc;
+            goto cleanup;
         }
     }
-
-    /* Allocate for OLS - cast to size_t to prevent 32-bit overflow */
-    ST_int K_with_cons = K_keep + 1;
-    /* y and the kept regressors. When nothing is omitted this is the data
-     * matrix itself and no copy is made. */
-    const int keep_is_data = (K_keep == K_x);
-    data_keep = keep_is_data ? data
-                             : (ST_double *)malloc((size_t)N * (K_keep + 1) * sizeof(ST_double));
-    xtx_keep = (ST_double *)malloc(K_alloc * K_alloc * sizeof(ST_double));
-    xty_keep = (ST_double *)malloc(K_alloc * sizeof(ST_double));
-    beta_keep = (ST_double *)malloc(K_with_cons * sizeof(ST_double));
-    inv_xx_keep = (ST_double *)malloc(K_with_cons * K_with_cons * sizeof(ST_double));
-    V_keep = (ST_double *)calloc(K_with_cons * K_with_cons, sizeof(ST_double));
-    means_x = (ST_double *)malloc(K_alloc * sizeof(ST_double));
-
-    if (!data_keep || !xtx_keep || !xty_keep || !beta_keep || !inv_xx_keep || !V_keep || !means_x) {
-        output_rc = 920;
-        goto cleanup;
-    }
-
-    /* Copy y and non-collinear X */
-    if (!keep_is_data) {
-        memcpy(data_keep, data, (size_t)N * sizeof(ST_double));
-        for (k = 0; k < K_keep; k++) {
-            memcpy(data_keep + (size_t)(k + 1) * N, data + (size_t)keep_idx[k] * N,
-                   (size_t)N * sizeof(ST_double));
-        }
-    }
-    for (k = 0; k < K_keep; k++) {
-        if (standardize) {
-            means_x[k] = means[keep_idx[k]] / stdevs[keep_idx[k]];
-        } else {
-            means_x[k] = means[keep_idx[k]];
-        }
-    }
-
-    /* Compute X'X and X'y on non-collinear data (weighted if using weights);
-     * when nothing is omitted they are the cross products computed above */
-    const int reuse_xx = keep_is_data && K_keep > 0;
-    if (reuse_xx) {
-        memcpy(xtx_keep, xtx, (size_t)K_keep * K_keep * sizeof(ST_double));
-        memcpy(xty_keep, xty_all, (size_t)K_keep * sizeof(ST_double));
-    }
-    if (has_weights) {
-        if (!reuse_xx)
-            compute_xtx_xty_weighted(data_keep, g_state->weights, weight_type, N, K_keep + 1, xtx_keep, xty_keep);
-        /* Weighted TSS_within = sum(w_i * y_i^2)
-         * Use quad-precision or Kahan summation based on option. */
-        if (use_quad) {
-            tss_within = dd_sum_sq_weighted(data_keep, g_state->weights, N);
-        } else {
-            tss_within = 0.0;
-            for (idx = 0; idx < N; idx++) {
-                volatile ST_double sq = data_keep[idx] * data_keep[idx];
-                tss_within += g_state->weights[idx] * sq;
-            }
-        }
-    } else {
-        if (!reuse_xx)
-            compute_xtx_xty(data_keep, N, K_keep + 1, xtx_keep, xty_keep);
-        /* Compute tss_within: use quad-precision or Kahan summation. */
-        if (use_quad) {
-            tss_within = dd_sum_sq(data_keep, N);
-        } else {
-            tss_within = 0.0;
-            for (idx = 0; idx < N; idx++) {
-                volatile ST_double sq = data_keep[idx] * data_keep[idx];
-                tss_within += sq;
-            }
-        }
-    }
-
     t_ols = get_time_sec();
 
-    /* Cholesky and invert */
-    inv_xx_x = (ST_double *)malloc(K_alloc * K_alloc * sizeof(ST_double));
-    if (!inv_xx_x) {
+    ST_int K_with_cons = K_keep + 1;
+    /* No constant: its row and column of the bread are zero, so every VCE
+     * leaves the regressors' block as without the constant and the
+     * constant's variance zero (its column of X is then irrelevant) */
+    if (no_intercept) {
+        for (i = 0; i < K_with_cons; i++) {
+            inv_xx_keep[(size_t)i * K_with_cons + K_keep] = 0.0;
+            inv_xx_keep[(size_t)K_keep * K_with_cons + i] = 0.0;
+        }
+        beta_keep[K_keep] = 0.0;
+    }
+    V_keep = (ST_double *)calloc(K_with_cons * K_with_cons, sizeof(ST_double));
+    V_psd = (ST_double *)calloc(K_with_cons * K_with_cons, sizeof(ST_double));
+    if (!V_keep || !V_psd) {
         output_rc = 920;
         goto cleanup;
     }
-
-    if (K_keep > 0) {
-        memcpy(inv_xx_x, xtx_keep, (size_t)K_keep * K_keep * sizeof(ST_double));
-        if (ctools_cholesky(inv_xx_x, K_keep) != 0) {
-            SF_error("creghdfe: X'X not positive definite\n");
-
-            output_rc = 198;
-            goto cleanup;
-        }
-
-        stata_retcode inverse_status_0 = ctools_invert_from_cholesky(inv_xx_x, K_keep, inv_xx_x);
-        if (inverse_status_0 != STATA_OK) {
-            output_rc = ctools_stata_rc(inverse_status_0);
-            goto cleanup;
-        }
-    }
-
-    /* Compute beta */
-    for (i = 0; i < K_keep; i++) {
-        beta_keep[i] = 0.0;
-        for (j = 0; j < K_keep; j++) {
-            beta_keep[i] += inv_xx_x[i * K_keep + j] * xty_keep[j];
-        }
-    }
-
-    /* Compute RSS */
-    rss = tss_within;
-    for (k = 0; k < K_keep; k++) {
-        rss -= beta_keep[k] * xty_keep[k];
-    }
-
-    /* Extend inv_xx with the constant (block partition formula). For
-     * fweight the 1'W1 term is sum(weights). */
-    ST_double N_corner = (weight_type == 2 && has_weights) ? g_state->sum_weights : (ST_double)N;
-    ctools_inverse_add_constant(inv_xx_x, K_keep, means_x, N_corner, inv_xx_keep);
-
-    /* Compute constant */
-    ST_double y_mean = means[0];
     ST_double xb_mean = 0.0;
-    for (k = 0; k < K_keep; k++) {
-        xb_mean += means_x[k] * beta_keep[k];
-    }
-    beta_keep[K_keep] = y_mean - xb_mean;
 
-    free(inv_xx_x); inv_xx_x = NULL;
-
-    /* Build data with constant for the robust and cluster VCEs (the
+    /* Build data with constant for the robust, cluster and dkraay VCEs (the
      * unadjusted VCE does not use it) - cast to size_t to prevent 32-bit overflow */
-    if (vcetype == 1 || vcetype == 2) {
+    if (vcetype >= 1) {
         data_with_cons = (ST_double *)malloc((size_t)N * (K_with_cons + 1) * sizeof(ST_double));
         if (!data_with_cons) {
             output_rc = 920;
@@ -1179,7 +1095,44 @@ ST_retcode do_full_regression(int argc, char *argv[])
     ST_double df_a_nested_computed = 0;  /* Track FEs nested within cluster */
     ST_int nested[10] = {0};
 
-    if (vcetype == 2) {
+    if (vcetype >= 2 && ncl > 1) {
+        /* Multi-way clustering: every dimension numbered in sorted order;
+         * an effect is nested when it is nested in any of them */
+        cluster_ids_all = (ST_int *)ctools_safe_malloc3((size_t)N, (size_t)ncl, sizeof(ST_int));
+        cluster_values_compact = (double *)malloc(N * sizeof(double));
+        if (!cluster_ids_all || !cluster_values_compact || !cluster_raw_values) {
+            output_rc = 920;
+            goto cleanup;
+        }
+        num_clusters = 0;
+        for (ST_int d = 0; d < ncl; d++) {
+            idx = 0;
+            for (i = 0; i < N_orig; i++)
+                if (mask[i]) cluster_values_compact[idx++] = cluster_raw_values[(size_t)d * N_orig + i];
+            if (ctools_numeric_to_cluster_ids(cluster_values_compact, N, cluster_ids_all + (size_t)d * N,
+                                              &num_clusters_dim[d]) != 0) {
+                output_rc = 920;
+                goto cleanup;
+            }
+            if (d == 0 || num_clusters_dim[d] < num_clusters) num_clusters = num_clusters_dim[d];
+            for (g = 0; g < G && dof_clusters; g++) {
+                if (input.slope_idx[g] || nested[g]) continue;
+                ST_int is_nested = ctools_fe_nested_in_cluster(
+                    g_state->factors[g].levels, g_state->factors[g].num_levels,
+                    cluster_ids_all + (size_t)d * N, N);
+                if (is_nested < 0) { output_rc = 920; goto cleanup; }
+                nested[g] = is_nested;
+            }
+        }
+        free(cluster_values_compact); cluster_values_compact = NULL;
+        for (g = 0; g < G; g++) {
+            if (nested[g]) df_a_nested_computed += g_state->factors[g].num_levels;
+            snprintf(scalar_name, sizeof(scalar_name), "__creghdfe_fe_nested_%d", g + 1);
+            if ((output_rc = ctools_scal_save(scalar_name, (ST_double)nested[g]))) goto cleanup;
+        }
+        free(cluster_raw_values);
+        cluster_raw_values = NULL;
+    } else if (vcetype >= 2) {
         cluster_ids = (ST_int *)malloc(N * sizeof(ST_int));
         if (!cluster_ids) {
             output_rc = 920;
@@ -1200,7 +1153,7 @@ ST_retcode do_full_regression(int argc, char *argv[])
             /* Check FE nesting within cluster */
             for (g = 0; g < G; g++) {
                 ST_int is_nested;
-                if (!dof_clusters) {
+                if (!dof_clusters || input.slope_idx[g]) {
                     is_nested = 0;
                 } else if (g == cluster_matches_fe) {
                     is_nested = 1;  /* FE is the cluster variable - trivially nested */
@@ -1250,7 +1203,7 @@ ST_retcode do_full_regression(int argc, char *argv[])
 
             /* Check if any FE is nested within cluster */
             for (g = 0; g < G; g++) {
-                ST_int is_nested = !dof_clusters ? 0 : ctools_fe_nested_in_cluster(
+                ST_int is_nested = (!dof_clusters || input.slope_idx[g]) ? 0 : ctools_fe_nested_in_cluster(
                     g_state->factors[g].levels, g_state->factors[g].num_levels,
                     cluster_ids, N);
                 if (is_nested < 0) { output_rc = 920; goto cleanup; }
@@ -1264,6 +1217,7 @@ ST_retcode do_full_regression(int argc, char *argv[])
         /* Free saved cluster raw values */
         free(cluster_raw_values);
         cluster_raw_values = NULL;
+        num_clusters_dim[0] = num_clusters;
     } else {
         /* No clustering - save 0 for all FE nested status */
         for (g = 0; g < G; g++) {
@@ -1280,15 +1234,15 @@ ST_retcode do_full_regression(int argc, char *argv[])
          * coefficients of the others, so the count depends on the nesting.
          * df_a keeps the nested levels; they are removed through df_a_nested. */
         if (compute_dof || !dof_pairs) {
-            if (ctools_hdfe_redundant_intercepts(g_state->factors, G, N, nested, dof_pairs, redundant)) {
-                output_rc = 920;
+            if ((output_rc = creghdfe_redundant(g_state, &input, nested, dof_pairs, redundant, exact)))
                 goto cleanup;
-            }
-            df_a = 0;
+            df_a = input.indiv ? indiv.NI : 0;
             for (g = 0; g < G; g++) {
                 df_a += g_state->factors[g].num_levels - (nested[g] ? 0 : redundant[g]);
                 snprintf(scalar_name, sizeof(scalar_name), "__creghdfe_fe_redundant_%d", g + 1);
                 if ((output_rc = ctools_scal_save(scalar_name, (ST_double)redundant[g]))) goto cleanup;
+                snprintf(scalar_name, sizeof(scalar_name), "__creghdfe_fe_exact_%d", g + 1);
+                if ((output_rc = ctools_scal_save(scalar_name, (ST_double)exact[g]))) goto cleanup;
             }
             df_r = N_eff_df - df_a;
             g_state->df_a = df_a;
@@ -1310,7 +1264,7 @@ ST_retcode do_full_regression(int argc, char *argv[])
             ga = 0;
         } else if (dof_pairs && compute_dof) {
             for (g = 0; g < G && gb < 0; g++) {
-                if (nested[g]) continue;
+                if (nested[g] || input.slope_idx[g]) continue;
                 if (ga < 0) ga = g;
                 else gb = g;
             }
@@ -1371,7 +1325,7 @@ ST_retcode do_full_regression(int argc, char *argv[])
 
     if (vcetype == 0) {
         output_rc = compute_vce_unadjusted(inv_xx_keep, rss, df_r, K_with_cons, V_keep);
-    } else if (vcetype == 1 || vcetype == 2) {
+    } else if (vcetype >= 1) {
         if (resid) {
             /* Pass weights for weighted VCE (NULL if no weights) */
             ST_double *vce_weights = has_weights ? g_state->weights : NULL;
@@ -1379,10 +1333,29 @@ ST_retcode do_full_regression(int argc, char *argv[])
             ST_double N_eff = (weight_type == 2) ? g_state->sum_weights : N;
             if (vcetype == 1) {
                 output_rc = compute_vce_robust(data_with_cons, resid, inv_xx_keep, vce_weights, weight_type, N, N_eff, K_with_cons, df_a, V_keep);
-            } else {
+            } else if (vcetype == 2 && ncl == 1) {
                 ST_int df_m_cluster = K_keep;
                 output_rc = compute_vce_cluster(data_with_cons, resid, inv_xx_keep, vce_weights, weight_type, cluster_ids, N, N_eff, K_with_cons, num_clusters, V_keep, df_m_cluster, df_a, df_a_nested);
+            } else if (vcetype == 2) {
+                ST_int psd_fixed = 0;
+                output_rc = compute_vce_multicluster(data_with_cons, resid, inv_xx_keep, vce_weights, weight_type,
+                    cluster_ids_all, num_clusters_dim, ncl, N, N_eff, K_with_cons, V_keep, K_keep, df_a,
+                    df_a_nested, &psd_fixed, V_psd, &psd_made);
+                if (!output_rc) output_rc = ctools_scal_save("__creghdfe_psd_fixed", (ST_double)psd_fixed);
+            } else {
+                ST_int bandwidth_used = 0;
+                output_rc = compute_vce_dkraay(data_with_cons, resid, inv_xx_keep, vce_weights, weight_type,
+                    cluster_ids, num_clusters, input.dkraay_bw, N, N_eff, K_with_cons, V_keep, K_keep,
+                    df_a - df_a_nested, &bandwidth_used, V_psd, &psd_made);
+                if (!output_rc) output_rc = ctools_scal_save("__creghdfe_dkraay_bw", (ST_double)bandwidth_used);
             }
+            /* The clusters of each dimension, and the fewest of them */
+            for (ST_int d = 0; d < ncl && vcetype >= 2 && !output_rc; d++) {
+                snprintf(scalar_name, sizeof(scalar_name), "__creghdfe_N_clust_%d", d + 1);
+                output_rc = ctools_scal_save(scalar_name, (ST_double)num_clusters_dim[d]);
+            }
+            if (vcetype >= 2 && !output_rc)
+                output_rc = ctools_scal_save("__creghdfe_N_clust", (ST_double)num_clusters);
         }
     }
 
@@ -1461,6 +1434,7 @@ ST_retcode do_full_regression(int argc, char *argv[])
             for (j = 0; j < K_with_cons; j++) {
                 ST_double stdev_x_j = (j < K_keep) ? (stdevs[keep_idx[j]] / stdev_y) : (1.0 / stdev_y);
                 V_keep[i * K_with_cons + j] = V_keep[i * K_with_cons + j] / (stdev_x_i * stdev_x_j);
+                if (psd_made) V_psd[i * K_with_cons + j] = V_psd[i * K_with_cons + j] / (stdev_x_i * stdev_x_j);
             }
         }
 
@@ -1469,7 +1443,7 @@ ST_retcode do_full_regression(int argc, char *argv[])
         for (k = 0; k < K_keep; k++) {
             xb_mean += means[keep_idx[k]] * beta_keep[k];
         }
-        beta_keep[K_keep] = means[0] - xb_mean;
+        beta_keep[K_keep] = no_intercept ? 0.0 : means[0] - xb_mean;
     }
 
     /* Store residuals back to Stata if requested.
@@ -1497,7 +1471,7 @@ ST_retcode do_full_regression(int argc, char *argv[])
 
     if (savefe && savefe_var_idx > 0 && resid && !output_rc) {
         output_rc = store_fixed_effects(g_state, obs_map, mask, N_orig,
-            K_keep, keep_idx, beta_keep, resid, savefe_var_idx);
+            K_keep, keep_idx, beta_keep, resid, savefe_var_idx, &input);
     }
 
     /* Free residuals and group assignments */
@@ -1536,9 +1510,38 @@ ST_retcode do_full_regression(int argc, char *argv[])
     };
     output_rc = creghdfe_post_results(&result);
     if (output_rc) goto cleanup;
+    /* The PSD version of e(V), which the wrapper posts when Stata's ereturn
+     * post would set reghdfe's indefinite one to zero (HDFE-27) */
+    if ((output_rc = ctools_scal_save("__creghdfe_psd_made", (ST_double)psd_made))) goto cleanup;
+    for (i = 0; i < K_with_cons && psd_made; i++)
+        for (j = 0; j < K_with_cons; j++)
+            if ((output_rc = ctools_mat_store("__creghdfe_V_psd", i + 1, j + 1,
+                                              V_psd[(size_t)i * K_with_cons + j]))) goto cleanup;
     /* e(sumweights): the sum of the weights as given (N unweighted) */
     if ((output_rc = ctools_scal_save("__creghdfe_sumweights",
                                       has_weights ? g_state->sum_weights : (ST_double)N))) goto cleanup;
+
+    /* vce(bootstrap): keep what the replicates need (creghdfe_boot.c) */
+    if (input.bs_retain) {
+        bs_ones = (ST_double *)malloc((size_t)K * sizeof(ST_double));
+        if (!bs_ones) { output_rc = 920; goto cleanup; }
+        for (k = 0; k < K; k++) bs_ones[k] = 1.0;
+        const creghdfe_boot_source source = {
+            .N = N, .K = K, .G = G, .raw = bs_raw, .tilde = bs_tilde,
+            .stdevs = standardize ? stdevs : bs_ones,
+            .weights = has_weights ? g_state->weights : NULL,
+            .weight_type = has_weights ? weight_type : 0,
+            .factors = g_state->factors, .is_collinear = is_collinear,
+            .b_hat = beta_keep, .K_keep = K_keep,
+            .maxiter = maxiter, .drop_singletons = drop_singletons, .use_quad = use_quad,
+            .tolerance = tolerance, .collinear_tol = input.collinear_tol,
+            .mask = mask, .obs_map = obs_map, .N_orig = N_orig,
+            .unit_var = input.bs_unit_idx, .strata_var = input.bs_strata_idx,
+            .in = &input,
+        };
+        if (!creghdfe_boot_retain_hook) { output_rc = 198; goto cleanup; }
+        if ((output_rc = creghdfe_boot_retain_hook(&source))) goto cleanup;
+    }
 
     /* Save timing results to Stata scalars */
     if ((output_rc = ctools_scal_save("_creghdfe_time_load", t_load - t_start))) goto cleanup;
@@ -1568,9 +1571,11 @@ cleanup:
     if (data_keep == data) data_keep = NULL;  /* shared when nothing was omitted */
     free(data); free(means); free(stdevs); free(tss);
     free(data_keep); free(xtx_keep); free(xty_keep); free(beta_keep);
-    free(inv_xx_keep); free(V_keep); free(keep_idx); free(xtx); free(is_collinear);
+    free(inv_xx_keep); free(V_keep); free(V_psd); free(keep_idx); free(xtx); free(is_collinear);
     free(norm2); free(xty_all); free(inv_rmcoll); free(fe_raw);
     free(cluster_ids);
+    free(cluster_ids_all);
+    free(means_zero);
     free(weights);
     free(cluster_raw_values);
     free(group_assignments);
@@ -1584,6 +1589,15 @@ cleanup:
     free(cluster_values_compact);
     free(root_to_group);
     free(resid);
+    free(bs_raw); free(bs_tilde); free(bs_ones);
+    hdfe_indiv_free(&indiv);
     cleanup_state();
     return output_rc;
+}
+
+ST_retcode do_full_regression(int argc, char *argv[])
+{
+    (void)argc;
+    (void)argv;
+    return creghdfe_full_regression(0);
 }

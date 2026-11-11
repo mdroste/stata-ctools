@@ -26,11 +26,11 @@ if _rc != 0 {
     test_fail "csample plugin load" "plugin returned error `=_rc'"
     exit 1
 }
-if _N < `N_before' {
+if _N == 50 {
     test_pass "csample plugin loads and runs (50% of 100 = `=_N' obs)"
 }
 else {
-    test_fail "csample plugin load" "no observations dropped"
+    test_fail "csample plugin load" "expected 50 observations, got `=_N'"
     exit 1
 }
 
@@ -44,8 +44,8 @@ gen id = _n
 set seed 12345
 csample 50
 local n_after = _N
-if `n_after' > 400 & `n_after' < 600 test_pass "50% sample yields ~500 obs (got `n_after')"
-else test_fail "50% sample yields ~500 obs" "got `n_after'"
+if `n_after' == 500 test_pass "50% sample yields exactly 500 obs"
+else test_fail "50% sample yields exactly 500 obs" "got `n_after'"
 
 * 25% sample
 clear
@@ -54,8 +54,8 @@ gen id = _n
 set seed 12345
 csample 25
 local n_after = _N
-if `n_after' > 200 & `n_after' < 300 test_pass "25% sample yields ~250 obs (got `n_after')"
-else test_fail "25% sample yields ~250 obs" "got `n_after'"
+if `n_after' == 250 test_pass "25% sample yields exactly 250 obs"
+else test_fail "25% sample yields exactly 250 obs" "got `n_after'"
 
 * SECTION 2b: Self-consistency with set seed
 print_section "Self-Consistency with set seed"
@@ -143,18 +143,17 @@ gen id = _n
 set seed 12345
 csample 50, by(group)
 
-* Native sample supports by(); count parity is checked in validate_audit_p2.do.
-* Use tighter range check with 20% tolerance around expected 50 per group.
+* The selected identities are random; the sample size in each group is fixed.
 local all_ok = 1
 forvalues g = 0/9 {
     count if group == `g'
     local n_g = r(N)
-    if `n_g' < 40 | `n_g' > 60 {
+    if `n_g' != 50 {
         local all_ok = 0
     }
 }
-if `all_ok' test_pass "50% by-group sample (~50 per group)"
-else test_fail "50% by-group sample" "some groups outside [40,60] range"
+if `all_ok' test_pass "50% by-group sample (exactly 50 per group)"
+else test_fail "50% by-group sample" "some groups do not contain exactly 50 observations"
 
 * By-group fixed count
 clear
@@ -235,8 +234,8 @@ set obs 10
 gen id = _n
 set seed 12345
 csample 50
-if _N >= 3 & _N <= 7 test_pass "small dataset sample (N=10, 50%)"
-else test_fail "small dataset sample" "got `=_N', expected 3-7"
+if _N == 5 test_pass "small dataset sample (N=10, 50%)"
+else test_fail "small dataset sample" "got `=_N', expected 5"
 
 * SECTION 7: if/in conditions
 print_section "If/In Conditions"
@@ -467,6 +466,162 @@ capture by g: csample 10, by(g)
 if _rc == 190 test_pass "DATA-07 by: with by() refused (r(190))"
 else test_fail "DATA-07 by: with by() refused" "r(`=_rc')"
 
+* _ct_output runs a command and returns its output (r(text), lines joined
+* by |) and return code (r(rc)). _ct_same_output runs a native and a ctools
+* command on copies of the data in memory and passes when the output, return
+* code, variable names and types, and (unless "nodata") values agree.
+capture program drop _ct_output
+program define _ct_output, rclass
+    tempfile f
+    tempname fh
+    capture log close _ctout
+    quietly log using `"`f'"', text replace name(_ctout)
+    capture noisily `0'
+    local rc = _rc
+    quietly log close _ctout
+    local text
+    file open `fh' using `"`f'"', read text
+    file read `fh' line
+    while !r(eof) {
+        if `"`macval(line)'"' != "" & substr(`"`macval(line)'"', 1, 5) != "r; t=" {
+            local text `"`macval(text)'`macval(line)'|"'
+        }
+        file read `fh' line
+    }
+    file close `fh'
+    return local text `"`macval(text)'"'
+    return scalar rc = `rc'
+end
+capture program drop _ct_same_output
+program define _ct_same_output
+    args name native ctools nodata
+    tempfile want
+    preserve
+    _ct_output `native'
+    local want_text `"`r(text)'"'
+    local want_rc = r(rc)
+    local want_vars
+    local want_types
+    forvalues j = 1/`c(k)' {
+        mata: st_local("v", st_varname(`j'))
+        local want_vars `want_vars' `v'
+        local want_types `want_types' `: type `v''
+    }
+    capture quietly save `"`want'"', emptyok
+    restore, preserve
+    _ct_output `ctools'
+    local got_text `"`r(text)'"'
+    local got_rc = r(rc)
+    local got_vars
+    local got_types
+    forvalues j = 1/`c(k)' {
+        mata: st_local("v", st_varname(`j'))
+        local got_vars `got_vars' `v'
+        local got_types `got_types' `: type `v''
+    }
+    local same_data = 1
+    if "`nodata'" == "" & "`got_vars'" != "" {
+        capture cf _all using `"`want'"'
+        local same_data = !_rc
+    }
+    restore
+    if "`nodata'" != "" {
+        local want_vars
+        local got_vars
+        local want_types
+        local got_types
+    }
+    if `"`macval(want_text)'"' == `"`macval(got_text)'"' & `want_rc' == `got_rc' & ///
+        "`want_vars'" == "`got_vars'" & "`want_types'" == "`got_types'" & `same_data' {
+        test_pass "`name'"
+    }
+    else {
+        noisily di as error `"`name': ctools [`macval(got_text)'] rc `got_rc' vars `got_vars' (`got_types')"'
+        noisily di as error `"`name': native [`macval(want_text)'] rc `want_rc' vars `want_vars' (`want_types') same data `same_data'"'
+        test_fail "`name'" "output, return code, variables or data differ from the native command"
+    }
+end
+* SAMP-01 to SAMP-05: sample's syntax (# with count, pduplicates()), its
+* messages and return codes, sort order after by(), and version 6 draws
+clear
+set obs 50
+gen long id = _n
+gen byte g = mod(_n, 3)
+gen double u = runiform()
+sort u
+drop u
+local i = 0
+foreach pair in `"3, count"' `"3, c"' `"2, count by(g)"' `"29"' `"29, by(g)"' `"35 if g == 1"' ///
+    `"50, pdup(1e-6)"' `"50, pduplicates(.5) by(g)"' `"1, pdup(abc)"' `"100"' `"101"' `"-1"' ///
+    `"50, count"' `"60, count"' `"5.5, count"' `"-1, count"' `"0, count by(g)"' `"abc"' ///
+    `"10 20"' `"98"' `"0"' {
+    local ++i
+    _ct_same_output "SAMP-01 output `i'" `"sample `pair'"' `"csample `pair'"' nodata
+}
+* Observation counts (draws differ by design; the numbers kept do not)
+foreach pair in `"3, count"' `"2, count by(g)"' `"29"' `"29, by(g)"' `"35 if g == 1"' `"-1, count"' {
+    preserve
+    sample `pair'
+    local want = _N
+    restore, preserve
+    csample `pair'
+    local got = _N
+    restore
+    if `got' == `want' test_pass "SAMP-01 kept count: `pair'"
+    else test_fail "SAMP-01 kept count: `pair'" "kept `got', sample keeps `want'"
+}
+* SAMP-03: sample leaves the data sorted by the by() variables
+preserve
+sample 50, by(g)
+local want : sortedby
+restore, preserve
+csample 50, by(g)
+local got : sortedby
+local ok = "`got'" == "`want'" & "`got'" == "g"
+sort g, stable
+restore
+if `ok' test_pass "SAMP-03 sorted by by() variables"
+else test_fail "SAMP-03 sorted by by() variables" "sortedby [`got'] vs [`want']"
+* the kept observations keep their order within each group
+preserve
+gen long orig = _n
+csample 50, by(g)
+gen long n = _n
+sort g orig
+assert n == _n
+restore
+test_pass "SAMP-03 order within groups"
+* SAMP-05: one observation is singular
+clear
+set obs 2
+_ct_same_output "SAMP-05 one observation deleted" "sample 50" "csample 50" nodata
+* SAMP-04: under version 6 sample's old algorithm draws the same sample
+clear
+set obs 40
+gen long id = _n
+gen byte g = mod(_n, 4)
+sort g
+foreach pair in `"50"' `"25 if g < 2"' `"30 in 5/30"' `"50, by(g)"' `"50, count"' `"101"' ///
+    `"50, by(g) threads(2) verbose"' {
+    tempfile want
+    local npair : subinstr local pair " threads(2) verbose" ""
+    preserve
+    set seed 11
+    capture noisily version 6: sample `npair'
+    local want_rc = _rc
+    quietly save `want'
+    restore, preserve
+    set seed 11
+    capture noisily version 6: csample `pair'
+    local got_rc = _rc
+    capture cf _all using `want'
+    local same = !_rc & _N > 0
+    restore
+    if `same' & `got_rc' == `want_rc' test_pass "SAMP-04 version 6 draw: `pair'"
+    else test_fail "SAMP-04 version 6 draw: `pair'" "rc `got_rc' vs `want_rc', same data `same'"
+}
+_ct_same_output "SAMP-04 version 6 by prefix" "version 6: by g: sample 50" "version 6: by g: csample 50" nodata
+_ct_same_output "SAMP-04 version 6 count" "version 6: sample 50, count" "version 6: csample 50, count" nodata
 noi print_summary "csample"
 }
 

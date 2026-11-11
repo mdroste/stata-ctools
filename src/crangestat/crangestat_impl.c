@@ -36,6 +36,9 @@ ST_retcode crangestat_main(const char *args)
     if (!isfinite(config.interval_low) || !isfinite(config.interval_high)) return 198;
     config.low_is_missing = ctools_parse_bool_option(args, "low_miss");
     config.high_is_missing = ctools_parse_bool_option(args, "high_miss");
+    config.var_bounds = ctools_parse_bool_option(args, "varbounds");
+    config.low_src = (int)ctools_parse_double_option(args, "lowsrc", -1);
+    config.high_src = (int)ctools_parse_double_option(args, "highsrc", -1);
 
     /*
        Argument format:
@@ -687,22 +690,32 @@ ST_retcode crangestat_main(const char *args)
                 /* Without excludeself, equal keys have identical windows and
                  * results, including order statistics and first/last values.
                  * Reuse only within this group; missing keys stay untouched. */
-                if (!config.exclude_self && i > g_start && key_val == key_data[i - 1]) {
+                if (!config.exclude_self && !config.var_bounds && i > g_start &&
+                    key_val == key_data[i - 1]) {
                     for (size_t s = 0; s < nstats; s++)
                         result_data[s][i] = result_data[s][i - 1];
                     continue;
                 }
 
-                /* Compute window bounds */
-                double low_bound = config.low_is_missing ? -DBL_MAX : key_val + config.interval_low;
-                double high_bound = config.high_is_missing ? DBL_MAX : key_val + config.interval_high;
+                size_t win_start, win_end;
+                if (config.var_bounds) {
+                    /* Bounds per observation: windows need not move forward */
+                    crangestat_var_window(key_data, g_start, g_end,
+                                          source_data[config.low_src][i],
+                                          source_data[config.high_src][i],
+                                          &win_start, &win_end);
+                } else {
+                    /* Compute window bounds */
+                    double low_bound = config.low_is_missing ? -DBL_MAX : key_val + config.interval_low;
+                    double high_bound = config.high_is_missing ? DBL_MAX : key_val + config.interval_high;
 
-                /* Slide window pointers forward (O(1) amortized) */
-                while (win_lo < g_end && key_data[win_lo] < low_bound) win_lo++;
-                while (win_hi < g_end && key_data[win_hi] <= high_bound) win_hi++;
+                    /* Slide window pointers forward (O(1) amortized) */
+                    while (win_lo < g_end && key_data[win_lo] < low_bound) win_lo++;
+                    while (win_hi < g_end && key_data[win_hi] <= high_bound) win_hi++;
 
-                size_t win_start = win_lo;
-                size_t win_end = win_hi;
+                    win_start = win_lo;
+                    win_end = win_hi;
+                }
 
                 /* Compute each statistic for this observation */
                 for (size_t s = 0; s < nstats; s++) {
@@ -885,7 +898,8 @@ ST_retcode crangestat_main(const char *args)
              *
              * For small groups (< 1000 obs), skip run detection as overhead exceeds benefit.
              */
-            if (!config.exclude_self && g_count >= CRANGESTAT_RUN_OPT_THRESHOLD) {
+            if (!config.exclude_self && !config.var_bounds &&
+                g_count >= CRANGESTAT_RUN_OPT_THRESHOLD) {
                 /* First pass: identify run boundaries (starts of each unique key) */
                 size_t *run_starts = (size_t *)malloc((g_count + 1) * sizeof(size_t));
                 if (!run_starts) {
@@ -1088,15 +1102,23 @@ standard_obs_loop:;
 
                         for (size_t i = my_start; i < my_end; i++) {
                             double key_val = key_data[i];
-                            double low_bound = config.low_is_missing ? -DBL_MAX : key_val + config.interval_low;
-                            double high_bound = config.high_is_missing ? DBL_MAX : key_val + config.interval_high;
+                            size_t win_start, win_end;
+                            if (config.var_bounds) {
+                                crangestat_var_window(key_data, g_start, g_end_nonmiss,
+                                                      source_data[config.low_src][i],
+                                                      source_data[config.high_src][i],
+                                                      &win_start, &win_end);
+                            } else {
+                                double low_bound = config.low_is_missing ? -DBL_MAX : key_val + config.interval_low;
+                                double high_bound = config.high_is_missing ? DBL_MAX : key_val + config.interval_high;
 
-                            /* Slide window pointers forward */
-                            while (win_lo < g_end_nonmiss && key_data[win_lo] < low_bound) win_lo++;
-                            while (win_hi < g_end_nonmiss && key_data[win_hi] <= high_bound) win_hi++;
+                                /* Slide window pointers forward */
+                                while (win_lo < g_end_nonmiss && key_data[win_lo] < low_bound) win_lo++;
+                                while (win_hi < g_end_nonmiss && key_data[win_hi] <= high_bound) win_hi++;
 
-                            size_t win_start = win_lo;
-                            size_t win_end = win_hi;
+                                win_start = win_lo;
+                                win_end = win_hi;
+                            }
 
                             /* Compute each statistic for this observation */
                             for (size_t s = 0; s < nstats; s++) {

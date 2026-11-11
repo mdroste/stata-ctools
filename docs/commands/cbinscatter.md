@@ -18,7 +18,7 @@ comparison threshold.
 ## Syntax
 
 ```stata
-cbinscatter yvar xvar [if] [in] [weight] [, options]
+cbinscatter yvar [yvar ...] xvar [if] [in] [weight] [, options]
 ```
 
 ## Options
@@ -26,7 +26,7 @@ cbinscatter yvar xvar [if] [in] [weight] [, options]
 ### Main Options
 | Option | Description |
 |--------|-------------|
-| `nquantiles(#)` | Number of bins (default: 20, range: 2-1000) |
+| `nquantiles(#)` (`n()`) | Number of bins (default: 20, at least 2; all by() groups' bins must fit in `c(max_matdim)` rows). binscatter stops with r(198) above 100 quantile bins; cbinscatter forms them |
 | `controls(varlist)` | Control variables to partial out via OLS |
 | `absorb(varlist)` | Fixed effects to absorb via HDFE (numeric or string; any codes) |
 | `by(varname)` | Create separate series by group |
@@ -42,8 +42,17 @@ cbinscatter yvar xvar [if] [in] [weight] [, options]
 | Option | Description |
 |--------|-------------|
 | `discrete` | Treat x as discrete (one bin per unique value) |
-| `genxq(varname)` | Unsupported; rejected with r(198) before data processing |
-| `savedata(filename)` | Save bin data to Stata file |
+| `xq(varname)` | Bins given by the values (positive integers) of a variable, as binscatter's `xq()` |
+| `genxq(newvar)` | Store each observation's quantile bin, numbered as binscatter's `genxq()` numbers it |
+| `medians` | Plot bin medians (`_pctile`'s, weighted) instead of means |
+| `noaddmean` | Keep the residualized x and y without their means (with `controls()`/`absorb()`) |
+| `rd(numlist)` | Fit lines separately on each side of these x values; dashed lines at them |
+| `randvar(varname)`, `randcut(#)`, `randn(#)` | Quantile cutpoints from a random subsample, as binscatter's `fastxtile` (the same draws under the same seed) |
+| `savedata(filename)` | Without an extension: binscatter's `filename.csv` and `filename.do` (classic method), plus the bins in `filename.dta`; with an extension, or with `method(binsreg)`, the `.dta` file alone |
+| `replace` | Let `savedata()` and `savegraph()` overwrite files |
+
+`medians`, `noaddmean`, `rd()`, `xq()` and the random-subsample options are binscatter's (classic method) and
+are refused with `method(binsreg)`. All of them work with several y variables, `by()`, `controls()` and `absorb()`.
 
 ### Graph Options
 | Option | Description |
@@ -54,9 +63,28 @@ cbinscatter yvar xvar [if] [in] [weight] [, options]
 | `xtitle(string)` | X-axis title (default: variable name) |
 | `legend(string)` | Legend options |
 | `colors(string)` | Colors for series |
-| `msymbols(string)` | Marker symbols for series |
+| `mcolors(string)`, `lcolors(string)` | Marker and line colors for series, as in binscatter |
+| `savegraph(filename)` | `graph save` (.gph or no extension) or `graph export` the graph; needs `replace` to overwrite |
+| `msymbols(string)` (`m()`) | Marker symbols for series |
 | `mlabels(string)` | Text labels for the plotted series |
 | *twoway_options* | Additional options passed to `twoway` |
+
+### binscatter legacy options
+`nbins(#)`, `create_xq`, `x_q(varname)`, `symbols()`, `unique()` and `linetype(noline)` work as in
+binscatter 7.02, with its notes. With both an option and its legacy form binscatter shows its message
+and stops with r(0); cbinscatter shows the message and exits with r(198).
+
+### Differences from binsreg
+`method(binsreg)` computes binsreg's binned means on fixed quantile bins of the raw x. binsreg was not
+installed to verify against, so these binsreg features are not provided: IMSE-optimal bins
+(`nbins()` selection, `binsmethod()`, `nbinsrot()`, `binspos()`, `pselect()`/`sselect()`), `dots(p s)`
+with p > 0, `line()`, `ci()`, `cb()`, `deriv()`, `at()`, `vce()`, `level()`, `nsims()`; `polyreg(p)` above 3
+(at most `linetype(cubic)`); `samebinsby`, `bycolors()`, `bysymbols()`, `bylpatterns()` (each group is
+binned on its own; series take `colors()`, `mcolors()`, `lcolors()`, `msymbols()`); `masspoints()`,
+`dfcheck()`, `noplot` (use `nograph`), `plotxrange()`/`plotyrange()` (use `xscale()`/`yscale()`),
+`reghdfeopt()`, binsreg's `savedata()` layout, and binsreg's `e()` results. binsreg's positional controls
+(`binsreg y x w1 w2`) go in `controls(w1 w2)`: more than two variables are several y and one x, as in
+binscatter.
 
 ### Reporting Options
 | Option | Description |
@@ -149,25 +177,36 @@ With `verbose`, you'll see time spent in:
 | `e(N_dropped)` | Observations dropped (missing values) |
 | `e(nquantiles)` | Number of bins |
 | `e(num_groups)` | Number of by-groups |
+| `e(discrete)` | 1 if the bins are the values of x |
 
 ### Macros
 | Result | Description |
 |--------|-------------|
 | `e(cmd)` | `cbinscatter` |
 | `e(cmdline)` | Command as typed |
-| `e(depvar)` | Y variable |
+| `e(depvar)` | Y variable (variables) |
 | `e(xvar)` | X variable |
 | `e(controls)` | Control variables |
 | `e(absorb)` | Absorbed fixed effects |
 | `e(by)` | By variable |
 | `e(linetype)` | Fit line type |
+| `e(rd)` | With `rd()`, the break points |
+| `e(graphcmd)` | The `twoway` command that drew the graph |
 
 ### Matrices
 | Result | Description |
 |--------|-------------|
 | `e(bindata)` | Bin statistics: by_group, bin_id, x_mean, y_mean, x_se, y_se, n_obs |
-| `e(coefs)` | Fit line coefficients per by-group: constant, x, x^2, x^3 (if linetype specified) |
+| `e(coefs)` | Fit line coefficients per by-group (and `rd()` interval): constant, x, x^2, x^3 (if linetype specified) |
 | `e(fit_stats)` | R-squared and number of observations of each fit |
+| `e(rdintervals)` | With `rd()`, each interval's bounds (`gt`, `lt_eq`), as in binscatter |
+| `e(y#_coefs)` | binscatter's fit coefficients of the #th y: x terms from the highest power, `_cons`; rows `by#:rd#` |
+| `e(byvalues)` | With a numeric `by()`, its values (rows `by1`, `by2`, ...), as in binscatter |
+
+### Functions
+| Result | Description |
+|--------|-------------|
+| `e(sample)` | The estimation sample, as in binscatter |
 
 ## How Binning Works
 

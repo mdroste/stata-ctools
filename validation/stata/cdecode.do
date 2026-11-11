@@ -895,11 +895,7 @@ forvalues i = 1/7 {
     else label define x_lbl `i' "`lbl'", add
 }
 label values x x_lbl
-cdecode x, generate(x_str)
-count if x_str == "cycle_1"
-* 1000/7 = 142 or 143
-if r(N) >= 142 & r(N) <= 143 test_pass "cyclic pattern"
-else test_fail "cyclic" "wrong count"
+benchmark_decode x, testname("cyclic pattern: every decoded label")
 
 * Test 10.7: Sparse data (mostly missing)
 clear
@@ -1886,11 +1882,8 @@ forvalues i = 1/10 {
     else label define x_lbl `i' "cat_`i'", add
 }
 label values x x_lbl
-cdecode x if value > 0.9 in 1/25000, generate(x_str)
-count if x_str != ""
-* Should be approximately 2500 (10% of 25000)
-if r(N) > 2000 & r(N) < 3000 test_pass "if and in on large dataset"
-else test_fail "large if/in" "unexpected count: `=r(N)'"
+benchmark_decode x, if2("value > 0.9") in2("1/25000") ///
+    testname("if and in on large dataset: exact rows and labels")
 
 * SECTION 27: Replace option tests
 print_section "Replace Option"
@@ -2291,6 +2284,110 @@ cdecode n, replace
 if "`: char n[note1]'" == "from source" & "`: char n[g3]'" == "kept" test_pass "DATA-11 cdecode replace keeps notes and chars"
 else test_fail "DATA-11 cdecode replace keeps notes and chars" "lost"
 
+* _ct_output runs a command and returns its output (r(text), lines joined
+* by |) and return code (r(rc)). _ct_same_output runs a native and a ctools
+* command on copies of the data in memory and passes when the output, return
+* code, variable names and types, and (unless "nodata") values agree.
+capture program drop _ct_output
+program define _ct_output, rclass
+    tempfile f
+    tempname fh
+    capture log close _ctout
+    quietly log using `"`f'"', text replace name(_ctout)
+    capture noisily `0'
+    local rc = _rc
+    quietly log close _ctout
+    local text
+    file open `fh' using `"`f'"', read text
+    file read `fh' line
+    while !r(eof) {
+        if `"`macval(line)'"' != "" & substr(`"`macval(line)'"', 1, 5) != "r; t=" {
+            local text `"`macval(text)'`macval(line)'|"'
+        }
+        file read `fh' line
+    }
+    file close `fh'
+    return local text `"`macval(text)'"'
+    return scalar rc = `rc'
+end
+capture program drop _ct_same_output
+program define _ct_same_output
+    args name native ctools nodata
+    tempfile want
+    preserve
+    _ct_output `native'
+    local want_text `"`r(text)'"'
+    local want_rc = r(rc)
+    local want_vars
+    local want_types
+    forvalues j = 1/`c(k)' {
+        mata: st_local("v", st_varname(`j'))
+        local want_vars `want_vars' `v'
+        local want_types `want_types' `: type `v''
+    }
+    capture quietly save `"`want'"', emptyok
+    restore, preserve
+    _ct_output `ctools'
+    local got_text `"`r(text)'"'
+    local got_rc = r(rc)
+    local got_vars
+    local got_types
+    forvalues j = 1/`c(k)' {
+        mata: st_local("v", st_varname(`j'))
+        local got_vars `got_vars' `v'
+        local got_types `got_types' `: type `v''
+    }
+    local same_data = 1
+    if "`nodata'" == "" & "`got_vars'" != "" {
+        capture cf _all using `"`want'"'
+        local same_data = !_rc
+    }
+    restore
+    if "`nodata'" != "" {
+        local want_vars
+        local got_vars
+        local want_types
+        local got_types
+    }
+    if `"`macval(want_text)'"' == `"`macval(got_text)'"' & `want_rc' == `got_rc' & ///
+        "`want_vars'" == "`got_vars'" & "`want_types'" == "`got_types'" & `same_data' {
+        test_pass "`name'"
+    }
+    else {
+        noisily di as error `"`name': ctools [`macval(got_text)'] rc `got_rc' vars `got_vars' (`got_types')"'
+        noisily di as error `"`name': native [`macval(want_text)'] rc `want_rc' vars `want_vars' (`want_types') same data `same_data'"'
+        test_fail "`name'" "output, return code, variables or data differ from the native command"
+    }
+end
+* DEC-01, DEC-02: decode's messages and return codes; the caller's r() is
+* kept (cdecode adds r(N_vars) and r(N_plugin))
+sysuse auto, clear
+_ct_same_output "DEC-01 string source message" "decode make, gen(bad)" "cdecode make, gen(bad)"
+_ct_same_output "DEC-01 unlabeled source message" "decode price, gen(bad)" "cdecode price, gen(bad)"
+_ct_same_output "DEC-01 labeled source output" "decode foreign, gen(dec)" "cdecode foreign, gen(dec)"
+quietly summarize price
+local mean = r(mean)
+local sd = r(sd)
+decode foreign, gen(native_str)
+local native_ok = r(mean) == `mean' & r(sd) == `sd'
+quietly summarize price
+cdecode foreign, gen(got_str)
+if `native_ok' & r(mean) == `mean' & r(sd) == `sd' & r(N_vars) == 1 & !missing(r(N_plugin)) {
+    test_pass "DEC-02 caller r() kept after cdecode"
+}
+else test_fail "DEC-02 caller r() kept after cdecode" "r(mean)=`r(mean)' r(N_vars)=`r(N_vars)'"
+quietly summarize price
+capture cdecode make, gen(bad)
+local rc = _rc
+if `rc' == 108 & r(mean) == `mean' & r(sd) == `sd' test_pass "DEC-02 caller r() kept after a failure"
+else test_fail "DEC-02 caller r() kept after a failure" "rc=`rc' r(mean)=`r(mean)'"
+quietly summarize price
+cdecode foreign if price > r(mean), gen(rich)
+count if rich != ""
+local n_rich = r(N)
+count if price > `mean'
+if `n_rich' == r(N) test_pass "DEC-02 if may name the caller's r()"
+else test_fail "DEC-02 if may name the caller's r()" "`n_rich' decoded"
 * SUMMARY
 * End of cdecode validation
 noi print_summary "cdecode"

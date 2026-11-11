@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.4 20261103}{...}
+{* *! version 1.2.6 20261111}{...}
 {viewerjumpto "Syntax" "cexport##syntax"}{...}
 {viewerjumpto "Description" "cexport##description"}{...}
 {viewerjumpto "Options" "cexport##options"}{...}
@@ -47,8 +47,8 @@
 {synopt:{opt replace}}overwrite existing file{p_end}
 
 {syntab:Formatting}
-{synopt:{opt novarnames}}do not write variable names as header row{p_end}
-{synopt:{opt quote}}quote all string fields{p_end}
+{synopt:{opt novar:names}}do not write variable names as header row{p_end}
+{synopt:{opt q:uote}}quote all string fields{p_end}
 {synopt:{opt noquoteif}}do not automatically quote strings containing delimiters{p_end}
 {synopt:{opt nolabel}}export values instead of value labels{p_end}
 {synopt:{opt datafmt}}export numeric variables using their display formats{p_end}
@@ -71,7 +71,7 @@
 {synopthdr:excel options}
 {synoptline}
 {syntab:Main}
-{synopt:{opt sheet(name[, modify|replace])}}worksheet name and update mode; default is "Sheet1"{p_end}
+{synopt:{opt sh:eet(name[, modify|replace])}}worksheet name and update mode; default is "Sheet1"{p_end}
 {synopt:{opt cell(start)}}starting cell for export; default is "A1"{p_end}
 {synopt:{opt replace}}overwrite existing file{p_end}
 
@@ -79,8 +79,8 @@
 {synopt:{opt firstrow(variables|varlabels)}}write column headers; default writes data in the first row{p_end}
 {synopt:{opt nolabel}}export values instead of value labels{p_end}
 {synopt:{opt datafmt}}export date/time variables using their display formats{p_end}
-{synopt:{opt datestring(fmt)}}custom format for date/time variables{p_end}
-{synopt:{opt missing(string)}}replacement value for missing data; default is empty cell{p_end}
+{synopt:{opt date:string(fmt)}}custom format for date/time variables{p_end}
+{synopt:{opt miss:ing(string)}}replacement value for missing data; default is empty cell{p_end}
 {synopt:{opt keepcellfmt}}retain existing cell formats when modifying a worksheet{p_end}
 
 {syntab:Reporting}
@@ -93,7 +93,10 @@
 {title:Description}
 
 {pstd}
-{cmd:cexport} writes delimited text, Excel (.xls and .xlsx), dBase, SAS7BDAT,
+{cmd:cexport} writes delimited text, Excel (.xls and .xlsx; as with
+{cmd:export excel}, a file name without an extension gets .xlsx, one ending in
+.xls is a binary workbook, and any other name, such as .xlsm or .xltx, is kept
+and holds an .xlsx workbook), dBase, SAS7BDAT,
 SAS XPORT5/8, SPSS SAV, and ESRI shapefiles. It uses C routines for file
 formatting and writing. Unless a variable list or {cmd:if}/{cmd:in} is
 specified, all variables and observations are exported. Shapefile export
@@ -229,16 +232,24 @@ instead of their value labels.
 {opt missing(string)} specifies a string value to use for missing data.
 By default, missing values are exported as empty cells. For example,
 {cmd:missing("NA")} exports all missing values as "NA", and {cmd:missing(".")}
-exports them as periods.
+exports them as periods. As with {cmd:export excel}, the string holds at most
+16 bytes, and it is written as a number when it is a decimal number
+({cmd:missing("99")}), otherwise as text.
+
+{pstd}
+Text is written as {cmd:export excel} writes it. A carriage return is written
+as it is, and Excel and {cmd:import excel} read it, or a carriage return and
+line feed, as a line feed; other control characters are written as
+{cmd:_x}{it:HHHH}{cmd:_} escapes.
 
 {phang}
 {opt keepcellfmt} retains existing formats for cells overwritten by
 {cmd:sheet(name, modify)}; variables with {cmd:%t} formats still receive their
 formats. Without it, overwritten cells receive the export's formats. As with
 {cmd:export excel}, other numbers then receive no number format, in a new
-workbook too. With whole-workbook {opt replace},
-it retains style definitions but not the old cells, their format assignments,
-or other worksheets; use sheet modification to retain an existing layout.
+workbook too. With whole-workbook {opt replace}, nothing of the old workbook is
+kept (no cells, formats or other worksheets), as with {cmd:export excel}; use
+sheet modification to retain an existing layout.
 
 {phang}
 {opt datafmt} writes date/time variables as strings in their Stata display
@@ -248,7 +259,9 @@ Without them, dates are converted to Excel date values and assigned date
 formats; see {help cexport##remarks:Remarks}.
 
 {phang}
-{opt locale(name)} is accepted for compatibility and has no effect.
+{opt locale(name)} is accepted and needs no effect: Stata uses it to translate
+extended ASCII text (and ignores it on Windows), while {cmd:cexport} writes text
+as Unicode (UTF-8 in .xlsx files, UTF-16 in .xls files).
 
 
 {dlgtab:Reporting}
@@ -272,7 +285,7 @@ The default follows the {help ctools##threads:ctools thread setting}.
 {synopt:{cmd:dbase}}.dbf files; {opt version(3)}, {opt datafmt}, {opt origdbfdate}{p_end}
 {synopt:{cmd:sas}}.sas7bdat files{p_end}
 {synopt:{cmd:spss}}.sav files; {opt novallabels}{p_end}
-{synopt:{cmd:sasxport5}}.xpt files; {opt rename}, {opt vallabfile(xpf|sascode|both|none)}{p_end}
+{synopt:{cmd:sasxport5}}.xpt files; {opt rename}, {opt val:labfile(xpf|sascode|both|none)}{p_end}
 {synopt:{cmd:sasxport8}}.v8xpt files; {opt vallabfile}{p_end}
 
 {pstd}

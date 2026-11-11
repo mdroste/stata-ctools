@@ -190,4 +190,12 @@ stata_retcode ctools_store_filtered_rowpar(double *values, size_t n_filtered, in
 stata_retcode ctools_store_filtered_str(char **strings, size_t n_filtered, int var_idx,
                                         perm_idx_t *obs_map);
 
+/*
+    1 when the loaders can read observation obs of strL variable var_idx: text
+    of at most 2,045 bytes. Every load refuses binary values and longer text
+    (error 109), so the ado files check first and give such keys numbers of
+    their own (_ctools_strlkey.ado).
+*/
+int ctools_io_strl_readable(int var_idx, int obs);
+
 #endif /* CTOOLS_DATA_IO_H */
