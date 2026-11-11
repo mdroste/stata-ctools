@@ -617,6 +617,7 @@ int main(int argc, char **argv) {
 #if defined(CTOOLS_CASE_memory_iv)
 /* Full IV command: injected allocations must fail cleanly or preserve estimates. */
 #include "alloc.h"
+#include "ctools_alloc.h"
 #include "ctools_types.h"
 #include "stplugin.h"
 #include <math.h>
@@ -715,7 +716,7 @@ void ctools_filtered_data_free(ctools_filtered_data *data)
     for (size_t j = 0; j < data->data.nvars; j++)
         free(data->data.vars[j].data.dbl);
     free(data->data.vars);
-    free(data->obs_map);
+    ctools_aligned_free(data->obs_map);
     memset(data, 0, sizeof(*data));
 }
 stata_retcode ctools_data_load(ctools_filtered_data *data, int *indices, size_t n, size_t start,
@@ -730,7 +731,7 @@ stata_retcode ctools_data_load(ctools_filtered_data *data, int *indices, size_t 
         return STATA_ERR_MEMORY;
     data->data.nvars = n;
     data->data.nobs = OBS;
-    data->obs_map = malloc(OBS * sizeof(perm_idx_t));
+    data->obs_map = ctools_cacheline_alloc(OBS * sizeof(perm_idx_t));
     if (!data->obs_map)
         return STATA_ERR_MEMORY;
     for (int i = 0; i < OBS; i++)
