@@ -55,6 +55,14 @@ int main(void) {
     assert(!strcmp(cimport_detect_charset("id,text\n1,first\n2,second\n",25),"ISO-8859-1"));
     const char utf32bom[]={ (char)0xff,(char)0xfe,0,0,'a',0,0,0 };
     assert(!strcmp(cimport_detect_charset(utf32bom,sizeof(utf32bom)),"UTF-32LE"));
+    assert(!cimport_convert_named_to_utf8(utf32bom, sizeof(utf32bom), "UTF-32",
+                                         &converted, &converted_size));
+    assert(converted_size == 1 && !strcmp(converted, "a"));
+    free(converted);
+    assert(!cimport_convert_named_to_utf8(utf32, sizeof(utf32), "UTF-32",
+                                         &converted, &converted_size));
+    assert(converted_size == 2 && !strcmp(converted, "ab"));
+    free(converted);
     /* Prefixes and random byte buffers exercise every recognizer under ASan. */
     char sample[16000];uint32_t seed=17;
     for(size_t i=0;i<sizeof(sample);i++) {

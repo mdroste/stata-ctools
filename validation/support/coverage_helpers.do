@@ -682,8 +682,11 @@ program define coverage_export_bytes
     if !`nr' & !`cr' {
         mata: ref_bytes=coverage_read_bytes(st_local("refcsv"))
         mata: got_bytes=coverage_read_bytes(st_local("gotcsv"))
+        // Stata's native export uses CRLF on Windows. These fixtures have no
+        // embedded newlines, so adapt the reference to cexport's requested line endings.
+        mata: ref_bytes=subinstr(ref_bytes,char(13)+char(10),char(10))
         if "`crlf'"!="" {
-            mata: ref_bytes=subinstr(ref_bytes,char(13)+char(10),char(10)); ref_bytes=subinstr(ref_bytes,char(10),char(13)+char(10))
+            mata: ref_bytes=subinstr(ref_bytes,char(10),char(13)+char(10))
         }
         mata: st_local("same",strofreal(ref_bytes==got_bytes))
     }

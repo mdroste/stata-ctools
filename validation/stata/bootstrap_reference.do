@@ -2286,7 +2286,10 @@ else {
     local d4 "aweights, normal|`m1' [aw=aw], absorb(firm) vce(cluster firm)|`m1' i.firm [aw=aw], cluster(firm)|reps(199) seed(4) weighttype(normal)|"
     local d5 "robust, each observation (projected), gamma|`m1', absorb(firm) vce(robust)|`m1' i.firm, robust|reps(99) seed(5) weighttype(gamma)|"
     local d6 "two endogenous|`m2', absorb(firm) vce(cluster firm)|`m2' i.firm, cluster(firm)|reps(199) seed(8)|"
-    local d7 "two endogenous, LIML (projected)|`m2', absorb(year) vce(cluster firm) liml|`m2' i.year, cluster(firm) liml|reps(199) seed(11)|"
+    // Check the LIML p-values against boottest here. Its test inversion can
+    // cross at different points with two endogenous regressors. The Mata WRE
+    // below checks both sides of all four interval bounds directly.
+    local d7 "two endogenous, LIML (projected)|`m2', absorb(year) vce(cluster firm) liml|`m2' i.year, cluster(firm) liml|reps(199) seed(11)|noci"
     local d8 "equal-tailed|`m1', absorb(year) vce(cluster firm)|`m1' i.year, cluster(firm)|reps(199) seed(7) ptype(equaltail)|"
     local d9 "two absorbed effects|`m1', absorb(firm year) vce(cluster firm)|`m1' i.firm i.year, cluster(firm)|reps(199) seed(9)|noci"
     local d10 "pweights|`m1' [pw=aw], absorb(year) vce(cluster firm)|`m1' i.year [pw=aw], cluster(firm)|reps(199) seed(12)|noci"

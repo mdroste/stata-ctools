@@ -715,7 +715,7 @@ int cimport_convert_named_to_utf8(const char *data, size_t size, const char *nam
     if (!strcmp(canonical,"utf-32")) {
         CImportEncodingDetection detected=cimport_detect_encoding(data,size);
         strcpy(canonical,detected.bom_length==4 && detected.encoding==CIMPORT_ENC_UTF32LE
-            ? "UTF-32LE" : "UTF-32BE");
+            ? "utf-32le" : "utf-32be");
     }
     if (!strcmp(canonical,"utf32le") || !strcmp(canonical,"utf32be") ||
         !strcmp(canonical,"utf16be")) return 198;
