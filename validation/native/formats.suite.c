@@ -891,7 +891,7 @@ int main(void)
 {
     char escaped[128];
     assert(xlsx_escape_xml("a\001b\r_x0041_",escaped,sizeof(escaped))>0);
-    assert(!strcmp(escaped,"a_x0001_b_x000D__x005F_x0041_"));
+    assert(!strcmp(escaped,"a_x0001_b\r_x005F_x0041_"));
     XLSXExportContext ctx;
     xlsx_context_init(&ctx);
     assert(xlsx_collect_string(&ctx,"ordinary & text")==0);

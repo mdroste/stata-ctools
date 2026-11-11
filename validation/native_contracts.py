@@ -367,12 +367,14 @@ def test_hdfe_failures_native():
         def run(binary, *args):
             result = subprocess.run(
                 [str(binary), *map(str, args)],
-                check=True,
-                capture_output=True,
+                stdout=subprocess.PIPE,
                 text=True,
                 env=env,
                 timeout=30,
             )
+            if result.returncode:
+                print(result.stdout, flush=True)
+                result.check_returncode()
             return int(re.search("allocations=(\\d+)", result.stdout)[1])
 
         iv = build("iv")

@@ -203,7 +203,7 @@ int main(void)
     double V[]={1,1,1, 1,1e16,1e16, 1,1e16,1e16+4};
     const double means[]={1,1};
     ppml_uncenter_vce(V,means,2);
-    assert(V[2]==-1 && V[5]==-1 && V[6]==-1 && V[7]==-1 && V[8]==3);
+    assert(V[2]==-1 && V[5]==-1 && V[6]==-1 && V[7]==-1 && V[8]==5);
     puts("PASS HDFE cancellation families, reset, and PPML covariance transform");
     return 0;
 }

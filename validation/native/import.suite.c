@@ -293,7 +293,7 @@ static void free_cells(Cell *data, size_t count)
 }
 
 static void compare(const char *path, int mode, int empty, bool header, int skip,
-                    bool expected_stream, int threads)
+                    bool expected_stream, bool expected_compact, int threads)
 {
     ctools_set_max_threads(threads);
     stream_threshold = SIZE_MAX;
@@ -349,7 +349,12 @@ static void compare(const char *path, int mode, int empty, bool header, int skip
         CImportContext *compact =
             cimport_parse_csv(path, ',', header, skip, false, mode, CIMPORT_NUMTYPE_AUTO, '.', 0,
                               empty, 0, CIMPORT_ENC_UNKNOWN, NULL, 0, NULL, 0);
-        assert(compact && compact->compact_rows == expected_stream);
+        if (!compact || compact->compact_rows != expected_compact)
+            fprintf(stderr, "compact mismatch mode=%d empty=%d header=%d skip=%d trial=%zu "
+                            "expected=%d actual=%d columns=%d\n",
+                    mode, empty, header, skip, trial, expected_compact,
+                    compact ? compact->compact_rows : -1, a->num_columns);
+        assert(compact && compact->compact_rows == expected_compact);
         assert(compact->total_rows == a->total_rows && compact->num_columns == a->num_columns);
         assert(!memcmp(a->columns, compact->columns, (size_t)a->num_columns * sizeof(*a->columns)));
         assert(atomic_load(&compact->cache_budget.used) <= cache_budget);
@@ -511,7 +516,9 @@ int main(void)
             for (int empty = 0; empty < 2; empty++)
             {
                 bool stream = i != 5 && i != 6 && !(mode == 2 && (i == 0 || i == 4));
-                compare(path, mode, empty, i != 8, 0, stream, 1);
+                /* The compact cache supports strL columns. Header-only
+                 * streaming falls back to retained rows for that fixture. */
+                compare(path, mode, empty, i != 8, 0, stream, stream || i == 6, 1);
             }
         }
     }
@@ -523,17 +530,17 @@ int main(void)
         fprintf(f, "%d,%.9f,\"quoted, text\"%s", i, i * .012345, i == 99999 ? "" : "\r\n\n");
     fclose(f);
     for (int mode = 0; mode < 3; mode++)
-        compare(path, mode, 0, true, 0, mode != 2, 4);
+        compare(path, mode, 0, true, 0, mode != 2, mode != 2, 4);
     strcpy(first, "5");
     strcpy(last, "15");
-    compare(path, 0, 0, true, 0, false, 4);
+    compare(path, 0, 0, true, 0, false, false, 4);
     first[0] = last[0] = 0;
-    compare(path, 0, 0, true, 4, true, 4);
+    compare(path, 0, 0, true, 4, true, true, 4);
     strcpy(strip, "no");
-    compare(path, 0, 0, true, 0, true, 4);
+    compare(path, 0, 0, true, 0, true, true, 4);
     strip[0] = 0;
     strcpy(locale, "en_US");
-    compare(path, 0, 0, true, 0, true, 4);
+    compare(path, 0, 0, true, 0, true, true, 4);
     locale[0] = 0;
     /* colrange(): retained, streamed and compact rows store the same selected
      * columns as variables 1.., with or without an end column. */
@@ -543,7 +550,7 @@ int main(void)
         strcpy(startcol, ranges[k][0]);
         strcpy(endcol, ranges[k][1]);
         for (int mode = 0; mode < 3; mode++)
-            compare(path, mode, 0, true, 0, mode != 2, 4);
+            compare(path, mode, 0, true, 0, mode != 2, mode != 2, 4);
     }
     startcol[0] = endcol[0] = 0;
     /* Later blocks change the final storage type: preserve original numeric
@@ -557,7 +564,7 @@ int main(void)
             fprintf(f, "%d,0.12345678901234567,x\n", i);
         fprintf(f, "10000,%s,last\n", text ? "00012x" : "5000000000000.5");
         fclose(f);
-        compare(path, 0, 0, true, 0, true, 1);
+        compare(path, 0, 0, true, 0, true, true, 1);
     }
     assert(released_sources && retained_sources);
     unlink(path);

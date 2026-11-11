@@ -778,7 +778,7 @@ int main(int argc, char **argv)
     two_fe = argc > 3 ? atoi(argv[3]) : 0;
     singleton = argc > 4 ? atoi(argv[4]) : 0;
     int save_failure = argc > 5 ? atoi(argv[5]) : 0;
-    const char *missing = argc > 6 ? argv[6] : NULL;
+    const char *unset_scalar = argc > 6 ? argv[6] : NULL;
     host.nobs1 = one;
     host.nobs2 = obs;
     host.nobs = obs;
@@ -798,7 +798,7 @@ int main(int argc, char **argv)
     calls = 0;
     save_at = save_failure;
     save_calls = 0;
-    missing_scalar = missing;
+    missing_scalar = unset_scalar;
     coefficient = variance = sample_size = NAN;
     int rc = do_iv_regression();
     printf("failure=%d rc=%d allocations=%d alive=%d b=%.17g expected=%.17g\n", failure, rc,
