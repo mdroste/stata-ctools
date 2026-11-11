@@ -559,6 +559,11 @@ ST_retcode cexport_xls_main(const char *args) {
     if ((rc = existing ? xe_compound(out, filename, oldbook, biff, (size_t)bytes)
                        : compound(out, biff, (size_t)bytes)))
         goto done;
+    /* Release the source handle before replacing the workbook on Windows. */
+    if (oldbook) {
+        xls_close_WB(oldbook);
+        oldbook = NULL;
+    }
     if (fclose(out)) {
         out = NULL;
         rc = 603;

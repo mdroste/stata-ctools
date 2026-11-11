@@ -1301,12 +1301,20 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
         : requested_encoding != CIMPORT_ENC_UNKNOWN
             ? cimport_encoding_name(requested_encoding)
             : cimport_detect_charset(ctx->file_data, ctx->file_size);
-    /* A Java charset name or alias given in encoding() is reported by its
-     * charset's name (latin1 as ISO-8859-1). */
+    const char *reported_encoding = source_encoding;
+#ifdef _WIN32
+    /* Windows Stata preserves the option spelling except for lowercase latin1. */
+    if (explicit_encoding && !strcmp(source_encoding, "latin1"))
+        reported_encoding = "ISO-8859-1";
+#else
+    /* On macOS and Linux Stata reports the canonical Java charset name. */
     const char *java_name =
         explicit_encoding ? cimport_java_charset(source_encoding) : NULL;
+    if (java_name)
+        reported_encoding = java_name;
+#endif
     snprintf(ctx->reported_encoding, sizeof(ctx->reported_encoding), "%s",
-             java_name ? java_name : source_encoding);
+             reported_encoding);
     ctx->encoding = cimport_parse_encoding_name(source_encoding);
     CImportByteScan bytes = cimport_scan_bytes(ctx->file_data, ctx->file_size);
     /* These stateless encodings preserve every ASCII byte. The detector can

@@ -550,12 +550,14 @@ foreach book in norcells norboth nostyles {
     }
     cio_record "xlsx modify of positions_`book' matches native" `rc'
 }
-* Text that is not valid UTF-8 fails like native, keeping the destination.
+* Reject invalid UTF-8 without changing the destination. Windows Stata can
+* accept the invalid byte, while native export on other platforms rejects it.
 clear
 quietly set obs 2
 gen str10 s=cond(_n==1,"caf"+char(233),"ok")
 capture noisily export excel using "`root'/invalid_utf8_native.xlsx", replace
 local nr=_rc
+if c(os) != "Windows" assert `nr' == 9901
 quietly export excel using "`root'/invalid_utf8.xlsx" in 2, replace
 quietly checksum "`root'/invalid_utf8.xlsx"
 local before=r(checksum)
@@ -565,7 +567,7 @@ foreach mode in replace modify {
     capture noisily cexport excel using "`root'/invalid_utf8.xlsx", `opt'
     local cr=_rc
     quietly checksum "`root'/invalid_utf8.xlsx"
-    cio_record "xlsx invalid UTF-8 `mode' fails like native" `=cond(`nr'==9901 & `cr'==9901 & r(checksum)==`before',0,9)'
+    cio_record "xlsx invalid UTF-8 `mode' leaves the workbook unchanged" `=cond(`cr'==9901 & r(checksum)==`before',0,9)'
 }
 * XLS modify of a worksheet that embeds a chart substream: the chart is kept
 * and both sheets stay readable. (Native's own edit of this file empties them.)
@@ -1827,8 +1829,9 @@ end
 
 program define io_export_case
     syntax, NAME(string) [OPTS(string asis) SELECT(string asis)]
+    local lineending = cond(c(os) == "Windows", "crlf", "")
     quietly export delimited `select' using "temp/io_parity/reference.csv", replace `opts'
-    capture noisily cexport delimited `select' using "temp/io_parity/result.csv", replace `opts'
+    capture noisily cexport delimited `select' using "temp/io_parity/result.csv", replace `opts' `lineending'
     local rc = _rc
     if !`rc' {
         mata: st_local("identical", strofreal(io_samefile("temp/io_parity/reference.csv", "temp/io_parity/result.csv")))
@@ -1879,12 +1882,13 @@ io_export_case, name("forced quoting") opts(quote)
 io_export_case, name("tab delimiter") opts(delimiter(tab))
 * Compare bytes: auto-detecting an import can conceal the wrong delimiter.
 local tab=char(9)
+local lineending = cond(c(os) == "Windows", "crlf", "")
 foreach delimiter in " " "`tab'" "tab" "," ";" {
     io_export_case, name("literal delimiter bytes") opts(delimiter("`delimiter'"))
     io_export_case, name("literal delimiter quoted selected bytes") opts(delimiter("`delimiter'") novarnames quote) select(d s if _n>1 in 1/5)
     quietly export delimited d s using "temp/io_parity/reference.csv", delimiter("`delimiter'") replace
     capture erase "temp/io_parity/new.csv"
-    cexport delimited d s using "temp/io_parity/new.csv", delimiter("`delimiter'") threads(2)
+    cexport delimited d s using "temp/io_parity/new.csv", delimiter("`delimiter'") threads(2) `lineending'
     mata: assert(io_samefile("temp/io_parity/reference.csv","temp/io_parity/new.csv"))
 }
 format d %20.5f
