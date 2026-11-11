@@ -681,6 +681,11 @@ static ST_retcode matrix(char *key, ST_int row, ST_int col, double value)
         variance = value;
     return 0;
 }
+static ST_int absent_matrix(char *name)
+{
+    (void)name;
+    return 0;
+}
 static ST_boolean missing(double x)
 {
     return x >= 8.98846567431158e307;
@@ -788,6 +793,8 @@ int main(int argc, char **argv)
     host.spoutsml = message;
     host.matstore = matrix;
     host.safematstore = matrix;
+    host.rowsof = absent_matrix;
+    host.colsof = absent_matrix;
     host.ismissing = missing;
     host.missval = 8.98846567431158e307;
     assert(do_iv_regression() == 0);
