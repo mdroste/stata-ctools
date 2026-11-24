@@ -201,6 +201,7 @@ static int parse_stata_hex(const char *s, int len, double *out)
  * with percent), trim, keep "", "." and ".a"-".z" as missing values, apply
  * dpcomma, then parse like real(). Returns 0 for a nonnumeric value, which is
  * stored as missing; without force the ado then leaves the variable untouched.
+ * Returns -1 for allocation failure, which must never be treated as bad text.
  */
 static int convert_value(const char *src, const cdestring_options *opts,
                          double missval, double *out)
@@ -285,12 +286,17 @@ static int convert_value(const char *src, const cdestring_options *opts,
      * "NA"/"NaN" as missing, which destring counts as nonnumeric. Finite
      * values below -maxdouble stay numbers, as real() keeps them. */
     double val;
-    if (!ctools_parse_double_fast(s, len, &val, missval)) {
+    ctools_number_status parsed = ctools_parse_double_status(s, len, &val, missval);
+    if (parsed == CTOOLS_NUMBER_MEMORY) return -1;
+    if (parsed == CTOOLS_NUMBER_INVALID) {
         char dexp[CDESTRING_STR_BUF_SIZE + 1];
         if (len > CDESTRING_STR_BUF_SIZE) return 0;
         memcpy(dexp, s, (size_t)len);
-        if (!d_exponent_to_e(dexp, len) ||
-            !ctools_parse_double_fast(dexp, len, &val, missval)) {
+        parsed = d_exponent_to_e(dexp, len)
+                     ? ctools_parse_double_status(dexp, len, &val, missval)
+                     : CTOOLS_NUMBER_INVALID;
+        if (parsed == CTOOLS_NUMBER_MEMORY) return -1;
+        if (parsed == CTOOLS_NUMBER_INVALID) {
             if (!parse_stata_hex(s, len, &val)) return 0;
             if (val >= missval) {
                 /* Native destring counts these as nonnumeric, but force
@@ -423,15 +429,36 @@ static int parse_options(const char *args, cdestring_options *opts)
         free(indices);
     }
 
-    /* Parse ignore= with escape sequence handling */
+    /* The ado passes raw bytes through a local macro, never command syntax.
+     * Keep ignore= for older callers and native fixtures. */
+    int raw_len = 0;
+    int raw_rc = ctools_parse_int_option(args, "ignorelen", &raw_len);
+    if (raw_rc < 0 || raw_len < 0 || raw_len == INT_MAX) {
+        free(opts->src_indices);
+        free(opts->dst_indices);
+        return -1;
+    }
     const char *ignore = strstr(args, "ignore=");
-    size_t capacity = ignore ? strcspn(ignore + 7, " \t") + 1 : 1;
-    if (capacity > INT_MAX || !(opts->ignore_chars = malloc(capacity))) {
+    size_t capacity = raw_rc == CTOOLS_PARSE_OK ? (size_t)raw_len + 1
+                       : ignore ? strcspn(ignore + 7, " \t") + 1 : 1;
+    if (capacity > INT_MAX || !(opts->ignore_chars = calloc(capacity, 1))) {
         free(opts->src_indices);
         free(opts->dst_indices);
         return -2;
     }
-    opts->ignore_len = parse_ignore_option(args, opts->ignore_chars, (int)capacity);
+    if (raw_rc == CTOOLS_PARSE_OK) {
+        if (SF_macro_use("___cds_ignore", opts->ignore_chars, (ST_int)capacity) ||
+            strlen(opts->ignore_chars) != (size_t)raw_len ||
+            SF_macro_save("_cdestring_ignore_read", "1")) {
+            free(opts->ignore_chars);
+            free(opts->src_indices);
+            free(opts->dst_indices);
+            return -1;
+        }
+        opts->ignore_len = raw_len;
+    } else {
+        opts->ignore_len = parse_ignore_option(args, opts->ignore_chars, (int)capacity);
+    }
 
     /* Boolean options */
     opts->force = ctools_parse_bool_option(args, "force");
@@ -462,12 +489,18 @@ static void free_options(cdestring_options *opts)
  * Public Entry Point
  * ============================================================================ */
 
+/* Each column fits Stata's observation limit; their combined count need not. */
+static uint64_t cdestring_total(const int *counts, int nvars)
+{
+    uint64_t total = 0;
+    for (int v = 0; v < nvars; v++) total += (uint64_t)counts[v];
+    return total;
+}
+
 ST_retcode cdestring_main(const char *args)
 {
     double t_start, t_parse, t_load, t_convert, t_store, t_total;
     cdestring_options opts;
-    int total_converted = 0;
-    int total_failed = 0;
 
     t_start = ctools_timer_seconds();
 
@@ -584,7 +617,11 @@ ST_retcode cdestring_main(const char *args)
                 if (src == NULL) src = "";
 
                 if (opts.percent && strchr(src, '%')) tl_percent[v]++;
-                if (convert_value(src, &opts, missval, &results[v][i])) {
+                int converted = convert_value(src, &opts, missval, &results[v][i]);
+                if (converted < 0) {
+                    #pragma omp atomic write
+                    tl_alloc_failed = 1;
+                } else if (converted) {
                     tl_converted[v]++;
                 } else {
                     tl_failed[v]++;
@@ -669,10 +706,8 @@ ST_retcode cdestring_main(const char *args)
     t_store = ctools_timer_seconds();
 
     /* Aggregate results */
-    for (int v = 0; v < nvars; v++) {
-        total_converted += var_converted[v];
-        total_failed += var_failed[v];
-    }
+    uint64_t total_converted = cdestring_total(var_converted, nvars);
+    uint64_t total_failed = cdestring_total(var_failed, nvars);
 
     free(results_block);
     free(results);

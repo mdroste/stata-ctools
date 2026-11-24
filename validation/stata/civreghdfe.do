@@ -1962,6 +1962,54 @@ foreach stat in xb stdp xbd {
     else test_fail "partial(): predict `stat' refused" "rc=`=_rc'"
 }
 
+* Prediction restrictions must not refit the partial projection on fewer rows.
+clear
+set seed 123
+set obs 96
+gen byte g = mod(_n, 4) + 1
+gen double x = rnormal()
+gen double z = rnormal()
+gen double y = 3*x + 2*z + g + _n/10 + rnormal()
+gen int fw = 1 + mod(_n, 3)
+gen double wt = .5 + runiform()
+replace x = . in 5
+replace x = . in 91
+replace z = . in 10
+replace z = . in 92
+foreach weight in none fw aw pw {
+    local wgt
+    if "`weight'" == "fw" local wgt [fw=fw]
+    if inlist("`weight'", "aw", "pw") local wgt [`weight'=wt]
+    foreach partial in "z" "z i.g" "_cons" {
+        * The full model is the FWL oracle, also with weights/FV terms.
+        * ivreg2_p's partial() branch itself drops the estimation weights.
+        quietly ivreg2 y x z i.g `wgt' if _n<=80
+        predict double ref_partial, residuals
+        quietly civreghdfe y x z i.g `wgt' if _n<=80, partial(`partial')
+        matrix before_b = e(b)
+        matrix before_V = e(V)
+        gen byte before_sample = e(sample)
+        predict double all_partial, residuals
+        predict double if_partial if _n<=12, residuals
+        predict double in_partial in 1/12, residuals
+        predict double out_partial if _n>80, residuals
+        assert all_partial == if_partial if _n<=12
+        assert all_partial == in_partial in 1/12
+        assert all_partial == out_partial if _n>80
+        assert e(sample) == before_sample
+        assert "`e(cmd)'" == "civreghdfe"
+        assert mreldif(e(b), before_b) == 0
+        assert mreldif(e(V), before_V) == 0
+        assert_var_equal all_partial ref_partial $DEFAULT_SIGFIGS "partial(`partial') `weight': qualified prediction"
+        drop ref_partial all_partial if_partial in_partial out_partial before_sample
+    }
+}
+quietly civreghdfe y x z if _n<=80, partial(z) noconstant
+predict double all_partial, residuals
+predict double out_partial if _n>80, residuals
+assert all_partial == out_partial if _n>80
+test_pass "partial(): no-constant prediction sample invariance"
+
 * civreghdfe against a reference command: the e(b) column names, e(b), e(V)
 * and the listed e() scalars, to $DEFAULT_SIGFIGS significant figures (equal
 * when both are missing)

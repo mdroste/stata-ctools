@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.6 20261111}{...}
+{* *! version 1.3.0 20261124}{...}
 {vieweralsosee "[R] qreg" "help qreg"}{...}
 {vieweralsosee "ctools" "help ctools"}{...}
 {viewerjumpto "Syntax" "cqreg##syntax"}{...}
@@ -204,7 +204,13 @@ variation. Convergence is assessed in these normalized units. Coefficients,
 covariance, sparsity and deviation statistics are returned in the original
 response units. If covariance values are too small or too large to calculate
 or store in Stata, {cmd:cqreg} returns error 498 without storing new
-estimates. Rescale the dependent variable and estimate the model again.
+estimates. Regressors are also centered and scaled before fitting and VCE
+calculation, with the full coefficient and covariance transformation undone
+on return. Indicator columns retain their zero origin for rank-deficient
+density estimates. A common weight factor is removed for numerical solving;
+reported weight sums and weight-specific VCE definitions retain their original
+units. Inputs whose range or resulting covariance cannot be represented are
+rejected with error 498. Rescale the affected variables and estimate again.
 
 {phang}
 {opt maxiter(#)} sets the maximum number of iterations of the interior-point

@@ -309,9 +309,11 @@ static int read_schema(tr *t, pq_schema *s)
             break;
         case 7:
             s->scale = tr_i32(t, type);
+            s->has_scale = 1;
             break;
         case 8:
             s->precision = tr_i32(t, type);
+            s->has_precision = 1;
             break;
         case 10:
             if (type == T_STRUCT)
@@ -430,6 +432,47 @@ const char *pq_type_name(pq_arrow a)
         "utf8",       "binary",        "fixed_size_binary", "null", "struct",    "list",
         "map",        "unknown",       "dictionary",  "large_utf8", "large_binary", "duration"};
     return names[a];
+}
+
+/* Validate every decimal leaf, including nested/unselected columns. Precision
+ * and scale follow Parquet's DECIMAL contract; Arrow's decimal256 caps the
+ * supported precision at 76. Do this before any arithmetic or type mapping. */
+static int valid_decimal_schema(const pq_schema *s)
+{
+    if (s->logical != 5 && s->converted != 5)
+        return 1;
+    if ((s->logical && s->logical != 5) || (s->converted >= 0 && s->converted != 5))
+        return 0;
+    int precision = s->logical == 5 ? s->lt_precision : s->precision;
+    int scale = s->logical == 5 ? s->lt_scale : s->scale;
+    if (precision < 1 || precision > 76 || scale < 0 || scale > precision)
+        return 0;
+    if (s->logical == 5 &&
+        ((s->has_precision && s->precision != precision) ||
+         (s->has_scale && s->scale != scale)))
+        return 0;
+    if (s->num_children > 0)
+        return 0;
+    switch (s->type)
+    {
+    case PQ_INT32:
+        return precision <= 9;
+    case PQ_INT64:
+        return precision <= 18;
+    case PQ_BYTE_ARRAY:
+        return 1;
+    case PQ_FLBA:
+    {
+        /* floor(log10(2^(8*n-1)-1)), for n=0..32; no floating rounding. */
+        static const unsigned char capacity[] = {
+            0, 2, 4, 6, 9, 11, 14, 16, 18, 21, 23, 26, 28, 31, 33, 35, 38,
+            40, 43, 45, 47, 50, 52, 55, 57, 59, 62, 64, 67, 69, 71, 74, 76};
+        return s->type_length > 0 &&
+               (s->type_length >= 32 || precision <= capacity[s->type_length]);
+    }
+    default:
+        return 0;
+    }
 }
 
 /* Parquet's logical (or, failing that, converted) annotation of a primitive,
@@ -578,6 +621,8 @@ static int walk(pq_file *f, int *pos, int depth)
     if (*pos >= f->nschema || depth > 100)
         return 1;
     pq_schema *s = &f->schema[(*pos)++];
+    if (!valid_decimal_schema(s))
+        return 1;
     if (s->num_children > 0)
     {
         for (int c = 0; c < s->num_children; c++)

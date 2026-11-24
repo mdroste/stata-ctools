@@ -1,4 +1,4 @@
-*! version 1.2.6 20261111 github.com/mdroste/stata-ctools
+*! version 1.3.0 20261124 github.com/mdroste/stata-ctools
 program define _cio_shp_export, rclass
     version 14.1
     syntax [anything] [using/] [, REPLACE SHX ID(varname numeric)]

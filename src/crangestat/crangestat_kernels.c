@@ -987,56 +987,25 @@ double crangestat_compute_window_stat_simple(stat_type type, const double *data,
     double minval = DBL_MAX, maxval = -DBL_MAX;
     double first_val = miss, last_val = miss;
 
-    /* Check if self is in window and non-missing (for excludeself optimization) */
-    int self_in_window = 0;
-    int self_is_missing = 1;
-    double self_val = 0.0;
-    if (exclude_self && self_idx >= win_start && self_idx < win_end)
-    {
-        self_in_window = 1;
-        self_val = data[self_idx];
-        self_is_missing = (self_val >= miss);
-    }
-
-    /* Use SIMD for large windows */
+    /* Omit self before summation: adding a large excluded value and then
+     * subtracting it can erase the entire sum of the retained rows. */
+    int self_in_window = exclude_self && self_idx >= win_start && self_idx < win_end;
     if ((win_end - win_start) >= 8)
     {
-        crangestat_simd_sum_minmax(data, win_start, win_end, &sum, &sum2, &minval, &maxval, &n);
-
-        /* SIMD-then-subtract optimization for excludeself */
-        if (exclude_self && self_in_window && !self_is_missing)
-        {
-            /* Subtract self's contribution from aggregates */
-            n -= 1;
-            sum -= self_val;
-            sum2 -= self_val * self_val;
-
-            /* For min/max: if self equals min/max, need to rescan */
-            /* Only rescan if we actually need min or max */
-            if (type == STAT_MIN && self_val == minval)
-            {
-                minval = DBL_MAX;
-                for (size_t i = win_start; i < win_end; i++)
-                {
-                    if (i == self_idx)
-                        continue;
-                    double val = data[i];
-                    if (val < miss && val < minval)
-                        minval = val;
-                }
-            }
-            if (type == STAT_MAX && self_val == maxval)
-            {
-                maxval = -DBL_MAX;
-                for (size_t i = win_start; i < win_end; i++)
-                {
-                    if (i == self_idx)
-                        continue;
-                    double val = data[i];
-                    if (val < miss && val > maxval)
-                        maxval = val;
-                }
-            }
+        if (self_in_window) {
+            double right_sum, right_sum2, right_min, right_max;
+            size_t right_n;
+            crangestat_simd_sum_minmax(data, win_start, self_idx,
+                                      &sum, &sum2, &minval, &maxval, &n);
+            crangestat_simd_sum_minmax(data, self_idx + 1, win_end,
+                                      &right_sum, &right_sum2, &right_min, &right_max, &right_n);
+            sum += right_sum;
+            sum2 += right_sum2;
+            minval = fmin(minval, right_min);
+            maxval = fmax(maxval, right_max);
+            n += right_n;
+        } else {
+            crangestat_simd_sum_minmax(data, win_start, win_end, &sum, &sum2, &minval, &maxval, &n);
         }
 
         /* Find first and last non-missing (still need sequential scan) */
@@ -1140,7 +1109,7 @@ double crangestat_compute_window_stat_simple(stat_type type, const double *data,
          * for two distinct values (no small-sample bias correction). */
         if (n < 2)
             return SV_missval;
-        double mean = sum / (double)n;
+        double mean = stable_window_mean(data, win_start, win_end, self_idx, exclude_self);
         /* Need second pass for higher moments */
         double m2 = 0.0, m3 = 0.0;
         for (size_t i = win_start; i < win_end; i++)
@@ -1167,7 +1136,7 @@ double crangestat_compute_window_stat_simple(stat_type type, const double *data,
     {
         if (n < 2)
             return SV_missval;
-        double mean = sum / (double)n;
+        double mean = stable_window_mean(data, win_start, win_end, self_idx, exclude_self);
         /* Need second pass for higher moments */
         double m2 = 0.0, m4 = 0.0;
         for (size_t i = win_start; i < win_end; i++)

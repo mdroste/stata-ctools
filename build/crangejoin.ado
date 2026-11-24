@@ -1,4 +1,4 @@
-*! version 1.2.6 20261111 github.com/mdroste/stata-ctools
+*! version 1.3.0 20261124 github.com/mdroste/stata-ctools
 *! C-accelerated interval joins (ctools)
 program define crangejoin
     version 14.1
@@ -27,7 +27,7 @@ program define crangejoin
         macro drop CTOOLS_crangejoin_plugin CTOOLS_crangejoin_mvars
         global CTOOLS_crangejoin_obs `mobs' `uobs'
         if "`mode'" == "" _ctools_undo record CTOOLS_u_crangejoin_
-        capture noisily break _crangejoin_impl `0'
+        capture noisily break _crangejoin_impl `macval(0)'
         local rc = _rc
         if `rc' {
             if "$CTOOLS_crangejoin_plugin" != "" {
@@ -161,7 +161,7 @@ program define _crangejoin_impl
         * Set before the plugin indexes the using data, so that the wrapper
         * releases them when a later step of _crangejoin_using fails
         global CTOOLS_crangejoin_plugin "`__ctools_plugin'"
-        frame `uframe': _crangejoin_using `"`using'"' `"`schema'"', `usingopts'
+        frame `uframe': _crangejoin_using `"`macval(using)'"' `"`schema'"', `usingopts'
         frame drop `uframe'
         _crangejoin_master `"`schema'"', `masteropts' lo(`lo') hi(`hi') ///
             renamed(`renamed') ustrl(`ustrl') nmaster(`nmaster') byindices(`byindices') ///
@@ -172,7 +172,7 @@ program define _crangejoin_impl
     * place of the master, from a snapshot of the whole dataset.
     preserve
     capture noisily {
-        _crangejoin_using `"`using'"' `"`schema'"', `usingopts'
+        _crangejoin_using `"`macval(using)'"' `"`schema'"', `usingopts'
         restore, preserve
         _crangejoin_master `"`schema'"', `masteropts' lo(`lo') hi(`hi') ///
             renamed(`renamed') ustrl(`ustrl') nmaster(`nmaster') byindices(`byindices') ///
@@ -203,8 +203,17 @@ program define _crangejoin_using
     _ctools_load
     capture program ctools_plugin, plugin using("`__ctools_plugin'")
     if _rc != 0 & _rc != 110 exit 601
-    if `"`keepusing'"' != "" quietly use `keepusing' `by' `key' using `"`using'"', clear
-    else quietly use `"`using'"', clear
+    * The varlist-using form of use rescans macro characters in its filename.
+    * Preserve selective loading for ordinary paths; literal macro characters
+    * require loading by filename first, then selecting the columns.
+    local literal = strpos(`"`macval(using)'"', char(36)) | strpos(`"`macval(using)'"', char(96))
+    if `"`keepusing'"' != "" & !`literal' {
+        quietly use `keepusing' `by' `key' using `"`macval(using)'"', clear
+    }
+    else {
+        quietly use `"`macval(using)'"', clear
+        if `"`keepusing'"' != "" keep `keepusing' `by' `key'
+    }
     if _N > 2147483647 exit 920
     confirm numeric variable `key', exact
     local i = 0

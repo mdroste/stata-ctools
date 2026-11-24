@@ -423,6 +423,14 @@ static stata_retcode csort_rowstaged(const int *widths, const int *sort_vars, si
         timer->store_time = ctools_timer_seconds();
         *modified = 1;
         rc = ctools_rowstage_store(&staged, keys.sort_order, nobs, obs1);
+        if (rc != STATA_OK) {
+            /* The original rows are still staged. An identity store allocates
+             * no gather buffers, so it can undo a partial publication even
+             * when another worker failed to allocate its scratch tile. */
+            stata_retcode undo_rc = ctools_rowstage_store(&staged, NULL, nobs, obs1);
+            if (undo_rc != STATA_OK)
+                SF_error("csort: could not restore the original observations\n");
+        }
         timer->store_time = ctools_timer_seconds() - timer->store_time;
     }
 
@@ -687,6 +695,10 @@ ST_retcode csort_main(const char *args)
     if (rc != STATA_OK) {
         snprintf(msg, sizeof(msg), "csort: failed to store data (error %d)\n", rc);
         SF_error(msg);
+        /* Columns are still in their original order: the permutation was
+         * applied only by the store. Undo writes before releasing that copy. */
+        if (ctools_data_store(&filtered.data, obs1) != STATA_OK)
+            SF_error("csort: could not restore the original observations\n");
         ctools_filtered_data_free(&filtered);
         free(sort_vars);
         return ctools_stata_rc(rc);

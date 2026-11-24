@@ -9,6 +9,7 @@
 #include "hdfe/hdfe_remap.h"
 #include "hdfe/hdfe_solver.h"
 #include <limits.h>
+#include <float.h>
 
 static int save_number(const char *name, double x)
 {
@@ -36,8 +37,13 @@ static double chdfe_unit_scale(double *x, int n)
         return 1;
     frexp(largest, &exponent);
     double scale = ldexp(1, exponent - 1);
-    for (int i = 0; i < n; i++)
-        x[i] /= scale;
+    for (int i = 0; i < n; i++) {
+        double normalized = x[i] / scale;
+        /* The solver forms squared norms. Do not erase nonzero inputs or
+         * entire groups when their dynamic range exceeds those norms. */
+        if (x[i] != 0 && fabs(normalized) < sqrt(DBL_MIN)) return NAN;
+        x[i] = normalized;
+    }
     return scale;
 }
 
@@ -144,8 +150,11 @@ ST_retcode chdfe_main(const char *args)
                 goto cleanup;
             }
         }
-    if (weighted)
-        chdfe_unit_scale(fd.data.vars[inputs - 1].data.dbl, nin);
+    if (weighted && !isfinite(chdfe_unit_scale(fd.data.vars[inputs - 1].data.dbl, nin))) {
+        ctools_error("chdfe", "weight range is too wide to preserve the projection; rescale or restrict the input");
+        rc = 498;
+        goto cleanup;
+    }
     for (int j = 0; j < g; j++)
         values[j] = fd.data.vars[k + j].data.dbl;
     rc = hdfe_load_factors(raw, g, (const double *const *)values, nin);
@@ -221,6 +230,11 @@ ST_retcode chdfe_main(const char *args)
                     f->slope[q++] = fd.data.vars[slope_col].data.dbl[i];
             slope_col++;
             double slope_scale = chdfe_unit_scale(f->slope, n);
+            if (!isfinite(slope_scale)) {
+                ctools_error("chdfe", "slope range is too wide to preserve the projection; rescale or restrict the input");
+                rc = 498;
+                goto cleanup;
+            }
             if (slopes[j] == 2)
             {
                 f->slope_center = calloc(l, sizeof(*f->slope_center));
@@ -269,6 +283,14 @@ ST_retcode chdfe_main(const char *args)
                     f->weighted_counts[h] += weights[i] * x * x;
                 lo[h] = fmin(lo[h], x);
                 hi[h] = fmax(hi[h], x);
+            }
+            for (int h = 0; weights && h < l; h++) {
+                if (f->counts[h] > 0 && !(f->weighted_counts[h] > 0)) {
+                    free(lo); free(hi);
+                    ctools_error("chdfe", "weighted slope norm underflows; rescale or restrict the input");
+                    rc = 498;
+                    goto cleanup;
+                }
             }
             if (flags & 8)
                 for (int h = 0; h < l; h++)
@@ -417,8 +439,22 @@ ST_retcode chdfe_main(const char *args)
             for (int i = 0, q = 0; i < nin; i++)
                 if (keep[i])
                     data[(size_t)j * n + q++] = fd.data.vars[base + j].data.dbl[i];
-        for (int j = 0; j < width; j++)
+        for (int j = 0; j < width; j++) {
             scales[j] = chdfe_unit_scale(data + (size_t)j * n, n);
+            if (!isfinite(scales[j])) {
+                ctools_error("chdfe", "variable range is too wide to preserve the projection; rescale or restrict the input");
+                rc = 498;
+                goto cleanup;
+            }
+            for (int i = 0; weights && i < n; i++) {
+                double value = data[(size_t)j * n + i];
+                if (value != 0 && weights[i] * value * value == 0) {
+                    ctools_error("chdfe", "weighted variable norm underflows; rescale or restrict the input");
+                    rc = 498;
+                    goto cleanup;
+                }
+            }
+        }
         double tick = ctools_timer_seconds();
         HDFE_SolveResult result =
             partial_out_columns_options(&state, data, n, width, transform, accel);

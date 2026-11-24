@@ -2390,6 +2390,7 @@ if `n_rich' == r(N) test_pass "DEC-02 if may name the caller's r()"
 else test_fail "DEC-02 if may name the caller's r()" "`n_rich' decoded"
 * SUMMARY
 * End of cdecode validation
+do "validation/support/six_release_regressions.do" cdecode
 noi print_summary "cdecode"
 }
 

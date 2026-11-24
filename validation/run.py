@@ -25,6 +25,7 @@ ASAN = {
     "test_sep24_native",
     "test_counting_sort_native",
     "test_csort_ordered_native",
+    "test_csort_recovery_native",
     "test_msd_sort_native",
     "test_sort_keys_native",
     "test_split_tokens_native",

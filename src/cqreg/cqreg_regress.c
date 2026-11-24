@@ -95,9 +95,9 @@ static ST_int read_scalar_int(const char *name, ST_int default_val)
  * Helper: Store scalar to Stata
  * ============================================================================ */
 
-static void store_scalar(const char *name, ST_double val)
+static ST_retcode store_scalar(const char *name, ST_double val)
 {
-    SF_scal_save((char *)name, val);
+    return SF_scal_save((char *)name, val);
 }
 
 /* ============================================================================
@@ -765,38 +765,111 @@ done:
  * Helper: Store results to Stata
  * ============================================================================ */
 
+/* Keep all fits and covariance calculations in the same well-scaled design.
+ * An observed origin avoids summing a large level before subtracting it. */
+static ST_retcode cqreg_normalize_design(cqreg_state *s)
+{
+    for (int j = 0; j < s->K - 1; j++) {
+        double *x = s->X + (size_t)j * s->N;
+        double origin = x[0], spread = 0;
+        int indicator = 1;
+        for (int i = 0; i < s->N; i++)
+            if (x[i] != 0 && x[i] != 1) { indicator = 0; break; }
+        /* Keep the original indicator/constant parameterization for qreg's
+         * generalized inverse when discrete outcomes have zero density in
+         * a factor level. These columns already have a safe origin. */
+        if (indicator) origin = 0;
+        for (int i = 0; i < s->N; i++) spread = fmax(spread, fabs(x[i] - origin));
+        if (!isfinite(spread)) return 498;
+        int exponent = 0;
+        if (spread > 0) frexp(spread, &exponent);
+        s->x_shift[j] = origin;
+        s->x_exponent[j] = exponent;
+        for (int i = 0; i < s->N; i++) {
+            double delta = x[i] - origin;
+            x[i] = scalbn(delta, -exponent);
+            if (delta != 0 && fabs(x[i]) < sqrt(DBL_MIN)) return 498;
+        }
+    }
+    return 0;
+}
+
+/* Apply b_original = T b + response_shift and V_original = T V T'.
+ * Work in extended precision until the final power-of-two unit conversion;
+ * never form an overflowing scale squared or invert the uncentered design. */
+static ST_retcode cqreg_restore_units(cqreg_state *s, double shift, int exponent)
+{
+    int K = s->K, last = K - 1;
+    long double *t = calloc((size_t)K, sizeof(*t));
+    long double *cross = calloc((size_t)K, sizeof(*cross));
+    if (!t || !cross) { free(t); free(cross); return 920; }
+    t[last] = 1;
+    for (int j = 0; j < last; j++) t[j] = -scalbnl(s->x_shift[j], -s->x_exponent[j]);
+    long double intercept = 0, variance = 0;
+    for (int i = 0; i < K; i++) {
+        intercept += t[i] * s->beta[i];
+        for (int j = 0; j < K; j++) cross[i] += s->V[(size_t)i*K+j] * t[j];
+        variance += t[i] * cross[i];
+    }
+    for (int i = 0; i < last; i++) {
+        s->beta[i] = (double)scalbnl(s->beta[i], exponent - s->x_exponent[i]);
+        for (int j = 0; j < last; j++) {
+            double old = s->V[(size_t)i*K+j];
+            double value = (double)scalbnl(old, 2*exponent - s->x_exponent[i] - s->x_exponent[j]);
+            if (i == j && old > 0 && value < DBL_MIN) { free(t); free(cross); return 498; }
+            s->V[(size_t)i*K+j] = value;
+        }
+        s->V[(size_t)i*K+last] = s->V[(size_t)last*K+i] =
+            (double)scalbnl(cross[i], 2*exponent - s->x_exponent[i]);
+    }
+    s->beta[last] = (double)(scalbnl(intercept, exponent) + shift);
+    s->V[(size_t)last*K+last] = (double)scalbnl(variance, 2*exponent);
+    free(t); free(cross);
+    if (variance > 0 && s->V[(size_t)last*K+last] < DBL_MIN) return 498;
+    for (int i = 0; i < K; i++) {
+        if (!isfinite(s->beta[i]) || SF_is_missing(s->beta[i])) return 498;
+        if (s->V[(size_t)i*K+i] < 0) return 498;
+        for (int j = 0; j < K; j++)
+            if (!isfinite(s->V[(size_t)i*K+j]) || SF_is_missing(s->V[(size_t)i*K+j])) return 498;
+    }
+    return 0;
+}
+
 static ST_retcode store_results(cqreg_state *state)
 {
     ST_int K = state->K;
     ST_int k, j;
     char scalar_name[64];
+    ST_retcode rc;
+
+#define CQREG_SAVE(name, value) do { if ((rc = store_scalar(name, value))) return rc; } while (0)
 
     /* Store scalar results */
-    store_scalar("__cqreg_N", (ST_double)state->N);
-    store_scalar("__cqreg_K_keep", (ST_double)(K - 1));  /* Exclude constant for reporting */
-    store_scalar("__cqreg_sum_adev", state->sum_adev);
-    store_scalar("__cqreg_sum_rdev", state->sum_rdev);
-    store_scalar("__cqreg_q_v", state->q_v);
-    store_scalar("__cqreg_sparsity", state->sparsity);
-    store_scalar("__cqreg_bandwidth", state->bandwidth);
-    store_scalar("__cqreg_iterations", (ST_double)state->iterations);
-    store_scalar("__cqreg_converged", (ST_double)state->converged);
+    CQREG_SAVE("__cqreg_N", (ST_double)state->N);
+    CQREG_SAVE("__cqreg_K_keep", (ST_double)(K - 1));  /* Exclude constant for reporting */
+    CQREG_SAVE("__cqreg_sum_adev", state->sum_adev);
+    CQREG_SAVE("__cqreg_sum_rdev", state->sum_rdev);
+    CQREG_SAVE("__cqreg_q_v", state->q_v);
+    CQREG_SAVE("__cqreg_sparsity", state->sparsity);
+    CQREG_SAVE("__cqreg_bandwidth", state->bandwidth);
+    CQREG_SAVE("__cqreg_iterations", (ST_double)state->iterations);
+    CQREG_SAVE("__cqreg_converged", (ST_double)state->converged);
     if (state->density_method == CQREG_DENSITY_KERNEL) {
-        store_scalar("__cqreg_kbwidth", state->kbwidth);
+        CQREG_SAVE("__cqreg_kbwidth", state->kbwidth);
     }
 
     /* Store coefficients (exclude constant for now, stored separately) */
     for (k = 0; k < K - 1; k++) {
         snprintf(scalar_name, sizeof(scalar_name), "__cqreg_beta_%d", k + 1);
-        store_scalar(scalar_name, state->beta[k]);
+        CQREG_SAVE(scalar_name, state->beta[k]);
     }
 
     /* Store constant */
-    store_scalar("__cqreg_cons", state->beta[K - 1]);
+    CQREG_SAVE("__cqreg_cons", state->beta[K - 1]);
 
     /* Store cluster info if applicable */
     if (state->vce_type == CQREG_VCE_CLUSTER) {
-        store_scalar("__cqreg_N_clust", (ST_double)state->num_clusters);
+        CQREG_SAVE("__cqreg_N_clust", (ST_double)state->num_clusters);
     }
 
     /* Store VCE matrix */
@@ -810,6 +883,7 @@ static ST_retcode store_results(cqreg_state *state)
     }
     return 0;
 }
+#undef CQREG_SAVE
 
 /* ============================================================================
  * Main Entry Point
@@ -1049,6 +1123,14 @@ ST_retcode cqreg_full_regression(const char *args)
         }
     }
 
+    rc = cqreg_normalize_design(state);
+    if (rc) {
+        ctools_error("cqreg", "regressor range cannot be represented safely; rescale the input");
+        cqreg_state_free(state);
+        ctools_filtered_data_free(&filtered);
+        return rc;
+    }
+
     /* Compute sample quantile and raw sum of deviations for pseudo R^2 */
     if (state->weights != NULL)
         state->q_v = cqreg_compute_quantile_w(state->y, state->weights, N, quantile);
@@ -1095,6 +1177,7 @@ ST_retcode cqreg_full_regression(const char *args)
     ST_double *Ys_owned = NULL, *Xs_owned = NULL;
     const ST_double *Ys = NULL, *Xs = NULL;
     ST_double sum_w = (ST_double)N;
+    int weight_exponent = 0;
 
     if (K_x > 0) {
         /* Compute X'X for collinearity check */
@@ -1169,7 +1252,7 @@ ST_retcode cqreg_full_regression(const char *args)
         char scalar_name[64];
         for (ST_int k = 0; k < K_x; k++) {
             snprintf(scalar_name, sizeof(scalar_name), "__cqreg_collinear_%d", k + 1);
-            SF_scal_save(scalar_name, (ST_double)is_collinear[k]);
+            if ((rc = store_scalar(scalar_name, (ST_double)is_collinear[k]))) goto cleanup;
         }
 
         main_debug_log("Collinearity: %d of %d variables collinear\n", num_collinear, K_x);
@@ -1187,6 +1270,8 @@ ST_retcode cqreg_full_regression(const char *args)
                         memcpy(&state->X[(size_t)dst * N], &state->X[(size_t)k * N],
                                (size_t)N * sizeof(ST_double));
                     }
+                    state->x_shift[dst] = state->x_shift[k];
+                    state->x_exponent[dst] = state->x_exponent[k];
                     dst++;
                 }
             }
@@ -1256,16 +1341,30 @@ ST_retcode cqreg_full_regression(const char *args)
             rc = 920;
             goto cleanup;
         }
+        double max_weight = 0;
+        for (ST_int i = 0; i < N; i++) max_weight = fmax(max_weight, state->weights[i]);
+        frexp(max_weight, &weight_exponent);
         sum_w = 0.0;
         for (ST_int i = 0; i < N; i++) {
-            Ys_owned[i] = state->weights[i] * state->y[i];
+            double w = scalbn(state->weights[i], -weight_exponent);
+            if (w < sqrt(DBL_MIN)) {
+                ctools_error("cqreg", "weight range cannot be represented safely");
+                rc = 498;
+                goto cleanup;
+            }
+            Ys_owned[i] = w * state->y[i];
             sum_w += state->weights[i];
+        }
+        if (!isfinite(sum_w) || SF_is_missing(sum_w)) {
+            ctools_error("cqreg", "weight sum cannot be represented; rescale the weights");
+            rc = 498;
+            goto cleanup;
         }
         #pragma omp parallel for if(K >= 2 && (size_t)N * (size_t)K > 200000)
         for (ST_int k = 0; k < K; k++) {
             const ST_double *src = &state->X[(size_t)k * N];
             ST_double *dst = &Xs_owned[(size_t)k * N];
-            for (ST_int i = 0; i < N; i++) dst[i] = state->weights[i] * src[i];
+            for (ST_int i = 0; i < N; i++) dst[i] = scalbn(state->weights[i], -weight_exponent) * src[i];
         }
         Ys = Ys_owned;
         Xs = Xs_owned;
@@ -1325,19 +1424,20 @@ ST_retcode cqreg_full_regression(const char *args)
             ST_int row = state->ipm->basis[j];
             if (row < 0 || row >= N) { stored = 0; break; }
             ST_double obs = map ? (ST_double)map[row] : (ST_double)(row + 1);
-            if (SF_mat_store("__cqreg_basis", 1, j + 1, obs)) { stored = 0; break; }
+            if ((rc = SF_mat_store("__cqreg_basis", 1, j + 1, obs))) goto cleanup;
             stored++;
         }
-        store_scalar("__cqreg_basis_n", (ST_double)stored);
+        if ((rc = store_scalar("__cqreg_basis_n", (ST_double)stored))) goto cleanup;
     }
     /* Before the auxiliary fits reuse the IPM state and its basis */
-    store_scalar("__cqreg_nonunique", state->ipm->basis_ok ?
+    rc = store_scalar("__cqreg_nonunique", state->ipm->basis_ok ?
                  (ST_double)cqreg_optimum_not_unique(Ys, Xs, state->beta,
                                                      state->residuals, N, K, quantile,
                                                      state->ipm->basis) : -1.0);
+    if (rc) goto cleanup;
     /* The solver's residuals are those of the scaled rows, w_i r_i */
     if (state->weights != NULL) {
-        for (ST_int i = 0; i < N; i++) state->residuals[i] /= state->weights[i];
+        for (ST_int i = 0; i < N; i++) state->residuals[i] /= scalbn(state->weights[i], -weight_exponent);
     }
     state->time_ipm = ctools_timer_seconds() - ipm_start;
 
@@ -1409,7 +1509,7 @@ ST_retcode cqreg_full_regression(const char *args)
          * Reuses main IPM state workspace (avoids ~2.8 GB allocation for N=5M).
          * Matches Stata's default vce(iid) "fitted" method exactly.
          */
-        rc = estimate_siddiqui_sparsity(Ys, Xs, sum_w,
+        rc = estimate_siddiqui_sparsity(Ys, Xs, scalbn(sum_w, -weight_exponent),
                                         N, K, quantile,
                                         state->bw_method,
                                         state->ipm,
@@ -1497,11 +1597,6 @@ ST_retcode cqreg_full_regression(const char *args)
      * Step 6: Store results to Stata
      * ======================================================================== */
 
-    for (ST_int k = 0; k < K; k++)
-        state->beta[k] = scalbn(state->beta[k], response_exponent);
-    /* The constant is the last column: only it and the sample quantile move
-     * with the location shift; deviations, densities and V do not. */
-    state->beta[K - 1] += response_shift;
     /* The covariance in the scaled response units, where the spread of y is
      * near one, for the rank: Stata's invsym() treats tiny diagonal values
      * as zero in absolute terms, so this applies qreg's rule to y at unit
@@ -1514,36 +1609,25 @@ ST_retcode cqreg_full_regression(const char *args)
     }
     if (rc) goto cleanup;
 
-    ST_double V_max_scaled = 0.0, V_max = 0.0;
-    for (size_t j = 0; j < (size_t)K * K; j++) {
-        ST_double value = state->V[j];
-        if (isfinite(value) && !SF_is_missing(value)) {
-            V_max_scaled = fmax(V_max_scaled, fabs(value));
-            state->V[j] = scalbn(value, 2 * response_exponent);
-            V_max = fmax(V_max, fabs(state->V[j]));
-        } else {
-            V_max = INFINITY;
-        }
-    }
-    /* A nonzero covariance that underflows to zero or subnormal values, or
-     * overflows (Stata reads values from 2^1023 up as missing), in the units
-     * of y cannot be posted (and its rank cannot be
-     * assessed): refuse it rather than report a zero or infinite matrix.
-     * A covariance that is exactly zero (one cluster, an atom of y at the
-     * quantile) is posted as qreg posts it. */
-    if (V_max_scaled > 0.0 && !(V_max >= DBL_MIN && V_max <= DBL_MAX && !SF_is_missing(V_max))) {
-        ctools_error("cqreg", "Stata cannot post the covariance at this response scale; "
-                     "rescale the dependent variable");
-        rc = 498;
+    rc = cqreg_restore_units(state, response_shift, response_exponent);
+    if (rc) {
+        ctools_error("cqreg", "coefficients or covariance cannot be posted in the original units; rescale the input");
         goto cleanup;
     }
-    state->sum_adev = scalbn(state->sum_adev, response_exponent);
+    state->sum_adev = scalbn(state->sum_adev, response_exponent + weight_exponent);
     state->sum_rdev = scalbn(state->sum_rdev, response_exponent);
     state->q_v = scalbn(state->q_v, response_exponent) + response_shift;
     if (!SF_is_missing(state->sparsity))
         state->sparsity = scalbn(state->sparsity, response_exponent);
     if (state->density_method == CQREG_DENSITY_KERNEL)
         state->kbwidth = scalbn(state->kbwidth, response_exponent);
+
+    if (!isfinite(state->sum_adev) || SF_is_missing(state->sum_adev) ||
+        !isfinite(state->sum_rdev) || SF_is_missing(state->sum_rdev)) {
+        ctools_error("cqreg", "weighted deviation statistics cannot be represented; rescale the input");
+        rc = 498;
+        goto cleanup;
+    }
 
     main_debug_log("Step 6: Storing results to Stata...\n");
     rc = store_results(state);

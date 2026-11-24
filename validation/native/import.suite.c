@@ -85,6 +85,20 @@ int main(void) {
     assert(!cimport_parse_unquoted_number("+123",4,&value,SV_missval,'.',0));
     assert(cimport_parse_unquoted_number("∞",3,&value,SV_missval,'.',0) && value==SV_missval);
     assert(!cimport_configure_locale("","",""));
+    /* Leading zeroes must not impose a length limit on Fortran exponents.
+     * Exercise inference's parser and conversion beyond its old stack bound. */
+    const int exponent_lengths[] = {127, 128, 129, 4096};
+    for (size_t boundary = 0; boundary < sizeof(exponent_lengths) / sizeof(exponent_lengths[0]); boundary++) {
+        int length = exponent_lengths[boundary];
+        for (int upper = 0; upper < 2; upper++) {
+            char number[4100];
+            memset(number, '0', (size_t)length);
+            memcpy(number + length - 3, upper ? "1D2" : "1d2", 3);
+            assert(cimport_field_looks_unquoted_numeric_sep(number, length, '.', 0));
+            assert(cimport_parse_unquoted_number(number, length, &value, SV_missval, '.', 0));
+            assert(value == 100);
+        }
+    }
     /* Empty files must still validate charsets; conversion receives NULL/0. */
     delimiters[0]=collapse[0]=literal[0]=0;
     char emptyfile[]="/tmp/ctools-cimport-empty-XXXXXX";

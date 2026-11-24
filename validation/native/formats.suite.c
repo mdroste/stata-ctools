@@ -319,6 +319,20 @@ ST_plugin *_stata_;
 #include "formats/excel_address.c"
 static ST_boolean edit_missing(ST_double z){return z>=8.98846567431158e307;}
 int main(void) {
+    const char *bad_entities[] = {"&bogus;", "&amp", "&", "&#;", "&#x;", "&#6q5;",
+        "&#0;", "&#1;", "&#xD800;", "&#xFFFE;", "&#1114112;", "&#999999999999999999999;"};
+    char entity_doc[256];
+    for (size_t i = 0; i < sizeof(bad_entities) / sizeof(bad_entities[0]); i++) {
+        snprintf(entity_doc, sizeof(entity_doc), "<worksheet><v>1%s00</v></worksheet>", bad_entities[i]);
+        assert(!xlsx_xml_validate_document(entity_doc, strlen(entity_doc), "worksheet"));
+        snprintf(entity_doc, sizeof(entity_doc), "<workbook name='%s'/>", bad_entities[i]);
+        assert(!xlsx_xml_validate_document(entity_doc, strlen(entity_doc), "workbook"));
+    }
+    const char *valid_entities = "<worksheet name='&quot;&apos;&amp;&lt;&gt;'>"
+        "<v>&#49;&#x30;&#13;&#x10ffff;</v><![CDATA[&bogus;]]><!-- &bogus; --></worksheet>";
+    assert(xlsx_xml_validate_document(valid_entities, strlen(valid_entities), "worksheet"));
+    for (size_t n = 0; n < strlen(valid_entities); n++)
+        assert(!xlsx_xml_validate_document(valid_entities, n, "worksheet"));
     const char *old = "<x:worksheet xmlns:x=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">"
         "<!-- > <row> --> <x:dimension ref='A1:F9'/><x:sheetData>"
         "<x:row r='2' ht='30' customHeight='1'><x:c r='A2' s='8'><x:f>SUM(A1)&gt;0</x:f><x:v>9</x:v></x:c>"

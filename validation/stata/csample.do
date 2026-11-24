@@ -622,6 +622,7 @@ foreach pair in `"50"' `"25 if g < 2"' `"30 in 5/30"' `"50, by(g)"' `"50, count"
 }
 _ct_same_output "SAMP-04 version 6 by prefix" "version 6: by g: sample 50" "version 6: by g: csample 50" nodata
 _ct_same_output "SAMP-04 version 6 count" "version 6: sample 50, count" "version 6: csample 50, count" nodata
+do "validation/support/six_release_regressions.do" csample
 noi print_summary "csample"
 }
 

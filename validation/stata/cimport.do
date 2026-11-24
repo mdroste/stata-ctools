@@ -3505,6 +3505,66 @@ capture erase "temp/gap_m2.xpt"
 capture erase "temp/gap_multi.xpt"
 clear
 
+* Long d/D exponents must behave identically during inference and conversion.
+tempfile exponent_csv exponent_expected
+tempname exponent_fh
+foreach length in 127 128 129 4096 {
+    foreach marker in d D {
+        foreach quoted in 0 1 {
+            local number = (`length' - 3) * "0" + "1`marker'2"
+            file open `exponent_fh' using `exponent_csv', write text replace
+            file write `exponent_fh' "x" _n
+            if `quoted' {
+                file write `exponent_fh' _char(34) "`number'" _char(34) _n
+            }
+            else file write `exponent_fh' "`number'" _n
+            file write `exponent_fh' "2`marker'2" _n
+            file close `exponent_fh'
+            foreach force in "" "numericcols(1)" {
+                import delimited using `exponent_csv', clear varnames(1) asdouble `force'
+                assert x[1] == 100 & x[2] == 200
+                quietly save `exponent_expected', replace
+                cimport delimited using `exponent_csv', clear varnames(1) asdouble `force'
+                cf _all using `exponent_expected', all
+                test_pass "long exponent `length' `marker' quoted=`quoted' `force'"
+            }
+        }
+    }
+}
+
+* Patch native DBF date records with impossible and malformed dates. The
+* reader must leave them missing rather than normalize or parse as numbers.
+tempfile date_dbf date_expected
+clear
+set obs 28
+gen double day = td(01jan2026)
+format day %td
+export dbase using `date_dbf', replace
+mata:
+__dbf_dates = ("20260231", "20260229", "20240229", "20260431", "20260430", "19000229", "20000229", "20260001", "20261301", "20260100", "20260132", "        ", "00000000", "1234    ", "2026011x", "20261231", "00000101", "00010101", "00991231", "01000101", "09991231", "10000101", "99991231", "15821010", "20260228", "20240228", "20240230", "20240231")
+__dbf_fh = fopen(st_local("date_dbf"), "r")
+__dbf_raw = fread(__dbf_fh, 100000)
+fclose(__dbf_fh)
+__dbf_h = ascii(substr(__dbf_raw,9,1)) + 256*ascii(substr(__dbf_raw,10,1))
+__dbf_r = ascii(substr(__dbf_raw,11,1)) + 256*ascii(substr(__dbf_raw,12,1))
+assert(__dbf_r == 9)
+for (__dbf_i=1; __dbf_i<=cols(__dbf_dates); __dbf_i++) {
+    __dbf_at = __dbf_h + (__dbf_i-1)*__dbf_r + 1
+    __dbf_raw = substr(__dbf_raw,1,__dbf_at) + __dbf_dates[__dbf_i] + substr(__dbf_raw,__dbf_at+9,.)
+}
+unlink(st_local("date_dbf"))
+__dbf_fh = fopen(st_local("date_dbf"), "w")
+fwrite(__dbf_fh,__dbf_raw)
+fclose(__dbf_fh)
+end
+import dbase using `date_dbf', clear
+quietly save `date_expected', replace
+cimport dbase using `date_dbf', clear
+cf _all using `date_expected', all
+assert missing(day[1]) & missing(day[2]) & day[3] == td(29feb2024)
+test_pass "DBF invalid calendar dates and malformed date fields"
+mata: mata drop __dbf_dates __dbf_fh __dbf_raw __dbf_h __dbf_r __dbf_i __dbf_at
+
 * Cleanup and summary
 
 local files : dir "temp" files "*.csv"

@@ -758,6 +758,8 @@ foreach o in "idcluster(x)" "strata(id) idcluster(x)" "cluster(id) idcluster(x) 
     "cluster(id) idcluster(1x)" "cluster(id) idcluster(w)" "if 0, cluster(id) strata(s) idcluster(nid)" ///
     "if 0, cluster(id) idcluster(nid)" "in 1, cluster(id) idcluster(nid)" {
     local opt = cond(strpos("`o'", ","), "`o'", ", `o'")
+    unab vars_original : *
+    local meta_original "`c(N)' [`: sortedby']"
     preserve
     capture bsample `opt'
     local rc_b = _rc
@@ -767,9 +769,16 @@ foreach o in "idcluster(x)" "strata(id) idcluster(x)" "cluster(id) idcluster(x) 
     restore, preserve
     capture cbsample `opt'
     local rc_c = _rc
+    * An unweighted error now rolls back, even where bsample leaves a sort.
+    if `rc_b' & !strpos("`o'", "weight(") {
+        local vars_b `vars_original'
+        local meta_b `"`meta_original'"'
+    }
     unab vars_c : *
     local meta_c "`c(N)' [`: sortedby']"
     capture local meta_c "`meta_c' `: type nid' `: variable label nid'"
+    local meta_b = strtrim("`meta_b'")
+    local meta_c = strtrim("`meta_c'")
     restore
     if `rc_b' == `rc_c' & "`vars_b' `meta_b'" == "`vars_c' `meta_c'" test_pass "P2-2 idcluster parity: `o' (r(`rc_b'))"
     else test_fail "P2-2 idcluster parity: `o'" "bsample r(`rc_b') `vars_b' `meta_b'; cbsample r(`rc_c') `vars_c' `meta_c'"
@@ -931,6 +940,7 @@ version 8: cbsample 10
 if _N == 10 test_pass "BSAMP-02 version 8 uses cbsample"
 else test_fail "BSAMP-02 version 8 uses cbsample" "N=`=_N'"
 * End of cbsample validation
+do "validation/support/six_release_regressions.do" cbsample
 noi print_summary "cbsample"
 }
 

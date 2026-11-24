@@ -37,8 +37,12 @@ ST_retcode crangestat_main(const char *args)
     config.low_is_missing = ctools_parse_bool_option(args, "low_miss");
     config.high_is_missing = ctools_parse_bool_option(args, "high_miss");
     config.var_bounds = ctools_parse_bool_option(args, "varbounds");
-    config.low_src = (int)ctools_parse_double_option(args, "lowsrc", -1);
-    config.high_src = (int)ctools_parse_double_option(args, "highsrc", -1);
+    config.low_src = config.high_src = -1;
+    int low_rc = ctools_parse_int_option(args, "lowsrc", &config.low_src);
+    int high_rc = ctools_parse_int_option(args, "highsrc", &config.high_src);
+    if (low_rc < 0 || high_rc < 0 ||
+        (config.var_bounds && (low_rc != CTOOLS_PARSE_OK || high_rc != CTOOLS_PARSE_OK)))
+        return 198;
 
     /*
        Argument format:
@@ -66,6 +70,9 @@ ST_retcode crangestat_main(const char *args)
         return 198;
     }
     size_t nsource = (size_t)nsource_value;
+    if (config.var_bounds && (config.low_src < 0 || config.low_src >= nsource_value ||
+                             config.high_src < 0 || config.high_src >= nsource_value))
+        return 198;
 
     while (*p == ' ' || *p == '\t') p++;
     int nby_value;
@@ -677,10 +684,11 @@ ST_retcode crangestat_main(const char *args)
                 }
             }
 
-            /* Process each observation in this group with sliding window.
-             * Since data is sorted by key, window bounds only advance forward. */
+            /* Bounds usually advance with the key. Overflow to an unbounded
+             * endpoint can move them backward, requiring a fresh search. */
             size_t win_lo = g_start;
             size_t win_hi = g_start;
+            double previous_low = -DBL_MAX, previous_high = -DBL_MAX;
             for (size_t i = g_start; i < g_end; i++) {
                 double key_val = key_data[i];
 
@@ -706,12 +714,18 @@ ST_retcode crangestat_main(const char *args)
                                           &win_start, &win_end);
                 } else {
                     /* Compute window bounds */
-                    double low_bound = config.low_is_missing ? -DBL_MAX : key_val + config.interval_low;
-                    double high_bound = config.high_is_missing ? DBL_MAX : key_val + config.interval_high;
+                    double low_bound = crangestat_interval_bound(key_val, config.interval_low, config.low_is_missing, 0);
+                    double high_bound = crangestat_interval_bound(key_val, config.interval_high, config.high_is_missing, 1);
 
                     /* Slide window pointers forward (O(1) amortized) */
+                    if (low_bound < previous_low)
+                        win_lo = crangestat_lower_bound(key_data, g_start, g_end, low_bound);
+                    if (high_bound < previous_high)
+                        win_hi = crangestat_upper_bound(key_data, g_start, g_end, high_bound);
                     while (win_lo < g_end && key_data[win_lo] < low_bound) win_lo++;
                     while (win_hi < g_end && key_data[win_hi] <= high_bound) win_hi++;
+                    previous_low = low_bound;
+                    previous_high = high_bound;
 
                     win_start = win_lo;
                     win_end = win_hi;
@@ -969,8 +983,8 @@ ST_retcode crangestat_main(const char *args)
                     }
 
                     /* Compute window bounds */
-                    double low_bound = config.low_is_missing ? -DBL_MAX : key_val + config.interval_low;
-                    double high_bound = config.high_is_missing ? DBL_MAX : key_val + config.interval_high;
+                    double low_bound = crangestat_interval_bound(key_val, config.interval_low, config.low_is_missing, 0);
+                    double high_bound = crangestat_interval_bound(key_val, config.interval_high, config.high_is_missing, 1);
 
                     /* Find window using binary search within group */
                     size_t win_start = crangestat_lower_bound(key_data, g_start, g_end, low_bound);
@@ -1094,11 +1108,11 @@ standard_obs_loop:;
                     if (my_start < my_end) {
                         /* Initialize window with ONE binary search for first obs */
                         double first_key = key_data[my_start];
-                        double first_low = config.low_is_missing ? -DBL_MAX : first_key + config.interval_low;
-                        double first_high = config.high_is_missing ? DBL_MAX : first_key + config.interval_high;
+                        double previous_low = crangestat_interval_bound(first_key, config.interval_low, config.low_is_missing, 0);
+                        double previous_high = crangestat_interval_bound(first_key, config.interval_high, config.high_is_missing, 1);
 
-                        size_t win_lo = crangestat_lower_bound(key_data, g_start, g_end_nonmiss, first_low);
-                        size_t win_hi = crangestat_upper_bound(key_data, g_start, g_end_nonmiss, first_high);
+                        size_t win_lo = crangestat_lower_bound(key_data, g_start, g_end_nonmiss, previous_low);
+                        size_t win_hi = crangestat_upper_bound(key_data, g_start, g_end_nonmiss, previous_high);
 
                         for (size_t i = my_start; i < my_end; i++) {
                             double key_val = key_data[i];
@@ -1109,12 +1123,18 @@ standard_obs_loop:;
                                                       source_data[config.high_src][i],
                                                       &win_start, &win_end);
                             } else {
-                                double low_bound = config.low_is_missing ? -DBL_MAX : key_val + config.interval_low;
-                                double high_bound = config.high_is_missing ? DBL_MAX : key_val + config.interval_high;
+                                double low_bound = crangestat_interval_bound(key_val, config.interval_low, config.low_is_missing, 0);
+                                double high_bound = crangestat_interval_bound(key_val, config.interval_high, config.high_is_missing, 1);
 
                                 /* Slide window pointers forward */
+                                if (low_bound < previous_low)
+                                    win_lo = crangestat_lower_bound(key_data, g_start, g_end_nonmiss, low_bound);
+                                if (high_bound < previous_high)
+                                    win_hi = crangestat_upper_bound(key_data, g_start, g_end_nonmiss, high_bound);
                                 while (win_lo < g_end_nonmiss && key_data[win_lo] < low_bound) win_lo++;
                                 while (win_hi < g_end_nonmiss && key_data[win_hi] <= high_bound) win_hi++;
+                                previous_low = low_bound;
+                                previous_high = high_bound;
 
                                 win_start = win_lo;
                                 win_end = win_hi;
@@ -1271,17 +1291,17 @@ standard_obs_loop:;
 
     /* Store timing scalars */
     double total = ctools_timer_seconds() - t_start;
-    SF_scal_save("_crangestat_time_load", t_load);
-    SF_scal_save("_crangestat_time_sort", t_sort);
-    SF_scal_save("_crangestat_time_groups", t_groups);
-    SF_scal_save("_crangestat_time_compute", t_compute);
-    SF_scal_save("_crangestat_time_store", t_store);
-    SF_scal_save("_crangestat_time_total", total);
-    SF_scal_save("_crangestat_nobs", (double)nobs);
-    SF_scal_save("_crangestat_nstats", (double)nstats);
-    SF_scal_save("_crangestat_ngroups", (double)ngroups);
-
-    CTOOLS_SAVE_THREAD_INFO("_crangestat");
+    const char *names[] = {"_crangestat_time_load", "_crangestat_time_sort",
+        "_crangestat_time_groups", "_crangestat_time_compute", "_crangestat_time_store",
+        "_crangestat_time_total", "_crangestat_nobs", "_crangestat_nstats",
+        "_crangestat_ngroups", "_crangestat_threads_max", "_crangestat_openmp_enabled"};
+    const double values[] = {t_load, t_sort, t_groups, t_compute, t_store, total,
+        (double)nobs, (double)nstats, (double)ngroups, (double)ctools_get_max_threads(),
+        (double)CTOOLS_OPENMP_ENABLED};
+    for (size_t j = 0; j < sizeof(values) / sizeof(values[0]); j++) {
+        ST_retcode publish_rc = SF_scal_save((char *)names[j], values[j]);
+        if (publish_rc) return publish_rc;
+    }
 
     /* Verbose output handled by .ado file using stored scalars */
 

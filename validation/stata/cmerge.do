@@ -2863,6 +2863,59 @@ foreach n in 0 2 {
 }
 clear
 
+* strL fallback order: unmatched rows, expanded matches, filtering, updates,
+* failed assertions, and the active estimation sample follow the master.
+capture program drop _cmerge_strl_order_case
+program define _cmerge_strl_order_case
+    syntax, Match(string) SIDE(string) OPTion(string)
+    tempfile master using expected
+    clear
+    set obs 4
+    gen id = cond(_n == 1, 3, cond(_n == 2, 1, cond(_n == 3, 2, 4)))
+    if inlist("`match'", "m:1", "m:m") replace id = 1 in 3
+    gen long masterrow = _n
+    gen double value = cond(_n == 2, ., _n * 10)
+    gen double outcome = _n^2
+    if "`side'" == "master" gen strL memo = "memo"
+    quietly save `master'
+    clear
+    set obs 4
+    gen id = cond(_n == 1, 1, cond(_n == 2, 2, cond(_n == 3, 3, 5)))
+    if inlist("`match'", "1:m", "m:m") replace id = 2 in 3
+    gen long usingrow = _n
+    gen double value = _n * 100
+    if "`side'" == "using" gen strL memo = "memo"
+    quietly save `using'
+    local opts
+    if "`option'" == "keep" local opts keep(match)
+    if "`option'" == "update" local opts update replace
+    if "`option'" == "assert" local opts assert(match)
+    use `master', clear
+    quietly regress outcome id if masterrow <= 3
+    set sortseed 721
+    capture noisily merge `match' id using `using', `opts' noreport
+    local native_rc = _rc
+    sort masterrow, stable
+    quietly save `expected'
+    use `master', clear
+    quietly regress outcome id if masterrow <= 3
+    set sortseed 721
+    capture noisily cmerge `match' id using `using', `opts' preserve_order(1) noreport
+    local rc = _rc
+    assert `rc' == `native_rc'
+    cf _all using `expected', all
+    assert e(sample) == cond(missing(masterrow), 0, masterrow <= 3)
+end
+foreach match in 1:1 m:1 1:m m:m {
+    foreach side in master using {
+        foreach option in all keep update assert {
+            capture noisily _cmerge_strl_order_case, match(`match') side(`side') option(`option')
+            if _rc test_fail "strL preserve_order `match' `side' `option'" "r(`=_rc')"
+            else test_pass "strL preserve_order `match' `side' `option'"
+        }
+    }
+}
+
 * End of cmerge validation
 noi print_summary "cmerge"
 }

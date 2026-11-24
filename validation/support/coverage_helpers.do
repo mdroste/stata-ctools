@@ -317,6 +317,65 @@ program define coverage_matching
     restore
 end
 
+* psmatch2 duplicates donors for neighbor(k>1) ties. Enumerate distances
+* independently for this option case instead of using that reference defect.
+capture program drop coverage_tied_matching
+program define coverage_tied_matching
+    syntax, REFerence(string asis) CANDidate(string asis) NAME(string)
+    preserve
+    sort id
+    mata: coverage_tied_expected = coverage_tied_oracle(st_data(., tokens("treat ps y")), 3)
+    capture quietly `candidate'
+    local rc=_rc
+    if `rc' {
+        restore
+        coverage_failure "`name'" "candidate rc=`rc'"
+        exit
+    }
+    local att=r(att)
+    sort id
+    mata: st_local("same", strofreal(coverage_tied_check(coverage_tied_expected, `att')))
+    if !`same' coverage_failure "`name'" "unique donors, boundary ties, weights, or effect differ"
+    else test_pass "`name' analytic tied matches"
+    restore
+end
+
+mata:
+real matrix coverage_tied_oracle(real matrix data, real scalar k)
+{
+    real matrix expected
+    real colvector controls, treated, distances, ordered, pick
+    real scalar i, row, cutoff
+    expected=J(rows(data),3,.)
+    controls=selectindex((data[,1]:==0):&(data[,2]:<.):&(data[,3]:<.))
+    treated=selectindex((data[,1]:==1):&(data[,2]:<.):&(data[,3]:<.))
+    expected[controls,3]=J(rows(controls),1,0)
+    expected[treated,3]=J(rows(treated),1,1)
+    for(i=1;i<=rows(treated);i++) {
+        row=treated[i]
+        distances=abs(data[controls,2]:-data[row,2])
+        ordered=sort(distances,1)
+        cutoff=ordered[min((k,rows(ordered)))]
+        pick=controls[selectindex(distances:<=cutoff)]
+        expected[row,1]=mean(data[pick,3])
+        expected[row,2]=rows(pick)
+        expected[pick,3]=expected[pick,3]:+1/rows(pick)
+    }
+    for(i=1;i<=rows(expected);i++) if(expected[i,3]==0) expected[i,3]=.
+    return(expected)
+}
+real scalar coverage_tied_check(real matrix expected, real scalar att)
+{
+    real colvector treated
+    real matrix actual
+    treated=selectindex(expected[,2]:<.)
+    actual=st_data(.,tokens("_y _nn _weight"))
+    return(coverage_isnumeric_equal(expected[treated,1..2],actual[treated,1..2]) &
+        coverage_isnumeric_equal(expected[,3],actual[,3]) &
+        reldif(att,mean(st_data(treated,"y"):-expected[treated,1]))<1e-7)
+}
+end
+
 capture program drop coverage_sampling
 program define coverage_sampling
     syntax, REFerence(string asis) CANDidate(string asis) NAME(string)

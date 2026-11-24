@@ -1,4 +1,4 @@
-*! version 1.2.6 20261111 github.com/mdroste/stata-ctools
+*! version 1.3.0 20261124 github.com/mdroste/stata-ctools
 
 program define cencode, rclass
     version 14.1
@@ -262,7 +262,7 @@ program define _cencode_impl, rclass
         * Install the label vector without interpreting user text as source
         * =====================================================================
 
-        local n_unique = _cencode_n_unique
+        local n_unique = scalar(_cencode_n_unique)
 
         if `__existing' {
             * A plugin that does not report protocol 2 numbered the strings
@@ -277,7 +277,7 @@ program define _cencode_impl, rclass
                 return scalar N_unique = r(N_unique)
                 continue
             }
-            local n_new = _cencode_n_new
+            local n_new = scalar(_cencode_n_new)
             if `n_new' > 0 {
                 mata: _cencode_apply_labels(st_local("__labelfile"), st_local("this_label"), strtoreal(st_local("n_new")))
             }
@@ -351,7 +351,7 @@ program define _cencode_impl, rclass
         local __time_postplugin = `__ct_elapsed93'
 
         * Calculate plugin call overhead
-        capture local __plugin_time_total = _cencode_time_total
+        capture local __plugin_time_total = scalar(_cencode_time_total)
         if _rc != 0 local __plugin_time_total = 0
         local __plugin_call_overhead = `__time_plugin' - `__plugin_time_total'
 
@@ -360,14 +360,14 @@ program define _cencode_impl, rclass
         di as text "cencode timing breakdown:"
         di as text "{hline 55}"
         di as text "  C plugin internals:"
-        di as text "    Argument parsing:       " as result %8.4f _cencode_time_parse " sec"
-        di as text "    Read and code strings:  " as result %8.4f _cencode_time_load " sec"
-        di as text "    Merge unique values:    " as result %8.4f _cencode_time_collect " sec"
-        di as text "    Sort:                   " as result %8.4f _cencode_time_sort " sec"
-        di as text "    Encode:                 " as result %8.4f _cencode_time_encode " sec"
-        di as text "    Apply labels:           " as result %8.4f _cencode_time_labels " sec"
+        di as text "    Argument parsing:       " as result %8.4f scalar(_cencode_time_parse) " sec"
+        di as text "    Read and code strings:  " as result %8.4f scalar(_cencode_time_load) " sec"
+        di as text "    Merge unique values:    " as result %8.4f scalar(_cencode_time_collect) " sec"
+        di as text "    Sort:                   " as result %8.4f scalar(_cencode_time_sort) " sec"
+        di as text "    Encode:                 " as result %8.4f scalar(_cencode_time_encode) " sec"
+        di as text "    Apply labels:           " as result %8.4f scalar(_cencode_time_labels) " sec"
         di as text "  {hline 53}"
-        di as text "    C plugin total:         " as result %8.4f _cencode_time_total " sec"
+        di as text "    C plugin total:         " as result %8.4f scalar(_cencode_time_total) " sec"
         di as text ""
         di as text "  Stata overhead:"
         di as text "    Pre-plugin setup:       " as result %8.4f `__time_preplugin' " sec"
@@ -383,9 +383,9 @@ program define _cencode_impl, rclass
         di as text "  Variables encoded:        " as result `n_vars'
 
         * Display thread diagnostics
-        capture local __threads_max = _cencode_threads_max
+        capture local __threads_max = scalar(_cencode_threads_max)
         if _rc == 0 {
-            capture local __openmp_enabled = _cencode_openmp_enabled
+            capture local __openmp_enabled = scalar(_cencode_openmp_enabled)
             if _rc != 0 local __openmp_enabled = 0
             di as text ""
             di as text "  Thread diagnostics:"

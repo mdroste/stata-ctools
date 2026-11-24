@@ -9,6 +9,30 @@
 #include "ctools_parse.h"
 #include "ctools_runtime.h"
 
+/* Stata on Windows enters with x87 precision set to 53 bits, while OpenMP
+ * workers start with 64 bits. Our long-double sums and cubic products need
+ * the same precision on every thread, including an already-created team.
+ * Change only the precision bits and restore the caller/worker control word. */
+static unsigned short interpolation_precision_begin(void)
+{
+    unsigned short saved = 0;
+#if defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__))
+    __asm__ volatile ("fnstcw %0" : "=m" (saved));
+    unsigned short extended = saved | 0x0300;
+    __asm__ volatile ("fldcw %0" : : "m" (extended) : "memory");
+#endif
+    return saved;
+}
+
+static void interpolation_precision_end(unsigned short saved)
+{
+#if defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__))
+    __asm__ volatile ("fldcw %0" : : "m" (saved) : "memory");
+#else
+    (void)saved;
+#endif
+}
+
 static double line(double x, double x0, double y0, double x1, double y1)
 {
     double m = (y1 - y0) / (x1 - x0);
@@ -112,91 +136,95 @@ ST_retcode cinterpolate_main(const char *args)
             if (groups[i])
                 groups[ng++] = i;
     groups[ng] = n;
-#pragma omp parallel for schedule(dynamic, 16)                                                     \
-    num_threads(ctools_get_max_threads()) if (n > 10000 && ng > 1)
-    for (size_t g = 0; g < ng; g++)
+#pragma omp parallel num_threads(ctools_get_max_threads()) if (n > 10000 && ng > 1)
     {
-        size_t begin = groups[g], end = groups[g + 1];
-        size_t first = end, last = end, second = end;
-        size_t anchors[4], nanchors = 0;
-        for (size_t a = begin; a < end;)
+        unsigned short precision = interpolation_precision_begin();
+#pragma omp for schedule(dynamic, 16)
+        for (size_t g = 0; g < ng; g++)
         {
-            size_t b = a + 1, count = 0;
-            long double sum = 0;
-            while (b < end && x[p[b]] == x[p[a]])
-                b++;
-            if (x[p[a]] < SV_missval)
+            size_t begin = groups[g], end = groups[g + 1];
+            size_t first = end, last = end, second = end;
+            size_t anchors[4], nanchors = 0;
+            for (size_t a = begin; a < end;)
             {
-                for (size_t j = a; j < b; j++)
-                    if (y[p[j]] < SV_missval)
-                    {
-                        sum += y[p[j]];
-                        count++;
-                    }
-                if (count)
+                size_t b = a + 1, count = 0;
+                long double sum = 0;
+                while (b < end && x[p[b]] == x[p[a]])
+                    b++;
+                if (x[p[a]] < SV_missval)
                 {
-                    double mean = (double)(sum / count);
                     for (size_t j = a; j < b; j++)
-                        out[p[j]] = mean;
-                    if (cubic)
-                    {
-                        /* Fill only the middle interval once its second right
-                         * anchor is known. Each gap is visited at most once. */
-                        if (nanchors == 4)
+                        if (y[p[j]] < SV_missval)
                         {
-                            for (int k = 0; k < 3; k++)
-                                anchors[k] = anchors[k + 1];
-                            nanchors = 3;
+                            sum += y[p[j]];
+                            count++;
                         }
-                        anchors[nanchors++] = a;
-                        if (nanchors == 4)
-                            for (size_t j = anchors[1] + 1; j < anchors[2]; j++)
-                                if (out[p[j]] >= SV_missval)
-                                    out[p[j]] = cubic_value(x[p[j]], x, out, p, anchors);
-                        a = b;
-                        continue;
-                    }
-                    if (first == end)
-                        first = a;
-                    else
+                    if (count)
                     {
-                        if (second == end)
-                            second = a;
-                        for (size_t j = last + 1; j < a; j++)
-                            if (out[p[j]] >= SV_missval)
-                                out[p[j]] = line(x[p[j]], x[p[last]], out[p[last]], x[p[a]], mean);
+                        double mean = (double)(sum / count);
+                        for (size_t j = a; j < b; j++)
+                            out[p[j]] = mean;
+                        if (cubic)
+                        {
+                            /* Fill only the middle interval once its second right
+                             * anchor is known. Each gap is visited at most once. */
+                            if (nanchors == 4)
+                            {
+                                for (int k = 0; k < 3; k++)
+                                    anchors[k] = anchors[k + 1];
+                                nanchors = 3;
+                            }
+                            anchors[nanchors++] = a;
+                            if (nanchors == 4)
+                                for (size_t j = anchors[1] + 1; j < anchors[2]; j++)
+                                    if (out[p[j]] >= SV_missval)
+                                        out[p[j]] = cubic_value(x[p[j]], x, out, p, anchors);
+                            a = b;
+                            continue;
+                        }
+                        if (first == end)
+                            first = a;
+                        else
+                        {
+                            if (second == end)
+                                second = a;
+                            for (size_t j = last + 1; j < a; j++)
+                                if (out[p[j]] >= SV_missval)
+                                    out[p[j]] = line(x[p[j]], x[p[last]], out[p[last]], x[p[a]], mean);
+                        }
+                        last = a;
                     }
-                    last = a;
+                }
+                a = b;
+            }
+            if (epolate && second != end)
+            {
+                /* Native ipolate obtains endpoint slopes from adjacent rows after
+                 * interpolation. Reusing original anchors changes rounding when
+                 * the neighboring row was interpolated. Skip duplicate x values. */
+                size_t left = end, right = end;
+                for (size_t j = first; j + 1 < end; j++)
+                {
+                    if (x[p[j + 1]] >= SV_missval || x[p[j]] == x[p[j + 1]] ||
+                        out[p[j]] >= SV_missval || out[p[j + 1]] >= SV_missval)
+                        continue;
+                    if (left == end)
+                        left = j;
+                    right = j;
+                }
+                if (left != end)
+                {
+                    for (size_t j = begin; j < first; j++)
+                        out[p[j]] =
+                            line(x[p[j]], x[p[left]], out[p[left]], x[p[left + 1]], out[p[left + 1]]);
+                    for (size_t j = last + 1; j < end; j++)
+                        if (x[p[j]] < SV_missval && out[p[j]] >= SV_missval)
+                            out[p[j]] = line(x[p[j]], x[p[right]], out[p[right]], x[p[right + 1]],
+                                             out[p[right + 1]]);
                 }
             }
-            a = b;
         }
-        if (epolate && second != end)
-        {
-            /* Native ipolate obtains endpoint slopes from adjacent rows after
-             * interpolation. Reusing original anchors changes rounding when
-             * the neighboring row was interpolated. Skip duplicate x values. */
-            size_t left = end, right = end;
-            for (size_t j = first; j + 1 < end; j++)
-            {
-                if (x[p[j + 1]] >= SV_missval || x[p[j]] == x[p[j + 1]] ||
-                    out[p[j]] >= SV_missval || out[p[j + 1]] >= SV_missval)
-                    continue;
-                if (left == end)
-                    left = j;
-                right = j;
-            }
-            if (left != end)
-            {
-                for (size_t j = begin; j < first; j++)
-                    out[p[j]] =
-                        line(x[p[j]], x[p[left]], out[p[left]], x[p[left + 1]], out[p[left + 1]]);
-                for (size_t j = last + 1; j < end; j++)
-                    if (x[p[j]] < SV_missval && out[p[j]] >= SV_missval)
-                        out[p[j]] = line(x[p[j]], x[p[right]], out[p[right]], x[p[right + 1]],
-                                         out[p[right + 1]]);
-            }
-        }
+        interpolation_precision_end(precision);
     }
     double tcompute = ctools_timer_seconds();
     /* Include excluded observations: their initialized destination stays missing. */

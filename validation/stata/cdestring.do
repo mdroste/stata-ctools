@@ -2002,6 +2002,7 @@ clear
 _ct_same_output "DESTR-03 empty dataset" "destring, replace" "cdestring, replace"
 * SUMMARY
 * End of cdestring validation
+do "validation/support/six_release_regressions.do" cdestring
 noi print_summary "cdestring"
 }
 

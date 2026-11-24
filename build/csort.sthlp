@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.6 20261111}{...}
+{* *! version 1.3.0 20261124}{...}
 {viewerjumpto "Syntax" "csort##syntax"}{...}
 {viewerjumpto "Description" "csort##description"}{...}
 {viewerjumpto "Options" "csort##options"}{...}
@@ -51,6 +51,13 @@ where {it:name} is one of: {opt auto} (default), {opt counting}, {opt lsd}, {opt
 {cmd:csort} sorts the observations of the current dataset by the values of the
 variables in {varlist}. The sort is {it:stable}, meaning observations with
 equal key values maintain their relative order.
+
+{pstd}
+A failed or interrupted sort restores the original observations, sort marker,
+and active estimation sample. Mutating sorts keep a recovery snapshot using
+{cmd:preserve}, which may spill to disk above {cmd:c(max_preservemem)}. This
+adds snapshot memory or disk I/O in ordinary and streaming modes. The
+already-sorted shortcut avoids the snapshot.
 
 
 {pstd}

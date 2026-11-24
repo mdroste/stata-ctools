@@ -17,10 +17,9 @@
  *   current direction, over donors not yet used when noreplace, while the
  *   distance does not increase (the first of equal distances wins); once a
  *   match is the last donor, the direction turns backward;
- * - ties adds the (unused) donors that follow it in that direction at no
- *   greater distance, and neighbor(k) then adds the k-1 closest around it
- *   from both sides, the left on equal distance, so a donor can enter a
- *   list twice;
+ * - with replacement, ties includes every distinct donor through the kth
+ *   distance boundary. Without replacement (neighbor(1)), it retains the
+ *   reference's forward scan over unused donors at the nearest distance;
  * - every list entry gets 1/(list length), and a match needs a distance below
  *   caliper() (strict); a target left without one is off support;
  * - without replacement the matched donors are used up and the scan resumes
@@ -229,20 +228,30 @@ static int psm_scan(const double *ps, ssize_t n_pos, ssize_t i0, ssize_t i1, ssi
             used[jm] = 1;
             if (psm_lists_push(out, jm)) return -1;
             n++;
-            if (ties) {
+            /* Without replacement only neighbor(1) is supported. Preserve
+             * its sequential availability policy; no second neighbor pass
+             * can duplicate these donors. */
+            if (ties && noreplace) {
                 for (ssize_t k = psm_step(jm, forward, me, noreplace, used, n_pos);
                      k >= j0 && k <= j1 && fabs(ps[i] - ps[k]) <= nearest;
                      k = psm_step(k, forward, me, noreplace, used, n_pos)) {
                     if (psm_lists_push(out, k)) return -1;
                     n++;
-                    if (noreplace) used[k] = 1;
+                    used[k] = 1;
                 }
             }
             ssize_t p0 = jm - 1, p1 = jm + 1;
             if (p0 == me) p0--;
             if (p1 == me) p1++;
             double e0 = 0.0, e1 = 0.0;
-            for (int k = 1; k < neighbors;) {
+            /* Walk outward once: include each donor through the kth-distance
+             * boundary exactly once, even when the nearest run already has k. */
+            double boundary = nearest;
+            for (; !noreplace || n < (uint32_t)neighbors;) {
+                if (noreplace) {
+                    while (p0 >= j0 && (p0 == me || used[p0])) p0--;
+                    while (p1 <= j1 && (p1 == me || used[p1])) p1++;
+                }
                 if (p0 >= j0) e0 = fabs(ps[i] - ps[p0]);
                 if (p1 <= j1) e1 = fabs(ps[i] - ps[p1]);
                 ssize_t pick;
@@ -255,10 +264,13 @@ static int psm_scan(const double *ps, ssize_t n_pos, ssize_t i0, ssize_t i1, ssi
                 } else {
                     break;
                 }
-                if (!(fabs(ps[i] - ps[pick]) < cal)) break;
+                double distance = fabs(ps[i] - ps[pick]);
+                if (!(distance < cal)) break;
+                if (n >= (uint32_t)neighbors && (!ties || distance > boundary)) break;
                 if (psm_lists_push(out, pick)) return -1;
                 n++;
-                k++;
+                boundary = distance;
+                if (noreplace) used[pick] = 1;
             }
         }
         out->count[t] = n;

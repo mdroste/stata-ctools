@@ -257,6 +257,7 @@ foreach pair in "str3 str4" "float double" "byte long" "long float" {
     else test_fail "DATA-13 by() type `mtype' with using `utype'" "type `: type g' vs `native_type', cf r(`=_rc')"
 }
 }
+do "validation/support/audit_four_regressions.do" crangejoin
 print_summary "crangejoin"
 global CTOOLS_COMPONENT_COMPLETE "crangejoin"
     global CTOOLS_CASE_COMPLETE "crangejoin"

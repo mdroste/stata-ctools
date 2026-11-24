@@ -6,9 +6,10 @@ sysuse auto, clear
 tempfile original
 save `original'
 local bad : dir `"`fx'"' files "bad_*.parquet"
-assert `: word count `bad'' == 19
+assert `: word count `bad'' == 48
 foreach name of local bad {
     local expected=691
+    if substr("`name'",1,12)=="bad_decimal_" local expected=3900
     if inlist("`name'", "bad_magic.parquet", "bad_footer_size.parquet", "bad_truncated.parquet", "bad_row_total.parquet", "bad_row_overflow.parquet", "bad_negative_rows.parquet") local expected=3900
     if "`name'"=="bad_huge_rows.parquet" local expected=920
     foreach how in "" snapshot {

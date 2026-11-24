@@ -236,13 +236,17 @@ the coefficients' names, where `qreg` uses `_rmcoll`'s compact form for factor v
 quantile loss. Use explicit indicators when the number of groups permits it.
 
 ### Scale of the regressors
-The collinearity screen runs on the correlation matrix of the regressors, as `_rmcoll`, and the
-diagonal ridge of the solver's normal equations is at most 1e-14 times a column's sum of squares,
-so a regressor measured on a very small scale (sum of squares near 1e-13) is neither omitted nor
-shrunk. `e(rank)` is computed with `invsym()` on the covariance in the scaled response units
-(spread of y between 1 and 2), not on the covariance divided by its largest entry, so a constant
-beside such a regressor keeps its rank. At scales below about 1e-10 `qreg` itself omits the
-regressor or stops with r(2001); `cqreg` gives the rescaled fit.
+The design is centered and scaled by powers of two before collinearity screening,
+main and auxiliary solves, and covariance calculation. Indicator columns retain
+their zero origin for the generalized inverse used with zero-density factor
+levels. Coefficients and the full covariance are transformed back to the original
+units. `e(rank)` is assessed in the normalized coordinates. A common weight factor
+is removed only from the numerical solve; weight sums and weight-specific VCE
+definitions retain their original meaning. Unsafe input ranges or
+unrepresentable output covariance return error 498 instead of a silent omission
+or zero standard error. At small regressor scales `qreg` itself can omit the
+regressor or stop with r(2001); `cqreg` returns the equivalent fit when its results
+can be represented.
 
 ### Multiple optima
 The quantile regression objective can have a set of minimizers, which is common with indicator

@@ -1,4 +1,4 @@
-*! version 1.2.6 20261111 github.com/mdroste/stata-ctools
+*! version 1.3.0 20261124 github.com/mdroste/stata-ctools
 
 program define crangestat, rclass
     version 14.1
@@ -141,7 +141,8 @@ program define _crangestat_impl
             di as error "crangestat: invalid interval low bound '`int_low''"
             exit 198
         }
-        local int_low_val = `int_low'
+        local int_low_val : display %24.17g `int_low'
+        local int_low_val = strtrim("`int_low_val'")
     }
 
     if "`int_high'" == "." {
@@ -154,7 +155,8 @@ program define _crangestat_impl
             di as error "crangestat: invalid interval high bound '`int_high''"
             exit 198
         }
-        local int_high_val = `int_high'
+        local int_high_val : display %24.17g `int_high'
+        local int_high_val = strtrim("`int_high_val'")
     }
 
     * Start timing
@@ -683,7 +685,7 @@ program define _crangestat_impl
 
         * Calculate plugin call overhead
         local __plugin_time_total = 0
-        if `nstats' > 0 local __plugin_time_total = _crangestat_time_total
+        if `nstats' > 0 local __plugin_time_total = scalar(_crangestat_time_total)
         local __plugin_call_overhead = `__time_plugin' - `__plugin_time_total'
 
         di as text ""
@@ -692,13 +694,13 @@ program define _crangestat_impl
         di as text "{hline 55}"
         if `nstats' > 0 {
         di as text "  C plugin internals:"
-        di as text "    Data load:              " as result %8.4f _crangestat_time_load " sec"
-        di as text "    Sort:                   " as result %8.4f _crangestat_time_sort " sec"
-        di as text "    Group detection:        " as result %8.4f _crangestat_time_groups " sec"
-        di as text "    Compute statistics:     " as result %8.4f _crangestat_time_compute " sec"
-        di as text "    Store results:          " as result %8.4f _crangestat_time_store " sec"
+        di as text "    Data load:              " as result %8.4f scalar(_crangestat_time_load) " sec"
+        di as text "    Sort:                   " as result %8.4f scalar(_crangestat_time_sort) " sec"
+        di as text "    Group detection:        " as result %8.4f scalar(_crangestat_time_groups) " sec"
+        di as text "    Compute statistics:     " as result %8.4f scalar(_crangestat_time_compute) " sec"
+        di as text "    Store results:          " as result %8.4f scalar(_crangestat_time_store) " sec"
         di as text "  {hline 53}"
-        di as text "    C plugin total:         " as result %8.4f _crangestat_time_total " sec"
+        di as text "    C plugin total:         " as result %8.4f scalar(_crangestat_time_total) " sec"
         di as text ""
         }
         di as text "  Stata overhead:"
@@ -713,9 +715,9 @@ program define _crangestat_impl
 
         * Display thread diagnostics
         local __threads_max = .
-        if `nstats' > 0 local __threads_max = _crangestat_threads_max
+        if `nstats' > 0 local __threads_max = scalar(_crangestat_threads_max)
         if !missing(`__threads_max') {
-            capture local __openmp_enabled = _crangestat_openmp_enabled
+            capture local __openmp_enabled = scalar(_crangestat_openmp_enabled)
             if _rc != 0 local __openmp_enabled = 0
             di as text ""
             di as text "  Thread diagnostics:"

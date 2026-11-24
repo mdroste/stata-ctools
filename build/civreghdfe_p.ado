@@ -1,4 +1,4 @@
-*! version 1.2.6 20261111 github.com/mdroste/stata-ctools
+*! version 1.3.0 20261124 github.com/mdroste/stata-ctools
 
 program define civreghdfe_p, rclass
     version 14.1
@@ -79,7 +79,9 @@ program define civreghdfe_p, rclass
             * partialled out with the other terms)
             tempvar xbvar ypart esample rpart
             tempname ivest
-            PredictXB `xbvar' `if' `in', xb
+            * The auxiliary projection always uses the estimation sample.
+            * Prediction qualifiers restrict output, not that regression.
+            PredictXB `xbvar' if e(sample) | `touse', xb
             quietly gen double `ypart' = `depvar' - `xbvar'
             quietly gen byte `esample' = e(sample)
             local pwt

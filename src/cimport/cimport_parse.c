@@ -621,11 +621,15 @@ bool cimport_parse_unquoted_number(const char *src, int len, double *value, doub
     for (int i = 0; i < len; i++) {
         if (src[i] == 'd' || src[i] == 'D') { dexp = src + i; break; }
     }
-    if (dexp && len < 128) {
-        char text[128];
+    if (dexp) {
+        char small[128];
+        char *text = len < (int)sizeof(small) ? small : malloc((size_t)len);
+        if (!text) return false;
         memcpy(text, src, (size_t)len);
         text[dexp - src] = 'e';
-        return ctools_parse_double_with_separators(text, len, value, missing, decimal, group);
+        bool ok = ctools_parse_double_with_separators(text, len, value, missing, decimal, group);
+        if (text != small) free(text);
+        return ok;
     }
     return ctools_parse_double_with_separators(src, len, value, missing, decimal, group);
 }

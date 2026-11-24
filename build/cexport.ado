@@ -1,4 +1,4 @@
-*! version 1.2.6 20261111 github.com/mdroste/stata-ctools
+*! version 1.3.0 20261124 github.com/mdroste/stata-ctools
 
 program define cexport, rclass
     version 14.1
@@ -23,7 +23,12 @@ program define cexport, rclass
         exit
     }
 
-    if inlist("`subcmd'", "sas", "spss", "sasxport5", "sasxport8", "dbase") {
+    if "`subcmd'" == "dbase" {
+        _cio_export `subcmd' `macval(0)'
+        return add
+        exit
+    }
+    if inlist("`subcmd'", "sas", "spss", "sasxport5", "sasxport8") {
         _cio_export `subcmd' `0'
         return add
         exit
@@ -31,7 +36,7 @@ program define cexport, rclass
 
     if "`subcmd'" == "excel" {
         * Dispatch to Excel export handler
-        cexport_excel `0'
+        cexport_excel `macval(0)'
         return add
         exit
     }
@@ -469,7 +474,7 @@ program define cexport_excel, rclass
     }
 
     _cexport_excel_sheet `macval(sheet)'
-    local sheet `"`r(sheet)'"'
+    mata: st_local("sheet", st_global("r(sheet)"))
     local sheet_action `r(action)'
     * As export excel does: the separate sheetmodify and sheetreplace options
     * exclude each other and take precedence over the sheet() suboption.
@@ -488,26 +493,29 @@ program define cexport_excel, rclass
     }
 
     * Handle filename - can come from using/ or as last positional argument
-    if `"`using'"' == "" & `"`anything'"' != "" {
-        local __tokens `"`anything'"'
+    if `"`macval(using)'"' == "" & `"`macval(anything)'"' != "" {
+        local __tokens `"`macval(anything)'"'
         local __filename ""
         local __varlist ""
-        while `"`__tokens'"' != "" {
+        while `"`macval(__tokens)'"' != "" {
             gettoken __tok __tokens : __tokens
-            if `"`__tokens'"' == "" local __filename `"`__tok'"'
+            * A one-line if reparses its command and expands the text again.
+            if `"`macval(__tokens)'"' == "" {
+                mata: st_local("__filename", st_local("__tok"))
+            }
             else {
-                local __varlist `"`__varlist' `__tok'"'
+                local __varlist `"`macval(__varlist)' `macval(__tok)'"'
             }
         }
-        if `"`__filename'"' == "" {
+        if `"`macval(__filename)'"' == "" {
             di as error "cexport excel: filename required"
             di as error "Syntax: cexport excel [varlist] [using] filename [, options]"
             exit 198
         }
-        local using `"`__filename'"'
-        local anything `"`__varlist'"'
+        local using `"`macval(__filename)'"'
+        local anything `"`macval(__varlist)'"'
     }
-    if `"`using'"' == "" {
+    if `"`macval(using)'"' == "" {
         di as error "cexport excel: filename required"
         di as error "Syntax: cexport excel [varlist] [using] filename [, options]"
         exit 198
@@ -515,8 +523,8 @@ program define cexport_excel, rclass
     * Resolve varlist from anything.
     * Must happen BEFORE marksample, which creates a touse tempvar
     * that ds would include in the variable list.
-    if strtrim(`"`anything'"') != "" {
-        unab varlist : `anything'
+    if strtrim(`"`macval(anything)'"') != "" {
+        unab varlist : `macval(anything)'
     }
     else {
         qui ds
@@ -528,8 +536,8 @@ program define cexport_excel, rclass
     marksample touse, novarlist
 
     * Validate cell option format (e.g., A1, B5, AA10)
-    if `"`cell'"' != "" {
-        local cell_upper = upper(`"`cell'"')
+    if `"`macval(cell)'"' != "" {
+        local cell_upper = upper(`"`macval(cell)'"')
         * Check format: 1-3 letters followed by 1 or more digits
         if !regexm("`cell_upper'", "^[A-Z]+[0-9]+$") {
             di as error "cexport excel: cell() must be a valid cell reference (e.g., A1, B5)"
@@ -544,21 +552,21 @@ program define cexport_excel, rclass
     * ending in .xls is a binary workbook; any other name (.xlsm, .xltx, .dat)
     * is kept as given and holds an Office Open XML workbook.
     mata: st_local("__xlbase", pathbasename(st_local("using")))
-    if !strpos(`"`__xlbase'"', ".") {
-        local using `"`using'.xlsx"'
+    if !strpos(`"`macval(__xlbase)'"', ".") {
+        local using `"`macval(using)'.xlsx"'
     }
     local excel_engine "cexport_xlsx"
-    if lower(substr(`"`using'"',-4,4)) == ".xls" local excel_engine "cexport_xls"
+    if lower(substr(`"`macval(using)'"',-4,4)) == ".xls" local excel_engine "cexport_xls"
 
     * Parse firstrow option
     local opt_firstrow = "nofirstrow"
-    if "`firstrow'" != "" & substr("variables",1,strlen("`firstrow'")) == "`firstrow'" local firstrow "variables"
-    if strlen("`firstrow'") >= 4 & substr("varlabels",1,strlen("`firstrow'")) == "`firstrow'" local firstrow "varlabels"
-    if "`firstrow'" != "" {
-        if "`firstrow'" == "nonames" {
+    if "`macval(firstrow)'" != "" & substr("variables",1,strlen("`macval(firstrow)'")) == "`macval(firstrow)'" local firstrow "variables"
+    if strlen("`macval(firstrow)'") >= 4 & substr("varlabels",1,strlen("`macval(firstrow)'")) == "`macval(firstrow)'" local firstrow "varlabels"
+    if "`macval(firstrow)'" != "" {
+        if "`macval(firstrow)'" == "nonames" {
             local opt_firstrow = "nofirstrow"
         }
-        else if inlist("`firstrow'", "variables", "varlabels") {
+        else if inlist("`macval(firstrow)'", "variables", "varlabels") {
             local opt_firstrow "firstrow"
         }
         else {
@@ -602,7 +610,7 @@ program define cexport_excel, rclass
     }
 
     * Handle datafmt and datestring(): format date/time variables as strings
-    if "`datafmt'" != "" | `"`datestring'"' != "" {
+    if "`datafmt'" != "" | `"`macval(datestring)'"' != "" {
         local new_export_varlist ""
         local formatted_vars ""
         local export_idx = 0
@@ -626,8 +634,8 @@ program define cexport_excel, rclass
 
                 * Use datestring format if specified, otherwise use variable's display format
                 * Note: missing values should become empty strings (like Stata's behavior)
-                if `"`datestring'"' != "" {
-                    qui gen str `fmtvar_`export_idx'' = cond(missing(`origvar'), "", string(`origvar', `"`datestring'"'))
+                if `"`macval(datestring)'"' != "" {
+                    qui gen str `fmtvar_`export_idx'' = cond(missing(`origvar'), "", string(`origvar', `"`macval(datestring)'"'))
                 }
                 else {
                     qui gen str `fmtvar_`export_idx'' = cond(missing(`origvar'), "", string(`origvar', "`fmt'"))
@@ -755,7 +763,7 @@ program define cexport_excel, rclass
     local opt_replace = cond("`replace'" != "", "replace", "")
     local opt_nolabel = cond("`nolabel'" != "", "nolabel", "")
     local opt_verbose = cond("`verbose'" != "", "verbose", "")
-    local opt_cell = cond(`"`cell'"' != "", `"cell=`cell'"', "")
+    local opt_cell = cond(`"`macval(cell)'"' != "", `"cell=`macval(cell)'"', "")
     local opt_keepcellfmt = cond("`keepcellfmt'" != "", "keepcellfmt", "")
 
     * Pass variable names to plugin
@@ -834,7 +842,7 @@ program define cexport_excel, rclass
     local metadata_count : word count `varlist'
     forvalues metadata_i=1/`metadata_count' {
         local __cexport_name_`metadata_i' : word `metadata_i' of `varlist'
-        if "`firstrow'" == "varlabels" {
+        if "`macval(firstrow)'" == "varlabels" {
             local header_var : word `metadata_i' of `varlist'
             * Labels may come from someone else's file: Mata only
             mata: st_local("__cexport_name_`metadata_i'", st_varlabel("`header_var'") != "" ? st_varlabel("`header_var'") : st_local("__cexport_name_`metadata_i'"))
@@ -843,12 +851,12 @@ program define cexport_excel, rclass
         local __cexport_date_`metadata_i' : word `metadata_i' of `date_cols'
         if "`__cexport_date_`metadata_i''" == "" local __cexport_date_`metadata_i' 0
     }
-    local __cexport_filename `"`using'"'
-    local __cexport_filename_len = strlen(`"`__cexport_filename'"')
-    local __cexport_sheet `"`sheet'"'
-    local __cexport_sheet_len = strlen(`"`__cexport_sheet'"')
-    local __cexport_missing `"`missing'"'
-    local __cexport_missing_len = strlen(`"`__cexport_missing'"')
+    * Pass literal text directly to the plugin, without macro re-expansion.
+    foreach field in filename sheet missing {
+        local source = cond("`field'" == "filename", "using", "`field'")
+        mata: st_local("__cexport_`field'", st_local("`source'"))
+        mata: st_local("__cexport_`field'_len", strofreal(strlen(st_local("`source'"))))
+    }
     local opt_replace = cond("`replace'" != "", "replace", "")
 
     * Record start time
@@ -872,7 +880,7 @@ program define cexport_excel, rclass
 
     * The plugin reports a write-protected destination as r(608)
     if `export_rc' == 608 {
-        di as error `"file `using' could not be saved"'
+        di as error `"file `macval(using)' could not be saved"'
         exit 603
     }
     if `export_rc' {
@@ -888,7 +896,7 @@ program define cexport_excel, rclass
 
     * Display summary
     di as text ""
-    di as text "file " as result `"`using'"' as text " saved"
+    di as text "file " as result `"`macval(using)'"' as text " saved"
     di as text "(" as result %12.0fc `nobs' as text " observations written)"
 
     if "`verbose'" != "" {
@@ -900,7 +908,7 @@ program define cexport_excel, rclass
     return scalar N = `nobs'
     return scalar k = `nvars'
     return scalar time = `elapsed'
-    return local filename `"`using'"'
+    return local filename `"`macval(using)'"'
 
     local __ct_elapsed99 = 0
 end

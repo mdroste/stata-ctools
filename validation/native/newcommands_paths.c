@@ -9,6 +9,56 @@
 #undef state
 
 static int last_allocations,last_stores;
+
+static void interpolation_thread_precision(void)
+{
+    clear_fixture();resize_fixture(30000);nv=4;
+    for(int i=0;i<nr;i++) {
+        double x=i/30+((i*37)%101)/202.0;
+        numbers[0][i]=i/30%3==1?mock.missval:2+x/10-x*x/1000+x*x*x/1000000+i%30;
+        numbers[1][i]=x;numbers[2][i]=i%30;
+    }
+#if defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__))
+    /* Reproduce Stata's main-thread precision and independently seeded workers. */
+    unsigned short original,host,after;
+    __asm__ volatile ("fnstcw %0" : "=m" (original));
+    host=(original & ~0x0300) | 0x0200;
+    __asm__ volatile ("fldcw %0" : : "m" (host) : "memory");
+#ifdef _OPENMP
+    unsigned short worker_before[4],worker_after[4];
+#pragma omp parallel num_threads(4)
+    {
+        int id=omp_get_thread_num();
+        unsigned short cw=id?original:host;
+        __asm__ volatile ("fldcw %0" : : "m" (cw) : "memory");
+        __asm__ volatile ("fnstcw %0" : "=m" (worker_before[id]));
+    }
+#endif
+#endif
+    threads=1;assert(!cinterpolate_main("1 0 0 cubic"));
+    double *serial=malloc((size_t)nr*sizeof(double));assert(serial);
+    memcpy(serial,numbers[3],(size_t)nr*sizeof(double));
+    for(int repeat=0;repeat<3;repeat++) {
+        threads=4;assert(!cinterpolate_main("1 0 0 cubic"));
+        assert(!memcmp(serial,numbers[3],(size_t)nr*sizeof(double)));
+    }
+    free(serial);assert(!live);
+#if defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__))
+    __asm__ volatile ("fnstcw %0" : "=m" (after));
+    assert(after==host);
+#ifdef _OPENMP
+#pragma omp parallel num_threads(4)
+    {
+        int id=omp_get_thread_num();
+        __asm__ volatile ("fnstcw %0" : "=m" (worker_after[id]));
+    }
+    for(int i=0;i<4;i++)assert(worker_after[i]==worker_before[i]);
+#endif
+    __asm__ volatile ("fldcw %0" : : "m" (original) : "memory");
+#endif
+    clear_fixture();
+}
+
 static void group_key(int col,int row,int group,int string)
 {
     if(string) { char s[24];snprintf(s,sizeof(s),"group-%d",group);text_cell(col,row,s);types[col]=1; }
@@ -206,6 +256,7 @@ int main(void)
     mock.nobs=nobs;mock.nvars=nvars;mock.nvar=nvars;mock.isstr=isstr;mock.isstrl=isstrl;
     mock.store=putnum;mock.safestore=putnum;mock.sstore=putstr;mock.macresave=macro_save;mock.macuse=macro_get;
     mock.missval=8.98846567431158e307;
+    interpolation_thread_precision();
     memset(longest,'x',2045);longest[2045]=0;
     for(threads=1;threads<=4;threads*=4) {
         for(int by=1;by<=2;by++)for(int string=0;string<=1;string++) {

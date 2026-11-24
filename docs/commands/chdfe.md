@@ -68,6 +68,11 @@ requires pairwise or first-pair adjustments; no output is created without an
 eligible pair. With more than two categorical effects, the degrees-of-freedom
 calculation is generally an upper bound, as in `hdfe`.
 
+If the within-sample range of weights, slopes, or transformed variables is too
+wide to preserve nonzero values and squared norms during normalization, `chdfe`
+returns error 498 before publishing output. It does not silently drop small
+groups or report convergence for the altered projection.
+
 ## Saved results
 
 The reference results are `e(df_a)`, `e(N_hdfe)`, `e(N_hdfe_extended)`,

@@ -1215,6 +1215,7 @@ if _rc test_fail "P3-10 negative code: generated variables" "rows coded -1"
 else test_pass "P3-10 negative code: generated variables"
 
 * SUMMARY
+do "validation/support/audit_four_regressions.do" cpsmatch
 noi print_summary "cpsmatch"
 }
 

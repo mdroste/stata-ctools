@@ -916,9 +916,9 @@ case(
     "cpsmatch",
     "exact score ties",
     "pscore outcome neighbor ties",
-    "psmatch2 treat, pscore(ps) outcome(y) neighbor(3) ties",
+    "analytic distinct donors through the third-distance boundary",
     "cpsmatch treat, pscore(ps) outcome(y) neighbor(3) ties",
-    "matching",
+    "tied_matching",
     setup="replace ps=round(ps,.1)\nreplace ps=.05 if ps==0\nreplace ps=.95 if ps==1",
 )
 
@@ -999,7 +999,7 @@ def inventory(root=ROOT):
     # Statistical-format dispatch options are composed in private adapters.
     for cmd, helper in [("cimport", "_cio_import"), ("cexport", "_cio_export")]:
         for line in (root / f"build/{helper}.ado").read_text().splitlines():
-            if "local options" not in line:
+            if not re.search(r"\blocal (?:options|syntax_opts)\b", line):
                 continue
             for token in re.findall(r"\b([A-Z][A-Za-z]*(?:\([^)]*\))?)", line):
                 word = token.split("(")[0]

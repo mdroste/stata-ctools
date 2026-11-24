@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.6 20261111}{...}
+{* *! version 1.3.0 20261124}{...}
 {viewerjumpto "Syntax" "cbsample##syntax"}{...}
 {viewerjumpto "Description" "cbsample##description"}{...}
 {viewerjumpto "Options" "cbsample##options"}{...}
@@ -105,6 +105,13 @@ cluster order, or at random when some stratum draws fewer clusters than it
 has. The data are sorted by strata, {it:newvar} and the original observation
 order. An existing variable of that name is replaced. {opt idcluster()}
 requires {opt cluster()} and may not be combined with {opt weight()} (r(198)).
+
+{pstd}
+Without {opt weight()}, {cmd:cbsample} under version 8 or later preserves the
+dataset while it draws and expands the sample. An error or Break restores the original observations,
+variables, labels and sort order, including an existing {opt idcluster()}
+variable. This recovery uses Stata's {help preserve} storage. An expanded
+sample requiring an {opt idcluster()} plugin pass must fit within 2^31-1 rows.
 
 {phang}
 {opt strata(varlist)} specifies variables identifying strata. Resampling is

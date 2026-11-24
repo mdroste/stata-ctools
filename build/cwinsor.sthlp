@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.6 20261111}{...}
+{* *! version 1.3.0 20261124}{...}
 {viewerjumpto "Syntax" "cwinsor##syntax"}{...}
 {viewerjumpto "Description" "cwinsor##description"}{...}
 {viewerjumpto "Options" "cwinsor##options"}{...}

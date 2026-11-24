@@ -1025,6 +1025,24 @@ foreach tag in le be {
 cio_import_test using "`root'/long_text.xlsx", kind(excel) name("xlsx long text allstring(%9.2f)") opts(firstrow allstring("%9.2f"))
 cio_import_test using "`root'/long_text.xlsx", kind(excel) name("xlsx long text allstring(%20.0g)") opts(firstrow allstring("%20.0g"))
 cio_import_test using "`root'/long_text.xlsx", kind(excel) name("xlsx long text allstring") opts(firstrow allstring)
+foreach fixture in entity_bad_text entity_bad_number entity_bad_attribute {
+    foreach recovery in "" "snapshot" {
+        clear
+        set obs 2
+        gen sentinel = 100 + _n
+        tempfile original
+        quietly save `original', replace
+        capture noisily cimport excel using "`root'/`fixture'.xlsx", clear `recovery'
+        local rc = _rc
+        * The XLSX reader reports malformed XML as r(610).
+        assert `rc' == 610
+        cf _all using `original', all
+        cio_record "xlsx rejects `fixture' and restores data `recovery'" 0
+    }
+}
+cimport excel using "`root'/entity_valid.xlsx", clear
+assert A == 1 & B == 100 & C == "&bogus;"
+cio_record "xlsx valid numeric entities and literal CDATA" 0
 di "IO_OPTIONS_PASSED=$IO_FORMATS_PASSED FAILED=$IO_FORMATS_FAILED"
 if $IO_FORMATS_FAILED exit 9
     global CTOOLS_CASE_COMPLETE "io_excel_options"

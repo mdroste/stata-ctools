@@ -535,6 +535,13 @@ static inline void ctools_missing_if_out_of_range(double *result, double missval
 
 bool ctools_parse_double_fast(const char *str, int len, double *result, double missval)
 {
+    return ctools_parse_double_status(str, len, result, missval) == CTOOLS_NUMBER_OK;
+}
+
+ctools_number_status ctools_parse_double_status(const char *str, int len,
+                                               double *result, double missval)
+{
+    if (!str || len < 0 || !result) return CTOOLS_NUMBER_INVALID;
     const char *p = str;
     const char *end = str + len;
 
@@ -676,7 +683,7 @@ bool ctools_parse_double_fast(const char *str, int len, double *result, double m
             buf = stack_buf;
         } else {
             buf = (char *)malloc(trimmed_len + 1);
-            if (!buf) return false;
+            if (!buf) return CTOOLS_NUMBER_MEMORY;
             allocated = true;
         }
         memcpy(buf, start, trimmed_len);

@@ -261,8 +261,11 @@ cqreg_state *cqreg_state_create(ST_int N, ST_int K)
     state->residuals = (ST_double *)ctools_cacheline_alloc(N * sizeof(ST_double));
     state->fitted = (ST_double *)ctools_cacheline_alloc(N * sizeof(ST_double));
     state->obs_density = (ST_double *)ctools_cacheline_alloc(N * sizeof(ST_double));
+    state->x_shift = calloc((size_t)K, sizeof(*state->x_shift));
+    state->x_exponent = calloc((size_t)K, sizeof(*state->x_exponent));
     if (state->beta == NULL || state->V == NULL || state->residuals == NULL ||
-        state->fitted == NULL || state->obs_density == NULL) goto cleanup;
+        state->fitted == NULL || state->obs_density == NULL ||
+        state->x_shift == NULL || state->x_exponent == NULL) goto cleanup;
 
     /* Initialize to zero */
     memset(state->beta, 0, K * sizeof(ST_double));
@@ -315,6 +318,8 @@ void cqreg_state_free(cqreg_state *state)
     }
 
     ctools_aligned_free(state->weights);
+    free(state->x_shift);
+    free(state->x_exponent);
     ctools_aligned_free(state->obs_map);
 
     /* Free stata_data if we own it */

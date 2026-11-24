@@ -900,6 +900,16 @@ def excel_import_fixtures(directory):
     book("numeric_headers.xlsx", [("Sheet1", row(1, value("A1", 0.25) + value("B1", 43831.5) + value("C1", "1e-7") + text("D1", "name"))
                                    + row(2, value("A2", 1) + value("B2", 2) + value("C2", 3) + value("D2", 4)))])
 
+    # Validate entities before a numeric prefix can be accepted as a value.
+    for name, cells in {
+        "entity_bad_text": '<c r="A1" t="inlineStr"><is><t>before &bogus; after</t></is></c>',
+        "entity_bad_number": '<c r="A1"><v>1&bogus;00</v></c>',
+        "entity_bad_attribute": '<c r="A1" s="&bogus;"><v>1</v></c>',
+        "entity_valid": '<c r="A1"><v>&#49;</v></c><c r="B1"><v>1&#x30;0</v></c>'
+                        '<c r="C1" t="inlineStr"><is><t><![CDATA[&bogus;]]></t></is></c>',
+    }.items():
+        book(name + ".xlsx", [("Sheet1", row(1, cells))])
+
     # Display formats, string-column text and header labels of date and time
     # cells; cells without s= (cellXfs[0] is a date); UTF-16 parts; long text
     # under allstring("%9.2f").

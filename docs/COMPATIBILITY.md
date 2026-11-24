@@ -31,6 +31,13 @@ In the Weights column, `aw`, `fw`, `pw`, and `iw` are Stata weight types. A dash
 
 ## cpsmatch standard errors
 
+With replacement, `ties neighbor(k)` includes each distinct donor once through
+the kth-distance boundary. This intentionally corrects `psmatch2`'s duplicate
+donors for multiple neighbors. Mahalanobis matching also corrects loss of
+information after translating covariates: it uses centered rank screening and
+distances formed from coordinate differences. Inputs whose names collide with
+generated outputs are rejected before they can be deleted.
+
 `cpsmatch` reports the same ATT standard error as `psmatch2` does by default:
 
 ```

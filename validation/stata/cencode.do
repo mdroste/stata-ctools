@@ -2463,6 +2463,7 @@ else test_fail "ENC-01 if may name the caller's r()" "`n_rich' encoded"
 drop native_code make_code rich
 _ct_same_output "ENC-01 numeric source message" "encode price, gen(bad)" "cencode price, gen(bad)"
 * End of cencode validation
+do "validation/support/six_release_regressions.do" cencode
 noi print_summary "cencode"
 }
 

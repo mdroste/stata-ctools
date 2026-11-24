@@ -102,6 +102,7 @@ typedef struct
     int num_children;
     int converted; /* -1 unset */
     int scale, precision;
+    int has_scale, has_precision;
     int logical; /* LogicalType union member id, 0 none */
     int lt_scale, lt_precision, lt_unit, lt_bits, lt_signed;
 } pq_schema;

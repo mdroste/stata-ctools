@@ -4,6 +4,8 @@
 static int scalar_calls,fail_scalar;
 static double scalars[9];
 static char failed_counts[256];
+static const char *raw_ignore = "";
+static int ignore_read;
 static const char *scalar_names[]={"_cdestring_n_converted","_cdestring_n_failed",
     "_cdestring_time_parse","_cdestring_time_load","_cdestring_time_convert",
     "_cdestring_time_store","_cdestring_time_total","_cdestring_threads_max",
@@ -16,8 +18,16 @@ static ST_retcode save_scalar(char *name,double value)
 }
 static ST_retcode save_macro(char *name,char *value)
 {
+    if(!strcmp(name,"_cdestring_ignore_read")) {
+        assert(!strcmp(value,"1"));ignore_read=1;return fail_macro?459:0;
+    }
     assert(!strcmp(name,"_cdestring_failed"));if(fail_macro)return 459;
     assert(strlen(value)<sizeof(failed_counts));strcpy(failed_counts,value);return 0;
+}
+static ST_retcode read_macro(char *name,char *value,ST_int size)
+{
+    assert(!strcmp(name,"___cds_ignore"));
+    assert(strlen(raw_ignore)<(size_t)size);strcpy(value,raw_ignore);return 0;
 }
 static ST_retcode error_message(char *message){(void)message;return 0;}
 stata_retcode ctools_store_filtered_rowpar(double *x,size_t n,int col,perm_idx_t *map)
@@ -30,7 +40,7 @@ static void init(int rows,int vars)
     assert(!live);clear_fixture();resize_fixture(rows);nv=2*vars;
     for(int v=0;v<vars;v++)types[v]=1;
     for(int v=0;v<vars;v++)for(int r=0;r<rows;r++)numbers[vars+v][r]=-12345;
-    scalar_calls=fail_scalar=0;failed_counts[0]=0;
+    scalar_calls=fail_scalar=ignore_read=0;failed_counts[0]=0;
     for(int i=0;i<9;i++)scalars[i]=-999;
 #ifdef _OPENMP
     omp_set_dynamic(0);omp_set_num_threads(threads);
@@ -91,6 +101,34 @@ static void values(void)
     assert(numbers[1][0]==missing(1)&&numbers[1][1]==0x1.fffffffffffffp1023);
 }
 static int last_allocations,last_stores;
+static void release_regressions(void)
+{
+    int counts[]={INT_MAX,INT_MAX,123};
+    assert(cdestring_total(counts,3)==UINT64_C(4294967417));
+    raw_ignore="\" \\t";
+    init(1,1);text_cell(0,0,"\"12\" \\t");
+    assert(!run("nvars=1 seqpairs force ignorelen=4"));
+    assert(ignore_read&&numbers[1][0]==12&&scalars[0]==1&&scalars[1]==0);
+    raw_ignore="";
+    /* A valid decimal longer than the parser's stack buffer must never
+     * become missing under force when any allocation fails. */
+    for(int exponent=0;exponent<2;exponent++) {
+        char value[160];strcpy(value,"1.");memset(value+2,'1',140);
+        strcpy(value+142,exponent?"d+0":"");
+        int count=0;
+        for(int fault=0;fault<=count;fault++) {
+            init(1,1);text_cell(0,0,value);fail_alloc=fault;
+            int rc=run("nvars=1 seqpairs force skipif");
+            if(!fault) {
+                assert(!rc&&numbers[1][0]>1.11&&numbers[1][0]<1.12);
+                count=allocations;
+            } else {
+                assert(rc==920&&stores==0&&numbers[1][0]==-12345);
+            }
+        }
+    }
+    clear_fixture();
+}
 static int pipeline(int rows,int vars,int force,int percent,int filter,int af,int sf,int mf,int vf)
 {
     init(rows,vars);int fail[4]={0},converted=0,total_failed=0;
@@ -132,9 +170,11 @@ int main(void)
 {
     mock.nobs=nobs;mock.nvars=nvars;mock.nvar=nvars;mock.isstr=isstr;mock.isstrl=isstrl;
     mock.store=putnum;mock.safestore=putnum;mock.scalsave=save_scalar;mock.macresave=save_macro;
+    mock.macuse=read_macro;
     mock.spouterr=error_message;mock.missval=8.98846567431158e307;
     values();
     for(threads=1;threads<=4;threads*=4) {
+        release_regressions();
         for(int vars=1;vars<=3;vars+=2)for(int force=0;force<2;force++)
             for(int percent=0;percent<2;percent++)for(int filter=0;filter<2;filter++)
                 assert(!pipeline(12001,vars,force,percent,filter,0,0,0,0));

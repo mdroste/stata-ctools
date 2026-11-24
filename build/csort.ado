@@ -1,12 +1,13 @@
-*! version 1.2.6 20261111 github.com/mdroste/stata-ctools
+*! version 1.3.0 20261124 github.com/mdroste/stata-ctools
 
 program define csort, rclass
     version 14.1
     local command `"`0'"'
     syntax varlist [in], [STReam(integer 0) NOSTReam *]
-    * Match the native automatic-stream threshold. Streaming keeps bounded
-    * C buffers; Stata's preserve may spill the recovery copy to disk.
-    local recover = "`nostream'" == "" & (`stream' > 0 | (c(k) > 30 & _N > 10000000))
+    * Publication and the subsequent sort-marker/e(sample) updates form one
+    * transaction, including ordinary and nostream sorts. preserve may spill
+    * the recovery copy to disk above c(max_preservemem).
+    local recover 1
     if "`: sortedby'" == "`varlist'" & "`in'" == "" local recover 0
     nobreak {
         if `recover' preserve

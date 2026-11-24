@@ -133,12 +133,26 @@ int cio_scan_dbf(cio_dataset *dataset, const char *path)
                     else if (*s == 'F' || *s == 'f' || *s == 'N' || *s == 'n')
                         x = 0;
                 }
-                else if (f[11] == 'D' && len == 8)
+                else if (f[11] == 'D')
                 {
-                    int y, m, d;
-                    if (sscanf(s, "%4d%2d%2d", &y, &m, &d) == 3 && m >= 1 && m <= 12 && d >= 1 &&
-                        d <= 31)
-                        x = cio_civil_days(y, (unsigned)m, (unsigned)d);
+                    /* Invalid dates remain missing; civil_days deliberately
+                     * normalizes overflow and is not a calendar validator. */
+                    int digits = len == 8;
+                    for (size_t k = 0; digits && k < len; k++)
+                        digits = s[k] >= '0' && s[k] <= '9';
+                    if (digits) {
+                        int y = (s[0]-'0')*1000 + (s[1]-'0')*100 + (s[2]-'0')*10 + s[3]-'0';
+                        int m = (s[4]-'0')*10 + s[5]-'0';
+                        int d = (s[6]-'0')*10 + s[7]-'0';
+                        static const int days[] = {31,28,31,30,31,30,31,31,30,31,30,31};
+                        /* Native Stata dates begin at year 0100. */
+                        if (y >= 100 && m >= 1 && m <= 12) {
+                            int last = days[m-1] + (m == 2 && y % 4 == 0 &&
+                                                   (y % 100 != 0 || y % 400 == 0));
+                            if (d >= 1 && d <= last)
+                                x = cio_civil_days(y, (unsigned)m, (unsigned)d);
+                        }
+                    }
                 }
                 else if (len)
                 {

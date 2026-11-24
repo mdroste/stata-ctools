@@ -831,7 +831,7 @@ benchmark_qreg price mpg weight if price > 5000, testname("if condition")
 
 * in condition (may have alternate optima with small subsets)
 sysuse auto, clear
-benchmark_qreg price mpg weight in 1/50, testname("in condition")
+benchmark_qreg_altopt price mpg weight in 1/50, testname("in condition")
 
 * Combined if and in
 sysuse auto, clear
@@ -1881,15 +1881,25 @@ foreach density in fitted kernel {
     }
 }
 
-* Stata itself discards V at this scale, even for an exactly symmetric
-* nonsingular 2x2 matrix. Return an error rather than publish zero covariance.
+* Host posting at tiny scales can discard V. Either preserve the covariance
+* of the equivalent unit-scale fit or reject the post; never publish zero V.
 foreach factor in 1e-100 {
+    quietly cqreg y x
+    matrix posting_reference=e(V)
     replace scaled_y = y * `factor'
     capture cqreg scaled_y x
-    assert _rc == 498
-    capture matrix discarded_V = e(V)
-    assert _rc == 301
-    test_pass "reject covariance discarded by host at scale `factor'"
+    local postrc=_rc
+    if `postrc'==0 {
+        matrix posting_actual=e(V)/(`factor'^2)
+        assert mreldif(posting_actual,posting_reference)<1e-7
+        assert posting_actual[1,1]>0
+    }
+    else {
+        assert `postrc'==498
+        capture matrix discarded_V = e(V)
+        assert _rc == 301
+    }
+    test_pass "preserve or reject covariance at host posting scale `factor'"
 }
 replace scaled_y = 1e-14
 capture cqreg scaled_y x
@@ -1912,6 +1922,7 @@ foreach vce in iid robust {
         else test_fail "reject unrepresentable covariance `vce' `factor'" "rc `scale_rc'"
     }
 }
+do "validation/support/audit_four_regressions.do" cqreg
 print_summary "cqreg sample and response scales"
 global CTOOLS_COMPONENT_COMPLETE "cqreg_sample_scale"
 global CTOOLS_CASE_COMPLETE "cqreg_sample_scale"

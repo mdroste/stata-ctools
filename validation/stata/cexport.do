@@ -2865,6 +2865,90 @@ foreach e in xlsm xltx dat "" {
     capture erase "`f_c'"
 }
 
+* Literal macro text in Excel paths/sheets must survive every dispatch step.
+* A colliding expanded destination must remain untouched, even with replace.
+local oldctxl : copy global CTXL
+global CTXL expanded
+local xl_local local_expansion
+tempfile xlbase
+foreach ext in xls xlsx {
+    foreach positional in 0 1 {
+        clear
+        set obs 2
+        gen x = 999
+        local collision "`xlbase'_`ext'_`positional'_expanded.`ext'"
+        export excel using "`collision'", replace
+        replace x = _n
+        mata: st_local("literal", st_local("xlbase") + "_`ext'_`positional'_" + char(36) + "CTXL" + (`positional' ? char(96) + "xl_local" + char(39) : "") + ".`ext'")
+        mata: st_local("sheet", "sales" + char(36) + "CTXL" + char(96) + "xl_local" + char(39) + "_end")
+        local syntax using
+        if `positional' local syntax
+        cexport excel `syntax' `"`macval(literal)'"', sheet(`"`macval(sheet)'"') replace
+        mata: assert(st_global("r(filename)") == st_local("literal"))
+        confirm file `"`macval(literal)'"'
+        import excel using `"`macval(literal)'"', sheet(`"`macval(sheet)'"') clear
+        assert A == _n
+        replace A = 7
+        cexport excel using `"`macval(literal)'"', sheet(`"`macval(sheet)'"', modify) cell(B1)
+        import excel using `"`macval(literal)'"', sheet(`"`macval(sheet)'"') clear
+        assert A == _n & B == 7
+        keep A
+        replace A = 8
+        cexport excel using `"`macval(literal)'"', sheet(`"`macval(sheet)'"') sheetreplace
+        import excel using `"`macval(literal)'"', sheet(`"`macval(sheet)'"') clear
+        assert c(k) == 1 & A == 8
+        import excel using "`collision'", clear
+        assert A == 999
+        erase `"`macval(literal)'"'
+        erase "`collision'"
+        test_pass "Excel literal path/sheet `ext', positional=`positional'"
+    }
+}
+mata: st_global("CTXL", st_local("oldctxl"))
+
+* DBF literal paths must never replace the macro-expanded destination.
+local dbf_oldglobal : copy global CTDBF
+global CTDBF expanded
+local dbf_local local_expansion
+tempfile dbfbase
+mata: st_local("dbfbase", pathrmsuffix(st_local("dbfbase")))
+foreach positional in 0 1 {
+    foreach extension in 0 1 {
+        foreach macros in dollar local both {
+            clear
+            set obs 2
+            gen x = 999
+            local stem "`dbfbase'_`positional'_`extension'_`macros'_"
+            mata: st_local("suffix", (st_local("macros") != "local" ? char(36)+"CTDBF" : "") + (st_local("macros") != "dollar" ? char(96)+"dbf_local"+char(39) : ""))
+            local expanded = cond("`macros'" == "local", "", "expanded") + cond("`macros'" == "dollar", "", "local_expansion")
+            local collision "`stem'`expanded'.dbf"
+            export dbase using "`collision'", replace
+            replace x = _n
+            mata: st_local("literal", st_local("stem") + st_local("suffix") + (strtoreal(st_local("extension")) ? ".dbf" : ""))
+            mata: st_local("destination", st_local("stem") + st_local("suffix") + ".dbf")
+            local using using
+            if `positional' local using
+            cexport dbase `using' `"`macval(literal)'"'
+            mata: assert(st_global("r(filename)") == st_local("destination"))
+            confirm file `"`macval(destination)'"'
+            capture export dbase using `"`macval(destination)'"'
+            local native_rc = _rc
+            capture cexport dbase `using' `"`macval(literal)'"'
+            assert _rc == `native_rc' & `native_rc' != 0
+            replace x = 7
+            cexport dbase `using' `"`macval(literal)'"', replace
+            import dbase using `"`macval(destination)'"', clear
+            assert x == 7
+            import dbase using "`collision'", clear
+            assert x == 999
+            erase `"`macval(destination)'"'
+            erase "`collision'"
+            test_pass "DBF literal path `macros', positional=`positional', extension=`extension'"
+        }
+    }
+}
+mata: st_global("CTDBF", st_local("dbf_oldglobal"))
+
 * IO-18: export sasxport5 takes val() for vallabfile()
 sysuse auto, clear
 keep make price foreign

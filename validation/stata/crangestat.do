@@ -2063,6 +2063,7 @@ if !_rc {
 }
 
 * End of crangestat validation
+do "validation/support/six_release_regressions.do" crangestat
 noi print_summary "crangestat"
 }
 

@@ -1,15 +1,35 @@
-*! version 1.2.6 20261111 github.com/mdroste/stata-ctools
+*! version 1.3.0 20261124 github.com/mdroste/stata-ctools
 
 program define cbsample
     version 14.1
-
-    * Under version 7 or earlier, bsample draws with its old algorithm
-    * (bsample_7), which scripts rely on to reproduce old resamples; that
-    * program does the draw here too
-    if _caller() < 8 {
-        _cbsample_version7 `0'
+    local caller = _caller()
+    local cmdline `"`0'"'
+    * Legacy draws use bsample_7; parse the ctools-only options under 14.1.
+    if `caller' < 8 {
+        _cbsample_version7 `cmdline'
         exit
     }
+    syntax [anything] [if] [in], [Weight(varname) *]
+    if "`weight'" != "" {
+        version `caller': _cbsample_impl `cmdline'
+        exit
+    }
+    * Expansion can fail after dropping observations. Keep the entire data
+    * transaction recoverable, including an existing idcluster() variable.
+    nobreak {
+        preserve
+        capture noisily break version `caller': _cbsample_impl `cmdline'
+        local rc = _rc
+        if `rc' {
+            restore
+            exit `rc'
+        }
+        restore, not
+    }
+end
+
+program define _cbsample_impl
+    version 14.1
 
     * Check observation limit (Stata plugin API limitation)
     if _N > 2147483647 {
@@ -104,7 +124,7 @@ program define cbsample
     * Sizes that differ across strata are stored by stratum in a variable.
     tempvar nsampvar
     if `"`n_exp'"' == "" | `nobs_sample' == 0 local n = 0
-    else _cbsample_size n : `"`n_exp'"' `touse' "`strata'" `nsampvar'
+    else _cbsample_size n : `"`n_exp'"' `touse' "`strata'" `nsampvar' "`cluster'"
     if `nobs_sample' == 0 {
         if "`strata'" == "" {
             di as error "cbsample: no observations in sampling sample"
@@ -272,22 +292,31 @@ program define cbsample
     }
     else {
         * No weight(): expand data to match bsample behavior
-        * Drop observations with zero weight first
-        quietly drop if `__cbsample_weight__' == 0
-        * Expand based on weight (creates duplicates for weight > 1)
-        quietly expand `__cbsample_weight__'
         if `"`idcluster'"' != "" {
-            * Stata's replace promotes bsample's byte id as its values grow
+            if scalar(_cbsample_total_weight) > 2147483647 {
+                di as error "cbsample: expanded data exceed the plugin observation limit"
+                exit 920
+            }
             local idmax = scalar(_cbsample_idmax)
             local idtype = cond(`idmax' <= 100, "byte", cond(`idmax' <= 32740, "int", "long"))
             quietly generate `idtype' `idcluster' = .
             format `idcluster' %8.0g
             quietly generate double `__cbsample_key__' = .
+        }
+        * Drop observations with zero weight first
+        quietly drop if `__cbsample_weight__' == 0
+        if "$CTOOLS_cbsample_fault" == "drop" exit 459
+        * Expand based on weight (creates duplicates for weight > 1)
+        quietly expand `__cbsample_weight__'
+        if "$CTOOLS_cbsample_fault" == "expand" exit 459
+        if "$CTOOLS_cbsample_fault" == "break" error 1
+        if `"`idcluster'"' != "" {
             local id_pass "seedhi=`seed_hi' seedlo=`seed_lo'"
             if _caller() > 13 local id_pass "`id_pass' iduniq"
             if scalar(_cbsample_idrandom) local id_pass "`id_pass' idrandom"
             plugin call ctools_plugin `__cbsample_pos__' `__cbsample_cl__' `__cbsample_st__' ///
                 `idcluster' `__cbsample_key__', "cbsample idpass `id_pass'"
+            if "$CTOOLS_cbsample_fault" == "idpass" exit 459
             label variable `idcluster' "Bootstrap sample cluster id"
             * bsample's row order: strata, id, then the observation order
             sort `strata' `__cbsample_key__'
@@ -310,14 +339,14 @@ program define cbsample
         di as text "  Stata pre-plugin:         " as result %8.4f `__time_preplugin' " sec"
         di as text "  {hline 58}"
         di as text "  C plugin phases:"
-        di as text "    Data load:              " as result %8.4f _cbsample_time_load " sec"
+        di as text "    Data load:              " as result %8.4f scalar(_cbsample_time_load) " sec"
         if `ncluster' > 0 | `nstrata' > 0 {
-            di as text "    Sort groups:            " as result %8.4f _cbsample_time_sort " sec"
+            di as text "    Sort groups:            " as result %8.4f scalar(_cbsample_time_sort) " sec"
         }
-        di as text "    Sampling:               " as result %8.4f _cbsample_time_sample " sec"
-        di as text "    Data store:             " as result %8.4f _cbsample_time_store " sec"
+        di as text "    Sampling:               " as result %8.4f scalar(_cbsample_time_sample) " sec"
+        di as text "    Data store:             " as result %8.4f scalar(_cbsample_time_store) " sec"
         di as text "  {hline 58}"
-        di as text "    C plugin total:         " as result %8.4f _cbsample_time_total " sec"
+        di as text "    C plugin total:         " as result %8.4f scalar(_cbsample_time_total) " sec"
         di as text "  {hline 58}"
         di as text "  Stata post-plugin:        " as result %8.4f `__time_postplugin' " sec"
         if "`__wgtvar'" == "" {
@@ -328,11 +357,11 @@ program define cbsample
         di as text "{hline 60}"
         di as text ""
         di as text "  Original obs: " as result `nobs_sample'
-        di as text "  Selected:     " as result %8.0f _cbsample_n_selected
-        di as text "  Total weight: " as result %8.0f _cbsample_total_weight
-        di as text "  Clusters:     " as result %8.0f _cbsample_nclusters
-        di as text "  Strata:       " as result %8.0f _cbsample_nstrata
-        di as text "  Threads:      " as result %8.0f _cbsample_threads
+        di as text "  Selected:     " as result %8.0f scalar(_cbsample_n_selected)
+        di as text "  Total weight: " as result %8.0f scalar(_cbsample_total_weight)
+        di as text "  Clusters:     " as result %8.0f scalar(_cbsample_nclusters)
+        di as text "  Strata:       " as result %8.0f scalar(_cbsample_nstrata)
+        di as text "  Threads:      " as result %8.0f scalar(_cbsample_threads)
         di as text "{hline 60}"
     }
 end
@@ -349,7 +378,7 @@ end
 * the sample (strata: in the stratum). Sizes that differ across strata are
 * stored by observation in the new variable sizevar and macname is "var".
 program define _cbsample_size
-    args macname colon exp touse strata sizevar
+    args macname colon exp touse strata sizevar cluster
     capture confirm number `exp'
     if !_rc {
         local values `exp'
@@ -361,7 +390,7 @@ program define _cbsample_size
         preserve
         tempvar nsamp eligible
         quietly generate byte `eligible' = !`touse'
-        sort `eligible', stable
+        sort `eligible' `cluster', stable
         quietly generate double `nsamp' = (`exp') if `touse'
         mata: __cb_v = st_data(., st_local("nsamp"), st_local("touse")); ///
             st_local("constant", strofreal(all(__cb_v :== __cb_v[1]))); ///
@@ -377,7 +406,7 @@ program define _cbsample_size
         tempvar nsamp first obs
         quietly generate double `obs' = _n
         quietly keep if `touse'
-        sort `strata', stable
+        sort `strata' `cluster', stable
         quietly by `strata': generate double `nsamp' = (`exp')
         quietly by `strata': generate byte `first' = _n == 1
         quietly by `strata': replace `first' = . if `nsamp' != `nsamp'[1]

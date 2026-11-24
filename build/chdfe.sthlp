@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.6 20261111}{...}
+{* *! version 1.3.0 20261124}{...}
 {viewerjumpto "Syntax" "chdfe##syntax"}{...}
 {viewerjumpto "Description" "chdfe##description"}{...}
 {viewerjumpto "Options" "chdfe##options"}{...}
@@ -106,6 +106,11 @@ or omission uses the {help ctools##threads:ctools setting}.
 and the iterations used. {opt verbose}, {opt verbose(#)} with a positive
 number, and {opt timeit} also report load, projection, and write times.
 {cmd:chdfe, version} reports the ctools release and stores {cmd:e(version)}.
+
+{pstd}If normalization cannot preserve the range of nonzero weights, slopes,
+or variable values and their squared norms, {cmd:chdfe} returns error 498
+before publishing output. Rescale or restrict the affected input; small
+groups are not silently discarded.
 
 {marker examples}{...}
 {title:Examples}

@@ -62,6 +62,51 @@ def corpus(folder):
         add(f'good_arrow{version}',[(0,list(range(2500))),(1,[i*1000003-5 for i in range(2500)])],
             f'brotli_pyarrow_v{version}.parquet',False)
 
+    # Decimal schema boundaries, with independent formatted cell expectations.
+    for physical, precision, scale, width in (
+        (pw.INT32,9,0,None), (pw.INT64,18,18,None),
+        (pw.FIXED_LEN_BYTE_ARRAY,2,0,1), (pw.FIXED_LEN_BYTE_ARRAY,38,38,16),
+        (pw.FIXED_LEN_BYTE_ARRAY,76,76,32), (pw.BYTE_ARRAY,76,76,None),
+    ):
+        for annotation in ('logical','converted','both'):
+            opts={}
+            if annotation!='converted': opts['logical_type']=pw.logical('DECIMAL',precision=precision,scale=scale)
+            if annotation!='logical': opts.update(converted='DECIMAL',precision=precision,scale=scale)
+            values=[1,-1,None,0]
+            if physical in (pw.FIXED_LEN_BYTE_ARRAY,pw.BYTE_ARRAY):
+                values=[None if v is None else v.to_bytes(width or 1,'big',signed=True) for v in values]
+            text=['1','-1',None,'0'] if scale==0 else [f'1E-{scale}',f'-1E-{scale}',None,f'0E-{scale}']
+            name=f'good_decimal_{physical}_{precision}_{annotation}'
+            pw.write_table(add(name,[(2,text)]),[pw.Column('d',physical,values,type_length=width,**opts)])
+    invalid_decimals=[
+        ('precision_zero',pw.INT32,0,0,None),
+        ('precision_negative',pw.INT32,-1,0,None),
+        ('precision_min',pw.INT32,-2147483648,0,None),
+        ('precision_max',pw.INT32,2147483647,0,None),
+        ('precision_77',pw.BYTE_ARRAY,77,0,None),
+        ('scale_min',pw.INT32,9,-2147483648,None),
+        ('scale_max',pw.INT32,9,2147483647,None),
+        ('scale_negative',pw.INT32,9,-1,None),
+        ('scale_over_precision',pw.INT32,9,10,None),
+        ('int32_precision',pw.INT32,10,0,None),
+        ('int64_precision',pw.INT64,19,0,None),
+        ('fixed_precision',pw.FIXED_LEN_BYTE_ARRAY,3,0,1),
+        ('float',pw.FLOAT,9,0,None),
+    ]
+    for name,physical,precision,scale,width in invalid_decimals:
+        for annotation in ('logical','converted'):
+            opts=dict(logical_type=pw.logical('DECIMAL',precision=precision,scale=scale)) if annotation=='logical' else dict(converted='DECIMAL',precision=precision,scale=scale)
+            values=[b'\x01']*3 if physical in (pw.FIXED_LEN_BYTE_ARRAY,pw.BYTE_ARRAY) else [1,2,3]
+            pw.write_table(add(f'bad_decimal_{name}_{annotation}'),[
+                pw.Column('d',physical,values,type_length=width,**opts)])
+    for name,legacy in (
+        ('conflict_precision',dict(converted='DECIMAL',precision=8,scale=0)),
+        ('conflict_scale',dict(converted='DECIMAL',precision=9,scale=1)),
+        ('conflict_type',dict(converted='DATE')),
+    ):
+        pw.write_table(add('bad_decimal_'+name),[pw.Column('d',pw.INT32,[1,2,3],
+            logical_type=pw.logical('DECIMAL',precision=9,scale=0),**legacy)])
+
     def raw(name, body, physical=pw.INT32, encoding=pw.PLAIN, count=2, codec=0,
             usize=None,csize=None,dictionary=None,optional=False,groups=None,total=None):
         dph=pw.Struct((1,'i32',count),(2,'i32',encoding),(3,'i32',pw.RLE),(4,'i32',pw.RLE))

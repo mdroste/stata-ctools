@@ -249,8 +249,12 @@ replace expected = . if missing(y) & (x < 2 | x > 998)
 cinterpolate y x, gen(got) by(group) cubic threads(1)
 assert_var_equal got expected $DEFAULT_SIGFIGS "cubic polynomial on irregular grouped x"
 assert id == _n
-cinterpolate y x, gen(parallel) by(group) cubic threads(4) verbose
-assert got == parallel
+* Exercise fresh/reused workers and return to the caller's serial thread.
+foreach nt in 4 16 4 1 {
+    cinterpolate y x, gen(parallel) by(group) cubic threads(`nt') verbose
+    assert got == parallel
+    drop parallel
+}
 bysort group: cinterpolate y x, gen(prefix) cubic
 assert prefix == got
 sort id

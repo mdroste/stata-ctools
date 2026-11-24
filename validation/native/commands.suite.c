@@ -1126,7 +1126,10 @@ static ST_int one(void) { return 1; }
 static ST_int nvars(void) { return 6; }
 static ST_int obs(void) { return 12; }
 static ST_boolean selected(int i) { return 1; }
-static ST_retcode save(char *k, double v) { return 0; }
+static int save_at, save_calls, save_rc;
+static ST_retcode save(char *k, double v) {
+    return ++save_calls == save_at ? save_rc : 0;
+}
 static ST_retcode store(ST_int v, ST_int i, double x) {
     assert(x == (i - 1) % 10);
     return __atomic_add_fetch(&store_calls, 1, __ATOMIC_RELAXED) == store_at ? 459 : 0;
@@ -1201,6 +1204,22 @@ int main(int argc, char **argv) {
     calls = 0;
     assert(crangestat_main("2 2 1 2 3 4 5 6 1 3 4 0 1 low=0 high=0") == 0);
     assert(alive == 0);
+    /* Publication errors and Break must reach the ado rollback. */
+    for (int code = 0; code < 2; code++) for (int fault = 1; fault <= 11; fault++) {
+        save_calls = 0; save_at = fault; save_rc = code ? 1 : 459;
+        assert(crangestat_main("2 2 1 2 3 4 5 6 1 3 4 0 1 low=0 high=0") == save_rc);
+        assert(alive == 0 && save_calls == fault);
+    }
+    save_at = 0;
+    const char *bad[] = {"", "lowsrc=0", "highsrc=0", "lowsrc=-1 highsrc=0",
+        "lowsrc=2 highsrc=0", "lowsrc=0 highsrc=100", "lowsrc=1e100 highsrc=0",
+        "lowsrc=0 highsrc=0.5", "lowsrc=NaN highsrc=0", "lowsrc=2147483648 highsrc=0"};
+    for (size_t j = 0; j < sizeof(bad)/sizeof(bad[0]); j++) {
+        char args[256]; snprintf(args, sizeof(args),
+            "2 2 1 2 3 4 5 6 1 3 4 0 1 low=0 high=0 varbounds %s", bad[j]);
+        int before = calls;
+        assert(crangestat_main(args) == 198 && alive == 0 && calls == before);
+    }
     rc = first_rc;
     calls = first_calls;
     printf("rc=%d calls=%d alive=%d\n", rc, calls, alive);

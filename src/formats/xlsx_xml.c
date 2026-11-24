@@ -705,6 +705,41 @@ bool xlsx_xml_parse_cell_ref(const char *ref, int *col, int *row)
 /* A non-allocating structural pass over the complete part. Keep source spans
  * rather than truncated tag-name buffers so mismatched long names also fail.
  * XML depth is bounded independently of worksheet size. */
+/* Return the first byte after a complete, valid XML entity. No DTDs are
+ * accepted, so only the five predefined names and character references can
+ * occur. Check before decoding: otherwise a numeric cell's prefix parser can
+ * turn a malformed value such as 1&unknown;00 into the plausible number 1. */
+static const char *xlsx_xml_entity_end(const char *p, const char *end)
+{
+    if (p == end || *p++ != '&' || p == end) return NULL;
+    if (*p != '#') {
+        static const char *names[] = {"amp;", "lt;", "gt;", "quot;", "apos;"};
+        for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+            size_t n = strlen(names[i]);
+            if ((size_t)(end - p) >= n && !memcmp(p, names[i], n)) return p + n;
+        }
+        return NULL;
+    }
+    p++;
+    unsigned base = 10, value = 0;
+    if (p < end && *p == 'x') { base = 16; p++; }
+    const char *first = p;
+    while (p < end && *p != ';') {
+        unsigned char c = (unsigned char)*p++;
+        unsigned digit = c >= '0' && c <= '9' ? c - '0' :
+                         c >= 'a' && c <= 'f' ? c - 'a' + 10 :
+                         c >= 'A' && c <= 'F' ? c - 'A' + 10 : 16;
+        if (digit >= base || value > (0x10ffffU - digit) / base) return NULL;
+        value = value * base + digit;
+    }
+    if (p == end || p == first) return NULL;
+    if (!(value == 9 || value == 10 || value == 13 ||
+          (value >= 0x20 && value <= 0xd7ff) ||
+          (value >= 0xe000 && value <= 0xfffd) ||
+          (value >= 0x10000 && value <= 0x10ffff))) return NULL;
+    return p + 1;
+}
+
 bool xlsx_xml_validate_document(const char *data, size_t len, const char *root)
 {
     if (!data || !root) return false;
@@ -717,6 +752,11 @@ bool xlsx_xml_validate_document(const char *data, size_t len, const char *root)
         if (*p != '<') {
             if (!depth && !isspace((unsigned char)*p)) return false;
             if (!*p) return false;
+            if (*p == '&') {
+                p = xlsx_xml_entity_end(p, end);
+                if (!p) return false;
+                continue;
+            }
             p++;
             continue;
         }
@@ -766,6 +806,11 @@ bool xlsx_xml_validate_document(const char *data, size_t len, const char *root)
             char quote = *p++;
             while (p < end && *p != quote) {
                 if (*p == '<' || !*p) return false;
+                if (*p == '&') {
+                    p = xlsx_xml_entity_end(p, end);
+                    if (!p) return false;
+                    continue;
+                }
                 p++;
             }
             if (p == end) return false;

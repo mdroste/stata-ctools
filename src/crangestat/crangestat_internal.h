@@ -106,6 +106,18 @@ typedef struct
     int high_src;         /* 0-based source holding the high bounds */
 } crangestat_config;
 
+/* Stata computes scalar offsets in a double variable. Positive values in the
+ * missing range and IEEE overflow become missing/unbounded. Finite negative
+ * values below -SV_missval remain valid Stata expression results. */
+static inline double crangestat_interval_bound(double key, double offset,
+                                               int unbounded, int upper)
+{
+    double value = key + offset;
+    if (unbounded || !isfinite(value) || value >= SV_missval)
+        return upper ? DBL_MAX : -DBL_MAX;
+    return value;
+}
+
 /* Statistic specification */
 typedef struct
 {

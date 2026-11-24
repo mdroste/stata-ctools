@@ -1,4 +1,4 @@
-*! version 1.2.6 20261111 github.com/mdroste/stata-ctools
+*! version 1.3.0 20261124 github.com/mdroste/stata-ctools
 
 program define cpsmatch, rclass sortpreserve
     version 14.1
@@ -43,14 +43,6 @@ program define cpsmatch, rclass sortpreserve
     _fv_check_depvar `depvar'
     local treatvar = strtrim(`"`treatvar'"')
     local k_covariates : word count `treatvar'
-
-    local inputs `varlist' `pscore' `outcome' `mahalanobis'
-    foreach input of local inputs {
-        if inlist("`input'", "_weight", "_id", "_support", "_pscore", "_treated", "_nn", "_pdif") {
-            di as error "input variable `input' conflicts with a matching output"
-            exit 111
-        }
-    }
 
     * psmatch2's checks, in its order. The method is settled in two steps
     * as there: radius counts as nearest-neighbor matching for the
@@ -130,6 +122,34 @@ program define cpsmatch, rclass sortpreserve
     else if "`kerneltype'" == "uniform" local kernelcode = 3
     else if "`kerneltype'" == "tricube" local kernelcode = 4
 
+    * Resolve FV base names and every output before deleting any variables.
+    fvrevar `varlist' `mahalanobis', list
+    local inputs `r(varlist)' `pscore' `outcome'
+    local generated _treated _support _weight _pscore _id _nn _pdif
+    forvalues n = 1/`neighbor' {
+        local generated `generated' _n`n'
+    }
+    local willsmooth = "`spline'" != "" | ("`method'" == "llr" & ///
+        "`kerneltype'" == "epan" & "`metric'" == "pscore")
+    foreach v of local outcome {
+        local generated `generated' _`v'
+        if `willsmooth' local generated `generated' _s_`v'
+        if `ai' > 0 local generated `generated' _self_`v'
+    }
+    local seen
+    foreach v of local generated {
+        confirm name `v'
+        if `: list v in inputs' {
+            di as error "input variable `v' conflicts with a matching output"
+            exit 111
+        }
+        if `: list v in seen' {
+            di as error "matching outputs have conflicting name `v'"
+            exit 110
+        }
+        local seen `seen' `v'
+    }
+
     * Verbose timing
     local __do_timing = ("`verbose'" != "")
     if `__do_timing' {
@@ -169,7 +189,7 @@ program define cpsmatch, rclass sortpreserve
     * Matching sample as psmatch2 builds it: treatment, covariates, the
     * outcomes and the Mahalanobis variables nonmissing, restricted to the
     * score model's e(sample), then a nonmissing score.
-    capture markout `touse' `outcome'
+    markout `touse' `outcome'
     if "`mahalanobis'" != "" {
         fvrevar `mahalanobis', list
         markout `touse' `r(varlist)'
@@ -928,9 +948,20 @@ program define _cpsmatch_mata
     local xvars
     tempname W
     if "`metric'" == "mahalanobis" {
-        quietly _rmdcoll _treated `mahalanobis' if `touse', expand
-        local mahalanobis `r(varlist)'
         fvrevar `mahalanobis'
+        local originals `r(varlist)'
+        tempname scales
+        matrix `scales' = J(1, `: word count `originals'', 1)
+        local j = 0
+        foreach v of local originals {
+            local ++j
+            tempvar centered
+            quietly generate double `centered' = `v'
+            mata: _cpsmatch_center("`centered'", "`touse'", "`scales'", `j')
+            local xvars `xvars' `centered'
+        }
+        quietly _rmdcoll _treated `xvars' if `touse', expand
+        fvrevar `r(varlist)'
         local xvars `r(varlist)'
         if "`w'" == "" {
             tempname XX0 XX1
@@ -940,7 +971,7 @@ program define _cpsmatch_mata
             matrix `W' = syminv((`XX0' + `XX1')/(r(N) - 2))
         }
         else {
-            matrix `W' = `w'
+            matrix `W' = diag(`scales') * `w' * diag(`scales')
         }
     }
     else {
@@ -990,6 +1021,26 @@ end
 
 mata:
 
+// Center before rank screening; retain units for a user-supplied metric.
+void _cpsmatch_center(string scalar name, string scalar sample,
+    string scalar scales, real scalar j)
+{
+    real colvector x, keep, z
+    real matrix s
+    real scalar origin, spread
+    x = st_data(., name)
+    keep = selectindex(st_data(., sample) :!= 0)
+    origin = x[keep[1]]
+    z = x :- origin
+    spread = max(abs(z[keep]))
+    if (spread >= .) _error(498)
+    if (spread == 0) spread = 1
+    st_store(., name, z :/ spread)
+    s = st_matrix(scales)
+    s[j] = spread
+    st_matrix(scales, s)
+}
+
 // The k smallest distances of a (distance, position) matrix, by Hoare's
 // selection (as psmatch2, whose list order this keeps); rows beyond k are
 // not ordered.
@@ -1034,7 +1085,7 @@ void _cpsmatch_nn(real scalar t0, real scalar t1, real scalar c0, real scalar c1
     string scalar idvars, string scalar outvars, string scalar matchvars,
     real scalar self, real scalar ate, real scalar altvar)
 {
-    real matrix X, W, IDS, Y, M, d, best
+    real matrix X, W, IDS, Y, M, d, best, delta
     real colvector q, weight, nn, support, pick
     real rowvector mean
     real scalar i, m, n, k, nout, first, last
@@ -1061,12 +1112,10 @@ void _cpsmatch_nn(real scalar t0, real scalar t1, real scalar c0, real scalar c1
     }
     first = min((t0, c0))
     last = max((t1, c1))
-    q = J(rows(X), 1, .)
-    for (i = first; i <= last; i++) q[i] = X[i, .] * W * X[i, .]'
-
     for (i = t0; i <= t1; i++) {
         if (self & !ate & weight[i] == 0) continue
-        d = q[|c0 \ c1|] - 2 * X[|c0, 1 \ c1, .|] * (W * X[i, .]') :+ q[i]
+        delta = X[|c0, 1 \ c1, .|] :- X[i, .]
+        d = rowsum((delta * W) :* delta)
         d = d, (c0::c1)
         if (self) d = select(d, d[., 2] :!= i)
         k = min((neighbors, rows(d)))
@@ -1119,7 +1168,7 @@ void _cpsmatch_smooth(real scalar c0, real scalar c1, real scalar t0, real scala
     string scalar kernel, real scalar bw, string scalar outvars, string scalar matchvars,
     real scalar ate)
 {
-    real matrix X, W, Y, M
+    real matrix X, W, Y, M, delta
     real colvector q, weight, support, treated, donors, d, w, ok, y, dd, ww, keep
     real scalar i, j, n, s, v, mean, sw, b, nout, first, arm, cons, sxx, sxy, xbar, ybar
 
@@ -1133,10 +1182,6 @@ void _cpsmatch_smooth(real scalar c0, real scalar c1, real scalar t0, real scala
         st_view(Y, ., tokens(outvars))
         st_view(M, ., tokens(matchvars))
     }
-    if (mahal) {
-        q = J(rows(X), 1, .)
-        for (i = 1; i <= rows(X); i++) q[i] = X[i, .] * W * X[i, .]'
-    }
     first = ate ? c0 : t0
     for (i = first; i <= t1; i++) {
         if (i > c1 & i < t0) continue
@@ -1147,7 +1192,10 @@ void _cpsmatch_smooth(real scalar c0, real scalar c1, real scalar t0, real scala
             if (!llr | nout) support[i] = 0
             continue
         }
-        if (mahal) d = q[donors] - 2 * X[donors, .] * (W * X[i, .]') :+ q[i]
+        if (mahal) {
+            delta = X[donors, .] :- X[i, .]
+            d = rowsum((delta * W) :* delta)
+        }
         else d = X[donors, 1] :- X[i, 1]
         w = _cpsmatch_kernel(d, kernel, bw)
         ok = selectindex(w :< .)

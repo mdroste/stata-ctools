@@ -1,4 +1,4 @@
-*! version 1.2.6 20261111 github.com/mdroste/stata-ctools
+*! version 1.3.0 20261124 github.com/mdroste/stata-ctools
 
 * Hand one value label to the plugin as local __cd_map (format: see
 * src/cdecode/cdecode_impl.c). Sets __cd_ok to 0 when decode itself must do the
@@ -209,7 +209,7 @@ program define _cdecode_impl, rclass
         di as text "cdecode: decoded `nvars' variable(s): `n_plugin' in the ctools plugin, " ///
             "`=`nvars' - `n_plugin'' with Stata's decode"
         if `n_plugin' > 0 {
-            capture local __threads_max = _cdecode_threads_max
+            capture local __threads_max = scalar(_cdecode_threads_max)
             if !_rc di as text "  threads available: `__threads_max'"
         }
     }

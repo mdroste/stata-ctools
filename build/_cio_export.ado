@@ -1,18 +1,18 @@
-*! version 1.2.6 20261111 github.com/mdroste/stata-ctools
+*! version 1.3.0 20261124 github.com/mdroste/stata-ctools
 *! Binary statistical writers; serialization is provided by C.
 program define _cio_export, rclass
     version 14.1
     gettoken kind 0 : 0
-    local options "REPLACE"
-    if "`kind'"=="spss" local options "`options' NOVALLabels"
+    local syntax_opts "REPLACE"
+    if "`kind'"=="spss" local syntax_opts "`syntax_opts' NOVALLabels"
     * export sasxport5 takes val() for vallabfile()
-    if "`kind'"=="sasxport5" local options "`options' REName VALlabfile(string)"
-    if "`kind'"=="sasxport8" local options "`options' VALLabfile"
-    if "`kind'"=="dbase" local options "`options' VERsion(string) DATAFmt ORIGDBFDATE"
-    capture syntax [varlist] [if] [in] using/ [, `options']
+    if "`kind'"=="sasxport5" local syntax_opts "`syntax_opts' REName VALlabfile(string)"
+    if "`kind'"=="sasxport8" local syntax_opts "`syntax_opts' VALLabfile"
+    if "`kind'"=="dbase" local syntax_opts "`syntax_opts' VERsion(string) DATAFmt ORIGDBFDATE"
+    capture syntax [varlist] [if] [in] using/ [, `syntax_opts']
     if _rc {
-        local 0 `"using `0'"'
-        syntax [if] [in] using/ [, `options']
+        local 0 `"using `macval(0)'"'
+        syntax [if] [in] using/ [, `syntax_opts']
     }
     * Stata answers an if one observation at a time. Without one the plugin
     * takes every observation in range; an if is marked and passed last, as a
@@ -64,8 +64,12 @@ program define _cio_export, rclass
     * ~ is the home directory, as for Stata's own file commands
     _ctools_home using `"`macval(using)'"'
     mata: st_local("base",pathbasename(st_local("using")))
-    if !strpos(`"`base'"',".") local using `"`using'`ext'"'
-    if "`replace'" == "" confirm new file `"`using'"'
+    if !strpos(`"`macval(base)'"',".") {
+        local using `"`macval(using)'`ext'"'
+    }
+    if "`replace'" == "" {
+        confirm new file `"`macval(using)'"'
+    }
     * Native's only explicit legacy version is version(3); IV is the default.
     if "`version'" != "" & "`version'" != "3" exit 198
     if "`version'" == "3" local version "III"
@@ -94,7 +98,7 @@ program define _cio_export, rclass
     }
     mata: st_local("__cio_cwd",pwd())
     mata: st_local("__cio_transportpath",pathisabs(st_local("using"))?st_local("using"):pathjoin(pwd(),st_local("using")))
-    local __cio_filename `"`using'"'
+    local __cio_filename : copy local using
     local __cio_replace = ("`replace'" != "")
     local __cio_datalabel : data label
     mata: st_local("__cio_table",strupper(pathrmsuffix(pathbasename(st_local("using")))))
@@ -182,16 +186,22 @@ program define _cio_export, rclass
     capture noisily plugin call ctools_plugin `exportvars' `touse' `in', "cio export `kind' `__cio_select'"
     * A write-protected destination (plugin r(608)) gives native's code and text
     if _rc == 608 {
-        if inlist("`kind'","spss","sasxport8") di as error `"file `using' already exists"'
-        else if "`kind'"=="dbase" di as error `"file `using' could not be opened"'
-        else di as error `"file `using' is read-only; cannot be modified or erased"'
+        if inlist("`kind'","spss","sasxport8") {
+            di as error `"file `macval(using)' already exists"'
+        }
+        else if "`kind'"=="dbase" {
+            di as error `"file `macval(using)' could not be opened"'
+        }
+        else {
+            di as error `"file `macval(using)' is read-only; cannot be modified or erased"'
+        }
         exit cond(inlist("`kind'","spss","sasxport8","dbase"),602,608)
     }
     if _rc exit _rc
-    return local filename `"`using'"'
+    return local filename : copy local using
     return scalar N = `__cio_N'
     return scalar k = `__cio_nvar'
-    di as text `"file `using' saved"'
+    di as text `"file `macval(using)' saved"'
 end
 mata:
 void _cio_label_metadata(real scalar j,string scalar set) {

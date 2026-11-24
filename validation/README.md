@@ -135,6 +135,17 @@ in `cdestring_impl.c` in a separate serial plugin and run
 above. It verifies every scalar publication in generate/replace and empty-sample
 paths, preserves original data/labels, and checks subsequent successful reuse.
 
+`python3 validation/run.py --native test_six_release_native` checks malformed
+range-bound source indices, every range-statistic scalar publication, and
+bootstrap id-pass allocation/read/store/Break failures in serial and OpenMP
+builds. The six command suites also run
+`validation/support/six_release_regressions.do`: quoted ignore characters,
+scalar-name collisions, excluded outliers, exact and overflowing interval
+bounds, cluster-sorted size expressions, and bootstrap rollback after a real
+maxvar failure or injected drop/expand/id-pass/Break errors. The destring native
+fixture additionally checks long-decimal allocation failure and aggregate
+counts above `INT_MAX` without allocating billion-row datasets.
+
 `test_bins_paths_native` covers external bin labels beyond the signed-int range,
 weighted median ties, sampled quantiles, few-value polynomials, collinear controls,
 absorbed effects, allocation failures, and parallel block reductions.

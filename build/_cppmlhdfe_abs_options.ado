@@ -1,4 +1,4 @@
-*! version 1.2.6 20261111 github.com/mdroste/stata-ctools
+*! version 1.3.0 20261124 github.com/mdroste/stata-ctools
 *! Private helper for cppmlhdfe.
 * The suboptions of absorb(absvars, ...), as ppmlhdfe hands them to reghdfe:
 * reghdfe's options (savefe, keepsingletons, the partialling tolerance(),

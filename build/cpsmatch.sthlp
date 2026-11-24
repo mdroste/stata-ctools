@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.2.6 20261111}{...}
+{* *! version 1.3.0 20261124}{...}
 {viewerjumpto "Syntax" "cpsmatch##syntax"}{...}
 {viewerjumpto "Description" "cpsmatch##description"}{...}
 {viewerjumpto "Options" "cpsmatch##options"}{...}
@@ -249,6 +249,16 @@ controls in score order (the lower score on equal distance), as in
 {phang}
 {opt ties} specifies that when there are tied matches at the boundary
 distance, all tied observations should be included as matches.
+With replacement, each donor is counted once through the requested neighbor
+boundary. This corrects {cmd:psmatch2}'s repeated donors when {opt ties} and
+{opt neighbor(#)} greater than one are combined, so results can differ.
+
+{pstd}
+Matching inputs may not have names that conflict with generated outputs,
+including outcome-derived names and {cmd:_n#}; such calls are rejected before
+inputs are replaced. Mahalanobis covariates are centered and scaled before
+rank screening, and distances use coordinate differences, so translating a
+covariate does not discard its information.
 
 {phang}
 {opt descending} specifies that matching should proceed in descending

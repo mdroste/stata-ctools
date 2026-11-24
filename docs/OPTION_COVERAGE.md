@@ -49,10 +49,10 @@ python3 validation/run.py cencode
 | `cbinscatter` | `x_q` | Compare command results |
 | `cbinscatter` | `symbols` | Compare command results |
 | `cbinscatter` | `unique` | Compare command results |
+| `cbsample` | `weight` | Check option behavior |
 | `cbsample` | `strata` | Compare command results |
 | `cbsample` | `cluster` | Compare command results |
 | `cbsample` | `idcluster` | Compare command results |
-| `cbsample` | `weight` | Check option behavior |
 | `cbsample` | `verbose` | Compare command results |
 | `cbsample` | `threads` | Compare command results |
 | `cdecode` | `generate` | Compare command results |

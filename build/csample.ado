@@ -1,4 +1,4 @@
-*! version 1.2.6 20261111 github.com/mdroste/stata-ctools
+*! version 1.3.0 20261124 github.com/mdroste/stata-ctools
 
 program define csample, byable(onecall)
     version 14.1
@@ -254,30 +254,30 @@ program define csample, byable(onecall)
         di as text "  Stata pre-plugin:         " as result %8.4f `__time_preplugin' " sec"
         di as text "  {hline 58}"
         di as text "  C plugin phases:"
-        di as text "    Data load:              " as result %8.4f _csample_time_load " sec"
+        di as text "    Data load:              " as result %8.4f scalar(_csample_time_load) " sec"
         if `nby' > 0 {
-            di as text "    Sort by-variables:      " as result %8.4f _csample_time_sort " sec"
+            di as text "    Sort by-variables:      " as result %8.4f scalar(_csample_time_sort) " sec"
         }
-        di as text "    Sampling:               " as result %8.4f _csample_time_sample " sec"
-        di as text "    Data store:             " as result %8.4f _csample_time_store " sec"
+        di as text "    Sampling:               " as result %8.4f scalar(_csample_time_sample) " sec"
+        di as text "    Data store:             " as result %8.4f scalar(_csample_time_store) " sec"
         di as text "  {hline 58}"
-        di as text "    C plugin total:         " as result %8.4f _csample_time_total " sec"
+        di as text "    C plugin total:         " as result %8.4f scalar(_csample_time_total) " sec"
         di as text "{hline 60}"
         di as text "    Wall clock total:       " as result %8.4f `__time_total' " sec"
         di as text "{hline 60}"
         di as text ""
         di as text "  Original obs: " as result `nobs_sample'
-        di as text "  Kept:         " as result %8.0f _csample_kept
-        di as text "  Dropped:      " as result %8.0f _csample_dropped
-        di as text "  Groups:       " as result %8.0f _csample_ngroups
-        di as text "  Threads:      " as result %8.0f _csample_threads
+        di as text "  Kept:         " as result %8.0f scalar(_csample_kept)
+        di as text "  Dropped:      " as result %8.0f scalar(_csample_dropped)
+        di as text "  Groups:       " as result %8.0f scalar(_csample_ngroups)
+        di as text "  Threads:      " as result %8.0f scalar(_csample_threads)
         di as text "{hline 60}"
     }
 
     * Summary message
     if "`verbose'" == "" {
-        local kept = _csample_kept
-        local dropped = _csample_dropped
+        local kept = scalar(_csample_kept)
+        local dropped = scalar(_csample_dropped)
         di as text "(`dropped' " plural(`dropped', "observation") " deleted)"
     }
 end

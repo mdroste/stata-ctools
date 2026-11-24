@@ -79,11 +79,19 @@ def test_counting_sort_native():
 
 
 def test_csort_ordered_native():
+    _run_csort_native("csort_ordered_native.c")
+
+
+def test_csort_recovery_native():
+    _run_csort_native("csort_recovery", ("ctools_arena.c", "ctools_platform.c", "ctools_threads.c"))
+
+
+def _run_csort_native(case, modules=()):
     source_dir = Path(os.environ.get("CTOOLS_TEST_SOURCE", ROOT / "src"))
     with tempfile.TemporaryDirectory(prefix="ctools-csort-ordered-") as tmp:
         directory = Path(tmp)
         source = directory / "test.c"
-        source.write_text(harness("csort_ordered_native.c"))
+        source.write_text(harness(case))
         for omp in (False, True):
             binary = directory / ("test-" + str(omp))
             flags = [
@@ -124,7 +132,8 @@ def test_csort_ordered_native():
             compiler = shlex.split(os.environ.get("CC", "clang"))
             libraries = [] if platform.system() == "Darwin" else ["-lm"]
             compile_native(
-                [*compiler, *flags, str(source), *libraries, "-o", str(binary)], check=True
+                [*compiler, *flags, str(source), *[str(source_dir / m) for m in modules],
+                 *libraries, "-o", str(binary)], check=True
             )
             for runtime_limit in (8, 2) if omp else (1,):
                 subprocess.run(
@@ -138,7 +147,7 @@ def test_csort_ordered_native():
                         OMP_THREAD_LIMIT=str(runtime_limit),
                     ),
                 )
-                print(f"PASS csort ordered-input openmp={omp} limit={runtime_limit}", flush=True)
+                print(f"PASS {case} openmp={omp} limit={runtime_limit}", flush=True)
 
 
 def test_msd_sort_native():

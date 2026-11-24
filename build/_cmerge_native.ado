@@ -1,4 +1,4 @@
-*! version 1.2.6 20261111 github.com/mdroste/stata-ctools
+*! version 1.3.0 20261124 github.com/mdroste/stata-ctools
 *! Private helper for cmerge.
 program define _cmerge_native, rclass
     args cmdline
@@ -34,8 +34,19 @@ program define _cmerge_native, rclass
             local preserved = 1
         }
     }
+    * The native merge sorts by keys. Carry the master's original ordinal so
+    * this fallback honors the same order option as the plugin. Missing
+    * ordinals put using-only rows after the master, retaining their key order.
+    if `preserve_order' {
+        tempvar master_order
+        quietly gen double `master_order' = _n
+    }
     capture noisily version `caller': merge `mtype' `anything' using `"`using'"', `opts'
     local rc = _rc
+    if `preserve_order' & inlist(`rc', 0, 9) {
+        sort `master_order', stable
+        drop `master_order'
+    }
     if `rc' {
         * merge exits 9 only when assert() fails; its result stays in memory
         if `rc' == 9 {

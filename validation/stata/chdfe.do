@@ -293,6 +293,7 @@ foreach wt in "" "[aw=w]" {
     drop got_*
 }
 test_pass "constant slopes retain exact redundancy at extreme scale"
+do "validation/support/audit_four_regressions.do" chdfe
 noisily print_summary "chdfe"
 global CTOOLS_CASE_COMPLETE "chdfe"
 }

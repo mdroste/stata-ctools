@@ -1668,6 +1668,63 @@ if c(stata_version) >= 18 {
 clear
 
 * End of csort validation
+* A failed publication or postprocessing step must restore the complete sort
+* transaction, including hidden e(sample) and the sortedby early-exit marker.
+capture program drop _csort_recovery_case
+program define _csort_recovery_case
+    syntax, MODE(string) THReads(integer) Changed(integer) ESTimates(integer)
+    clear
+    set obs 8
+    gen long id = _n
+    gen double key = 9 - id
+    gen double y = id + mod(id, 2)
+    gen str8 payload = "row " + string(id)
+    label var payload "original payload"
+    if `estimates' quietly regress y id if id <= 5
+    gen byte sample_before = e(sample)
+    sort id
+    tempfile original
+    quietly save `original'
+    if `changed' quietly replace y = y + 1
+    local changed_before = c(changed)
+    quietly datasignature
+    local signature `"`r(datasignature)'"'
+    local options
+    if "`mode'" == "standard" local options nostream
+    if "`mode'" == "stream" local options stream(1)
+    global CTOOLS_csort_fault post
+    capture noisily csort key, `options' threads(`threads')
+    local rc = _rc
+    macro drop CTOOLS_csort_fault
+    assert `rc' == 1
+    assert c(changed) == `changed_before'
+    assert "`: sortedby'" == "id"
+    assert id == _n & payload == "row " + string(id)
+    assert "`: variable label payload'" == "original payload"
+    assert e(sample) == sample_before
+    quietly datasignature
+    assert `"`r(datasignature)'"' == `"`signature'"'
+    csort id
+    assert id == _n
+    csort key, `options' threads(`threads') nosortedby
+    assert key == _n & id == 9 - _n
+    assert payload == "row " + string(id)
+    assert e(sample) == sample_before
+end
+foreach mode in auto standard stream {
+    foreach threads in 1 8 {
+        foreach changed in 0 1 {
+            foreach estimates in 0 1 {
+                capture noisily _csort_recovery_case, mode(`mode') threads(`threads') ///
+                    changed(`changed') estimates(`estimates')
+                local rc = _rc
+                capture macro drop CTOOLS_csort_fault
+                if `rc' test_fail "csort recovery `mode' `threads' `changed' `estimates'" "r(`rc')"
+                else test_pass "csort recovery `mode' `threads' `changed' `estimates'"
+            }
+        }
+    }
+}
 noi print_summary "csort"
 }
 

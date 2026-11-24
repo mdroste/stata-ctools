@@ -135,15 +135,9 @@ static ST_int cqreg_compute_xtx_inv(ST_double *XtX_inv,
     vce_debug_log("  Cholesky decomposition...\n");
     memcpy(L, XtX, kk_size);
     if (cqreg_cholesky(L, K) != 0) {
-        vce_debug_log("  Cholesky failed, trying with regularization...\n");
-        /* Try with regularization */
-        memcpy(L, XtX, kk_size);
-        cqreg_add_regularization(L, K, 1e-10);
-        if (cqreg_cholesky(L, K) != 0) {
-            vce_debug_log("  ERROR: Cholesky still failed\n");
-            rc = -1;
-            goto cleanup;
-        }
+        /* A regularized inverse is not the requested sampling covariance. */
+        rc = -1;
+        goto cleanup;
     }
     vce_debug_log("  Cholesky done, L[0]=%.4f\n", L[0]);
 

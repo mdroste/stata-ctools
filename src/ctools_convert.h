@@ -74,6 +74,17 @@ int ctools_int64_to_str(int64_t val, char *buf);
 */
 bool ctools_parse_double_fast(const char *str, int len, double *result, double missval);
 
+/* Conversion commands must distinguish bad text from resource failure before
+ * applying force/missing-value semantics. The bool API above is retained for
+ * callers that only need a validity predicate. */
+typedef enum {
+    CTOOLS_NUMBER_MEMORY = -1,
+    CTOOLS_NUMBER_INVALID = 0,
+    CTOOLS_NUMBER_OK = 1
+} ctools_number_status;
+ctools_number_status ctools_parse_double_status(const char *str, int len,
+                                               double *result, double missval);
+
 /*
     Fast double parser with custom decimal and group separators.
     Handles European formats like "1.234,56" (decimal=',', group='.').

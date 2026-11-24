@@ -183,6 +183,8 @@ typedef struct {
     /* Column-major layout: X[k*N + i] = obs i of var k */
     ST_double *y;             /* Dependent variable (N) - points to data->vars[0] */
     ST_double *X;             /* Regressors (N x K), constant is last column - contiguous copy */
+    ST_double *x_shift;       /* Original origins of normalized design columns */
+    int *x_exponent;          /* X_original = x_shift + 2^x_exponent X */
     ST_double *weights;       /* Observation weights (N), NULL if unweighted */
     void *obs_map;            /* The loader's 1-based Stata observation of
                                  row i (perm_idx_t, N), NULL for rows 1..N;

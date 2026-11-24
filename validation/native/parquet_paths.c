@@ -67,6 +67,12 @@ static void mutations(void)
 }
 int main(void)
 {
+    /* The public formatter must not overflow even without schema validation. */
+    const uint8_t one[]={1};char extreme[64];
+    pq_decimal_text(one,1,INT_MIN,extreme,sizeof(extreme));
+    assert(!strcmp(extreme,"1E+2147483648"));
+    pq_decimal_text(one,1,INT_MAX,extreme,sizeof(extreme));
+    assert(!strcmp(extreme,"1E-2147483647"));
     libdeflate_set_memory_allocator(pq_test_malloc,pq_test_free);
     for(size_t i=0;i<sizeof(cases)/sizeof(*cases);i++) {
         int rc=run_file(cases[i].name,cases[i].valid,0,0);

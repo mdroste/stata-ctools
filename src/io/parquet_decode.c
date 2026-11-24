@@ -3,6 +3,7 @@
 #include "parquet_internal.h"
 #include "ctools_file.h"
 #include <math.h>
+#include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -559,7 +560,8 @@ void pq_decimal_text(const uint8_t *be, size_t n, int scale, char *out, size_t c
     int pos = 0;
     if (neg)
         buf[pos++] = '-';
-    int adjusted = nd - 1 - scale;
+    /* Keep this helper safe even when called outside the validated reader. */
+    int64_t adjusted = (int64_t)nd - 1 - scale;
     if (scale < 0 || adjusted < -6)
     {
         buf[pos++] = d[0];
@@ -569,7 +571,7 @@ void pq_decimal_text(const uint8_t *be, size_t n, int scale, char *out, size_t c
             memcpy(buf + pos, d + 1, (size_t)nd - 1);
             pos += nd - 1;
         }
-        pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, "E%s%d", adjusted >= 0 ? "+" : "",
+        pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, "E%s%" PRId64, adjusted >= 0 ? "+" : "",
                         adjusted);
     }
     else if (scale == 0)

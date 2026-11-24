@@ -1,4 +1,4 @@
-*! version 1.2.6 20261111 github.com/mdroste/stata-ctools
+*! version 1.3.0 20261124 github.com/mdroste/stata-ctools
 
 program define cdestring
     version 14.1
@@ -180,17 +180,9 @@ program define cdestring
         local threads_code "threads(`threads')"
     }
 
-    local ignore_code ""
-    if `"`ignore'"' != "" {
-        * Escape special characters for passing to C
-        * Escape backslashes first so literal \t differs from an actual tab.
-        local ignore_escaped = subinstr(`"`ignore'"', "\", "\\", .)
-        local ignore_escaped = subinstr(`"`ignore_escaped'"', " ", "\s", .)
-        local ignore_escaped = subinstr(`"`ignore_escaped'"', char(9), "\t", .)
-        local ignore_escaped = subinstr(`"`ignore_escaped'"', char(10), "\n", .)
-        local ignore_escaped = subinstr(`"`ignore_escaped'"', char(13), "\r", .)
-        local ignore_code "ignore=`ignore_escaped'"
-    }
+    * Keep user bytes out of Stata/plugin command syntax, including quotes.
+    mata: st_local("__cds_ignore", st_local("ignore")); ///
+        st_local("ignore_code", "ignorelen=" + strtrim(strofreal(strlen(st_local("ignore")), "%21.0f")))
 
     local force_code ""
     if "`force'" != "" {
@@ -264,16 +256,20 @@ program define cdestring
         local select_code "touse"
     }
 
-    * ignore= goes last so its characters cannot be read as option keywords.
     * The plugin sets local cdestring_failed (nonnumeric count per variable).
     local cdestring_failed ""
+    local cdestring_ignore_read ""
     if `plugin_nvars' {
         capture noisily plugin call ctools_plugin `plugin_vars' `plugin_dest' `marker' `ifcond' `in', ///
             "cdestring `threads_code' seqpairs nvars=`plugin_nvars' `force_code' `percent_code' `dpcomma_code' `float_code' `verbose_code' `select_code' `ignore_flags' `ignore_code'"
         local plugin_rc = _rc
         if `plugin_rc' exit `plugin_rc'
-        local n_converted = _cdestring_n_converted
-        local n_failed = _cdestring_n_failed
+        if "`cdestring_ignore_read'" != "1" {
+            di as error "cdestring: install the matching ctools plugin before converting data"
+            exit 198
+        }
+        local n_converted = scalar(_cdestring_n_converted)
+        local n_failed = scalar(_cdestring_n_failed)
     }
     else {
         local n_converted = 0
@@ -555,7 +551,7 @@ program define cdestring
         local __time_postplugin = `__ct_elapsed93'
 
         * Calculate plugin call overhead
-        capture local __plugin_time_total = _cdestring_time_total
+        capture local __plugin_time_total = scalar(_cdestring_time_total)
         if _rc != 0 local __plugin_time_total = 0
         local __plugin_call_overhead = `__time_plugin' - `__plugin_time_total'
 
@@ -564,12 +560,12 @@ program define cdestring
         di as text "cdestring timing breakdown:"
         di as text "{hline 55}"
         di as text "  C plugin internals:"
-        di as text "    Argument parsing:       " as result %8.4f _cdestring_time_parse " sec"
-        di as text "    Data load:              " as result %8.4f _cdestring_time_load " sec"
-        di as text "    String conversion:      " as result %8.4f _cdestring_time_convert " sec"
-        di as text "    Store results:          " as result %8.4f _cdestring_time_store " sec"
+        di as text "    Argument parsing:       " as result %8.4f scalar(_cdestring_time_parse) " sec"
+        di as text "    Data load:              " as result %8.4f scalar(_cdestring_time_load) " sec"
+        di as text "    String conversion:      " as result %8.4f scalar(_cdestring_time_convert) " sec"
+        di as text "    Store results:          " as result %8.4f scalar(_cdestring_time_store) " sec"
         di as text "  {hline 53}"
-        di as text "    C plugin total:         " as result %8.4f _cdestring_time_total " sec"
+        di as text "    C plugin total:         " as result %8.4f scalar(_cdestring_time_total) " sec"
         di as text ""
         di as text "  Stata overhead:"
         di as text "    Pre-plugin setup:       " as result %8.4f `__time_preplugin' " sec"
@@ -588,9 +584,9 @@ program define cdestring
         }
 
         * Display thread diagnostics
-        capture local __threads_max = _cdestring_threads_max
+        capture local __threads_max = scalar(_cdestring_threads_max)
         if _rc == 0 {
-            capture local __openmp_enabled = _cdestring_openmp_enabled
+            capture local __openmp_enabled = scalar(_cdestring_openmp_enabled)
             if _rc != 0 local __openmp_enabled = 0
             di as text ""
             di as text "  Thread diagnostics:"
