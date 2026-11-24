@@ -877,11 +877,15 @@ program define cppmlhdfe, eclass
     local sample_idx : word count `plugin_varlist'
     scalar __cppmlhdfe_sample_idx = `sample_idx'
 
+    * Optional outputs get a variable only when requested; index 0 tells the
+    * plugin to skip that column's per-observation stores.
     tempvar saved_d
-    quietly generate double `saved_d' = .
-    local plugin_varlist `plugin_varlist' `saved_d'
-    local d_idx : word count `plugin_varlist'
-    scalar __cppmlhdfe_d_idx = `d_idx'
+    scalar __cppmlhdfe_d_idx = 0
+    if "`d'" != "" {
+        quietly generate double `saved_d' = .
+        local plugin_varlist `plugin_varlist' `saved_d'
+        scalar __cppmlhdfe_d_idx = `: word count `plugin_varlist''
+    }
 
     scalar __cppmlhdfe_keepsingletons = ("`keepsingletons'" != "")
     * The plugin announces dropped singletons unless the HDFE verbosity is -1
@@ -909,12 +913,17 @@ program define cppmlhdfe, eclass
         scalar __cppmlhdfe_guess_idx = `: word count `plugin_varlist''
     }
     tempvar separation_tag separation_certificate
-    quietly generate byte `separation_tag' = .
-    quietly generate double `separation_certificate' = .
-    foreach output in tag certificate {
-        local variable = cond("`output'"=="tag","`separation_tag'","`separation_certificate'")
-        local plugin_varlist `plugin_varlist' `variable'
-        scalar __cppmlhdfe_`output'_idx = `: word count `plugin_varlist''
+    scalar __cppmlhdfe_tag_idx = 0
+    scalar __cppmlhdfe_certificate_idx = 0
+    if "`tagsep'" != "" {
+        quietly generate byte `separation_tag' = .
+        local plugin_varlist `plugin_varlist' `separation_tag'
+        scalar __cppmlhdfe_tag_idx = `: word count `plugin_varlist''
+    }
+    if "`zvarname'" != "" {
+        quietly generate double `separation_certificate' = .
+        local plugin_varlist `plugin_varlist' `separation_certificate'
+        scalar __cppmlhdfe_certificate_idx = `: word count `plugin_varlist''
     }
 
     * vce(bootstrap): the resampling units and strata (numbered in sorted

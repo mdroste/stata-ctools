@@ -1482,7 +1482,16 @@ program define _cmerge_impl, rclass
     }
     * keep() drops observations, which the plugin's copy must then cover;
     * snapshot and fast need no copy at all
-    if "`keep'" != "" local plan_args "`plan_args' hold_undo"
+    * With the kept codes the plan can tell when keep() drops nothing (all
+    * rows kept), which needs no copy; update may split matches into 3/4/5.
+    if "`keep'" != "" {
+        local __keep_mask = 0
+        foreach __c of local keep_codes {
+            local __keep_mask = `__keep_mask' + 2^`__c'
+        }
+        local plan_args "`plan_args' hold_undo keep_mask `__keep_mask'"
+        if "`update'" != "" local plan_args "`plan_args' update_split"
+    }
     if "`snapshot'`fast'" != "" local plan_args "`plan_args' nocopy"
     if `merge_by_n' local plan_args "`plan_args' merge_by_n"
     if `__dta' local plan_args "`plan_args' nocopy"
@@ -1727,7 +1736,15 @@ program define _cmerge_impl, rclass
             local filter_var "`temp_merge_var'"
         }
         local keep_list : subinstr local keep_codes " " ",", all
-        qui keep if inlist(`filter_var', `keep_list')
+        * The counts tell whether any row has a code outside keep(); a keep
+        * if that drops nothing still passes over every observation.
+        local __keep_drops = 0
+        local __c 0
+        foreach __n in `merge_master' `merge_using' `merge_matched' `merge_updated' `merge_conflict' {
+            local ++__c
+            if !`: list posof "`__c'" in keep_codes' local __keep_drops = `__keep_drops' + `__n'
+        }
+        if `__keep_drops' qui keep if inlist(`filter_var', `keep_list')
 
         * Drop temp filter variable if we created one
         if "`temp_merge_var'" != "" {

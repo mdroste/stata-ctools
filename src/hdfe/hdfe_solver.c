@@ -371,12 +371,9 @@ ST_int cg_solve_column_threaded(HDFE_State *S, ST_double *y, ST_int thread_id)
             /* Fused: y -= alpha*u, r -= alpha*v, ssr = w·(r·r) */
             ssr_old = ssr;
             ssr = ctools_simd_fused_axpy2_wdot(y, u, r, v, weights, alpha, (size_t)N);
-            beta = (fabs(ssr_old) < 1e-30) ? 0.0 : ssr / ssr_old;
 
-            /* CG update: u = r + beta*u (SIMD-accelerated) */
-            ctools_simd_axpby(u, r, 1.0, beta, (size_t)N);
-
-            /* Convergence: recent_ssr / improvement_potential <= tol^2 */
+            /* Convergence: recent_ssr / improvement_potential <= tol^2. Checked
+             * before the direction update, which a converged column discards. */
             if (improvement_potential > 1e-30 && recent_ssr <= tol_sq * improvement_potential)
             {
                 return iter;
@@ -385,6 +382,10 @@ ST_int cg_solve_column_threaded(HDFE_State *S, ST_double *y, ST_int thread_id)
             {
                 return iter;
             }
+
+            /* CG update: u = r + beta*u (SIMD-accelerated) */
+            beta = (fabs(ssr_old) < 1e-30) ? 0.0 : ssr / ssr_old;
+            ctools_simd_axpby(u, r, 1.0, beta, (size_t)N);
         }
     }
     else
@@ -409,12 +410,9 @@ ST_int cg_solve_column_threaded(HDFE_State *S, ST_double *y, ST_int thread_id)
             /* Fused: y -= alpha*u, r -= alpha*v, ssr = r·r */
             ssr_old = ssr;
             ssr = ctools_simd_fused_axpy2_dot(y, u, r, v, alpha, (size_t)N);
-            beta = (fabs(ssr_old) < 1e-30) ? 0.0 : ssr / ssr_old;
 
-            /* CG update: u = r + beta*u (SIMD-accelerated) */
-            ctools_simd_axpby(u, r, 1.0, beta, (size_t)N);
-
-            /* Convergence: recent_ssr / improvement_potential <= tol^2 */
+            /* Convergence: recent_ssr / improvement_potential <= tol^2. Checked
+             * before the direction update, which a converged column discards. */
             if (improvement_potential > 1e-30 && recent_ssr <= tol_sq * improvement_potential)
             {
                 return iter;
@@ -423,6 +421,10 @@ ST_int cg_solve_column_threaded(HDFE_State *S, ST_double *y, ST_int thread_id)
             {
                 return iter;
             }
+
+            /* CG update: u = r + beta*u (SIMD-accelerated) */
+            beta = (fabs(ssr_old) < 1e-30) ? 0.0 : ssr / ssr_old;
+            ctools_simd_axpby(u, r, 1.0, beta, (size_t)N);
         }
     }
 

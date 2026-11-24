@@ -855,6 +855,7 @@ static ST_retcode cmerge_plan(const char *args)
     cmerge_plan_t plan;
     memset(&plan, 0, sizeof(plan));
     int preserve_order = 0, sorted = 0, sorted_hint = 0, value = 0, bad = 0, arg_idx = 0;
+    int keep_mask = 0, update_split = 0; /* keep(): bit c set when code c is kept */
     for (char *token = strtok(args_copy, " "); token && !bad;
          token = strtok(NULL, " "), arg_idx++) {
         if (arg_idx == 0) {
@@ -878,6 +879,11 @@ static ST_retcode cmerge_plan(const char *args)
             sorted_hint = 1;
         } else if (strcmp(token, "hold_undo") == 0) {
             plan.hold_undo = 1;
+        } else if (strcmp(token, "keep_mask") == 0) {
+            token = strtok(NULL, " ");
+            bad = !token || !ctools_safe_atoi(token, &keep_mask) || keep_mask < 0 || keep_mask > 62;
+        } else if (strcmp(token, "update_split") == 0) {
+            update_split = 1;
         } else if (strcmp(token, "nocopy") == 0) {
             plan.nocopy = 1;
         }
@@ -1179,6 +1185,16 @@ done:
     plan.specs = specs;
     plan.orig_rows = orig_rows;
     plan.orig_nvars = (size_t)SF_nvars();
+    /* keep() that keeps every row's code drops nothing, so it needs no undo
+     * copy beyond what the written cells need. With update, matched rows
+     * become 3, 4 or 5 only during execute: then all three must be kept. */
+    if (plan.hold_undo && keep_mask) {
+        const int matched_bits = update_split ? (1 << 3) | (1 << 4) | (1 << 5) : (1 << 3);
+        int drops = (plan.n_master_only && !(keep_mask & (1 << 1))) ||
+                    (plan.n_using_only && !(keep_mask & (1 << 2))) ||
+                    (plan.n_matched && (keep_mask & matched_bits) != matched_bits);
+        if (!drops) plan.hold_undo = 0;
+    }
     plan.t_total = ctools_timer_ms() - t_total_start;
     plan.ready = 1;
     g_plan = plan;

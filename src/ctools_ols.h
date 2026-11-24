@@ -73,9 +73,44 @@ static inline dd_real two_sum(ST_double a, ST_double b) {
     return (dd_real){s, e};
 }
 
+/* The exact rounding error a*b - p of p = fl(a*b). With hardware FMA this
+ * is one fused instruction. The baseline x86-64 targets have no FMA, and
+ * there fma() is a library call; MinGW-w64's software fma() is not
+ * correctly rounded either, so the "error-free" product was inexact on
+ * Windows. Dekker's split product is exact (and so bitwise equal to a
+ * correctly rounded fma) whenever no split overflows and the error does not
+ * underflow; the rare operands outside that range use fma(). */
+#if defined(__FMA__) || defined(__aarch64__) || defined(_M_ARM64)
+#define CTOOLS_PROD_ERR(a, b, p) __builtin_fma((a), (b), -(p))
+#else
+#if (defined(__x86_64__) || defined(__i386__)) && (defined(__GNUC__) || defined(__clang__))
+/* Operands outside the split's range: the FMA instruction where the CPU has
+ * one (every x86-64 CPU since 2013), so that they too are exact. */
+__attribute__((target("fma"), noinline, unused))
+static ST_double ctools_fma_insn(ST_double a, ST_double b, ST_double c) {
+    return __builtin_fma(a, b, c);
+}
+#define CTOOLS_FMA_RARE(a, b, c) \
+    (__builtin_cpu_supports("fma") ? ctools_fma_insn((a), (b), (c)) : fma((a), (b), (c)))
+#else
+#define CTOOLS_FMA_RARE(a, b, c) fma((a), (b), (c))
+#endif
+static inline ST_double ctools_prod_err(ST_double a, ST_double b, ST_double p) {
+    if (fabs(a) < 0x1p995 && fabs(b) < 0x1p995 && fabs(p) > 0x1p-968) {
+        const ST_double split = 134217729.0; /* 2^27 + 1 */
+        ST_double ca = split * a, cb = split * b;
+        ST_double ah = ca - (ca - a), al = a - ah;
+        ST_double bh = cb - (cb - b), bl = b - bh;
+        return ((ah * bh - p) + ah * bl + al * bh) + al * bl;
+    }
+    return (p == 0.0 && (a == 0.0 || b == 0.0)) ? 0.0 : CTOOLS_FMA_RARE(a, b, -p);
+}
+#define CTOOLS_PROD_ERR(a, b, p) ctools_prod_err((a), (b), (p))
+#endif
+
 static inline dd_real two_prod(ST_double a, ST_double b) {
     ST_double p = a * b;
-    ST_double e = fma(a, b, -p);
+    ST_double e = CTOOLS_PROD_ERR(a, b, p);
     return (dd_real){p, e};
 }
 
@@ -120,6 +155,13 @@ dd_real dd_dot_weighted(const ST_double *x, const ST_double *y, const ST_double 
  * shortens the wait on each sum's dependency chain. */
 void dd_dot_weighted_multi(const ST_double *x, const ST_double *const *ys, ST_int n,
                            const ST_double *w, ST_int N, dd_real *out);
+
+/* The same sums over fixed blocks of rows (each in row order, then the
+ * blocks in order), computed in parallel: equal to dd_dot_weighted_multi to
+ * double-double accuracy and independent of the thread count. Returns 0, or
+ * 920 on allocation failure. */
+int dd_dot_weighted_multi_blocked(const ST_double *x, const ST_double *const *ys, ST_int n,
+                                  const ST_double *w, ST_int N, dd_real *out);
 
 /* ========================================================================
  * Dot product variants for numerical precision

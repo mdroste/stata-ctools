@@ -1,14 +1,66 @@
 #include "cppmlhdfe_internal.h"
 
-double ppml_quad_dot(const double *x, const double *y, const double *w, int n)
+/* One block: four double-double sums over the rows i % 4 interleave their
+ * dependency chains, then are added in lane order. */
+static dd_real ppml_quad_dot_block(const double *x, const double *y, const double *w, int lo,
+                                   int hi)
 {
-    dd_real sum = {0, 0};
-    for (int i = 0; i < n; i++)
+    dd_real s[4] = {{0, 0}, {0, 0}, {0, 0}, {0, 0}};
+    int i = lo;
+    for (; i + 4 <= hi; i += 4)
+    {
+        for (int l = 0; l < 4; l++)
+        {
+            double xy = x[i + l] * y[i + l];
+            dd_real prod = two_prod(xy, w ? w[i + l] : 1.0);
+            s[l] = dd_add_d(dd_add_d(s[l], prod.hi), prod.lo);
+        }
+    }
+    for (; i < hi; i++)
     {
         double xy = x[i] * y[i];
         dd_real prod = two_prod(xy, w ? w[i] : 1.0);
-        sum = dd_add_d(dd_add_d(sum, prod.hi), prod.lo);
+        s[0] = dd_add_d(dd_add_d(s[0], prod.hi), prod.lo);
     }
+    dd_real sum = s[0];
+    for (int l = 1; l < 4; l++)
+        sum = dd_add_d(dd_add_d(sum, s[l].hi), s[l].lo);
+    return sum;
+}
+
+/* A double-double inner product over fixed blocks of rows, each summed in
+ * order and then combined in block order, so the result does not depend on
+ * the thread count. The blocks run in parallel unless the caller is already
+ * in a parallel region (the column-parallel solvers). */
+#define PPML_DOT_BLOCK 32768
+double ppml_quad_dot(const double *x, const double *y, const double *w, int n)
+{
+    int nblocks = (n + PPML_DOT_BLOCK - 1) / PPML_DOT_BLOCK;
+    dd_real stack_part[64];
+    dd_real *part = nblocks <= 64 ? stack_part : (dd_real *)malloc((size_t)nblocks * sizeof(dd_real));
+    dd_real sum = {0, 0};
+    if (!part)
+    {
+        for (int b = 0; b < nblocks; b++)
+        {
+            int lo = b * PPML_DOT_BLOCK, hi = n - lo > PPML_DOT_BLOCK ? lo + PPML_DOT_BLOCK : n;
+            dd_real s = ppml_quad_dot_block(x, y, w, lo, hi);
+            sum = dd_add_d(dd_add_d(sum, s.hi), s.lo);
+        }
+        return sum.hi + sum.lo;
+    }
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) if (nblocks > 8 && !omp_in_parallel())
+#endif
+    for (int b = 0; b < nblocks; b++)
+    {
+        int lo = b * PPML_DOT_BLOCK, hi = n - lo > PPML_DOT_BLOCK ? lo + PPML_DOT_BLOCK : n;
+        part[b] = ppml_quad_dot_block(x, y, w, lo, hi);
+    }
+    for (int b = 0; b < nblocks; b++)
+        sum = dd_add_d(dd_add_d(sum, part[b].hi), part[b].lo);
+    if (part != stack_part)
+        free(part);
     return sum.hi + sum.lo;
 }
 

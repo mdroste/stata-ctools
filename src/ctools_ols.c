@@ -146,7 +146,7 @@ ST_double kahan_dot(const ST_double * RESTRICT x,
 
     for (i = 0; i < N; i++) {
         ST_double p = x[i] * y[i];
-        ST_double pe = fma(x[i], y[i], -p);
+        ST_double pe = CTOOLS_PROD_ERR(x[i], y[i], p);
         ST_double t = s + p;
         ST_double v = t - s;
         ST_double te = (s - (t - v)) + (p - v);
@@ -269,6 +269,60 @@ void dd_dot_weighted_multi(const ST_double *x, const ST_double *const *ys, ST_in
     for (; t < n; t++) {
         out[t] = dd_dot_weighted(x, ys[t], w, N);
     }
+}
+
+/* dd_dot_weighted_multi over fixed blocks of CTOOLS_DD_BLOCK rows: each
+ * block's sums run in row order and the blocks are added in block order, so
+ * the result is independent of the thread count (and equal to the
+ * sequential sums to double-double accuracy). Blocks run in parallel unless
+ * the caller is already in a parallel region. Returns 0 or 920. */
+#define CTOOLS_DD_BLOCK 32768
+int dd_dot_weighted_multi_blocked(const ST_double *x, const ST_double *const *ys, ST_int n,
+                                  const ST_double *w, ST_int N, dd_real *out)
+{
+    ST_int nblocks = (N + CTOOLS_DD_BLOCK - 1) / CTOOLS_DD_BLOCK;
+    if (n < 1) return 0;
+    if (nblocks <= 1) {
+        dd_dot_weighted_multi(x, ys, n, w, N, out);
+        return 0;
+    }
+    dd_real *part = (dd_real *)malloc((size_t)nblocks * (size_t)n * sizeof(dd_real));
+    if (!part) return 920;
+    int failed = 0;
+#ifdef _OPENMP
+    #pragma omp parallel if (nblocks > 8 && !omp_in_parallel())
+#endif
+    {
+        const ST_double **ysb = (const ST_double **)malloc((size_t)n * sizeof(*ysb));
+        if (!ysb) {
+#ifdef _OPENMP
+            #pragma omp atomic write
+#endif
+            failed = 1;
+        }
+#ifdef _OPENMP
+        #pragma omp for schedule(static)
+#endif
+        for (ST_int b = 0; b < nblocks; b++) {
+            if (!ysb) continue;
+            ST_int lo = b * CTOOLS_DD_BLOCK;
+            ST_int len = N - lo < CTOOLS_DD_BLOCK ? N - lo : CTOOLS_DD_BLOCK;
+            for (ST_int t = 0; t < n; t++) ysb[t] = ys[t] + lo;
+            dd_dot_weighted_multi(x + lo, ysb, n, w ? w + lo : NULL, len, part + (size_t)b * n);
+        }
+        free(ysb);
+    }
+    if (failed) { free(part); return 920; }
+    for (ST_int t = 0; t < n; t++) {
+        dd_real s = {0.0, 0.0};
+        for (ST_int b = 0; b < nblocks; b++) {
+            s = dd_add_d(s, part[(size_t)b * n + t].hi);
+            s = dd_add_d(s, part[(size_t)b * n + t].lo);
+        }
+        out[t] = s;
+    }
+    free(part);
+    return 0;
 }
 
 /* ========================================================================

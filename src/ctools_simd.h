@@ -396,6 +396,24 @@ static inline double ctools_simd_dot(const double *x, const double *y, size_t n)
         float64x2_t vtotal = vaddq_f64(vsum0, vsum1);
         sum = ctools_hsum_neon(vtotal);
     }
+#else
+    /* Baseline x86-64: eight accumulators in the AVX2 path's lane order
+     * (without fused multiply-adds), so that the compiler can vectorize the
+     * loop and the sum does not wait on one addition chain. */
+    if (n >= CTOOLS_SIMD_THRESHOLD) {
+        double s0 = 0, s1 = 0, s2 = 0, s3 = 0, s4 = 0, s5 = 0, s6 = 0, s7 = 0;
+        for (; i + 8 <= n; i += 8) {
+            s0 += x[i] * y[i];         s1 += x[i + 1] * y[i + 1];
+            s2 += x[i + 2] * y[i + 2]; s3 += x[i + 3] * y[i + 3];
+            s4 += x[i + 4] * y[i + 4]; s5 += x[i + 5] * y[i + 5];
+            s6 += x[i + 6] * y[i + 6]; s7 += x[i + 7] * y[i + 7];
+        }
+        for (; i + 4 <= n; i += 4) {
+            s0 += x[i] * y[i];         s1 += x[i + 1] * y[i + 1];
+            s2 += x[i + 2] * y[i + 2]; s3 += x[i + 3] * y[i + 3];
+        }
+        sum = (((s0 + s4) + (s2 + s6)) + ((s1 + s5) + (s3 + s7)));
+    }
 #endif
 
     /* Scalar tail */
@@ -490,6 +508,22 @@ static inline double ctools_simd_dot_weighted(const double *w,
 
         float64x2_t vtotal = vaddq_f64(vsum0, vsum1);
         sum = ctools_hsum_neon(vtotal);
+    }
+#else
+    /* Baseline x86-64: eight accumulators in the AVX2 lane order */
+    if (n >= CTOOLS_SIMD_THRESHOLD) {
+        double s0 = 0, s1 = 0, s2 = 0, s3 = 0, s4 = 0, s5 = 0, s6 = 0, s7 = 0;
+        for (; i + 8 <= n; i += 8) {
+            s0 += (w[i] * x[i]) * y[i];             s1 += (w[i + 1] * x[i + 1]) * y[i + 1];
+            s2 += (w[i + 2] * x[i + 2]) * y[i + 2]; s3 += (w[i + 3] * x[i + 3]) * y[i + 3];
+            s4 += (w[i + 4] * x[i + 4]) * y[i + 4]; s5 += (w[i + 5] * x[i + 5]) * y[i + 5];
+            s6 += (w[i + 6] * x[i + 6]) * y[i + 6]; s7 += (w[i + 7] * x[i + 7]) * y[i + 7];
+        }
+        for (; i + 4 <= n; i += 4) {
+            s0 += (w[i] * x[i]) * y[i];             s1 += (w[i + 1] * x[i + 1]) * y[i + 1];
+            s2 += (w[i + 2] * x[i + 2]) * y[i + 2]; s3 += (w[i + 3] * x[i + 3]) * y[i + 3];
+        }
+        sum = (((s0 + s4) + (s2 + s6)) + ((s1 + s5) + (s3 + s7)));
     }
 #endif
 
@@ -793,6 +827,52 @@ static inline double ctools_simd_fused_axpy2_dot(double *y, const double *u,
         float64x2_t vtotal = vaddq_f64(vdot0, vdot1);
         dot = ctools_hsum_neon(vtotal);
     }
+#else
+    /* Baseline x86-64: eight accumulators in the AVX2 lane order */
+    if (n >= CTOOLS_SIMD_THRESHOLD) {
+        double s0 = 0, s1 = 0, s2 = 0, s3 = 0, s4 = 0, s5 = 0, s6 = 0, s7 = 0;
+        for (; i + 8 <= n; i += 8) {
+            y[i] -= alpha * u[i];
+            r[i] -= alpha * v[i];
+            y[i + 1] -= alpha * u[i + 1];
+            r[i + 1] -= alpha * v[i + 1];
+            y[i + 2] -= alpha * u[i + 2];
+            r[i + 2] -= alpha * v[i + 2];
+            y[i + 3] -= alpha * u[i + 3];
+            r[i + 3] -= alpha * v[i + 3];
+            y[i + 4] -= alpha * u[i + 4];
+            r[i + 4] -= alpha * v[i + 4];
+            y[i + 5] -= alpha * u[i + 5];
+            r[i + 5] -= alpha * v[i + 5];
+            y[i + 6] -= alpha * u[i + 6];
+            r[i + 6] -= alpha * v[i + 6];
+            y[i + 7] -= alpha * u[i + 7];
+            r[i + 7] -= alpha * v[i + 7];
+            s0 += r[i] * r[i];
+            s1 += r[i + 1] * r[i + 1];
+            s2 += r[i + 2] * r[i + 2];
+            s3 += r[i + 3] * r[i + 3];
+            s4 += r[i + 4] * r[i + 4];
+            s5 += r[i + 5] * r[i + 5];
+            s6 += r[i + 6] * r[i + 6];
+            s7 += r[i + 7] * r[i + 7];
+        }
+        for (; i + 4 <= n; i += 4) {
+            y[i] -= alpha * u[i];
+            r[i] -= alpha * v[i];
+            y[i + 1] -= alpha * u[i + 1];
+            r[i + 1] -= alpha * v[i + 1];
+            y[i + 2] -= alpha * u[i + 2];
+            r[i + 2] -= alpha * v[i + 2];
+            y[i + 3] -= alpha * u[i + 3];
+            r[i + 3] -= alpha * v[i + 3];
+            s0 += r[i] * r[i];
+            s1 += r[i + 1] * r[i + 1];
+            s2 += r[i + 2] * r[i + 2];
+            s3 += r[i + 3] * r[i + 3];
+        }
+        dot = (((s0 + s4) + (s2 + s6)) + ((s1 + s5) + (s3 + s7)));
+    }
 #endif
 
     /* Scalar tail */
@@ -947,6 +1027,52 @@ static inline double ctools_simd_fused_axpy2_wdot(double *y, const double *u,
 
         float64x2_t vtotal = vaddq_f64(vdot0, vdot1);
         dot = ctools_hsum_neon(vtotal);
+    }
+#else
+    /* Baseline x86-64: eight accumulators in the AVX2 lane order */
+    if (n >= CTOOLS_SIMD_THRESHOLD) {
+        double s0 = 0, s1 = 0, s2 = 0, s3 = 0, s4 = 0, s5 = 0, s6 = 0, s7 = 0;
+        for (; i + 8 <= n; i += 8) {
+            y[i] -= alpha * u[i];
+            r[i] -= alpha * v[i];
+            y[i + 1] -= alpha * u[i + 1];
+            r[i + 1] -= alpha * v[i + 1];
+            y[i + 2] -= alpha * u[i + 2];
+            r[i + 2] -= alpha * v[i + 2];
+            y[i + 3] -= alpha * u[i + 3];
+            r[i + 3] -= alpha * v[i + 3];
+            y[i + 4] -= alpha * u[i + 4];
+            r[i + 4] -= alpha * v[i + 4];
+            y[i + 5] -= alpha * u[i + 5];
+            r[i + 5] -= alpha * v[i + 5];
+            y[i + 6] -= alpha * u[i + 6];
+            r[i + 6] -= alpha * v[i + 6];
+            y[i + 7] -= alpha * u[i + 7];
+            r[i + 7] -= alpha * v[i + 7];
+            s0 += (w[i] * r[i]) * r[i];
+            s1 += (w[i + 1] * r[i + 1]) * r[i + 1];
+            s2 += (w[i + 2] * r[i + 2]) * r[i + 2];
+            s3 += (w[i + 3] * r[i + 3]) * r[i + 3];
+            s4 += (w[i + 4] * r[i + 4]) * r[i + 4];
+            s5 += (w[i + 5] * r[i + 5]) * r[i + 5];
+            s6 += (w[i + 6] * r[i + 6]) * r[i + 6];
+            s7 += (w[i + 7] * r[i + 7]) * r[i + 7];
+        }
+        for (; i + 4 <= n; i += 4) {
+            y[i] -= alpha * u[i];
+            r[i] -= alpha * v[i];
+            y[i + 1] -= alpha * u[i + 1];
+            r[i + 1] -= alpha * v[i + 1];
+            y[i + 2] -= alpha * u[i + 2];
+            r[i + 2] -= alpha * v[i + 2];
+            y[i + 3] -= alpha * u[i + 3];
+            r[i + 3] -= alpha * v[i + 3];
+            s0 += (w[i] * r[i]) * r[i];
+            s1 += (w[i + 1] * r[i + 1]) * r[i + 1];
+            s2 += (w[i + 2] * r[i + 2]) * r[i + 2];
+            s3 += (w[i + 3] * r[i + 3]) * r[i + 3];
+        }
+        dot = (((s0 + s4) + (s2 + s6)) + ((s1 + s5) + (s3 + s7)));
     }
 #endif
 

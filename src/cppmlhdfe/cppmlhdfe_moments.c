@@ -113,15 +113,61 @@ static ST_double ppml_saturated_loglik(ST_double y)
            - inv * (1.0 / 12.0 - inv2 * (1.0 / 360.0 - inv2 * (1.0 / 1260.0 - inv2 / 1680.0)));
 }
 
-ST_double ppml_compute_deviance(const ST_double *y, const ST_double *eta, const ST_double *offset,
-                                const ST_double *w_user, ST_int N)
+/* The deviance and log likelihood are double-double sums over fixed blocks
+ * of rows, each summed in row order, and then the block sums in block order.
+ * The blocks run in parallel, and since they do not depend on the thread
+ * count neither does the result. */
+#define PPML_SUM_BLOCK 32768
+
+static dd_real ppml_dd_add_dd(dd_real a, dd_real b)
+{
+    return dd_add_d(dd_add_d(a, b.hi), b.lo);
+}
+
+static dd_real ppml_deviance_block(const ST_double *y, const ST_double *eta, const ST_double *offset,
+                                   const ST_double *w_user, ST_int lo, ST_int hi)
 {
     dd_real dev = {0.0, 0.0};
-    for (ST_int i = 0; i < N; i++) {
+    for (ST_int i = lo; i < hi; i++) {
         ST_double w = (w_user != NULL) ? w_user[i] : 1.0;
         ST_double eta_total = eta[i] + (offset != NULL ? offset[i] : 0.0);
         dev = dd_add_d(dev, w * ppml_unit_deviance(y[i], eta_total));
     }
+    return dev;
+}
+
+static dd_real ppml_loglik_block(const ST_double *y, const ST_double *eta, const ST_double *offset,
+                                 ST_double log_scale, const ST_double *w_user, ST_int lo, ST_int hi)
+{
+    dd_real ll = {0.0, 0.0};
+    for (ST_int i = lo; i < hi; i++) {
+        ST_double w = (w_user != NULL) ? w_user[i] : 1.0;
+        ST_double eta_total = eta[i] + (offset != NULL ? offset[i] : 0.0) + log_scale;
+        ll = dd_add_d(ll, w * (ppml_saturated_loglik(y[i]) - ppml_unit_deviance(y[i], eta_total)));
+    }
+    return ll;
+}
+
+ST_double ppml_compute_deviance(const ST_double *y, const ST_double *eta, const ST_double *offset,
+                                const ST_double *w_user, ST_int N)
+{
+    ST_int nblocks = (N + PPML_SUM_BLOCK - 1) / PPML_SUM_BLOCK;
+    dd_real *part = nblocks > 1 ? (dd_real *)malloc((size_t)nblocks * sizeof(dd_real)) : NULL;
+    dd_real dev = {0.0, 0.0};
+    if (!part) {
+        for (ST_int b = 0; b < nblocks; b++) {
+            ST_int lo = b * PPML_SUM_BLOCK, hi = lo + PPML_SUM_BLOCK < N ? lo + PPML_SUM_BLOCK : N;
+            dev = ppml_dd_add_dd(dev, ppml_deviance_block(y, eta, offset, w_user, lo, hi));
+        }
+        return 2.0 * (dev.hi + dev.lo);
+    }
+    #pragma omp parallel for schedule(static)
+    for (ST_int b = 0; b < nblocks; b++) {
+        ST_int lo = b * PPML_SUM_BLOCK, hi = lo + PPML_SUM_BLOCK < N ? lo + PPML_SUM_BLOCK : N;
+        part[b] = ppml_deviance_block(y, eta, offset, w_user, lo, hi);
+    }
+    for (ST_int b = 0; b < nblocks; b++) dev = ppml_dd_add_dd(dev, part[b]);
+    free(part);
     return 2.0 * (dev.hi + dev.lo);
 }
 
@@ -129,11 +175,22 @@ ST_double ppml_compute_deviance(const ST_double *y, const ST_double *eta, const 
 ST_double ppml_compute_loglik(const ST_double *y, const ST_double *eta, const ST_double *offset,
                               ST_double log_scale, const ST_double *w_user, ST_int N)
 {
+    ST_int nblocks = (N + PPML_SUM_BLOCK - 1) / PPML_SUM_BLOCK;
+    dd_real *part = nblocks > 1 ? (dd_real *)malloc((size_t)nblocks * sizeof(dd_real)) : NULL;
     dd_real ll = {0.0, 0.0};
-    for (ST_int i = 0; i < N; i++) {
-        ST_double w = (w_user != NULL) ? w_user[i] : 1.0;
-        ST_double eta_total = eta[i] + (offset != NULL ? offset[i] : 0.0) + log_scale;
-        ll = dd_add_d(ll, w * (ppml_saturated_loglik(y[i]) - ppml_unit_deviance(y[i], eta_total)));
+    if (!part) {
+        for (ST_int b = 0; b < nblocks; b++) {
+            ST_int lo = b * PPML_SUM_BLOCK, hi = lo + PPML_SUM_BLOCK < N ? lo + PPML_SUM_BLOCK : N;
+            ll = ppml_dd_add_dd(ll, ppml_loglik_block(y, eta, offset, log_scale, w_user, lo, hi));
+        }
+        return ll.hi + ll.lo;
     }
+    #pragma omp parallel for schedule(static)
+    for (ST_int b = 0; b < nblocks; b++) {
+        ST_int lo = b * PPML_SUM_BLOCK, hi = lo + PPML_SUM_BLOCK < N ? lo + PPML_SUM_BLOCK : N;
+        part[b] = ppml_loglik_block(y, eta, offset, log_scale, w_user, lo, hi);
+    }
+    for (ST_int b = 0; b < nblocks; b++) ll = ppml_dd_add_dd(ll, part[b]);
+    free(part);
     return ll.hi + ll.lo;
 }

@@ -15,6 +15,7 @@
 #include "ctools_config.h"
 #include "ctools_unroll.h"
 #include "ctools_simd.h"
+#include "ctools_ols.h"
 
 /* ============================================================================
  * Matrix Multiplication
@@ -313,7 +314,7 @@ ST_retcode ctools_vce_robust(const ctools_vce_data *d, ST_double dof_adj, ST_dou
      * parallel, a few columns k per pass. */
 #define CTOOLS_MEAT_ADD(acc, comp, a, b) do { \
         ST_double p_ = (a) * (b); \
-        ST_double pe_ = fma((a), (b), -p_); \
+        ST_double pe_ = CTOOLS_PROD_ERR((a), (b), p_); \
         ST_double t_ = (acc) + p_; \
         ST_double v_ = t_ - (acc); \
         (comp) += ((acc) - (t_ - v_)) + (p_ - v_) + pe_; \

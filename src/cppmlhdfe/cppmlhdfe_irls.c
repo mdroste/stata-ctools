@@ -188,33 +188,27 @@ static ST_retcode ppml_normal_equations(const ST_double *data, ST_int N, const S
     ST_int a;
     int failed = 0;
 
-    #pragma omp parallel if(K > 1 && (size_t)N * (size_t)K > 100000)
-    {
-        /* per-thread list of right-hand vectors: z, then x_0 .. x_a */
-        const ST_double **targets = (const ST_double **)malloc(((size_t)K + 1) * sizeof(*targets));
-        dd_real *sums = (dd_real *)malloc(((size_t)K + 1) * sizeof(*sums));
-        if (!targets || !sums) {
-            #pragma omp atomic write
-            failed = 1;
+    /* Each row's sums run over fixed blocks of observations in parallel
+     * (dd_dot_weighted_multi_blocked), so all threads work on every row
+     * whatever K is, and the result does not depend on the thread count. */
+    const ST_double **targets = (const ST_double **)malloc(((size_t)K + 1) * sizeof(*targets));
+    dd_real *sums = (dd_real *)malloc(((size_t)K + 1) * sizeof(*sums));
+    if (!targets || !sums) failed = 1;
+    for (a = 0; a < K && !failed; a++) {
+        const ST_double *xa = data + (size_t)((cols ? cols[a] : a) + 1) * N;
+        targets[0] = data;
+        for (ST_int b = 0; b <= a; b++)
+            targets[b + 1] = data + (size_t)((cols ? cols[b] : b) + 1) * N;
+        if (dd_dot_weighted_multi_blocked(xa, targets, a + 2, w, N, sums)) { failed = 1; break; }
+        if (xty_dd) xty_dd[a] = sums[0];
+        xty[a] = sums[0].hi + sums[0].lo;
+        for (ST_int b = 0; b <= a; b++) {
+            xtx[a * K + b] = sums[b + 1].hi + sums[b + 1].lo;
+            xtx[b * K + a] = sums[b + 1].hi + sums[b + 1].lo;
         }
-        #pragma omp for schedule(dynamic)
-        for (a = 0; a < K; a++) {
-            if (!targets || !sums) continue;
-            const ST_double *xa = data + (size_t)((cols ? cols[a] : a) + 1) * N;
-            targets[0] = data;
-            for (ST_int b = 0; b <= a; b++)
-                targets[b + 1] = data + (size_t)((cols ? cols[b] : b) + 1) * N;
-            dd_dot_weighted_multi(xa, targets, a + 2, w, N, sums);
-            if (xty_dd) xty_dd[a] = sums[0];
-            xty[a] = sums[0].hi + sums[0].lo;
-            for (ST_int b = 0; b <= a; b++) {
-                xtx[a * K + b] = sums[b + 1].hi + sums[b + 1].lo;
-                xtx[b * K + a] = sums[b + 1].hi + sums[b + 1].lo;
-            }
-        }
-        free(targets);
-        free(sums);
     }
+    free(targets);
+    free(sums);
     return failed ? 920 : 0;
 }
 
@@ -468,7 +462,12 @@ ST_retcode ppml_irls_loop(ppml_irls_io *io)
         for (i = 0; i < N; i++) {
             xb_work[i] += z_orig[i] - aug_copy[i];
             if (!isfinite(xb_work[i])) eta_not_finite |= 1;
-            else if (!isfinite(exp(xb_work[i] + (offset_compact ? offset_compact[i] : 0.0)))) mu_overflow |= 1;
+            else {
+                /* exp() overflows only above log(DBL_MAX) = 709.78; below 709
+                 * it is finite, so only those rare rows need the call */
+                ST_double eta_off = xb_work[i] + (offset_compact ? offset_compact[i] : 0.0);
+                if (eta_off > 709.0 && !isfinite(exp(eta_off))) mu_overflow |= 1;
+            }
         }
         /* Far from the optimum with wide offsets (means spanning hundreds of
          * orders of magnitude) the full step can overflow a mean although
@@ -899,12 +898,24 @@ ST_retcode ppml_final_solve(ppml_irls_io *io)
        regression): the sum of squared partialled working residuals with the
        regression weights w_reg, which sum to N (to the fweight total) */
     {
-        dd_real rss = {0.0, 0.0};
-        for (i = 0; i < N; i++) {
-            ST_double r = aug_copy[i];
-            for (k = 0; k < K_keep; k++) r -= aug_copy[(size_t)(keep_idx[k] + 1) * N + i] * beta_final[k];
-            rss = dd_add_d(rss, w_reg[i] * r * r);
+        /* Fixed blocks of rows summed in parallel, then in block order */
+        const ST_int blk = 32768, nblk = (N + blk - 1) / blk;
+        dd_real *part = (dd_real *)malloc((size_t)(nblk > 0 ? nblk : 1) * sizeof(dd_real));
+        if (!part) { output_rc = 920; goto ppml_cleanup; }
+        #pragma omp parallel for schedule(static) if (nblk > 8)
+        for (ST_int b = 0; b < nblk; b++) {
+            dd_real acc = {0.0, 0.0};
+            ST_int hi = (b + 1) * blk < N ? (b + 1) * blk : N;
+            for (ST_int ii = b * blk; ii < hi; ii++) {
+                ST_double r = aug_copy[ii];
+                for (ST_int kk = 0; kk < K_keep; kk++) r -= aug_copy[(size_t)(keep_idx[kk] + 1) * N + ii] * beta_final[kk];
+                acc = dd_add_d(acc, w_reg[ii] * r * r);
+            }
+            part[b] = acc;
         }
+        dd_real rss = {0.0, 0.0};
+        for (ST_int b = 0; b < nblk; b++) rss = dd_add_d(dd_add_d(rss, part[b].hi), part[b].lo);
+        free(part);
         io->rss = rss.hi + rss.lo;
     }
 
@@ -921,6 +932,7 @@ ST_retcode ppml_final_solve(ppml_irls_io *io)
                                              eta, fe_work, xb_work, num_threads, report);
         free(beta_full);
         if (output_rc) goto ppml_cleanup;
+        #pragma omp parallel for schedule(static) if (N > 100000)
         for (i = 0; i < N; i++) {
             mu[i] = exp(eta[i] + (offset_compact ? offset_compact[i] : 0.0));
             if (mu[i] < PPML_MU_FLOOR) mu[i] = PPML_MU_FLOOR;
@@ -2070,16 +2082,34 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
      * - mean(offset) + log(stdev_y). */
     ST_double constant, mean_d;
     {
-        dd_real sw = {0.0, 0.0}, slog = {0.0, 0.0}, soff = {0.0, 0.0}, sd = {0.0, 0.0};
-        for (i = 0; i < N; i++) {
-            ST_double w = irls_w[i];
-            ST_double d = z_orig[i] - vce_resid[i];
-            for (k = 0; k < K_keep; k++) d -= X[(size_t)keep_idx[k]*N+i]*beta_final[k];
-            sw = dd_add_d(sw, w);
-            slog = dd_add_d(slog, w * log(mu[i]));
-            if (offset_compact) soff = dd_add_d(soff, w * offset_compact[i]);
-            sd = dd_add_d(sd, w * d);
+        /* Fixed blocks of rows in parallel, then the blocks in order */
+        const ST_int blk = 32768, nblk = (N + blk - 1) / blk;
+        dd_real *part = (dd_real *)malloc((size_t)(nblk > 0 ? nblk : 1) * 4 * sizeof(dd_real));
+        if (!part) { output_rc = 920; goto ppml_cleanup; }
+        #pragma omp parallel for schedule(static) if (nblk > 8)
+        for (ST_int b = 0; b < nblk; b++) {
+            dd_real bw = {0.0, 0.0}, blog = {0.0, 0.0}, boff = {0.0, 0.0}, bd = {0.0, 0.0};
+            ST_int hi = (b + 1) * blk < N ? (b + 1) * blk : N;
+            for (ST_int ii = b * blk; ii < hi; ii++) {
+                ST_double w = irls_w[ii];
+                ST_double d = z_orig[ii] - vce_resid[ii];
+                for (ST_int kk = 0; kk < K_keep; kk++) d -= X[(size_t)keep_idx[kk]*N+ii]*beta_final[kk];
+                bw = dd_add_d(bw, w);
+                blog = dd_add_d(blog, w * log(mu[ii]));
+                if (offset_compact) boff = dd_add_d(boff, w * offset_compact[ii]);
+                bd = dd_add_d(bd, w * d);
+            }
+            part[4 * (size_t)b] = bw; part[4 * (size_t)b + 1] = blog;
+            part[4 * (size_t)b + 2] = boff; part[4 * (size_t)b + 3] = bd;
         }
+        dd_real sw = {0.0, 0.0}, slog = {0.0, 0.0}, soff = {0.0, 0.0}, sd = {0.0, 0.0};
+        for (ST_int b = 0; b < nblk; b++) {
+            sw = dd_add_d(dd_add_d(sw, part[4 * (size_t)b].hi), part[4 * (size_t)b].lo);
+            slog = dd_add_d(dd_add_d(slog, part[4 * (size_t)b + 1].hi), part[4 * (size_t)b + 1].lo);
+            soff = dd_add_d(dd_add_d(soff, part[4 * (size_t)b + 2].hi), part[4 * (size_t)b + 2].lo);
+            sd = dd_add_d(dd_add_d(sd, part[4 * (size_t)b + 3].hi), part[4 * (size_t)b + 3].lo);
+        }
+        free(part);
         ST_double wsum = sw.hi + sw.lo;
         constant = (slog.hi + slog.lo) / wsum;
         mean_d = (sd.hi + sd.lo) / wsum;
