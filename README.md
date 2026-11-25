@@ -23,14 +23,14 @@
 | --- | --- | --- | ---: |
 | `import` | `cimport` | Import text, Excel, dBase, SAS, SPSS, and shapefiles | 40–60× |
 | `export` | `cexport` | Export text, Excel, dBase, SAS, SPSS, and shapefiles | 50–70× |
-| `sort` | `csort` | Sort dataset | 1.3–4× |
-| `merge` | `cmerge` | Merge (join) datasets | 2–7× |
+| `sort` | `csort` | Sort dataset | 0.5–6× |
+| `merge` | `cmerge` | Merge (join) datasets | 0.5–7× |
 | `sample` | `csample` | Resampling without replacement | 5–9× |
 | `bsample` | `cbsample` | Resampling with replacement | 3–5× |
 | `encode` | `cencode` | Recast string as labeled numeric | 15–70× |
 | `decode` | `cdecode` | Recast labeled numeric as string | 2–20× |
 | `destring` | `cdestring` | Recast string as numeric type | 40–50× |
-| `ipolate` | [`cinterpolate`](docs/USAGE.md#interpolation-cinterpolate) | Linear interpolation and extrapolation | 50–80× |
+| `ipolate` | [`cinterpolate`](docs/USAGE.md#interpolation-cinterpolate) | Linear interpolation and extrapolation | 10–80× |
 | `split` | [`csplit`](docs/USAGE.md#string-fields-csplit) | Split strings into fields | 70–130× |
 | `qreg` | `cqreg` | Quantile regression | 4–6× |
 
@@ -39,7 +39,7 @@
 | Stata command | Replaced with | Description | Approx. speedup¹ |
 | --- | --- | --- | ---: |
 | `distinct` | [`cdistinct`](docs/commands/cdistinct.md) | Report distinct values | 10–30× |
-| `cipolate` | [`cinterpolate, cubic`](docs/USAGE.md#interpolation-cinterpolate) | Local cubic interpolation | — |
+| `cipolate` | [`cinterpolate, cubic`](docs/USAGE.md#interpolation-cinterpolate) | Local cubic interpolation | 10-20× |
 | `rangejoin` | [`crangejoin`](docs/USAGE.md#interval-joins-crangejoin) | Join observations within inclusive intervals | 10–20× |
 | `winsor2`, `gstats winsor` | `cwinsor` | Winsorize variables | 2–5× vs. `gstats winsor` |
 | `rangestat` | `crangestat` | Range statistics of variables | 80–110× |
@@ -48,17 +48,23 @@
 | `reghdfe` | `creghdfe` | OLS with multi-way fixed effects | 10–20× |
 | `ivreghdfe` | `civreghdfe` | 2SLS/GMM with multi-way fixed effects | 10–20× |
 | `ppmlhdfe` | `cppmlhdfe` | PPML with multi-way fixed effects | 5–6× |
-| `hdfe` | [`chdfe`](docs/commands/chdfe.md) | Remove fixed effects from variables | — |
+| `hdfe` | [`chdfe`](docs/commands/chdfe.md) | Remove fixed effects from variables | 5-15× |
 
 ¹ These are approximate speedups from a small number of benchmarks on data with **1M, 10M, and 25M observations** and 20 mixed-type variables. Values below 1× mean ctools was slower. Your machine's mileage may vary. See [benchmark details and results](docs/performance/README.md).
 
 ## Installation
 
 ctools requires Stata 14.1+, macOS 11 or later (Apple Silicon or Intel), Windows 10 or
-later (x86-64), or x86-64 Linux with glibc 2.17 or later. See [PLATFORMS.md](docs/development/PLATFORMS.md). In Stata:
+later (x86-64), or x86-64 Linux with glibc 2.17 or later. See [PLATFORMS.md](docs/development/PLATFORMS.md).
 
+You can install the latest version of ctools from this GitHub repository within Stata:
 ```stata
 net install ctools, from("https://raw.githubusercontent.com/mdroste/stata-ctools/main/build") replace
+```
+
+Alternatively, you can install a recent stable version from SSC:
+```stata
+ssc install ctools, replace
 ```
 
 For a drag-and-drop installation, download `ctools-<version>.zip` from
