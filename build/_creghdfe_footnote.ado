@@ -1,4 +1,4 @@
-*! version 1.3.0 20261124 github.com/mdroste/stata-ctools
+*! version 1.3.1 20261124 github.com/mdroste/stata-ctools
 * The absorbed degrees of freedom after creghdfe, named in e(footnote) (for
 * the displays of bootstrap, jackknife and other prefixes) and shown by
 * creghdfe itself: reghdfe's footnote table from e(dof_table), with ? where

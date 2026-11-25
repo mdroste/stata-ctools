@@ -1,4 +1,4 @@
-*! version 1.3.0 20261124 github.com/mdroste/stata-ctools
+*! version 1.3.1 20261124 github.com/mdroste/stata-ctools
 *! dofadjustments() of the HDFE estimators.
 * _ctools_hdfe_dof [, all none firstpair pairwise clusters continuous]
 *

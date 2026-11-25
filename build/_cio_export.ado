@@ -1,4 +1,4 @@
-*! version 1.3.0 20261124 github.com/mdroste/stata-ctools
+*! version 1.3.1 20261124 github.com/mdroste/stata-ctools
 *! Binary statistical writers; serialization is provided by C.
 program define _cio_export, rclass
     version 14.1

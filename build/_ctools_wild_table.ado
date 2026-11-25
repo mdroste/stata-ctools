@@ -1,4 +1,4 @@
-*! version 1.3.0 20261124 github.com/mdroste/stata-ctools
+*! version 1.3.1 20261124 github.com/mdroste/stata-ctools
 *! The wild bootstrap table after the coefficient table of an HDFE estimator.
 * Design: docs/development/BOOTSTRAP_PLAN.md (section 4.7).
 *

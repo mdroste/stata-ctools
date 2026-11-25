@@ -1,4 +1,4 @@
-*! version 1.3.0 20261124 github.com/mdroste/stata-ctools
+*! version 1.3.1 20261124 github.com/mdroste/stata-ctools
 
 * byable(recall) and the sw and mi properties as qreg declares them: by:,
 * stepwise, nestreg and mi estimate accept cqreg

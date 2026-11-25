@@ -1,4 +1,4 @@
-*! version 1.3.0 20261124 github.com/mdroste/stata-ctools
+*! version 1.3.1 20261124 github.com/mdroste/stata-ctools
 *! Remove absorbed fixed effects from a list of variables
 program define chdfe, eclass
     version 14.1
