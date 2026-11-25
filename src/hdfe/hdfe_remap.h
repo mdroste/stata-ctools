@@ -46,8 +46,8 @@ int remap_values_sorted(const double *values, ST_int N, ST_int *levels_out, ST_i
 
 /*
  * Remap FE values to contiguous 1-based levels with fused counting.
- * Uses O(N) counting-based approach for integer values (common case),
- * falls back to O(N log N) sort for non-integer or very sparse values.
+ * Uses direct counting for dense integer values and hashing for sparse
+ * or non-integer values.
  *
  * @param values      Input: N FE values (already filtered, no missing)
  * @param N           Number of observations

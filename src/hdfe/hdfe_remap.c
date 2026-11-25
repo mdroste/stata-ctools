@@ -176,83 +176,10 @@ static int remap_counting_impl(const double *values, ST_int N, ST_int *levels_ou
 }
 
 /*
- * Sort-based remap fallback for non-integer or very sparse values: O(N log N).
- * Same algorithm as remap_values_sorted but without SF_is_missing check
- * (data is already filtered) and with fused counting.
- */
-static int remap_sort_impl(const double *values, ST_int N, ST_int *levels_out, ST_int *num_levels,
-                           ST_int **counts_out, const double *weights, ST_double **wcounts_out)
-{
-    ValueIndexPair *pairs = (ValueIndexPair *)malloc(N * sizeof(ValueIndexPair));
-    if (!pairs)
-        return -1;
-
-    for (ST_int i = 0; i < N; i++)
-    {
-        pairs[i].value = values[i];
-        pairs[i].index = i;
-    }
-
-    qsort(pairs, N, sizeof(ValueIndexPair),
-          (int (*)(const void *, const void *))compare_value_index_inline);
-
-    ST_int level = 1;
-    double prev_value = pairs[0].value;
-    levels_out[pairs[0].index] = level;
-
-    for (ST_int i = 1; i < N; i++)
-    {
-        if (pairs[i].value != prev_value)
-        {
-            level++;
-            prev_value = pairs[i].value;
-        }
-        levels_out[pairs[i].index] = level;
-    }
-    free(pairs);
-
-    /* Count per level */
-    ST_int *counts = (ST_int *)calloc(level, sizeof(ST_int));
-    if (!counts)
-        return -1;
-
-    if (weights && wcounts_out)
-    {
-        ST_double *wcounts = (ST_double *)calloc(level, sizeof(ST_double));
-        if (!wcounts)
-        {
-            free(counts);
-            return -1;
-        }
-        for (ST_int i = 0; i < N; i++)
-        {
-            ST_int lev = levels_out[i] - 1;
-            counts[lev]++;
-            wcounts[lev] += weights[i];
-        }
-        *wcounts_out = wcounts;
-    }
-    else
-    {
-        for (ST_int i = 0; i < N; i++)
-        {
-            counts[levels_out[i] - 1]++;
-        }
-    }
-
-    *counts_out = counts;
-    *num_levels = level;
-    return 0;
-}
-
-/*
  * Hash remap for non-integer or very sparse values: O(N) expected.
- * Levels are numbered in order of first appearance, as remap_counting_impl
- * numbers them (the sort fallback numbers them in value order; nothing
- * downstream depends on the numbering, since each level's sums run over the
- * observations in order). Equal values share a level: -0.0 is folded into
- * 0.0, and values are already free of missing codes. Returns 1 when its
- * table cannot be allocated, so the caller can fall back to sorting.
+ * Levels are numbered in order of first appearance, as in remap_counting_impl.
+ * Equal values share a level, including signed zeros. The caller filters
+ * out missing codes before remapping.
  */
 static inline uint64_t remap_mix64(uint64_t x)
 {
@@ -274,7 +201,7 @@ static int remap_hash_impl(const double *values, ST_int N, ST_int *levels_out, S
     {
         free(keys);
         free(slots);
-        return 1;
+        return -1;
     }
     ST_int level = 0;
     for (ST_int i = 0; i < N; i++)
@@ -307,7 +234,7 @@ static int remap_hash_impl(const double *values, ST_int N, ST_int *levels_out, S
                 free(nslots);
                 free(keys);
                 free(slots);
-                return 1;
+                return -1;
             }
             for (size_t s = 0; s < cap; s++)
             {
@@ -378,7 +305,7 @@ int remap_and_count(const double *values, ST_int N, ST_int *levels_out, ST_int *
     {
         double v = values[i];
         /* Keep counting codes within exact double integers. This also makes
-         * the later signed range subtraction safe. Other labels use sorting. */
+         * the later signed range subtraction safe. Other labels use hashing. */
         if (!isfinite(v) || v < -0x1p53 || v > 0x1p53 || trunc(v) != v)
         {
             all_integer = 0;
@@ -410,10 +337,5 @@ int remap_and_count(const double *values, ST_int N, ST_int *levels_out, ST_int *
         }
     }
 
-    /* Sparse or non-integer codes: hash them, or sort if the table cannot be
-     * allocated */
-    int rc = remap_hash_impl(values, N, levels_out, num_levels, counts_out, weights, wcounts_out);
-    if (rc != 1)
-        return rc;
-    return remap_sort_impl(values, N, levels_out, num_levels, counts_out, weights, wcounts_out);
+    return remap_hash_impl(values, N, levels_out, num_levels, counts_out, weights, wcounts_out);
 }
