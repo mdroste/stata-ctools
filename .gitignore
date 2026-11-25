@@ -7,6 +7,7 @@ AGENTS.md
 *.plugin
 *.dSYM/
 *.o
+a.out
 /build/obj
 
 /dist/
