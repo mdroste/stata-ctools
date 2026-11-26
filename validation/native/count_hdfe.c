@@ -3,6 +3,7 @@
 #include "ctools_types.h"
 #include "ctools_simd.h"
 #include "alloc.h"
+#include <math.h>
 #include <stdarg.h>
 static ST_plugin mock;
 ST_plugin *_stata_ = &mock;
@@ -128,6 +129,48 @@ stata_retcode ctools_store_filtered(double *v, size_t n, int col, perm_idx_t *ma
             return STATA_ERR_STATA_WRITE;
     return STATA_OK;
 }
+void ctools_filtered_data_release(ctools_filtered_data *fd)
+{
+    /* no release session in these tests: production frees at once too */
+    ctools_filtered_data_free(fd);
+}
+/* ctools_data_store.c's contract, one thread: columns[j][i] * scale[j] to
+ * var_idx[j] at obs_map[i]; with fill_rows every observation 1..fill_rows is
+ * written, the rows not in obs_map with fill[j] (NULL: missing); values that
+ * Stata cannot hold are stored as missing and flagged. */
+stata_retcode ctools_store_filtered_cols(const double *const *columns, const double *scale,
+                                         const double *fill, const int *var_idx, size_t ncols,
+                                         size_t n_filtered, const perm_idx_t *obs_map,
+                                         size_t fill_rows, int *unstorable)
+{
+    if (unstorable)
+        *unstorable = 0;
+    const size_t rows = fill_rows ? fill_rows : n_filtered;
+    for (size_t j = 0; j < ncols; j++)
+    {
+        const double s = scale ? scale[j] : 1.0;
+        const double other = fill ? fill[j] : SV_missval;
+        for (size_t r = 0, p = 0; r < rows; r++)
+        {
+            const size_t obs = fill_rows ? r + 1 : (size_t)obs_map[r];
+            double v = other;
+            if (!fill_rows || (p < n_filtered && (size_t)obs_map[p] == obs))
+            {
+                const size_t i = fill_rows ? p++ : r;
+                v = columns[j] ? columns[j][i] * s : s;
+                if (!(v < SV_missval && v > -INFINITY))
+                {
+                    v = SV_missval;
+                    if (unstorable)
+                        *unstorable = 1;
+                }
+            }
+            if (putnum(var_idx[j], (ST_int)obs, v))
+                return STATA_ERR_STATA_WRITE;
+        }
+    }
+    return STATA_OK;
+}
 #include "ctools_parse.c"
 #include "ctools_order.c"
 #include "ctools_hdfe_utils.c"
@@ -136,6 +179,8 @@ stata_retcode ctools_store_filtered(double *v, size_t n, int col, perm_idx_t *ma
 #include "hdfe/hdfe_solver.c"
 #include "cdistinct/cdistinct_impl.c"
 #include "chdfe/chdfe_impl.c"
+/* last: it defines SD_SAFEMODE for itself */
+#include "hdfe/hdfe_missing.c"
 
 static int distinct_case(void)
 {

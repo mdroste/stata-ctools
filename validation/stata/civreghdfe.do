@@ -502,6 +502,24 @@ benchmark_ivreghdfe price (mpg = weight length) ib3.rep78, absorb(foreign) testn
 sysuse auto, clear
 benchmark_ivreghdfe price (mpg = weight length) c.turn#i.foreign, absorb(rep78) testname("c.turn#i.foreign interaction")
 
+* civnofv (internal) sends plain i.f terms through fvrevar instead of the
+* plugin's factor levels: both paths must give the same model.
+sysuse auto, clear
+foreach spec in "price (mpg = weight) i.rep78" "price (mpg = i.rep78)" "price (mpg = weight length) ib3.rep78 i.foreign" {
+    quietly civreghdfe `spec', absorb(headroom) vce(robust)
+    matrix native_b = e(b)
+    matrix native_V = e(V)
+    local native_names : colfullnames e(b)
+    local native_N = e(N)
+    quietly generate byte native_sample = e(sample)
+    quietly civreghdfe `spec', absorb(headroom) vce(robust) civnofv
+    assert mreldif(e(b), native_b) < 1e-12 & mreldif(e(V), native_V) < 1e-12
+    assert `"`: colfullnames e(b)'"' == `"`native_names'"' & e(N) == `native_N'
+    assert e(sample) == native_sample
+    drop native_sample
+    test_pass "civnofv matches the native factor path: `spec'"
+}
+
 * Factor-by-factor interaction
 * Note: i.race#i.union with absorb(idcode) causes different collinearity
 * selections after HDFE partialling (Cholesky vs _rmcoll). Both produce valid

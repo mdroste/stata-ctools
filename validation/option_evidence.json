@@ -994,6 +994,16 @@
         }
       ]
     },
+    "civnofv": {
+      "kind": "contract",
+      "reason": "Internal: sends plain i.f terms through fvrevar instead of the plugin's factor levels; e(b), e(V), coefficient names, e(N) and e(sample) match the native path.",
+      "evidence": [
+        {
+          "path": "validation/stata/civreghdfe.do",
+          "anchor": "civnofv matches the native factor path"
+        }
+      ]
+    },
     "dropfirst": {
       "kind": "contract",
       "reason": "Replay with the drop* options hides the stored equations' tables, as ivreg2's replay does.",

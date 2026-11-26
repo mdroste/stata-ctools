@@ -1,6 +1,30 @@
 /* Analytic paired residuals are orthogonal to every supplied slope/category. */
 #include "newcommands_mock.h"
 void ctools_msg(const char *m,const char *f,...){(void)m;(void)f;}
+/* No release session here: production frees at once too. */
+void ctools_filtered_data_release(ctools_filtered_data *fd){ctools_filtered_data_free(fd);}
+/* ctools_data_store.c's contract, one thread (see count_hdfe.c). */
+stata_retcode ctools_store_filtered_cols(const double *const *columns,const double *scale,
+    const double *fill,const int *var_idx,size_t ncols,size_t n_filtered,const perm_idx_t *obs_map,
+    size_t fill_rows,int *unstorable)
+{
+    if(unstorable)*unstorable=0;
+    const size_t rows=fill_rows?fill_rows:n_filtered;
+    for(size_t j=0;j<ncols;j++) {
+        const double s=scale?scale[j]:1.0,other=fill?fill[j]:SV_missval;
+        for(size_t r=0,p=0;r<rows;r++) {
+            const size_t obs=fill_rows?r+1:(size_t)obs_map[r];
+            double v=other;
+            if(!fill_rows||(p<n_filtered&&(size_t)obs_map[p]==obs)) {
+                const size_t i=fill_rows?p++:r;
+                v=columns[j]?columns[j][i]*s:s;
+                if(!(v<SV_missval&&v>-INFINITY)){v=SV_missval;if(unstorable)*unstorable=1;}
+            }
+            if(putnum(var_idx[j],(ST_int)obs,v))return STATA_ERR_STATA_WRITE;
+        }
+    }
+    return STATA_OK;
+}
 #include "ctools_parse.c"
 #include "ctools_order.c"
 #include "ctools_hdfe_utils.c"
@@ -8,6 +32,8 @@ void ctools_msg(const char *m,const char *f,...){(void)m;(void)f;}
 #include "hdfe/hdfe_sample.c"
 #include "hdfe/hdfe_solver.c"
 #include "chdfe/chdfe_impl.c"
+/* last: it defines SD_SAFEMODE for itself */
+#include "hdfe/hdfe_missing.c"
 static ST_boolean ismissing(double x){return x>=mock.missval;}
 static ST_retcode message(char *s){(void)s;return 0;}
 static const char *totals[]={"N","df","mobility","nested","singletons","iterations","group_saved"};

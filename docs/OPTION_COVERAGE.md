@@ -301,6 +301,7 @@ python3 validation/run.py cencode
 | `civreghdfe` | `civcollin` | Check option behavior |
 | `civreghdfe` | `civecollin` | Check option behavior |
 | `civreghdfe` | `civdups` | Check option behavior |
+| `civreghdfe` | `civnofv` | Check option behavior |
 | `civreghdfe` | `noreturn` | Check option behavior |
 | `civreghdfe` | `civaux` | Check option behavior |
 | `civreghdfe` | `psd0` | Compare command results |

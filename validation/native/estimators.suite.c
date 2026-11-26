@@ -438,6 +438,8 @@ stata_retcode ctools_data_load(ctools_filtered_data *d, int *v, size_t n, size_t
     }
     return STATA_OK;
 }
+/* No release session in these tests: production frees at once too. */
+void ctools_filtered_data_release(ctools_filtered_data *d) { ctools_filtered_data_free(d); }
 #include "creghdfe/creghdfe_hdfe.c"
 #include "creghdfe/creghdfe_regress.c"
 #include "hdfe/hdfe_missing.c"
@@ -458,6 +460,15 @@ stata_retcode ctools_data_load(ctools_filtered_data *d, int *v, size_t n, size_t
 #include "ctools_matrix.c"
 #include "ctools_ols.c"
 #include "ctools_spi.c"
+/* No helper pool: creghdfe runs its count jobs inline, as it does when the
+ * pool cannot start. */
+ctools_persistent_pool *ctools_get_global_pool(void) { return NULL; }
+int ctools_persistent_pool_submit_batch(ctools_persistent_pool *pool, ctools_thread_func func,
+                                        void *args, size_t count, size_t arg_size) {
+    (void)pool; (void)func; (void)args; (void)count; (void)arg_size;
+    return -1;
+}
+int ctools_persistent_pool_wait(ctools_persistent_pool *pool) { (void)pool; return 0; }
 int main(int argc, char **argv) {
     store_at = argc > 5 ? atoi(argv[5]) : 0;
     scalar_at = argc > 6 ? atoi(argv[6]) : 0;
@@ -591,6 +602,8 @@ stata_retcode ctools_data_load(ctools_filtered_data *d, int *v, size_t n, size_t
     }
     return STATA_OK;
 }
+/* No release session in these tests: production frees at once too. */
+void ctools_filtered_data_release(ctools_filtered_data *d) { ctools_filtered_data_free(d); }
 #include "cppmlhdfe/cppmlhdfe_irls.c"
 #include "hdfe/hdfe_missing.c"
 #include "cppmlhdfe/cppmlhdfe_result.c"
@@ -797,6 +810,22 @@ stata_retcode ctools_data_load(ctools_filtered_data *data, int *indices, size_t 
     }
     return STATA_OK;
 }
+/* No release session in these tests: production frees at once too. */
+void ctools_filtered_data_release(ctools_filtered_data *data)
+{
+    ctools_filtered_data_free(data);
+}
+/* These cases ask for no residual variable, so nothing is stored; a call
+ * would be a change in that, reported as a failed write. */
+stata_retcode ctools_store_filtered_rowpar(double *values, size_t n_filtered, int var_idx,
+                                           perm_idx_t *obs_map)
+{
+    (void)values;
+    (void)n_filtered;
+    (void)var_idx;
+    (void)obs_map;
+    return STATA_ERR_STATA_WRITE;
+}
 
 #include "civreghdfe/civreghdfe_impl.c"
 #include "civreghdfe/civreghdfe_result.c"
@@ -899,6 +928,14 @@ int main(int argc, char **argv)
 #include "ctools_hdfe_utils.c"
 #include "ctools_ols.c"
 
+int ctools_get_max_threads(void)
+{
+    return 1;
+}
+double ctools_timer_seconds(void)
+{
+    return 0;
+}
 static ST_plugin host;
 ST_plugin *_stata_ = &host;
 static ST_retcode message(char *s)
