@@ -811,6 +811,9 @@ static ST_retcode fit_rows(const ppml_boot_model *m, const ST_int *rows, const S
     S.weight_type = 1;
     S.weights = irls_w;
     S.sum_weights = 0.0;
+    /* as the full fit (cppmlhdfe_irls.c): w is the multiplicity times the
+     * user's weight */
+    S.floor_any_weight_span = !hdfe_weight_span_too_wide(w, N2);
     if (ctools_hdfe_alloc_buffers(&S, 0, K_aug) != 0)
     {
         rc = 920;
@@ -1740,6 +1743,8 @@ static ppml_reval *reval_new(const ppml_boot_model *m, ST_int threads, ST_int B)
     S->has_weights = 1;
     S->weight_type = 1;
     S->weights = ev->irls_w;
+    /* as the full fit (cppmlhdfe_irls.c) */
+    S->floor_any_weight_span = !(m->w_user && hdfe_weight_span_too_wide(m->w_user, N));
     if (ctools_hdfe_alloc_buffers(S, 0, K_aug) != 0)
     {
         reval_free(ev);

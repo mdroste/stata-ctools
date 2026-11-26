@@ -25,12 +25,12 @@ Each ctools command reimplements an existing Stata command and is pinned to one 
 | --- | --- | --- | ---: |
 | `import` | `cimport` | Import text, Excel, dBase, SAS, SPSS, and shapefiles | 10–20× |
 | `export` | `cexport` | Export text, Excel, dBase, SAS, SPSS, and shapefiles | 50–80× |
-| `sort` | `csort` | Sort dataset | 1.7–4×² |
-| `merge` | `cmerge` | Merge (join) datasets | 2–6×² |
+| `sort` | `csort` | Sort dataset | 1.7–4× |
+| `merge` | `cmerge` | Merge (join) datasets | 2–6× |
 | `joinby` | [`cjoinby`](docs/commands/cjoinby.md) | Form all pairwise combinations within groups | 20–70× |
-| `reshape` | [`creshape`](docs/commands/creshape.md) | Convert data from wide to long form and vice versa | 20–40×⁷ |
-| `collapse` | [`ccollapse`](docs/commands/ccollapse.md) | Make dataset of summary statistics | 1.1–20×⁴ |
-| `egen` | [`cegen`](docs/commands/cegen.md) | Extensions to generate | 3–60×⁵ |
+| `reshape` | [`creshape`](docs/commands/creshape.md) | Convert data from wide to long form and vice versa | 20–40× |
+| `collapse` | [`ccollapse`](docs/commands/ccollapse.md) | Make dataset of summary statistics | 1.1–20× |
+| `egen` | [`cegen`](docs/commands/cegen.md) | Extensions to generate | 3–60× |
 | `sample` | `csample` | Resampling without replacement | 6–10× |
 | `bsample` | `cbsample` | Resampling with replacement | 2–4× |
 | `encode` | `cencode` | Recast string as labeled numeric | 30–160× |
@@ -38,7 +38,7 @@ Each ctools command reimplements an existing Stata command and is pinned to one 
 | `destring` | `cdestring` | Recast string as numeric type | 20–40× |
 | `ipolate` | [`cinterpolate`](docs/USAGE.md#interpolation-cinterpolate) | Linear interpolation and extrapolation | 50–90× |
 | `split` | [`csplit`](docs/USAGE.md#string-fields-csplit) | Split strings into fields | 140–270× |
-| `qreg` | `cqreg` | Quantile regression | 8–10×³ |
+| `qreg` | `cqreg` | Quantile regression | 8–10× |
 
 ### User-written commands
 
@@ -53,22 +53,12 @@ See [Attribution](docs/ATTRIBUTION.md#community-contributed-commands) for the au
 | `rangestat` | `crangestat` | Range statistics of variables | 30–70× |
 | `binscatter`<br>`binscatter2`<br>`binsreg` | `cbinscatter` | Binned scatter plots | 7–40×<br>3–20×<br>3–30× |
 | `psmatch2` | `cpsmatch` | Propensity score matching | 3–4× |
-| `reghdfe`<br>`fereg` | `creghdfe` | OLS with multi-way fixed effects | 8–20×<br>0.3–0.5× |
-| `ivreghdfe` | `civreghdfe` | 2SLS/GMM with multi-way fixed effects | 10–20× |
-| `ppmlhdfe`<br>`feppml` | `cppmlhdfe` | PPML with multi-way fixed effects | 6–9×³<br>0.3–0.5× |
+| `reghdfe`<br>`fereg` | `creghdfe` | OLS with multi-way fixed effects | 30–40×<br>1.4–1.6× |
+| `ivreghdfe` | `civreghdfe` | 2SLS/GMM with multi-way fixed effects | 20–40× |
+| `ppmlhdfe`<br>`feppml` | `cppmlhdfe` | PPML with multi-way fixed effects | 30–50×<br>1.9–3× |
 | `hdfe` | [`chdfe`](docs/commands/chdfe.md) | Remove fixed effects from variables | 5–20× |
 
-¹ These are approximate speedups from a small number of benchmarks on data with **1M, 10M, and 25M observations** and 20 mixed-type variables. Where a ctools command replaces several commands, each has its own speedup, in the same order. Values below 1× mean ctools was slower. Your machine's mileage may vary. See [benchmark details and results](docs/performance/README.md).
-
-² `csort` and `cmerge` work better on data with many observations relative to variables; their speedups shrink as the number of variables grows.
-
-³ Measured at 1M and 10M observations only: `qreg` and `ppmlhdfe` take minutes per run at 25M.
-
-⁴ Measured at 10M observations only, on nine combinations of statistics and `by()` variables, and not yet part of the benchmark profile above; the smallest speedup is without `by()`. Against `gcollapse` the range was 4–20×; see the [command page](docs/commands/ccollapse.md#performance).
-
-⁵ Measured at 2M and 10M observations on 33 combinations of `egen` functions and `by()` variables, and not yet part of the benchmark profile above. The smallest speedups are for sums without `by()` and across variables, where `egen` is already fast; the largest are for `mode()`, `tag()` and `seq()` within groups. Against `gegen` the range at 2M was 1.3–6× for the functions `gegen` implements; see the [command page](docs/commands/cegen.md#performance).
-
-⁷ Measured on data of 1M and 10M observations in long form (ten values of `j`, three reshaped variables and three others), in both directions, against `reshape`'s default `favor(speed)`, and not yet part of the benchmark profile above. See the [`creshape` guide](docs/commands/creshape.md#performance).
+¹ Approximate speedups from a small number of benchmarks on data with 1M, 10M, and 25M observations and 20 mixed-type variables; `collapse`, `egen` and `reshape` were timed on their own workloads, shown on their command pages. Where a ctools command replaces several commands, the speedups are in the same order. Below 1× means ctools was slower. Your mileage may vary. See [benchmark details and results](docs/performance/README.md).
 
 ## Installation
 

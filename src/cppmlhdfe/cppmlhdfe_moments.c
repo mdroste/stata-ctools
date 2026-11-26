@@ -339,8 +339,8 @@ ST_retcode ppml_irls_step_weights(const ST_double *mu, const ST_double *w_user,
              * once this pass ends. Its weight here is exactly zero rather
              * than that marker's: a positive weight sixteen orders below the
              * others is what a projection can neither use nor certify (the
-             * iteration on the rows reports a breakdown), while a zero one
-             * simply takes the row out. */
+             * iteration on the rows once reported a breakdown for it), while
+             * a zero one simply takes the row out. */
             if (excluded && excluded[i]) w = 0.0;
             irls_w[i] = w;
             sum += w;

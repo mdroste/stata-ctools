@@ -753,10 +753,10 @@
   "basic_check_failures": 0,
   "result_files": {
     "timings.csv": {
-      "sha256": "d0bd2489fc54290b395e84f0f72ab3a02549b24d06b9051c591c1d12c8d06f40"
+      "sha256": "a3acb4ca626e6e12becdfa558068c560bec283da81b96bc6e20eba789bc90b05"
     },
     "results.md": {
-      "sha256": "6d2d7cc1142d0af48c0372bc9fdb434f2a87343b7f6feb07200b9cf1ab0822cc"
+      "sha256": "8b4a1af0442a5d45aafab89dab2e2c48a3ad8fb964b0aa0c91cd811594f3adb6"
     }
   },
   "ctools_threads_note": "ctools commands ran without threads(); the thread policy resolved to 16 (automatic: usable CPUs, at most 16). Stata references used set processors 4, the license limit; fereg and feppml used their own default thread count.",
@@ -847,6 +847,605 @@
           "version_comments": [
             "*! version 2.1.0  22dec2022"
           ]
+        }
+      },
+      "completed_calls": 12,
+      "command_failures": 0,
+      "basic_check_failures": 0
+    },
+    "reghdfe": {
+      "note": "reghdfe was measured again after the shared run, in sessions that ran only reghdfe, fereg, ivreghdfe, ppmlhdfe, feppml; these values override the shared fields for this comparison (see docs/performance/README.md, single-command refresh).",
+      "date": "2026-11-26",
+      "cpu": "AMD Ryzen 9 9950X 16-Core Processor",
+      "os": "Windows 11 Pro 10.0.26200",
+      "stata": "StataNow/MP 19.5 for Windows (64-bit x86-64), revision 14 Oct 2026",
+      "stata_processors": 4,
+      "ctools_threads": 16,
+      "observations": [
+        1000000,
+        10000000,
+        25000000
+      ],
+      "variables": 20,
+      "workload": "Stata: reghdfe y x1 x2, absorb(firm group) tolerance(1e-8); ctools: creghdfe y x1 x2, absorb(firm group) tolerance(1e-8)",
+      "repetitions": 2,
+      "repetition_note": "2 passes over the sizes, each a separate set of sessions that ran only reghdfe, fereg, ivreghdfe, ppmlhdfe, feppml; a published time is the smallest of the passes",
+      "git_head_context": "b958d5b8345b44067be4856d66578f12af7b8e6f",
+      "source_identity": "git archive of b958d5b8345b44067be4856d66578f12af7b8e6f (committed dev, exported at 2026-11-26T11:43:56Z; uncommitted working-tree changes not included); the measured plugin and the command's own wrappers are identified by the hashes below, its shared _ctools helper ado files are those of that commit",
+      "build_note": "Windows x86-64 OpenMP plugin built locally from that tree with MSYS2 MINGW64 gcc 16.2 using the `make windows` flags; Stata loaded it through CTOOLS_TEST_PLUGIN_DIR, ahead of the repository's build/.",
+      "execution_note": "Each size ran in one batch Stata session: the test data was made once, then reghdfe, fereg, ivreghdfe, ppmlhdfe, feppml ran in turn, the Stata command first and the ctools command second, each on a fresh copy of the data (creghdfe and cppmlhdfe were timed again in each of their two comparisons). The run did not wait for an idle machine: other processes (Stata sessions and compilations) used 225% of one logical processor on average (per session below, sampled every 5 s; percentages are of one logical processor). Stata references used set processors 4; fereg and feppml used their own default thread count.",
+      "checks": "after each command: _N and e(N) equal the observation count",
+      "sessions": {
+        "hd1_1000000": {
+          "wall": 17.3,
+          "samples": 3,
+          "max_other_cpu_percent": 148,
+          "mean_other_cpu_percent": 127
+        },
+        "hd1_10000000": {
+          "wall": 169.4,
+          "samples": 33,
+          "max_other_cpu_percent": 571,
+          "mean_other_cpu_percent": 187
+        },
+        "hd1_25000000": {
+          "wall": 211.0,
+          "samples": 42,
+          "max_other_cpu_percent": 912,
+          "mean_other_cpu_percent": 264
+        },
+        "hd2_1000000": {
+          "wall": 17.8,
+          "samples": 3,
+          "max_other_cpu_percent": 229,
+          "mean_other_cpu_percent": 215
+        },
+        "hd2_10000000": {
+          "wall": 170.7,
+          "samples": 34,
+          "max_other_cpu_percent": 336,
+          "mean_other_cpu_percent": 190
+        },
+        "hd2_25000000": {
+          "wall": 239.6,
+          "samples": 47,
+          "max_other_cpu_percent": 408,
+          "mean_other_cpu_percent": 250
+        }
+      },
+      "files": {
+        "measured-build/_creghdfe_estat.ado": {
+          "sha256": "00ea35098eeca0c9770fe7f4e2ff169fdf97836a2aaee585a571c242a4989331",
+          "version_comments": [
+            "*! version 1.3.2 20261124 github.com/mdroste/stata-ctools"
+          ]
+        },
+        "measured-build/_creghdfe_footnote.ado": {
+          "sha256": "749048718509c9dbec7a0e6e54d5a29b0dff14ff385709935774599835ab8c44",
+          "version_comments": [
+            "*! version 1.3.2 20261124 github.com/mdroste/stata-ctools"
+          ]
+        },
+        "measured-build/creghdfe.ado": {
+          "sha256": "01705a9ea9382a71f49e161fc5efb782907b8a9ee9b326cd81346deb04ffb78f",
+          "version_comments": [
+            "*! version 1.3.2 20261124 github.com/mdroste/stata-ctools",
+            "*! original: reghdfe 6.13.1 (January 10, 2026) by Sergio Correia and Noah Constantine",
+            "*! original: see help creghdfe for details"
+          ]
+        },
+        "measured-build/ctools_windows.plugin": {
+          "sha256": "760fe5fae8832890113f5f2a55cd0e7cc8cb619b2302474bcc314db27b6de682"
+        },
+        "validation/performance/profiles.do": {
+          "sha256": "fd51d652b2ec850134dbd86cfe1a3b7f10a2903ba73efeddbb9e386d433d1583"
+        },
+        "generated-workload": {
+          "sha256": "a27085c8ff06a641877eecbbfb669cbaf11af29a886f2181b71486c522ef08d6"
+        }
+      },
+      "reference_files": {
+        "C:/Users/Mike/ado/plus/r/reghdfe.ado": {
+          "sha256": "f9462bb7364055b138b223a495d4b0fd4b3c5e3bedc1fc886b75bf1546f9d66a",
+          "version_comments": [
+            "*! version 6.13.1 10Jan2026"
+          ]
+        },
+        "C:/Users/Mike/ado/plus/f/ftools.ado": {
+          "sha256": "459666a26fdcc67b798b0a38eab3dcefa6714c4e679745f99eca945f41b3cd88",
+          "version_comments": [
+            "*! version 2.50.0 09jan2026"
+          ]
+        }
+      },
+      "completed_calls": 12,
+      "command_failures": 0,
+      "basic_check_failures": 0
+    },
+    "fereg": {
+      "note": "fereg was measured again after the shared run, in sessions that ran only reghdfe, fereg, ivreghdfe, ppmlhdfe, feppml; these values override the shared fields for this comparison (see docs/performance/README.md, single-command refresh).",
+      "date": "2026-11-26",
+      "cpu": "AMD Ryzen 9 9950X 16-Core Processor",
+      "os": "Windows 11 Pro 10.0.26200",
+      "stata": "StataNow/MP 19.5 for Windows (64-bit x86-64), revision 14 Oct 2026",
+      "stata_processors": 4,
+      "ctools_threads": 16,
+      "observations": [
+        1000000,
+        10000000,
+        25000000
+      ],
+      "variables": 20,
+      "workload": "Stata: fereg y x1 x2, absorb(firm group) tolerance(1e-8); ctools: creghdfe y x1 x2, absorb(firm group) tolerance(1e-8)",
+      "repetitions": 2,
+      "repetition_note": "2 passes over the sizes, each a separate set of sessions that ran only reghdfe, fereg, ivreghdfe, ppmlhdfe, feppml; a published time is the smallest of the passes",
+      "git_head_context": "b958d5b8345b44067be4856d66578f12af7b8e6f",
+      "source_identity": "git archive of b958d5b8345b44067be4856d66578f12af7b8e6f (committed dev, exported at 2026-11-26T11:43:56Z; uncommitted working-tree changes not included); the measured plugin and the command's own wrappers are identified by the hashes below, its shared _ctools helper ado files are those of that commit",
+      "build_note": "Windows x86-64 OpenMP plugin built locally from that tree with MSYS2 MINGW64 gcc 16.2 using the `make windows` flags; Stata loaded it through CTOOLS_TEST_PLUGIN_DIR, ahead of the repository's build/.",
+      "execution_note": "Each size ran in one batch Stata session: the test data was made once, then reghdfe, fereg, ivreghdfe, ppmlhdfe, feppml ran in turn, the Stata command first and the ctools command second, each on a fresh copy of the data (creghdfe and cppmlhdfe were timed again in each of their two comparisons). The run did not wait for an idle machine: other processes (Stata sessions and compilations) used 225% of one logical processor on average (per session below, sampled every 5 s; percentages are of one logical processor). Stata references used set processors 4; fereg and feppml used their own default thread count.",
+      "checks": "after each command: _N and e(N) equal the observation count",
+      "sessions": {
+        "hd1_1000000": {
+          "wall": 17.3,
+          "samples": 3,
+          "max_other_cpu_percent": 148,
+          "mean_other_cpu_percent": 127
+        },
+        "hd1_10000000": {
+          "wall": 169.4,
+          "samples": 33,
+          "max_other_cpu_percent": 571,
+          "mean_other_cpu_percent": 187
+        },
+        "hd1_25000000": {
+          "wall": 211.0,
+          "samples": 42,
+          "max_other_cpu_percent": 912,
+          "mean_other_cpu_percent": 264
+        },
+        "hd2_1000000": {
+          "wall": 17.8,
+          "samples": 3,
+          "max_other_cpu_percent": 229,
+          "mean_other_cpu_percent": 215
+        },
+        "hd2_10000000": {
+          "wall": 170.7,
+          "samples": 34,
+          "max_other_cpu_percent": 336,
+          "mean_other_cpu_percent": 190
+        },
+        "hd2_25000000": {
+          "wall": 239.6,
+          "samples": 47,
+          "max_other_cpu_percent": 408,
+          "mean_other_cpu_percent": 250
+        }
+      },
+      "files": {
+        "measured-build/_creghdfe_estat.ado": {
+          "sha256": "00ea35098eeca0c9770fe7f4e2ff169fdf97836a2aaee585a571c242a4989331",
+          "version_comments": [
+            "*! version 1.3.2 20261124 github.com/mdroste/stata-ctools"
+          ]
+        },
+        "measured-build/_creghdfe_footnote.ado": {
+          "sha256": "749048718509c9dbec7a0e6e54d5a29b0dff14ff385709935774599835ab8c44",
+          "version_comments": [
+            "*! version 1.3.2 20261124 github.com/mdroste/stata-ctools"
+          ]
+        },
+        "measured-build/creghdfe.ado": {
+          "sha256": "01705a9ea9382a71f49e161fc5efb782907b8a9ee9b326cd81346deb04ffb78f",
+          "version_comments": [
+            "*! version 1.3.2 20261124 github.com/mdroste/stata-ctools",
+            "*! original: reghdfe 6.13.1 (January 10, 2026) by Sergio Correia and Noah Constantine",
+            "*! original: see help creghdfe for details"
+          ]
+        },
+        "measured-build/ctools_windows.plugin": {
+          "sha256": "760fe5fae8832890113f5f2a55cd0e7cc8cb619b2302474bcc314db27b6de682"
+        },
+        "validation/performance/profiles.do": {
+          "sha256": "fd51d652b2ec850134dbd86cfe1a3b7f10a2903ba73efeddbb9e386d433d1583"
+        },
+        "generated-workload": {
+          "sha256": "a27085c8ff06a641877eecbbfb669cbaf11af29a886f2181b71486c522ef08d6"
+        }
+      },
+      "reference_files": {
+        "C:/Users/Mike/ado/plus/f/fereg.ado": {
+          "sha256": "c86d8625737761b3030d9f73f8fcb57dd06b57b7ff7264babe6a0c6ca6a80cf7",
+          "version_comments": [
+            "*! fereg 0.6.8 OLS 22nov2026"
+          ]
+        },
+        "C:/Users/Mike/ado/plus/f/fereg_windows.plugin": {
+          "sha256": "7ab69e08483878c10ea90da839b475e678f36397c85ff7b94829216a4ed47a21"
+        }
+      },
+      "completed_calls": 12,
+      "command_failures": 0,
+      "basic_check_failures": 0
+    },
+    "ivreghdfe": {
+      "note": "ivreghdfe was measured again after the shared run, in sessions that ran only reghdfe, fereg, ivreghdfe, ppmlhdfe, feppml; these values override the shared fields for this comparison (see docs/performance/README.md, single-command refresh).",
+      "date": "2026-11-26",
+      "cpu": "AMD Ryzen 9 9950X 16-Core Processor",
+      "os": "Windows 11 Pro 10.0.26200",
+      "stata": "StataNow/MP 19.5 for Windows (64-bit x86-64), revision 14 Oct 2026",
+      "stata_processors": 4,
+      "ctools_threads": 16,
+      "observations": [
+        1000000,
+        10000000,
+        25000000
+      ],
+      "variables": 20,
+      "workload": "Stata: ivreghdfe y x2 (x1=z), absorb(firm group) tolerance(1e-8); ctools: civreghdfe y x2 (x1=z), absorb(firm group) tolerance(1e-8)",
+      "repetitions": 2,
+      "repetition_note": "2 passes over the sizes, each a separate set of sessions that ran only reghdfe, fereg, ivreghdfe, ppmlhdfe, feppml; a published time is the smallest of the passes",
+      "git_head_context": "b958d5b8345b44067be4856d66578f12af7b8e6f",
+      "source_identity": "git archive of b958d5b8345b44067be4856d66578f12af7b8e6f (committed dev, exported at 2026-11-26T11:43:56Z; uncommitted working-tree changes not included); the measured plugin and the command's own wrappers are identified by the hashes below, its shared _ctools helper ado files are those of that commit",
+      "build_note": "Windows x86-64 OpenMP plugin built locally from that tree with MSYS2 MINGW64 gcc 16.2 using the `make windows` flags; Stata loaded it through CTOOLS_TEST_PLUGIN_DIR, ahead of the repository's build/.",
+      "execution_note": "Each size ran in one batch Stata session: the test data was made once, then reghdfe, fereg, ivreghdfe, ppmlhdfe, feppml ran in turn, the Stata command first and the ctools command second, each on a fresh copy of the data (creghdfe and cppmlhdfe were timed again in each of their two comparisons). The run did not wait for an idle machine: other processes (Stata sessions and compilations) used 225% of one logical processor on average (per session below, sampled every 5 s; percentages are of one logical processor). Stata references used set processors 4; fereg and feppml used their own default thread count.",
+      "checks": "after each command: _N and e(N) equal the observation count",
+      "sessions": {
+        "hd1_1000000": {
+          "wall": 17.3,
+          "samples": 3,
+          "max_other_cpu_percent": 148,
+          "mean_other_cpu_percent": 127
+        },
+        "hd1_10000000": {
+          "wall": 169.4,
+          "samples": 33,
+          "max_other_cpu_percent": 571,
+          "mean_other_cpu_percent": 187
+        },
+        "hd1_25000000": {
+          "wall": 211.0,
+          "samples": 42,
+          "max_other_cpu_percent": 912,
+          "mean_other_cpu_percent": 264
+        },
+        "hd2_1000000": {
+          "wall": 17.8,
+          "samples": 3,
+          "max_other_cpu_percent": 229,
+          "mean_other_cpu_percent": 215
+        },
+        "hd2_10000000": {
+          "wall": 170.7,
+          "samples": 34,
+          "max_other_cpu_percent": 336,
+          "mean_other_cpu_percent": 190
+        },
+        "hd2_25000000": {
+          "wall": 239.6,
+          "samples": 47,
+          "max_other_cpu_percent": 408,
+          "mean_other_cpu_percent": 250
+        }
+      },
+      "files": {
+        "measured-build/_civreghdfe_collin.ado": {
+          "sha256": "d638983bb27d08729938d968435e68f9b5f5ef9e0d5f4139d252a61e23adda2a",
+          "version_comments": [
+            "*! version 1.3.2 20261124 github.com/mdroste/stata-ctools",
+            "*! civreghdfe: ivreg2's collinearity rules for the variable lists"
+          ]
+        },
+        "measured-build/_civreghdfe_fvstrip.ado": {
+          "sha256": "e5d77bab9d47f02e3e9e558d44f141d17dc50dbce2c78944579ea160cd160447",
+          "version_comments": [
+            "*! version 1.3.2 20261124 github.com/mdroste/stata-ctools",
+            "*! Private helper for civreghdfe."
+          ]
+        },
+        "measured-build/_civreghdfe_optflags.ado": {
+          "sha256": "5937eb0c51822f78aa88079ddf49e1f4274681fb0cf79ed299db1c7ee1b7f22d",
+          "version_comments": [
+            "*! version 1.3.2 20261124 github.com/mdroste/stata-ctools",
+            "*! Private helper for civreghdfe."
+          ]
+        },
+        "measured-build/civreghdfe.ado": {
+          "sha256": "6d77ba5e31cda39f43dec0d20dbb164bb62eca61a58f25473a7a8e73fb22eeb8",
+          "version_comments": [
+            "*! version 1.3.2 20261124 github.com/mdroste/stata-ctools",
+            "*! original: ivreghdfe 1.1.4 (November 29, 2025) by Sergio Correia",
+            "*! original: ivreg2 4.1.12 (August 14, 2024) by Christopher F Baum, Mark E Schaffer, and Steven Stillman",
+            "*! original: see help civreghdfe for details"
+          ]
+        },
+        "measured-build/ctools_windows.plugin": {
+          "sha256": "760fe5fae8832890113f5f2a55cd0e7cc8cb619b2302474bcc314db27b6de682"
+        },
+        "validation/performance/profiles.do": {
+          "sha256": "fd51d652b2ec850134dbd86cfe1a3b7f10a2903ba73efeddbb9e386d433d1583"
+        },
+        "generated-workload": {
+          "sha256": "a27085c8ff06a641877eecbbfb669cbaf11af29a886f2181b71486c522ef08d6"
+        }
+      },
+      "reference_files": {
+        "C:/Users/Mike/ado/plus/i/ivreghdfe.ado": {
+          "sha256": "b52ead3626c5aab41a6d6c58f928bdfca0aa91537ff762149ef3d8b700ee04ea",
+          "version_comments": [
+            "*! ivreghdfe 1.1.4  29nov2025 (bugfix for github issue #61)",
+            "*! ivreghdfe 1.1.3  04Jan2023 (bugfix for github issue #48)",
+            "*! ivreghdfe 1.1.2  29Sep2022 (bugfix for github issue #44)",
+            "*! ivreghdfe 1.1.1  14Dec2021 (experimental -margins- support)",
+            "*! ivreghdfe 1.1.0  25Feb2021",
+            "*! ivreg2 4.1.11  22Nov2019",
+            "*! authors cfb & mes",
+            "*! see end of file for version comments"
+          ]
+        },
+        "C:/Users/Mike/ado/plus/i/ivreg2.ado": {
+          "sha256": "218a4066a075f4a33d2b476c96dad87b554d9b02319181b0f8f3faf1ca6629df",
+          "version_comments": [
+            "*! ivreg2 4.1.12  14aug2024",
+            "*! authors cfb & mes",
+            "*! see end of file for version comments"
+          ]
+        },
+        "C:/Users/Mike/ado/plus/r/ranktest.ado": {
+          "sha256": "197ad146f8937e562c2e04b55a2f78d43f293ea90c5886a6d08069c8c77e6657",
+          "version_comments": [
+            "*! ranktest 2.0.04  21sept2020",
+            "*! authors mes & fw; KP stat based on code by fk",
+            "*! see end of file for version comments"
+          ]
+        },
+        "C:/Users/Mike/ado/plus/r/reghdfe.ado": {
+          "sha256": "f9462bb7364055b138b223a495d4b0fd4b3c5e3bedc1fc886b75bf1546f9d66a",
+          "version_comments": [
+            "*! version 6.13.1 10Jan2026"
+          ]
+        },
+        "C:/Users/Mike/ado/plus/f/ftools.ado": {
+          "sha256": "459666a26fdcc67b798b0a38eab3dcefa6714c4e679745f99eca945f41b3cd88",
+          "version_comments": [
+            "*! version 2.50.0 09jan2026"
+          ]
+        }
+      },
+      "completed_calls": 12,
+      "command_failures": 0,
+      "basic_check_failures": 0
+    },
+    "ppmlhdfe": {
+      "note": "ppmlhdfe was measured again after the shared run, in sessions that ran only reghdfe, fereg, ivreghdfe, ppmlhdfe, feppml; these values override the shared fields for this comparison (see docs/performance/README.md, single-command refresh).",
+      "date": "2026-11-26",
+      "cpu": "AMD Ryzen 9 9950X 16-Core Processor",
+      "os": "Windows 11 Pro 10.0.26200",
+      "stata": "StataNow/MP 19.5 for Windows (64-bit x86-64), revision 14 Oct 2026",
+      "stata_processors": 4,
+      "ctools_threads": 16,
+      "observations": [
+        1000000,
+        10000000
+      ],
+      "variables": 20,
+      "workload": "Stata: ppmlhdfe count x1 x2, absorb(firm group) tolerance(1e-8); ctools: cppmlhdfe count x1 x2, absorb(firm group) tolerance(1e-8)",
+      "repetitions": 2,
+      "repetition_note": "2 passes over the sizes, each a separate set of sessions that ran only reghdfe, fereg, ivreghdfe, ppmlhdfe, feppml; a published time is the smallest of the passes",
+      "git_head_context": "b958d5b8345b44067be4856d66578f12af7b8e6f",
+      "source_identity": "git archive of b958d5b8345b44067be4856d66578f12af7b8e6f (committed dev, exported at 2026-11-26T11:43:56Z; uncommitted working-tree changes not included); the measured plugin and the command's own wrappers are identified by the hashes below, its shared _ctools helper ado files are those of that commit",
+      "build_note": "Windows x86-64 OpenMP plugin built locally from that tree with MSYS2 MINGW64 gcc 16.2 using the `make windows` flags; Stata loaded it through CTOOLS_TEST_PLUGIN_DIR, ahead of the repository's build/.",
+      "execution_note": "Each size ran in one batch Stata session: the test data was made once, then reghdfe, fereg, ivreghdfe, ppmlhdfe, feppml ran in turn, the Stata command first and the ctools command second, each on a fresh copy of the data (creghdfe and cppmlhdfe were timed again in each of their two comparisons). The run did not wait for an idle machine: other processes (Stata sessions and compilations) used 225% of one logical processor on average (per session below, sampled every 5 s; percentages are of one logical processor). Stata references used set processors 4; fereg and feppml used their own default thread count.",
+      "checks": "after each command: _N and e(N) equal the observation count",
+      "sessions": {
+        "hd1_1000000": {
+          "wall": 17.3,
+          "samples": 3,
+          "max_other_cpu_percent": 148,
+          "mean_other_cpu_percent": 127
+        },
+        "hd1_10000000": {
+          "wall": 169.4,
+          "samples": 33,
+          "max_other_cpu_percent": 571,
+          "mean_other_cpu_percent": 187
+        },
+        "hd1_25000000": {
+          "wall": 211.0,
+          "samples": 42,
+          "max_other_cpu_percent": 912,
+          "mean_other_cpu_percent": 264
+        },
+        "hd2_1000000": {
+          "wall": 17.8,
+          "samples": 3,
+          "max_other_cpu_percent": 229,
+          "mean_other_cpu_percent": 215
+        },
+        "hd2_10000000": {
+          "wall": 170.7,
+          "samples": 34,
+          "max_other_cpu_percent": 336,
+          "mean_other_cpu_percent": 190
+        },
+        "hd2_25000000": {
+          "wall": 239.6,
+          "samples": 47,
+          "max_other_cpu_percent": 408,
+          "mean_other_cpu_percent": 250
+        }
+      },
+      "files": {
+        "measured-build/_cppmlhdfe_abs_options.ado": {
+          "sha256": "55b84c4fe14e0f80158b0979b648a86e1cb703a66db64791a205a27b3f802452",
+          "version_comments": [
+            "*! version 1.3.2 20261124 github.com/mdroste/stata-ctools",
+            "*! Private helper for cppmlhdfe."
+          ]
+        },
+        "measured-build/_cppmlhdfe_estat.ado": {
+          "sha256": "b431a5f6bdac286a224e77edfc0c6b2a21516f4059f4cd1eac29f13228565685",
+          "version_comments": [
+            "*! version 1.3.2 20261124 github.com/mdroste/stata-ctools"
+          ]
+        },
+        "measured-build/_cppmlhdfe_footnote.ado": {
+          "sha256": "3ab817b2fadb95efc7c2063ad756286e51f00e0d2f58d69ad5752a4483dc9061",
+          "version_comments": [
+            "*! version 1.3.2 20261124 github.com/mdroste/stata-ctools"
+          ]
+        },
+        "measured-build/cppmlhdfe.ado": {
+          "sha256": "b76d60d234141eb35eaa5c18ea8d787ac354c4ac4a6edd7f1710ffd368969397",
+          "version_comments": [
+            "*! version 1.3.2 20261124 github.com/mdroste/stata-ctools",
+            "*! original: ppmlhdfe 2.3.3 (November 2, 2025) by Sergio Correia, Paulo Guimar\u00e3es, and Thomas Zylkin",
+            "*! original: see help cppmlhdfe for details"
+          ]
+        },
+        "measured-build/ctools_windows.plugin": {
+          "sha256": "760fe5fae8832890113f5f2a55cd0e7cc8cb619b2302474bcc314db27b6de682"
+        },
+        "validation/performance/profiles.do": {
+          "sha256": "fd51d652b2ec850134dbd86cfe1a3b7f10a2903ba73efeddbb9e386d433d1583"
+        },
+        "generated-workload": {
+          "sha256": "a27085c8ff06a641877eecbbfb669cbaf11af29a886f2181b71486c522ef08d6"
+        }
+      },
+      "reference_files": {
+        "C:/Users/Mike/ado/plus/p/ppmlhdfe.ado": {
+          "sha256": "634177e7002345eb6b17f2e42a1f4c1685ea59e3f9839dbb316452876cab8b5c",
+          "version_comments": [
+            "*! version 2.3.3 02nov2025",
+            "*! Authors: Sergio Correia, Paulo Guimar\u00e3es, Thomas Zylkin",
+            "*! URL: https://github.com/sergiocorreia/ppmlhdfe"
+          ]
+        },
+        "C:/Users/Mike/ado/plus/r/reghdfe.ado": {
+          "sha256": "f9462bb7364055b138b223a495d4b0fd4b3c5e3bedc1fc886b75bf1546f9d66a",
+          "version_comments": [
+            "*! version 6.13.1 10Jan2026"
+          ]
+        },
+        "C:/Users/Mike/ado/plus/f/ftools.ado": {
+          "sha256": "459666a26fdcc67b798b0a38eab3dcefa6714c4e679745f99eca945f41b3cd88",
+          "version_comments": [
+            "*! version 2.50.0 09jan2026"
+          ]
+        }
+      },
+      "completed_calls": 8,
+      "command_failures": 0,
+      "basic_check_failures": 0
+    },
+    "feppml": {
+      "note": "feppml was measured again after the shared run, in sessions that ran only reghdfe, fereg, ivreghdfe, ppmlhdfe, feppml; these values override the shared fields for this comparison (see docs/performance/README.md, single-command refresh).",
+      "date": "2026-11-26",
+      "cpu": "AMD Ryzen 9 9950X 16-Core Processor",
+      "os": "Windows 11 Pro 10.0.26200",
+      "stata": "StataNow/MP 19.5 for Windows (64-bit x86-64), revision 14 Oct 2026",
+      "stata_processors": 4,
+      "ctools_threads": 16,
+      "observations": [
+        1000000,
+        10000000,
+        25000000
+      ],
+      "variables": 20,
+      "workload": "Stata: feppml count x1 x2, absorb(firm group) tolerance(1e-8); ctools: cppmlhdfe count x1 x2, absorb(firm group) tolerance(1e-8)",
+      "repetitions": 2,
+      "repetition_note": "2 passes over the sizes, each a separate set of sessions that ran only reghdfe, fereg, ivreghdfe, ppmlhdfe, feppml; a published time is the smallest of the passes",
+      "git_head_context": "b958d5b8345b44067be4856d66578f12af7b8e6f",
+      "source_identity": "git archive of b958d5b8345b44067be4856d66578f12af7b8e6f (committed dev, exported at 2026-11-26T11:43:56Z; uncommitted working-tree changes not included); the measured plugin and the command's own wrappers are identified by the hashes below, its shared _ctools helper ado files are those of that commit",
+      "build_note": "Windows x86-64 OpenMP plugin built locally from that tree with MSYS2 MINGW64 gcc 16.2 using the `make windows` flags; Stata loaded it through CTOOLS_TEST_PLUGIN_DIR, ahead of the repository's build/.",
+      "execution_note": "Each size ran in one batch Stata session: the test data was made once, then reghdfe, fereg, ivreghdfe, ppmlhdfe, feppml ran in turn, the Stata command first and the ctools command second, each on a fresh copy of the data (creghdfe and cppmlhdfe were timed again in each of their two comparisons). The run did not wait for an idle machine: other processes (Stata sessions and compilations) used 225% of one logical processor on average (per session below, sampled every 5 s; percentages are of one logical processor). Stata references used set processors 4; fereg and feppml used their own default thread count.",
+      "checks": "after each command: _N and e(N) equal the observation count",
+      "sessions": {
+        "hd1_1000000": {
+          "wall": 17.3,
+          "samples": 3,
+          "max_other_cpu_percent": 148,
+          "mean_other_cpu_percent": 127
+        },
+        "hd1_10000000": {
+          "wall": 169.4,
+          "samples": 33,
+          "max_other_cpu_percent": 571,
+          "mean_other_cpu_percent": 187
+        },
+        "hd1_25000000": {
+          "wall": 211.0,
+          "samples": 42,
+          "max_other_cpu_percent": 912,
+          "mean_other_cpu_percent": 264
+        },
+        "hd2_1000000": {
+          "wall": 17.8,
+          "samples": 3,
+          "max_other_cpu_percent": 229,
+          "mean_other_cpu_percent": 215
+        },
+        "hd2_10000000": {
+          "wall": 170.7,
+          "samples": 34,
+          "max_other_cpu_percent": 336,
+          "mean_other_cpu_percent": 190
+        },
+        "hd2_25000000": {
+          "wall": 239.6,
+          "samples": 47,
+          "max_other_cpu_percent": 408,
+          "mean_other_cpu_percent": 250
+        }
+      },
+      "files": {
+        "measured-build/_cppmlhdfe_abs_options.ado": {
+          "sha256": "55b84c4fe14e0f80158b0979b648a86e1cb703a66db64791a205a27b3f802452",
+          "version_comments": [
+            "*! version 1.3.2 20261124 github.com/mdroste/stata-ctools",
+            "*! Private helper for cppmlhdfe."
+          ]
+        },
+        "measured-build/_cppmlhdfe_estat.ado": {
+          "sha256": "b431a5f6bdac286a224e77edfc0c6b2a21516f4059f4cd1eac29f13228565685",
+          "version_comments": [
+            "*! version 1.3.2 20261124 github.com/mdroste/stata-ctools"
+          ]
+        },
+        "measured-build/_cppmlhdfe_footnote.ado": {
+          "sha256": "3ab817b2fadb95efc7c2063ad756286e51f00e0d2f58d69ad5752a4483dc9061",
+          "version_comments": [
+            "*! version 1.3.2 20261124 github.com/mdroste/stata-ctools"
+          ]
+        },
+        "measured-build/cppmlhdfe.ado": {
+          "sha256": "b76d60d234141eb35eaa5c18ea8d787ac354c4ac4a6edd7f1710ffd368969397",
+          "version_comments": [
+            "*! version 1.3.2 20261124 github.com/mdroste/stata-ctools",
+            "*! original: ppmlhdfe 2.3.3 (November 2, 2025) by Sergio Correia, Paulo Guimar\u00e3es, and Thomas Zylkin",
+            "*! original: see help cppmlhdfe for details"
+          ]
+        },
+        "measured-build/ctools_windows.plugin": {
+          "sha256": "760fe5fae8832890113f5f2a55cd0e7cc8cb619b2302474bcc314db27b6de682"
+        },
+        "validation/performance/profiles.do": {
+          "sha256": "fd51d652b2ec850134dbd86cfe1a3b7f10a2903ba73efeddbb9e386d433d1583"
+        },
+        "generated-workload": {
+          "sha256": "a27085c8ff06a641877eecbbfb669cbaf11af29a886f2181b71486c522ef08d6"
+        }
+      },
+      "reference_files": {
+        "C:/Users/Mike/ado/plus/f/feppml.ado": {
+          "sha256": "88b81443c4d56aafaccbec756403c4c7456e65726e05027be833c7ee0ea340a6",
+          "version_comments": [
+            "*! version 0.6.8 22nov2026"
+          ]
+        },
+        "C:/Users/Mike/ado/plus/f/fereg_windows.plugin": {
+          "sha256": "7ab69e08483878c10ea90da839b475e678f36397c85ff7b94829216a4ed47a21"
         }
       },
       "completed_calls": 12,

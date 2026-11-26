@@ -574,9 +574,10 @@ ST_retcode ppml_irls_loop(ppml_irls_io *io)
              * convergence that column can already be at the arithmetic floor,
              * where the iteration on the rows (which takes over once the
              * weights span too wide a range for the solve) can certify
-             * nothing and reports a breakdown when a weight is negligible
-             * (a row flagged by separation(mu), say). Projected from z
-             * itself it has a residual to work on, as it had when every
+             * nothing. It takes that floor as converged (floor_any_weight_span)
+             * unless the user's weights alone span a range that could hide an
+             * effect; then it reports a breakdown. Projected from z itself
+             * the column has a residual to work on, as it had when every
              * iteration ran on the rows. */
             #pragma omp parallel for schedule(static) if (N > 100000)
             for (i = 0; i < N; i++) aug_copy[i] = z_orig[i];
@@ -1650,6 +1651,13 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
     }
     weights = NULL;
     offset_arr = NULL;
+
+    /* The IRLS weights of zero outcomes fall without bound: a residual the
+     * iteration on the rows brings to the rounding floor is convergence
+     * whatever their range, as ppmlhdfe takes it, unless the user's weights
+     * alone span a range that could hide an effect (see hdfe_solver.h) */
+    g_ppml_state->floor_any_weight_span =
+        !(w_user_compact && hdfe_weight_span_too_wide(w_user_compact, N));
 
     /* A wrapper that passes its sample marker as the sample output (1 on
      * every loaded row) sets __cppmlhdfe_sample_prefilled: the rows dropped

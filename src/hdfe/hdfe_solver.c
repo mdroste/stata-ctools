@@ -46,7 +46,26 @@ static ST_double weighted_dot_product(const ST_double *RESTRICT x, const ST_doub
  * Accept that floor only with well-scaled weights. Tiny positive weights can
  * hide a large unresolved FE component behind a small weighted residual; that
  * ambiguous case must fail. The weight scan is cold and replaces the old
- * zero-step update of four observation vectors, never adding a normal pass. */
+ * zero-step update of four observation vectors, never adding a normal pass.
+ *
+ * The exception is S->floor_any_weight_span (cppmlhdfe). There the lightest
+ * rows are zero outcomes whose IRLS weight, their mean, heads to zero: the
+ * norm the projection is wanted in, not weights a user chose. Their range
+ * passes 1/(128 eps) after enough iterations on such panels, and the floor
+ * the loop reached with well-scaled weights one iteration before (and that
+ * ppmlhdfe accepts) then became r(498). cppmlhdfe still leaves the flag
+ * unset when its user's weights alone span that range. */
+int hdfe_weight_span_too_wide(const ST_double *weights, ST_int N)
+{
+    ST_double smallest = DBL_MAX, largest = 0.0;
+    for (ST_int i = 0; i < N; i++) {
+        ST_double w = weights[i];
+        if (w > largest) largest = w;
+        if (w > 0.0 && w < smallest) smallest = w;
+    }
+    return smallest <= 128.0 * DBL_EPSILON * largest;
+}
+
 static ST_int cg_breakdown_result(const HDFE_State *S, ST_double residual_norm2,
                                   ST_double initial_norm2, ST_int iter)
 {
@@ -54,16 +73,9 @@ static ST_int cg_breakdown_result(const HDFE_State *S, ST_double residual_norm2,
     if (!isfinite(initial_norm2) || !isfinite(residual_norm2) ||
         residual_norm2 > roundoff * initial_norm2)
         return HDFE_CG_BREAKDOWN;
-    if (S->has_weights && S->weights) {
-        ST_double smallest = DBL_MAX, largest = 0.0;
-        for (ST_int i = 0; i < S->N; i++) {
-            ST_double w = S->weights[i];
-            if (w > largest) largest = w;
-            if (w > 0.0 && w < smallest) smallest = w;
-        }
-        if (smallest <= 128.0 * DBL_EPSILON * largest)
-            return HDFE_CG_BREAKDOWN;
-    }
+    if (S->has_weights && S->weights && !S->floor_any_weight_span &&
+        hdfe_weight_span_too_wide(S->weights, S->N))
+        return HDFE_CG_BREAKDOWN;
     return iter;
 }
 

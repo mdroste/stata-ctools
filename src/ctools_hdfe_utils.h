@@ -68,6 +68,12 @@ typedef struct {
     ST_int factors_initialized;  /* Flag indicating factors are ready */
     ST_int df_a;                 /* Degrees of freedom absorbed */
     ST_int mobility_groups;      /* Number of mobility groups (connected components) */
+    /* 1: the iteration on the rows takes a residual it has brought to the
+     * rounding floor as converged whatever the range of the positive
+     * weights; 0 (the default): a range wider than that floor can certify
+     * makes it a breakdown (hdfe_solver.c, cg_breakdown_result). Set by
+     * cppmlhdfe, whose IRLS weights fall without bound for zero outcomes. */
+    ST_int floor_any_weight_span;
 } HDFE_State;
 
 /*

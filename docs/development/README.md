@@ -1569,7 +1569,18 @@ span rule is for, and those iterations run on the rows. Three things in
   back by several units.
 - A row `separation(mu)` flags gets weight zero for the rest of the pass, not
   the 2^-46 marker of its mean: a positive weight that far below the others
-  makes the row iteration report a breakdown.
+  is one the projection can neither use nor certify.
+- The row iteration's breakdown rule (`cg_breakdown_result()`) treats a
+  residual at the rounding floor as r(498) when the positive weights span more
+  than 1/(128 eps), about 3.5e13: rows that light can hide an unresolved
+  effect (`support/creghdfe_numerics.do`, `native/hdfe_numerics.c`). Zero
+  outcomes take the IRLS weights past that span on their own after enough
+  iterations, and the floor reached one iteration earlier with a narrower span
+  (and accepted by ppmlhdfe) then became r(498) (the low standardized outcome
+  of PPML-17, the `slopes4` panel). So `cppmlhdfe` sets
+  `HDFE_State.floor_any_weight_span`, under which that floor is convergence
+  whatever the span, unless the user's weights alone span that range
+  (`hdfe_weight_span_too_wide()`); every other caller keeps the rule.
 - The separation checks keep the row iteration where its result depends on
   it. Each first asks the coefficient solve whether there is anything to do,
   on rows of positive weight where the projection is unique, and only then

@@ -28,13 +28,8 @@ int ctools_get_max_threads(void)
 {
     return threads;
 }
-int ctools_release_queue(void *p, int kind, void (*fn)(void *))
-{
-    (void)p;
-    (void)kind;
-    (void)fn;
-    return 0;
-}
+/* ctools_release_queue comes from src/ctools_release.c, which the harness
+ * links into every native test; outside a session it frees nothing. */
 void stata_data_init(stata_data *data)
 {
     memset(data, 0, sizeof(*data));

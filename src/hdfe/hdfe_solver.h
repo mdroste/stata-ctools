@@ -21,6 +21,13 @@
 #define HDFE_CG_BREAKDOWN INT_MIN
 ST_int cg_solve_column_threaded(HDFE_State *S, ST_double *y, ST_int thread_id);
 
+/* 1 when the positive values of weights[0..N-1] span more than the iteration
+ * on the rows can certify at its rounding floor: there a residual that small
+ * is a breakdown, since rows that light can hide an unresolved effect, unless
+ * S->floor_any_weight_span. A caller whose own weights are only part of the
+ * solver's (cppmlhdfe) applies the same test to them. */
+int hdfe_weight_span_too_wide(const ST_double *weights, ST_int N);
+
 /* ========================================================================
  * Partial Out Multiple Columns (Shared Helper)
  *

@@ -228,7 +228,12 @@ They are not a fresh measurement of the current checkout. The README profile
 measures linear `cinterpolate` against `ipolate`, `cinterpolate, cubic`
 against SSC `cipolate`, and `chdfe` against SSC `hdfe`. A published time is
 the smallest over the passes the manifest records (`repetitions`); a
-comparison it lists under `comparisons_not_measured` has no row.
+comparison it lists under `comparisons_not_measured` has no row. A comparison
+refreshed on its own after the shared run (see `command_runs` in the manifest)
+was measured on the build recorded there. `qreg` and `ppmlhdfe` were timed at
+1M and 10M observations only. `csort` and `cmerge` do best on data with many
+observations relative to variables; their speedups shrink as the number of
+variables grows.
 
 - [Times and speedups](../benchmarks/readme_profile/results.md)
 - [Individual timings](../benchmarks/readme_profile/timings.csv)
