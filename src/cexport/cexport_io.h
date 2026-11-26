@@ -10,12 +10,12 @@
  *   CEXPORT_IO_MMAP   - Memory-mapped writes for maximum throughput
  *
  * Performance optimizations:
- *   - Async mmap flush (MS_ASYNC) with optional final sync
+ *   - Async mmap flush (MS_ASYNC)
  *   - Vectored I/O (pwritev/writev) for batched writes
  *   - Windows async batching with WaitForMultipleObjects
  *   - Pre-fault mmap pages (MADV_POPULATE_WRITE on Linux 5.14+)
  *   - Optional write-through (FILE_FLAG_WRITE_THROUGH on Windows)
- *   - Deferred fsync for non-critical exports
+ *   - No final sync: close does not wait for the data to reach the device
  *
  * All writes are in binary mode with explicit line endings controlled
  * by the caller, ensuring correct offset math across platforms.
@@ -50,8 +50,7 @@ typedef enum {
 typedef enum {
     CEXPORT_IO_FLAG_NONE       = 0,
     CEXPORT_IO_FLAG_DIRECT     = (1 << 0),  /* Bypass OS cache (large files) */
-    CEXPORT_IO_FLAG_NOFSYNC    = (1 << 1),  /* Skip final fsync (faster, less durable) */
-    CEXPORT_IO_FLAG_PREFAULT   = (1 << 2)   /* Pre-fault mmap pages */
+    CEXPORT_IO_FLAG_PREFAULT   = (1 << 1)   /* Pre-fault mmap pages */
 } cexport_io_flags_t;
 
 /* Cross-platform file handle */
@@ -97,7 +96,7 @@ void cexport_io_init(cexport_io_file *file);
  * @param file     File structure to initialize
  * @param filename Path to output file
  * @param backend  I/O backend to use (PWRITE or MMAP)
- * @param flags    Optional flags (DIRECT, NOFSYNC, PREFAULT)
+ * @param flags    Optional flags (DIRECT, PREFAULT)
  * @return         0 on success, -1 on error (error_message set)
  */
 int cexport_io_open(cexport_io_file *file, const char *filename,

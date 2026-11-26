@@ -39,9 +39,24 @@
  * values; without force such variables are not stored (the ado leaves them
  * untouched, as native destring does).
  *
+ * The ado converts in two calls, so that each destination is created with
+ * its final storage type:
+ *   parse nvars=<n> [options]  - the plugin varlist holds the sources (and a
+ *                                sample marker last, with touse). Converts
+ *                                and keeps the numbers. Also sets locals
+ *                                cdestring_types, cdestring_missing and
+ *                                cdestring_seen and scalar _cdestring_nobs.
+ *   store                      - the plugin varlist holds one destination
+ *                                per variable parse reported a type for, in
+ *                                their order. Writes the numbers, frees them.
+ *   discard                    - frees the numbers without writing.
+ *
  * @param args  Command arguments as space-separated string
  * @return      0 on success, Stata error code on failure
  */
 ST_retcode cdestring_main(const char *args);
+
+/* Frees the numbers parse kept. Idempotent. */
+void cdestring_cleanup_state(void);
 
 #endif /* CDESTRING_IMPL_H */

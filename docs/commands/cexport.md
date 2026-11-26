@@ -100,7 +100,7 @@ cexport delimited using output.csv, quote replace
 - **Async mmap flush**: Uses `MS_ASYNC` instead of `MS_SYNC` so the OS writes dirty pages in the background while formatting continues
 - **File pre-allocation**: `posix_fallocate` (POSIX) or `SetFilePointerEx`+`SetEndOfFile` (Windows) reserves disk space upfront, avoiding expensive file-growth operations during writing
 - **Zero-copy mmap access**: Data is formatted directly into memory-mapped output buffers, bypassing userspace buffering
-- **Deferred disk write**: `nofsync` skips the final request to write buffered data to disk. The command may finish sooner, but a system crash or power loss can leave the file incomplete
+- **No forced disk write**: `cexport` returns once the operating system has the output and does not wait for it to reach the disk, so a system crash or power loss immediately after an export can leave the file incomplete. `nofsync` is accepted for compatibility and has no effect
 - **Windows async batching**: On Windows, multiple output buffers can be written concurrently
 - **Optional write-through**: `direct` opens the file with `FILE_FLAG_WRITE_THROUGH` on Windows; it does not bypass the page cache, because unbuffered writes would need sector-aligned rows. macOS and Linux builds ignore it
 - **SIMD-accelerated data loading**: AVX2/SSE2/NEON bulk load from Stata with 16x loop unrolling in `ctools_data_io`
@@ -150,6 +150,7 @@ Embedded quotes within strings are escaped by doubling them (`"` becomes `""`).
 ## Technical Notes
 
 - Value labels can be decoded to their text representation
+- `cexport delimited` writes value-label text and the usual `%t` date and time formats (`%td`, `%tc`, `%tw`, `%tm`, `%tq`, `%th`, `%ty` with the documented display codes) straight from the numeric variable. Other formats (`datafmt` on plain numbers, fractions of a second, `%tC`, `%tb`, legacy `%d` codes), dates outside the years 100 to 9999, and labels longer than 2,045 bytes are formatted by Stata into a temporary string variable first, which costs one pass over the data per variable
 - Variables are exported in the order specified (or dataset order if `varlist` is omitted)
 - The `replace` option is required to overwrite existing files
 

@@ -1,4 +1,7 @@
 *! version 1.3.1 20261124 github.com/mdroste/stata-ctools
+*! original: winsor2 1.1 (December 16, 2014) by Yujun Lian
+*! original: gstats winsor from gtools 1.10.1 (December 5, 2022) by Mauricio Caceres Bravo
+*! original: see help cwinsor for details
 
 program define cwinsor, rclass
     version 14.1

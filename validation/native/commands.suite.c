@@ -1260,6 +1260,8 @@ stata_retcode ctools_data_load(ctools_filtered_data *d, int *v, size_t n, size_t
 }
 stata_retcode ctools_sort_dispatch(stata_data *d, int *v, size_t n, sort_algorithm_t a) { abort(); }
 stata_retcode ctools_apply_permutation(stata_data *d) { abort(); }
+/* csample's compaction of a small sample; these cases do not ask for it */
+stata_retcode ctools_data_store(stata_data *d, size_t obs1) { abort(); }
 #ifdef BOOTSTRAP
 #include "cbsample/cbsample_impl.c"
 #else

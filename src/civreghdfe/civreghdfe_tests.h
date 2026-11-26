@@ -17,6 +17,13 @@
 #include "civreghdfe_omega.h"
 
 /*
+    Sum over the N rows of w[i] * a[i] * b[i] (w or b NULL: 1), each term
+    formed in that order, over fixed blocks of rows added in block order:
+    the same bits at any thread count (up to 32768 rows: the serial sum).
+*/
+ST_double civ_block_dot(const ST_double *a, const ST_double *b, const ST_double *w, ST_int N);
+
+/*
     Every test returns 0, or 920 when memory runs out. A statistic that
     cannot be computed is SV_missval, never 0 (which would read as p = 1);
     a test that does not apply (e.g. an exactly identified model) keeps 0.
@@ -41,6 +48,9 @@
       degrees of freedom of the Cragg-Donald F and the unclustered rk F
     - rk_om: ranktest's S structure (a kernel becomes Bartlett, Kiefer iid)
     - rk_cluster, rk_nclust: cluster-type F conversion and its cluster count
+    - ZtZ_fit, ZtX_fit: the fit's Z'WZ (K_iv x K_iv) and Z'WX (K_iv x
+      (K_exog + K_endog), X = [X_exog, X_endog]), whose blocks are the
+      partialling's cross products; NULL: computed here
     - underid_stat: Output - underidentification test statistic
     - underid_df: Output - degrees of freedom
     - cd_f: Output - Cragg-Donald F statistic
@@ -61,6 +71,8 @@ ST_retcode civreghdfe_compute_underid_test(
     const civ_omega *rk_om,
     ST_int rk_cluster,
     ST_int rk_nclust,
+    const ST_double *ZtZ_fit,
+    const ST_double *ZtX_fit,
     ST_double *underid_stat,
     ST_int *underid_df,
     ST_double *cd_f,

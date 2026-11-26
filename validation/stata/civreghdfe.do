@@ -2645,6 +2645,44 @@ foreach k in bartlett truncated parzen qs thann {
     }
 }
 
+* e(sample) when the plugin drops observations (singletons): the plugin
+* marks them in the sample marker, which becomes e(sample). The count must be
+* e(N), the dropped observations those ivreghdfe drops, and no variable of
+* the dataset may change.
+webuse nlswork, clear
+keep if inrange(idcode, 1, 300) & !missing(ln_wage, tenure, ttl_exp, hours, union)
+gen double w = 0.5 + mod(idcode, 7) / 5
+foreach spec in "" "vce(cluster idcode)" "[aw=w]" "residuals(civ_res)" {
+    local wgt = cond("`spec'" == "[aw=w]", "[aw=w]", "")
+    local opt = cond("`spec'" == "[aw=w]", "", "`spec'")
+    capture drop civ_res
+    quietly datasignature
+    local before `r(datasignature)'
+    quietly civreghdfe ln_wage (tenure = union hours) ttl_exp `wgt', absorb(idcode year) `opt'
+    local n = e(N)
+    local singletons = e(num_singletons)
+    quietly count if e(sample)
+    local marked = r(N)
+    capture drop civ_res
+    quietly datasignature
+    local after `r(datasignature)'
+    tempvar smp
+    quietly gen byte `smp' = e(sample)
+    * the observations left out are the singleton groups
+    quietly bysort idcode (`smp'): gen long __grp = sum(`smp')
+    quietly by idcode: replace __grp = __grp[_N]
+    quietly count if `smp' & __grp == 1
+    local single_in = r(N)
+    drop __grp `smp'
+    sort idcode year
+    if `marked' == `n' & `singletons' > 0 & `marked' == _N - `singletons' & `single_in' == 0 & ///
+        "`before'" == "`after'" {
+        test_pass "e(sample) leaves out the singletons, data unchanged: `spec'"
+    }
+    else test_fail "e(sample) with singletons: `spec'" ///
+        "e(N)=`n' e(sample)=`marked' singletons=`singletons' _N=`=_N' singleton rows in sample=`single_in' data changed=`=("`before'" != "`after'")'"
+}
+
 * Summary
 
 * Cleanup to prevent state corruption before next validation script

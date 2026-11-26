@@ -89,6 +89,7 @@ quietly {
 * code, variable names and types, and (unless "nodata") values agree.
 capture program drop _ct_output
 program define _ct_output, rclass
+    _ct_loud _ct_output
     tempfile f
     tempname fh
     capture log close _ctout
@@ -172,7 +173,7 @@ end
 quietly summarize x
 foreach pair in `"y x, gen(z)"' `"y x, gen(z) epolate"' `"y x, gen(z) by(g)"' ///
     `"y x if g == 1, gen(z)"' `"y x in 1/3, gen(z)"' `"y x if 0, gen(z)"' `"y x, gen(z) by(g) epolate"' {
-    _ct_same_output "IPOL-02 message: `pair'" `"ipolate `pair'"' `"cinterpolate `pair'"'
+    noisily _ct_same_output "IPOL-02 message: `pair'" `"ipolate `pair'"' `"cinterpolate `pair'"'
     preserve
     ipolate `pair'
     local want = r(N)

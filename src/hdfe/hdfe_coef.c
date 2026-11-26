@@ -969,6 +969,33 @@ int hdfe_coef_applies(const HDFE_State *S)
         if (f->slope || !f->levels || f->num_levels < 1)
             return 0;
     }
+    /* Positive weights that span more than HDFE_COEF_WEIGHT_SPAN: a level
+     * tied to the others only through the lightest rows has a pivot near
+     * rounding, the solve holds it at zero, and those rows' residuals are
+     * then wrong while the solve reports success. The iteration on the rows
+     * handles that case (it solves it or reports a breakdown). */
+    if (S->has_weights && S->weights)
+    {
+        /* min and max are exact in any order: rows in parallel */
+        const ST_double *RESTRICT wts = S->weights;
+        const ST_int N = S->N;
+        ST_double lightest = INFINITY, heaviest = 0.0;
+#pragma omp parallel for schedule(static) reduction(min : lightest) reduction(max : heaviest)  \
+    if (N > HDFE_COEF_PARALLEL_MIN && omp_get_level() == 0)
+        for (ST_int i = 0; i < N; i++)
+        {
+            const ST_double w = wts[i];
+            if (w > 0.0)
+            {
+                if (w < lightest)
+                    lightest = w;
+                if (w > heaviest)
+                    heaviest = w;
+            }
+        }
+        if (heaviest > 0.0 && !(lightest * HDFE_COEF_WEIGHT_SPAN >= heaviest))
+            return 0;
+    }
     return 1;
 }
 

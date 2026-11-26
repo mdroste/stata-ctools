@@ -1,5 +1,8 @@
 *! version 1.3.1 20261124 github.com/mdroste/stata-ctools
 *! C-accelerated linear and cubic interpolation (ctools)
+*! original: Stata's ipolate (ipolate.ado 1.3.5, April 23, 2020)
+*! original: cipolate 1.0.0 (July 4, 2002) by Nicholas J. Cox
+*! original: see help cinterpolate for details
 program define cinterpolate, byable(onecall)
     version 14.1
     syntax varlist(numeric min=2 max=2) [if] [in], Generate(name) ///

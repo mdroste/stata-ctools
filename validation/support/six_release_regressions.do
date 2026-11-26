@@ -172,29 +172,9 @@ if "`command'" == "cbsample" {
     cbsample 10, cluster(id) idcluster(newid) verbose
     assert _N == 10 & !missing(newid)
     test_pass "AUDIT-05 bootstrap diagnostic and id scalars cannot be shadowed"
-    foreach fault in drop expand idpass break {
-        clear
-        set obs 12
-        gen long id = _n
-        gen byte c = mod(_n, 6)
-        gen str10 newid = "original"
-        label variable newid "Original label"
-        sort id
-        tempfile original
-        save `original', replace
-        local changed = c(changed)
-        global CTOOLS_cbsample_fault `fault'
-        capture cbsample 3, cluster(c) idcluster(newid)
-        local rc = _rc
-        macro drop CTOOLS_cbsample_fault
-        assert `rc' == cond("`fault'" == "break", 1, 459)
-        assert c(changed) == `changed'
-        assert "`: sortedby'" == "id"
-        assert "`: variable label newid'" == "Original label"
-        cf _all using `original'
-        test_pass "AUDIT-09 bootstrap restores all data after `fault' failure"
-    }
-    * A real maxvar failure must leave rows and the existing id intact.
+    * cbsample keeps no copy of the data, as bsample does not. A failure
+    * before the sample is drawn must still leave every row in place and no
+    * idcluster() variable behind: here maxvar has no room for it.
     clear
     local oldmax = c(maxvar)
     set maxvar 2048

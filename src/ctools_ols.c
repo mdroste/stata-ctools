@@ -666,8 +666,9 @@ void compute_xtx_xty_weighted(
     const ST_double *y = &data[0];  /* Column 0 is y */
 
     /* For aweight/pweight: normalize weights to sum to N (reghdfe.mata line 3598) */
+    const int scaled = (weight_type == 1 || weight_type == 3);
     ST_double weight_scale = 1.0;
-    if (weight_type == 1 || weight_type == 3) {
+    if (scaled) {
         ST_double sum_w = 0.0;
         for (i = 0; i < N; i++) sum_w += weights[i];
         weight_scale = (ST_double)N / sum_w;
@@ -677,21 +678,13 @@ void compute_xtx_xty_weighted(
     memset(xtx, 0, (size_t)K_x * K_x * sizeof(ST_double));
     memset(xty, 0, K_x * sizeof(ST_double));
 
-    /* Pre-normalize weights if needed to avoid branch per observation */
-    ST_double *w_scaled = NULL;
-    if (weight_type == 1 || weight_type == 3) {
-        w_scaled = (ST_double *)malloc(N * sizeof(ST_double));
-        if (w_scaled) {
-            for (i = 0; i < N; i++) w_scaled[i] = weights[i] * weight_scale;
-        }
-    }
-    const ST_double *w_eff = w_scaled ? w_scaled : weights;
-
     /* xty[j] = sum_i (w_i x_ij) y_i and xtx[j,k] = sum_i (w_i x_ij) x_ik for
      * k >= j, every element accumulated over the observations in order with
-     * plain double arithmetic. The elements are independent sums, so the rows
-     * of the upper triangle run in parallel, four right-hand columns per
-     * pass over the data. */
+     * plain double arithmetic, w_i = weights[i] * weight_scale rounded to a
+     * double (formed in the loop: a stored copy of the scaled weights would
+     * cost a pass over the rows and N doubles). The elements are independent
+     * sums, so the rows of the upper triangle run in parallel, four
+     * right-hand columns per pass over the data. */
     #pragma omp parallel for schedule(dynamic) private(i, k) if(K_x > 1 && (size_t)N * (size_t)K_x > 100000)
     for (j = 0; j < K_x; j++) {
         const ST_double *xj = data + (size_t)(j + 1) * N;
@@ -705,12 +698,23 @@ void compute_xtx_xty_weighted(
                 ST_int rhs = t + (q < n_now ? q : 0);
                 r[q] = (rhs == 0) ? y : data + (size_t)(j + rhs) * N;
             }
-            for (i = 0; i < N; i++) {
-                ST_double wxj = w_eff[i] * xj[i];
-                acc[0] += wxj * r[0][i];
-                acc[1] += wxj * r[1][i];
-                acc[2] += wxj * r[2][i];
-                acc[3] += wxj * r[3][i];
+            if (scaled) {
+                for (i = 0; i < N; i++) {
+                    const ST_double w_i = weights[i] * weight_scale;
+                    ST_double wxj = w_i * xj[i];
+                    acc[0] += wxj * r[0][i];
+                    acc[1] += wxj * r[1][i];
+                    acc[2] += wxj * r[2][i];
+                    acc[3] += wxj * r[3][i];
+                }
+            } else {
+                for (i = 0; i < N; i++) {
+                    ST_double wxj = weights[i] * xj[i];
+                    acc[0] += wxj * r[0][i];
+                    acc[1] += wxj * r[1][i];
+                    acc[2] += wxj * r[2][i];
+                    acc[3] += wxj * r[3][i];
+                }
             }
             for (ST_int q = 0; q < n_now; q++) {
                 ST_int rhs = t + q;
@@ -726,8 +730,6 @@ void compute_xtx_xty_weighted(
             xtx[(size_t)k * K_x + j] = xtx[(size_t)j * K_x + k];
         }
     }
-
-    if (w_scaled) free(w_scaled);
 }
 
 /* ========================================================================

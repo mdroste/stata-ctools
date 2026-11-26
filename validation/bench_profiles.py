@@ -204,6 +204,8 @@ def readme_summary_main(argv=None):
     )
 
 
+# Pair (named by the Stata command, as in profiles.do) -> the Stata command as the
+# README writes it. A ctools command with several Stata counterparts has a pair for each.
 profile_COMMANDS = {
     "import": "import",
     "export": "export",
@@ -220,16 +222,41 @@ profile_COMMANDS = {
     "split": "split",
     "rangejoin": "rangejoin",
     "qreg": "qreg",
+    "winsor2": "winsor2",
     "winsor": "gstats winsor",
     "rangestat": "rangestat",
     "psmatch2": "psmatch2",
     "binscatter": "binscatter",
+    "binscatter2": "binscatter2",
+    "binsreg": "binsreg",
     "reghdfe": "reghdfe",
+    "fereg": "fereg",
     "ivreghdfe": "ivreghdfe",
     "ppmlhdfe": "ppmlhdfe",
+    "feppml": "feppml",
     "hdfe": "hdfe",
 }
+# The ctools command of a pair, where it is not "c" + the pair's name.
+profile_CTOOLS = {
+    "ipolate": "cinterpolate",
+    "cipolate": "cinterpolate, cubic",
+    "winsor2": "cwinsor",
+    "psmatch2": "cpsmatch",
+    "binscatter2": "cbinscatter",
+    "binsreg": "cbinscatter",
+    "fereg": "creghdfe",
+    "feppml": "cppmlhdfe",
+}
 profile_SIZES = (1_000_000, 10_000_000, 25_000_000)
+# These Stata commands take minutes per run at 25M observations, so their pairs
+# are not run above this size (profiles.do holds the same limits).
+profile_LIMITS = {"qreg": 10_000_000, "ppmlhdfe": 10_000_000}
+
+
+def profile_sizes(command, sizes):
+    """The sizes at which a pair runs."""
+    limit = profile_LIMITS.get(command)
+    return [n for n in sizes if limit is None or n <= limit]
 
 
 def profile_rounded(ratio, *, upper):
@@ -252,17 +279,24 @@ def profile_summarize(path, sizes, pairs=None):
             if key in rows:
                 raise ValueError(f"duplicate timing: {key}")
             rows[key] = row
-    expected = {(cmd, n, method) for cmd in commands for n in sizes for method in ("ref", "c")}
+    expected = {
+        (cmd, n, method)
+        for cmd in commands
+        for n in profile_sizes(cmd, sizes)
+        for method in ("ref", "c")
+    }
     if rows.keys() != expected:
         raise ValueError(f"unexpected/missing timings: {rows.keys() ^ expected}")
     output = [
-        "| Command | Observations | Reference (s) | ctools (s) | Speedup |",
-        "|---|---:|---:|---:|---:|",
+        "| Stata command | ctools command | Observations | Stata (s) | ctools (s) | Speedup |",
+        "|---|---|---:|---:|---:|---:|",
     ]
     ranges = {}
     for cmd, label in commands.items():
+        ctools = profile_CTOOLS.get(cmd, "c" + cmd)
         ratios = []
-        for n in sizes:
+        run_at = profile_sizes(cmd, sizes)
+        for n in run_at:
             pair = [rows[cmd, n, method] for method in ("ref", "c")]
             times = [float(row["seconds"]) for row in pair]
             valid = all(
@@ -275,14 +309,51 @@ def profile_summarize(path, sizes, pairs=None):
                 result = f"{ratio:.2f}×"
             else:
                 result = "— (failed check/command or timer resolution)"
-            output.append(f"| `{label}` | {n:,} | {times[0]:.3f} | {times[1]:.3f} | {result} |")
-        if len(ratios) == len(sizes):
+            output.append(
+                f"| `{label}` | `{ctools}` | {n:,} | {times[0]:.3f} | {times[1]:.3f} | {result} |"
+            )
+        if run_at and len(ratios) == len(run_at):
             low = profile_rounded(min(ratios), upper=False)
             high = profile_rounded(max(ratios), upper=True)
             ranges[label] = f"{low}×" if low == high else f"{low}–{high}×"
         else:
             ranges[label] = "—"
     return "\n".join(output) + "\n", ranges
+
+
+profile_MARKERS = "¹²³⁴⁵⁶⁷⁸⁹"
+
+
+def profile_update_readme(readme, ranges):
+    """Write each speedup into its README table row; return the new text.
+
+    A row's first cell names the Stata commands a ctools command replaces, one
+    per line (separated by <br>), and its last cell holds their speedups in the
+    same order. Footnote markers after a speedup are kept.
+    """
+    lines = readme.split("\n")
+    for command, speedup in ranges.items():
+        found = []
+        for index, line in enumerate(lines):
+            if not line.startswith("| ") or not line.rstrip().endswith("|"):
+                continue
+            cells = line.rstrip()[1:-1].split("|")
+            names = [name.strip() for name in cells[0].split("<br>")]
+            if f"`{command}`" in names:
+                found.append((index, cells, names))
+        if len(found) != 1:
+            raise ValueError(f"expected exactly one README row for {command}")
+        index, cells, names = found[0]
+        values = [value.strip() for value in cells[-1].split("<br>")]
+        if len(values) != len(names):
+            raise ValueError(f"README row for {command}: one speedup per Stata command")
+        position = names.index(f"`{command}`")
+        marker = values[position][len(values[position].rstrip(profile_MARKERS)) :]
+        values[position] = speedup + marker
+        cells[-1] = " " + "<br>".join(values) + " "
+        ending = lines[index][len(lines[index].rstrip()) :]  # "\r" in a CRLF file
+        lines[index] = "|" + "|".join(cells) + "|" + ending
+    return "\n".join(lines)
 
 
 def profile_main(argv=None):
@@ -316,15 +387,15 @@ def profile_main(argv=None):
     for command, speedup in ranges.items():
         print(f"{command:14} {speedup}")
     if args.update_readme:
-        readme = args.update_readme.read_text()
-        for command, speedup in ranges.items():
-            pattern = rf"^(\| `{re.escape(command)}` \|.*\|) [^|]+ \|$"
-            readme, count = re.subn(
-                pattern, lambda m, value=speedup: f"{m[1]} {value} |", readme, flags=re.MULTILINE
-            )
-            if count != 1:
-                parser.error(f"expected exactly one README row for {command}; no changes written")
-        args.update_readme.write_text(readme)
+        # newline="" keeps the file's own line endings.
+        with args.update_readme.open(encoding="utf-8", newline="") as source:
+            readme = source.read()
+        try:
+            readme = profile_update_readme(readme, ranges)
+        except ValueError as error:
+            parser.error(f"{error}; no changes written")
+        with args.update_readme.open("w", encoding="utf-8", newline="") as target:
+            target.write(readme)
 
 
 hdfe_OUT = ROOT / "temp/hdfe_datasets"

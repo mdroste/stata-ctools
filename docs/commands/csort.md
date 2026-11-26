@@ -12,7 +12,7 @@ Sort Stata datasets.
 
 The default `auto` mode chooses an algorithm from the key types and ranges: counting sort (falling back to LSD) when every key is numeric, LSD when the string keys are at most 16 bytes wide (`str1`-`str16`), and MSD when any string key is wider. `sample`, `counting`, `merge`, and `ips4o` are also available. Like native `sort`, `csort` rejects `if` and accepts `in`: `csort varlist in range` orders only the observations in the range and leaves the others in place. That form is run by `sort, stable` itself, which sets the sort marker only when the range covers the whole dataset.
 
-A failed or interrupted sort restores the original observations, sort marker, and active estimation sample. Mutating sorts keep a Stata recovery snapshot, which may spill to disk above `c(max_preservemem)`. This adds snapshot memory or disk I/O to ordinary sorts as well as streaming sorts; the already-sorted shortcut avoids the snapshot.
+`csort` keeps no copy of the dataset while it sorts, so a sort needs no `preserve` memory or disk space. Break is held until the sorted observations, the sort marker, and the active estimation sample agree. If a sorted value cannot be written back, the ordinary mode puts the original observations back; streaming mode (`stream()`, or chosen automatically for large, wide data) cannot, and leaves the columns moved so far in their new order.
 
 ## Syntax
 

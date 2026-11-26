@@ -101,11 +101,13 @@ f _ctools_cleanup.ado
 f _ctools_home.ado
 f _ctools_ebv.ado
 f _ctools_fvsplit.ado
+f _ctools_fvnative.ado
 f _ctools_lap.ado
 f _ctools_vce.ado
 f _ctools_mode.ado
 f _ctools_undo.ado
 f _ctools_hdfe_absorb.ado
+f _ctools_hdfe_screen.ado
 f _ctools_hdfe_dof.ado
 f _ctools_hdfe_vce.ado
 f _ctools_hdfe_post.ado

@@ -9,6 +9,11 @@ if "`__workload'" == "profile_readme" {
 * Arguments: output directory, quoted observation counts, Stata/MP processors,
 * quoted subset of pairs (default all). ctools commands take no threads()
 * option, so they use the ctools default.
+* A pair is one Stata command and the ctools command that replaces it, named by
+* the Stata command. A ctools command with several Stata counterparts has one
+* pair for each (cbinscatter: binscatter, binscatter2, binsreg; creghdfe:
+* reghdfe, fereg; cppmlhdfe: ppmlhdfe, feppml; cwinsor: winsor, winsor2), and
+* each pair times the ctools command again.
 args outdir sizes threads pairs
 clear all
 set more off
@@ -17,7 +22,7 @@ set graphics off
 if `"`outdir'"' == "" local outdir "docs/benchmarks/readme_profile"
 if `"`sizes'"' == "" local sizes "1000000 10000000 25000000"
 if "`threads'" == "" local threads = c(processors)
-local allpairs "export import sort merge sample bsample encode decode destring distinct ipolate cipolate split rangejoin winsor rangestat binscatter reghdfe ivreghdfe ppmlhdfe hdfe psmatch2 qreg"
+local allpairs "export import sort merge sample bsample encode decode destring distinct ipolate cipolate split rangejoin winsor winsor2 rangestat binscatter binscatter2 binsreg reghdfe fereg ivreghdfe ppmlhdfe feppml hdfe psmatch2 qreg"
 if `"`pairs'"' == "" local pairs "`allpairs'"
 capture mkdir "`outdir'"
 log using "`outdir'/profile.log", text replace name(profile)
@@ -34,10 +39,16 @@ program define profile_readme
     di "PROFILE_SETTINGS sizes=`sizes' variables=20 processors=`threads' seed=95183 pairs=`pairs'"
     foreach cmd in cimport cexport csort cmerge csample cbsample cencode cdecode ///
         cdestring cdistinct distinct cinterpolate csplit crangejoin cqreg cwinsor crangestat cpsmatch ///
-        cbinscatter creghdfe civreghdfe cppmlhdfe chdfe rangejoin rangestat gstats ///
-        psmatch2 binscatter reghdfe ivreghdfe ppmlhdfe hdfe cipolate ftools ivreg2 {
+        cbinscatter creghdfe civreghdfe cppmlhdfe chdfe rangejoin rangestat gstats winsor2 ///
+        psmatch2 binscatter binscatter2 binsreg reghdfe fereg ivreghdfe ppmlhdfe feppml hdfe ///
+        cipolate ftools ivreg2 {
         capture noisily which `cmd'
     }
+    * qreg and ppmlhdfe take minutes per run at 25M observations, so their pairs
+    * are not run above this size. validation/bench_profiles.py (profile_LIMITS)
+    * and readme_benchmarks.do repeat these limits.
+    local limit_qreg 10000000
+    local limit_ppmlhdfe 10000000
     * Older ctools releases installed a linear cipolate; the reference is SSC's cubic one.
     capture findfile cipolate.ado
     if !_rc & strpos(" `pairs' ", " cipolate ") {
@@ -143,18 +154,30 @@ program define profile_readme
         local c_qreg "cqreg y x1 x2 x3"
         local ref_winsor "gstats winsor x1 x2 x3, cuts(1 99) replace"
         local c_winsor "cwinsor x1 x2 x3, cuts(1 99) replace"
+        local ref_winsor2 "winsor2 x1 x2 x3, cuts(1 99) replace"
+        local c_winsor2 "`c_winsor'"
         local ref_rangestat "rangestat (mean) y, interval(month -2 2) by(firm)"
         local c_rangestat "crangestat (mean) y, interval(month -2 2) by(firm)"
         local ref_psmatch2 "psmatch2 treat x1 x2, outcome(y) logit neighbor(1)"
         local c_psmatch2 "cpsmatch treat x1 x2, outcome(y) logit neighbor(1)"
         local ref_binscatter "binscatter y x1, nquantiles(20)"
         local c_binscatter "cbinscatter y x1, nquantiles(20)"
+        local ref_binscatter2 "binscatter2 y x1, nquantiles(20)"
+        local c_binscatter2 "`c_binscatter'"
+        * binsreg chooses its number of bins from the data unless told; 20
+        * quantile-spaced bins with their means is what the others draw.
+        local ref_binsreg "binsreg y x1, nbins(20)"
+        local c_binsreg "`c_binscatter'"
         local ref_reghdfe "reghdfe y x1 x2, absorb(firm group) tolerance(1e-8)"
         local c_reghdfe "creghdfe y x1 x2, absorb(firm group) tolerance(1e-8)"
+        local ref_fereg "fereg y x1 x2, absorb(firm group) tolerance(1e-8)"
+        local c_fereg "`c_reghdfe'"
         local ref_ivreghdfe "ivreghdfe y x2 (x1=z), absorb(firm group) tolerance(1e-8)"
         local c_ivreghdfe "civreghdfe y x2 (x1=z), absorb(firm group) tolerance(1e-8)"
         local ref_ppmlhdfe "ppmlhdfe count x1 x2, absorb(firm group) tolerance(1e-8)"
         local c_ppmlhdfe "cppmlhdfe count x1 x2, absorb(firm group) tolerance(1e-8)"
+        local ref_feppml "feppml count x1 x2, absorb(firm group) tolerance(1e-8)"
+        local c_feppml "`c_ppmlhdfe'"
         local ref_hdfe "hdfe y x1 x2, absorb(firm group) gen(res_) tol(1e-8)"
         local c_hdfe "chdfe y x1 x2, absorb(firm group) gen(res_) tol(1e-8)"
         timer off 98
@@ -166,6 +189,12 @@ program define profile_readme
             " total=" strtrim(string(`total', "%15.3f")) " clock=`c(current_time)'"
 
         foreach cmd of local pairs {
+            if "`limit_`cmd''" != "" {
+                if `N' > `limit_`cmd'' {
+                    di "PROFILE_SKIP N=`N' command=`cmd' limit=`limit_`cmd''"
+                    continue
+                }
+            }
             foreach method in ref c {
                 timer clear 98
                 timer on 98
@@ -196,7 +225,7 @@ program define profile_readme
                     if "`cmd'"=="sample" local expected = `N'/10
                     capture assert _N==`expected'
                     local checkrc = _rc
-                    if inlist("`cmd'","qreg","reghdfe","ivreghdfe","ppmlhdfe") {
+                    if inlist("`cmd'","qreg","reghdfe","fereg","ivreghdfe","ppmlhdfe","feppml") {
                         capture assert e(N)==`N'
                         if _rc local checkrc = _rc
                     }

@@ -1837,6 +1837,7 @@ foreach mode in "replace" "generate(an bn cn)" {
 * code, variable names and types, and (unless "nodata") values agree.
 capture program drop _ct_output
 program define _ct_output, rclass
+    _ct_loud _ct_output
     tempfile f
     tempname fh
     capture log close _ctout
@@ -1926,7 +1927,7 @@ foreach pair in ///
     `"u, gen(1bad)"' `"u w, gen(k1 k1)"' `"u"' `"u, gen(k1) replace"' `"u, gen(k1 k2)"' ///
     `"u, replace ignore("a,b")"' `"u, replace ignore("a", asbytes illegal)"' {
     local ++i
-    _ct_same_output "DESTR-04 messages `i'" `"destring `pair'"' `"cdestring `pair'"'
+    noisily _ct_same_output "DESTR-04 messages `i'" `"destring `pair'"' `"cdestring `pair'"'
 }
 * Hexadecimal (%21x) numbers: real() reads them and so does destring
 clear
@@ -1978,10 +1979,10 @@ count if !missing(got)
 if r(N) == 16 test_pass "DESTR-07 hexadecimal values read"
 else test_fail "DESTR-07 hexadecimal values read" "`r(N)' nonmissing, expected 16"
 keep in 1/15
-_ct_same_output "DESTR-07 hexadecimal without force" "destring hn, replace" "cdestring hn, replace"
-_ct_same_output "DESTR-07 hexadecimal float" "destring hn, replace float force" "cdestring hn, replace float force"
+noisily _ct_same_output "DESTR-07 hexadecimal without force" "destring hn, replace" "cdestring hn, replace"
+noisily _ct_same_output "DESTR-07 hexadecimal float" "destring hn, replace float force" "cdestring hn, replace float force"
 replace hn = subinstr(hn, ".", ",", 1)
-_ct_same_output "DESTR-07 hexadecimal dpcomma" "destring hn, replace dpcomma force" "cdestring hn, replace dpcomma force"
+noisily _ct_same_output "DESTR-07 hexadecimal dpcomma" "destring hn, replace dpcomma force" "cdestring hn, replace dpcomma force"
 * Removing illegal bytes must preserve complete valid UTF-8 whitespace.
 clear
 set obs 4
@@ -1997,9 +1998,73 @@ assert got == 1.25 in 2
 assert missing(got) in 3
 assert got == 12 in 4
 test_pass "DESTR-08 illegal preserves valid Unicode whitespace"
+* The plugin chooses each new variable's storage type and counts its missing
+* values and ignore() characters; destring's compress, count and strpos
+* passes are the reference. The values sit on every type boundary. (noisily:
+* _ct_output captures no text while output is quiet, and here the messages,
+* which name the type, the count and the characters, are what is compared.)
+clear
+set obs 12
+gen str20 b_hi = cond(_n == 1, "100", "-127")
+gen str20 i_lo = cond(_n == 1, "101", "5")
+gen str20 i_neg = cond(_n == 1, "-128", "5")
+gen str20 i_hi = cond(_n == 1, "32740", "-32767")
+gen str20 l_lo = cond(_n == 1, "32741", "5")
+gen str20 l_neg = cond(_n == 1, "-32768", "5")
+gen str20 l_hi = cond(_n == 1, "2147483620", "-2147483647")
+gen str20 d_hi = cond(_n == 1, "2147483621", "5")
+gen str20 d_neg = cond(_n == 1, "-2147483648", "5")
+gen str20 frac = cond(_n == 1, "1.5", "5")
+gen str20 allmiss = cond(_n == 1, ".", cond(_n == 2, ".a", ""))
+gen str20 extmiss = cond(_n == 1, ".z", cond(_n == 2, ".a", string(_n)))
+gen str20 negzero = "-0"
+gen str20 big = cond(_n == 1, "1e15", "5")
+gen str20 f_round = cond(_n == 1, "16777217", cond(_n == 2, "100.0000001", "0.1"))
+gen str20 f_int = cond(_n == 1, "100.0000001", "5")
+gen str20 money = cond(mod(_n, 3) == 0, "$1,234", cond(mod(_n, 3) == 1, "12", "7%"))
+gen str20 tail = string(_n * 1000)
+local all b_hi i_lo i_neg i_hi l_lo l_neg l_hi d_hi d_neg frac allmiss extmiss negzero big f_round f_int
+noisily _ct_same_output "DESTR-09 storage types: replace" "destring `all', replace" "cdestring `all', replace"
+noisily _ct_same_output "DESTR-09 storage types: float" "destring `all', replace float" "cdestring `all', replace float"
+noisily _ct_same_output "DESTR-09 storage types: generate" ///
+    "destring b_hi l_lo frac allmiss tail, generate(g1 g2 g3 g4 g5)" ///
+    "cdestring b_hi l_lo frac allmiss tail, generate(g1 g2 g3 g4 g5)"
+noisily _ct_same_output "DESTR-09 last variable: replace" "destring tail, replace" "cdestring tail, replace"
+noisily _ct_same_output "DESTR-09 last variable: generate" "destring tail, generate(tail_n)" "cdestring tail, generate(tail_n)"
+noisily _ct_same_output "DESTR-09 ignore characters" ///
+    `"destring money tail, generate(m t) ignore("%$,x")"' `"cdestring money tail, generate(m t) ignore("%$,x")"'
+noisily _ct_same_output "DESTR-09 ignore bytes" ///
+    `"destring money, replace ignore("$,%", asbytes)"' `"cdestring money, replace ignore("$,%", asbytes)"'
+noisily _ct_same_output "DESTR-09 percent" ///
+    `"destring money, generate(m) ignore("$,") percent"' `"cdestring money, generate(m) ignore("$,") percent"'
+noisily _ct_same_output "DESTR-09 nonnumeric: no force" "destring money tail, replace" "cdestring money tail, replace"
+noisily _ct_same_output "DESTR-09 nonnumeric: force" "destring money tail, replace force" "cdestring money tail, replace force"
+* if and in (cdestring only): the observations left out are missing and do
+* not affect the type
+cdestring i_lo l_lo if _n > 1 in 1/6, generate(p1 p2)
+capture noisily {
+    assert "`: type p1'" == "byte" & "`: type p2'" == "byte"
+    assert p1 == 5 & p2 == 5 if inrange(_n, 2, 6)
+    assert missing(p1) & missing(p2) if !inrange(_n, 2, 6)
+}
+if !_rc test_pass "DESTR-09 if and in: type and values"
+else test_fail "DESTR-09 if and in" "wrong type or values"
+drop p1 p2
+noisily _ct_output cdestring i_lo if _n > 1 in 1/6, generate(p1)
+if strpos(`"`r(text)'"', "(7 missing values generated)") test_pass "DESTR-09 if and in: missing values counted"
+else test_fail "DESTR-09 if and in: missing values counted" `"`r(text)'"'
+* Many observations: the type, counts and characters come from every thread
+clear
+set obs 200000
+gen str12 whole = string(mod(_n * 7919, 60000) - 20000)
+gen str12 small = string(mod(_n, 200) - 99)
+gen str14 cash = "$" + string(mod(_n * 31, 5000)) + cond(mod(_n, 50000) == 0, ",5", "")
+replace small = ".b" in 150000
+noisily _ct_same_output "DESTR-09 parallel types and counts" ///
+    `"destring whole small cash, replace ignore("$,#")"' `"cdestring whole small cash, replace ignore("$,#") threads(8)"'
 * No variables at all: varlist required
 clear
-_ct_same_output "DESTR-03 empty dataset" "destring, replace" "cdestring, replace"
+noisily _ct_same_output "DESTR-03 empty dataset" "destring, replace" "cdestring, replace"
 * SUMMARY
 * End of cdestring validation
 do "validation/support/six_release_regressions.do" cdestring

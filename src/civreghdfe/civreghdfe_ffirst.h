@@ -37,10 +37,14 @@ typedef struct {
     y, X1 (N x K1), Z (N x L, the K2 included instruments first, then the
     excluded ones); X2 is the first K2 columns of Z. Returns 0, 920 or a
     store error; a statistic that cannot be computed is missing.
+    ZtZ_fit (L x L), Zty_fit (L) and ZtX_fit (L x (K2 + K1), columns
+    [X2, X1]), when given, are the fit's Z'WZ, Z'Wy and Z'WX: the same sums
+    as the cross products taken here, which are then not taken again.
 */
 ST_retcode civ_ffirst(const ST_double *y, const ST_double *X1, ST_int K1,
                       const ST_double *Z, ST_int L, ST_int K2,
                       const ST_double *w, ST_int N, const civ_omega *om,
-                      const civ_ffirst_dof *dof);
+                      const civ_ffirst_dof *dof, const ST_double *ZtZ_fit,
+                      const ST_double *Zty_fit, const ST_double *ZtX_fit);
 
 #endif /* CIVREGHDFE_FFIRST_H */

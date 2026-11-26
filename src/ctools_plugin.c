@@ -56,6 +56,7 @@
 #include "ctools_threads.h"
 #include "ctools_runtime.h"
 #include "ctools_cancel.h"
+#include "ctools_release.h"
 #include "cdistinct/cdistinct_impl.h"
 #include "chdfe/chdfe_impl.h"
 #include "ctools_version.h"
@@ -272,6 +273,7 @@ static ST_retcode thread_settings_call(const char *args)
 #include "crangejoin/crangejoin_impl.h"
 #include "cgroup/cgroup_impl.h"
 #include "formats/ctools_dta.h"
+#include "hdfe/hdfe_missing.h"
 
 static const ctools_command_descriptor commands[] = {
 #define CTOOLS_COMMAND(name, owner, handler, cleanup) {name, owner, handler, cleanup},
@@ -311,6 +313,12 @@ STDLL stata_call(int argc, char *argv[])
         /* _ctools_load refuses a plugin whose protocol differs from the ado's. */
         version_rc = SF_macro_save("_ctools_plugin_protocol", CTOOLS_PROTOCOL);
         if (version_rc) return version_rc;
+        version_rc = SF_macro_save("_ctools_plugin_hdfe_screen", "1");
+        if (version_rc) return version_rc;
+        version_rc = SF_macro_save("_ctools_plugin_hdfe_markout", "1");
+        if (version_rc) return version_rc;
+        version_rc = SF_macro_save("_ctools_plugin_hdfe_fvlevels", "1");
+        if (version_rc) return version_rc;
         return SF_macro_save("_ctools_plugin_revision", CTOOLS_BUILD_REVISION);
     }
 
@@ -320,6 +328,9 @@ STDLL stata_call(int argc, char *argv[])
         snprintf(seconds, sizeof(seconds), "%.17g", ctools_timer_seconds());
         return SF_macro_save("_ctools_clock_value", seconds);
     }
+
+    /* The previous command's memory is returned before this one allocates */
+    ctools_release_wait();
 
     /* Initialize OpenMP safely before any parallel code runs */
     ctools_init_openmp();
@@ -394,16 +405,22 @@ STDLL stata_call(int argc, char *argv[])
     rc = ctools_command_begin(command, cmd_args);
     if (!rc) {
         ctools_cancel_begin(ctools_host_cancel);
+        /* the command's final cleanup may leave its memory to a helper
+         * thread, which returns it while Stata goes on */
+        ctools_release_open();
         rc = command->handler(cmd_args);
+        ctools_release_end();
         ctools_cancel_end();
     }
     else SF_error("ctools: unknown command or invalid command phase\n");
 
     free(cmd_str);
-
-    /* Clean up thread pool at end of each plugin call */
-    ctools_destroy_global_pool();
     ctools_command_finish(rc);
+
+    /* Clean up thread pool at end of each plugin call: after the queued
+     * memory, on the helper thread when the command queued any (no pool
+     * work is pending here; every submit waits for its tasks) */
+    ctools_release_close(ctools_destroy_global_pool);
 
     return rc;
 }

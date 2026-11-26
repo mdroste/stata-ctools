@@ -1,8 +1,29 @@
 #include "ctools_transport_internal.h"
 #include "ctools_rowstage.h"
+#include "ctools_release.h"
 #ifdef _OPENMP
 #include <omp.h>
 #endif
+#if defined(__x86_64__) || defined(_M_X64)
+#include <emmintrin.h>
+#define ROWSTAGE_STREAM_STORES 1
+#endif
+
+/* Copy a tile read into cache to its staged rows without first reading the
+ * destination: the staged copy is far larger than the caches, and ordinary
+ * stores to it read every line before writing it. dst and n are multiples
+ * of 8 bytes. */
+static void rowstage_stream_copy(char *dst, const char *src, size_t n)
+{
+#ifdef ROWSTAGE_STREAM_STORES
+    long long *d = (long long *)(void *)dst;
+    const long long *s = (const long long *)(const void *)src;
+    for (size_t i = 0; i < n / 8; i++)
+        _mm_stream_si64(d + i, s[i]);
+#else
+    memcpy(dst, src, n);
+#endif
+}
 
 /* A tile is the run of observations one worker moves between passes over the
  * variables: small enough that the Stata records and their staged rows stay
@@ -39,6 +60,15 @@ void ctools_rowstage_free(ctools_rowstage *rs)
     free(rs->width);
     free(rs->offset);
     ctools_rowstage_init(rs);
+}
+
+void ctools_rowstage_release(ctools_rowstage *rs)
+{
+    if (!rs)
+        return;
+    ctools_release_later(rs->rows);
+    rs->rows = NULL;
+    ctools_rowstage_free(rs);
 }
 
 static size_t rowstage_tile_rows(size_t stride)
@@ -195,16 +225,22 @@ stata_retcode ctools_rowstage_load(ctools_rowstage *rs, const int *var_indices, 
         tid = (size_t)omp_get_thread_num();
 #endif
         rowstage_share(nobs, team, tid, &start, &end);
-        /* Each worker owns its rows; only the last one may read into the guard. */
+        /* Each tile is read into a cache-resident buffer (with a guard for
+         * direct string reads) and streamed to its staged rows; without the
+         * buffer the tile is read in place and only the last worker may read
+         * into the guard. */
+        char *tbuf = (char *)malloc(tile_rows * stride + IO_SLOT_GUARD);
         const char *safe_end = rs->rows + end * stride + (end == nobs ? IO_SLOT_GUARD : 0);
         for (size_t tile = start; tile < end && !atomic_load(&error); tile += tile_rows)
         {
             size_t count = end - tile < tile_rows ? end - tile : tile_rows;
+            char *base = tbuf ? tbuf : rs->rows + tile * stride;
+            const char *tile_end = tbuf ? tbuf + tile_rows * stride + IO_SLOT_GUARD : safe_end;
             for (size_t j = 0; j < nvars; j++)
             {
                 ST_int idx = (ST_int)rs->var_idx[j];
                 ST_int obs = (ST_int)(obs1 + tile);
-                char *slot = rs->rows + tile * stride + rs->offset[j];
+                char *slot = base + rs->offset[j];
                 int io_rc = 0;
                 if (rs->width[j] == 0)
                 {
@@ -225,7 +261,7 @@ stata_retcode ctools_rowstage_load(ctools_rowstage *rs, const int *var_indices, 
                     size_t width = (size_t)rs->width[j];
                     for (size_t i = 0; i < count && !io_rc; i++, slot += stride)
                         io_rc = ctools_io_read_string_slot_direct(read_fn, idx, obs + (ST_int)i,
-                                                                  slot, width, safe_end);
+                                                                  slot, width, tile_end);
                 }
                 if (io_rc)
                 {
@@ -233,7 +269,13 @@ stata_retcode ctools_rowstage_load(ctools_rowstage *rs, const int *var_indices, 
                     break;
                 }
             }
+            if (tbuf)
+                rowstage_stream_copy(rs->rows + tile * stride, tbuf, count * stride);
         }
+#ifdef ROWSTAGE_STREAM_STORES
+        _mm_sfence();
+#endif
+        free(tbuf);
     }
     ctools_memory_barrier();
     rc = (stata_retcode)atomic_load(&error);

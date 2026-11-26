@@ -17,40 +17,48 @@
 
 **ctools** provides really fast drop-in replacements for common Stata programs. The syntax of ctools is largely unchanged from the commands they replace, sometimes with additional features; see the [compatibility table](docs/COMPATIBILITY.md).
 
+Each ctools command reimplements an existing Stata command and is pinned to one version of it. [Attribution](docs/ATTRIBUTION.md) lists each original command, its authors, and the pinned version. The same information appears in each command's help file.
+
 ### Stata built-in commands
 
 | Stata command | Replaced with | Description | Approx. speedup¹ |
 | --- | --- | --- | ---: |
-| `import` | `cimport` | Import text, Excel, dBase, SAS, SPSS, and shapefiles | 40–60× |
-| `export` | `cexport` | Export text, Excel, dBase, SAS, SPSS, and shapefiles | 50–70× |
-| `sort` | `csort` | Sort dataset | 0.5–6× |
-| `merge` | `cmerge` | Merge (join) datasets | 0.5–7× |
-| `sample` | `csample` | Resampling without replacement | 5–9× |
-| `bsample` | `cbsample` | Resampling with replacement | 3–5× |
-| `encode` | `cencode` | Recast string as labeled numeric | 15–70× |
-| `decode` | `cdecode` | Recast labeled numeric as string | 2–20× |
-| `destring` | `cdestring` | Recast string as numeric type | 40–50× |
-| `ipolate` | [`cinterpolate`](docs/USAGE.md#interpolation-cinterpolate) | Linear interpolation and extrapolation | 10–80× |
-| `split` | [`csplit`](docs/USAGE.md#string-fields-csplit) | Split strings into fields | 70–130× |
-| `qreg` | `cqreg` | Quantile regression | 4–6× |
+| `import` | `cimport` | Import text, Excel, dBase, SAS, SPSS, and shapefiles | 10–20× |
+| `export` | `cexport` | Export text, Excel, dBase, SAS, SPSS, and shapefiles | 50–80× |
+| `sort` | `csort` | Sort dataset | 1.7–4×² |
+| `merge` | `cmerge` | Merge (join) datasets | 2–6×² |
+| `sample` | `csample` | Resampling without replacement | 6–10× |
+| `bsample` | `cbsample` | Resampling with replacement | 2–4× |
+| `encode` | `cencode` | Recast string as labeled numeric | 30–160× |
+| `decode` | `cdecode` | Recast labeled numeric as string | 2–5× |
+| `destring` | `cdestring` | Recast string as numeric type | 20–40× |
+| `ipolate` | [`cinterpolate`](docs/USAGE.md#interpolation-cinterpolate) | Linear interpolation and extrapolation | 50–90× |
+| `split` | [`csplit`](docs/USAGE.md#string-fields-csplit) | Split strings into fields | 140–270× |
+| `qreg` | `cqreg` | Quantile regression | 8–10×³ |
 
 ### User-written commands
 
+See [Attribution](docs/ATTRIBUTION.md#community-contributed-commands) for the authors of these commands and the versions ctools is pinned to.
+
 | Stata command | Replaced with | Description | Approx. speedup¹ |
 | --- | --- | --- | ---: |
-| `distinct` | [`cdistinct`](docs/commands/cdistinct.md) | Report distinct values | 10–30× |
-| `cipolate` | [`cinterpolate, cubic`](docs/USAGE.md#interpolation-cinterpolate) | Local cubic interpolation | 10-20× |
-| `rangejoin` | [`crangejoin`](docs/USAGE.md#interval-joins-crangejoin) | Join observations within inclusive intervals | 10–20× |
-| `winsor2`, `gstats winsor` | `cwinsor` | Winsorize variables | 2–5× vs. `gstats winsor` |
-| `rangestat` | `crangestat` | Range statistics of variables | 80–110× |
-| `binscatter`, `binsreg` | `cbinscatter` | Binned scatter plots | 8–60× vs. `binscatter` |
-| `psmatch2` | `cpsmatch` | Propensity score matching | 2–4× |
-| `reghdfe` | `creghdfe` | OLS with multi-way fixed effects | 10–20× |
+| `distinct` | [`cdistinct`](docs/commands/cdistinct.md) | Report distinct values | 10–40× |
+| `cipolate` | [`cinterpolate, cubic`](docs/USAGE.md#interpolation-cinterpolate) | Local cubic interpolation | 40–80× |
+| `rangejoin` | [`crangejoin`](docs/USAGE.md#interval-joins-crangejoin) | Join observations within inclusive intervals | 10–30× |
+| `winsor2`<br>`gstats winsor` | `cwinsor` | Winsorize variables | 20–60×<br>1.9–4× |
+| `rangestat` | `crangestat` | Range statistics of variables | 30–70× |
+| `binscatter`<br>`binscatter2`<br>`binsreg` | `cbinscatter` | Binned scatter plots | 7–40×<br>3–20×<br>3–30× |
+| `psmatch2` | `cpsmatch` | Propensity score matching | 3–4× |
+| `reghdfe`<br>`fereg` | `creghdfe` | OLS with multi-way fixed effects | 8–20×<br>0.3–0.5× |
 | `ivreghdfe` | `civreghdfe` | 2SLS/GMM with multi-way fixed effects | 10–20× |
-| `ppmlhdfe` | `cppmlhdfe` | PPML with multi-way fixed effects | 5–6× |
-| `hdfe` | [`chdfe`](docs/commands/chdfe.md) | Remove fixed effects from variables | 5-15× |
+| `ppmlhdfe`<br>`feppml` | `cppmlhdfe` | PPML with multi-way fixed effects | 6–9×³<br>0.3–0.5× |
+| `hdfe` | [`chdfe`](docs/commands/chdfe.md) | Remove fixed effects from variables | 5–20× |
 
-¹ These are approximate speedups from a small number of benchmarks on data with **1M, 10M, and 25M observations** and 20 mixed-type variables. Values below 1× mean ctools was slower. Your machine's mileage may vary. See [benchmark details and results](docs/performance/README.md).
+¹ These are approximate speedups from a small number of benchmarks on data with **1M, 10M, and 25M observations** and 20 mixed-type variables. Where a ctools command replaces several commands, each has its own speedup, in the same order. Values below 1× mean ctools was slower. Your machine's mileage may vary. See [benchmark details and results](docs/performance/README.md).
+
+² `csort` and `cmerge` work better on data with many observations relative to variables; their speedups shrink as the number of variables grows.
+
+³ Measured at 1M and 10M observations only: `qreg` and `ppmlhdfe` take minutes per run at 25M.
 
 ## Installation
 
@@ -81,6 +89,7 @@ See the [documentation index](docs/README.md) for command guides, development an
 
 - [Command features](docs/FEATURES.md), [usage examples](docs/USAGE.md), and Stata's `help <command>`.
 - [Compatibility and limitations](docs/COMPATIBILITY.md), including supported options and numerical differences.
+- [Attribution](docs/ATTRIBUTION.md): the original command behind each ctools command, its authors, and the pinned version.
 - [Installation and building from source](docs/INSTALLATION.md) and the [developer guide](docs/development/README.md).
 
 ## Authorship
@@ -90,12 +99,17 @@ See the [documentation index](docs/README.md) for command guides, development an
 
 ## Thanks
 
-- Sergio Correia for [ftools](https://github.com/sergiocorreia/ftools), [reghdfe](https://github.com/sergiocorreia/reghdfe), and [ivreghdfe](https://github.com/sergiocorreia/ivreghdfe) (with Lars Vilhuber), as well as tons of helpful comments and suggestions
+ctools reimplements commands written by the people below. [Attribution](docs/ATTRIBUTION.md) lists the version of each command that ctools is pinned to, along with references to cite.
+
+- Sergio Correia for [ftools](https://github.com/sergiocorreia/ftools), [reghdfe](https://github.com/sergiocorreia/reghdfe) (with Noah Constantine), [ivreghdfe](https://github.com/sergiocorreia/ivreghdfe) (with Lars Vilhuber), and [hdfe](https://ideas.repec.org/c/boc/bocode/s457985.html), as well as tons of helpful comments and suggestions
 - Sergio Correia, Paulo Guimarães, and Thomas Zylkin for [ppmlhdfe](https://github.com/sergiocorreia/ppmlhdfe)
 - Mauricio Caceres Bravo for [gtools](https://github.com/mcaceresb/gtools) and invaluable contributions to [cowsay](https://github.com/mdroste/stata-cowsay)
 - Christopher (Kit) Baum, Mark E Schaffer, and Steven Stillman for [ivreg2](https://ideas.repec.org/c/boc/bocode/s425401.html)
+- Frank Kleibergen, Mark E Schaffer, and Frank Windmeijer for [ranktest](https://ideas.repec.org/c/boc/bocode/s456865.html)
+- David Roodman for [boottest](https://ideas.repec.org/c/boc/bocode/s458121.html)
+- Gary Longton and Nicholas J. Cox for [distinct](https://ideas.repec.org/c/boc/bocode/s424201.html)
 - Robert Picard, Nicholas J. Cox, and Roberto Ferrer for [rangestat](https://ideas.repec.org/c/boc/bocode/s458161.html)
-- Nicholas J. Cox for [cipolate](https://ideas.repec.org/c/boc/bocode/s426202.html)
+- Nicholas J. Cox for [cipolate](https://ideas.repec.org/c/boc/bocode/s426202.html), and for Stata's official `split` and `destring`, which the Stata manual credits to him
 - Robert Picard for [rangejoin](https://ideas.repec.org/c/boc/bocode/s458162.html)
 - Edwin Leuven and Barbara Sianesi for [psmatch2](https://ideas.repec.org/c/boc/bocode/s432001.html)
 - Yujun Lian for [winsor2](https://ideas.repec.org/c/boc/bocode/s457765.html)

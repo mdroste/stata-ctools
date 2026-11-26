@@ -50,7 +50,7 @@ program define _ctools_load
     }
 
     * The ado/plugin argument protocol, stamped from config/release.json.
-    local __ado_protocol "3"
+    local __ado_protocol "4"
     local __reinstall `"net install ctools, from("https://raw.githubusercontent.com/mdroste/stata-ctools/main/build") replace"'
 
     tempname __rhold
@@ -80,6 +80,9 @@ program define _ctools_load
         di as error "  See https://github.com/mdroste/stata-ctools/blob/main/docs/INSTALLATION.md#troubleshooting"
         exit `__load_rc'
     }
+    local ctools_plugin_hdfe_screen
+    local ctools_plugin_hdfe_markout
+    local ctools_plugin_hdfe_fvlevels
     capture plugin call ctools_plugin, "version"
     local __id_rc = _rc
     if `__id_rc' | "`ctools_plugin_protocol'" != "`__ado_protocol'" {
@@ -96,5 +99,8 @@ program define _ctools_load
     c_local __ctools_plugin_version "`ctools_plugin_version'"
     c_local __ctools_plugin_revision "`ctools_plugin_revision'"
     c_local __ctools_plugin_protocol "`ctools_plugin_protocol'"
+    c_local __ctools_plugin_hdfe_screen = ("`ctools_plugin_hdfe_screen'" == "1")
+    c_local __ctools_plugin_hdfe_markout = ("`ctools_plugin_hdfe_markout'" == "1")
+    c_local __ctools_plugin_hdfe_fvlevels = ("`ctools_plugin_hdfe_fvlevels'" == "1")
     capture confirm number 0
 end

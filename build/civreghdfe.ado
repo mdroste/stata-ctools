@@ -1,4 +1,7 @@
 *! version 1.3.1 20261124 github.com/mdroste/stata-ctools
+*! original: ivreghdfe 1.1.4 (November 29, 2025) by Sergio Correia
+*! original: ivreg2 4.1.12 (August 14, 2024) by Christopher F Baum, Mark E Schaffer, and Steven Stillman
+*! original: see help civreghdfe for details
 
 program define civreghdfe, eclass byable(recall)
     version 14.1
@@ -149,14 +152,16 @@ program define civreghdfe, eclass byable(recall)
         CFORMAT(string) ///
         NOCOLLIN ///
         DOFadjustments(string) KEEPSINgletons SFIRST ///
-        CIVRERUN CIVCOLLIN(string) CIVECOLLIN(string) CIVDUPS(string) ///
+        CIVRERUN CIVCOLLIN(string) CIVECOLLIN(string) CIVDUPS(string) CIVNOFV ///
         NORETURN NOWILDtable CIVAUX ///
         PSD0 PSDA SW Tvar(varname) Ivar(varname) BVCLEAN FVALL FVSEP USEQR ///
         TEChnique(string) TRAnsform(string) ACCELeration(string) PREConditioner(string) ///
         PRUNE NOSAMPle POOLsize(integer 10) GROUPVar(name) TIMEit noWARN]
 
     * Freeze incoming-r() qualifiers before parsing helpers replace r().
-    if `"`if'"' != "" {
+    * An if that names no r() or s() result goes to marksample as it is,
+    * which saves a marker variable (a pass over the data).
+    if `"`if'"' != "" & ustrregexm(`"`if'"', "(^|[^A-Za-z0-9_])[rs][(]") {
         tempvar __incoming_sample
         mark `__incoming_sample' `if' `in'
         local if "if `__incoming_sample'"
@@ -443,9 +448,63 @@ program define civreghdfe, eclass byable(recall)
     tsrevar `depvar'
     local depvar_var `r(varlist)'
     confirm numeric variable `depvar_var'
-    * Mark sample early for fvrevar
-    marksample touse
-    markout `touse' `depvar_var'
+    * For a plain numeric model, mark its variables and effects together.
+    * Operators, strings and absorb suboptions keep the general path.
+    local __plain_mark = 0
+    capture confirm numeric variable `depvar_var' `endogvars' `exogvars' `instruments' `absorb'
+    if !_rc local __plain_mark = 1
+    if `__plain_mark' local varlist `depvar_var' `endogvars' `exogvars' `instruments' `absorb'
+    * Plain inputs use the estimator's native scan, also with an aweight,
+    * fweight or pweight that is one numeric variable (marksample checks its
+    * rows; the plugin reads it as it is). Weight expressions, iweights and
+    * factors use streaming native marking at the original preparation
+    * boundaries so factor levels and weight-expression evaluation agree.
+    local __wbare = 0
+    if inlist("`weight'", "aweight", "fweight", "pweight") {
+        local __wexp = strtrim(`"`exp'"')
+        if substr(`"`__wexp'"', 1, 1) == "=" local __wexp = strtrim(substr(`"`__wexp'"', 2, .))
+        if `: word count `__wexp'' == 1 {
+            capture confirm numeric variable `__wexp', exact
+            if !_rc local __wbare = 1
+        }
+    }
+    local __ctools_plugin_hdfe_screen = 0
+    local __ctools_plugin_hdfe_markout = 0
+    _ctools_load
+    local __native_screen = 0
+    capture confirm numeric variable `absorb'
+    local __plain_fe = (_rc == 0)
+    if "`fevce'`partial'`fwl'`orthog'`endogtest'`redundant'`bw'`kernel'`kiefer'" == "" & ///
+        !`__wild' & !`dkraay' & substr(lower(strtrim(`"`vce'"')), 1, 4) != "boot" {
+        capture confirm numeric variable `depvar'
+        if !_rc & `__plain_fe' & `__plain_mark' & ("`weight'" == "" | `__wbare') ///
+            local __native_screen = `__ctools_plugin_hdfe_screen'
+        else if `__ctools_plugin_hdfe_markout' {
+            _ctools_hdfe_screen plan `depvar' `endogvars' `exogvars' `instruments'
+            if `__screen_ok' local __native_screen = 2
+        }
+    }
+    * Stata can reuse the old e(sample) storage when it is released before
+    * marksample allocates a new marker (posting is about 45 ms faster at
+    * 10M rows). Keep previous results when the qualifiers, weights or
+    * options can refer to them: e() or _b[], _se[], _coef[] as a token
+    * (vce( or tolerance( is not one), and with noreturn, which posts
+    * nothing. A fit that fails after this point leaves e() empty, as a
+    * failed creghdfe does.
+    if "`noreturn'" == "" & ///
+        !ustrregexm(`"`cmdline'"', "(^|[^A-Za-z0-9_])(e[(]|_b\[|_se\[|_coef\[)") {
+        ereturn clear
+    }
+    if `__native_screen' marksample touse, novarlist
+    else marksample touse
+    local varlist
+    if `__native_screen' == 2 {
+        local __early_inputs `depvar_var'
+        if `__plain_fe' local __early_inputs `__early_inputs' `absorb'
+        if `__plain_mark' local __early_inputs `__screen_inputs' `absorb'
+        _ctools_hdfe_screen mark `__early_inputs', touse(`touse') plugin(`__ctools_plugin') threads(`threads')
+    }
+    else if !`__plain_mark' markout `touse' `depvar_var'
 
     * One numeric variable per absorbed effect for the plugin: string
     * variables and interactions are numbered first (the plugin renumbers
@@ -493,7 +552,7 @@ program define civreghdfe, eclass byable(recall)
         * Heterogeneous slopes (id#c.x, id##c.x, id##c.(x z)) are absorbed as
         * reghdfe absorbs them, which ivreghdfe calls: one factor per
         * intercept and per slope (e(extended_absvars))
-        _ctools_hdfe_absorb `absorb', touse(`touse') cmd(civreghdfe) slopes
+        _ctools_hdfe_absorb `absorb', touse(`touse') cmd(civreghdfe) slopes `=cond(`__plain_mark' | (`__native_screen' == 2 & `__plain_fe'), "nomark", "")'
         local n_absorb = r(n)
         if `fe_any' & `n_absorb' != `__t' {
             di as error "civreghdfe: each absorb() term saved with savefe or newvar= must be one effect"
@@ -745,7 +804,8 @@ program define civreghdfe, eclass byable(recall)
     local cluster_var ""
     local cluster_var2 ""
     if `"`vce'"' != "" {
-        _ctools_hdfe_vce, spec(`"`vce'"') touse(`touse') cmd(civreghdfe)
+        * with the native screen the plugin drops missing cluster values
+        _ctools_hdfe_vce, spec(`"`vce'"') touse(`touse') cmd(civreghdfe) `=cond(`__native_screen' == 1, "nomark", "")'
         local vce_kind `r(kind)'
         if "`vce_kind'" == "robust" {
             local vce_type = 1
@@ -830,31 +890,65 @@ program define civreghdfe, eclass byable(recall)
         }
     }
 
-    * Expand factor variables — single fvrevar, base pre-filter, then _rmcoll
+    * Expand factor variables â€” single fvrevar, base pre-filter, then _rmcoll
     * fvexpand (cheap) gets names; fvrevar (expensive) creates temp vars
     * Pre-filtering base/omitted levels reduces _rmcoll input size
-    local endogvars_names_all ""
-    local __n_endog_total = 0
-    if "`endogvars'" != "" {
-        fvexpand `endogvars' if `touse'
-        local endogvars_names_all "`r(varlist)'"
+    * Plain i.f terms: the plugin builds the indicators from f and the
+    * levels come from one plugin pass (_ctools_fvnative, as in creghdfe),
+    * not from fvexpand and fvrevar (about 0.2 s each per term at 10M rows).
+    * partial(), the orthog()/endogtest()/redundant() tests, the bootstraps
+    * and fevce() keep fvrevar's variables; the collinearity check makes
+    * the indicators it reads (below). civnofv: fvrevar's path always.
+    local __fvn_ok 0
+    local __all_fv `endogvars' `exogvars' `instruments'
+    if `__ctools_plugin_hdfe_fvlevels' & "`civnofv'" == "" & strpos(`"`__all_fv'"', ".") & ///
+        `"`fevce'`partial'`fwl'`orthog'`endogtest'`redundant'"' == "" & ///
+        !`__wild' & substr(lower(strtrim(`"`vce'"')), 1, 4) != "boot" {
+        _ctools_fvnative `__all_fv', touse(`touse') plugin(`__ctools_plugin') threads(`threads')
+    }
+    if `__fvn_ok' {
+        * the names of each group's terms, in order
+        local __rest_n `__fvn_names'
+        local __rest_c `__fvn_counts'
+        foreach __grp in endogvars exogvars instruments {
+            local `__grp'_names_all
+            local __nt : word count ``__grp''
+            forvalues __t = 1/`__nt' {
+                gettoken __c __rest_c : __rest_c
+                forvalues __u = 1/`__c' {
+                    gettoken __nm __rest_n : __rest_n
+                    local `__grp'_names_all ``__grp'_names_all' `__nm'
+                }
+            }
+        }
         local __n_endog_total : word count `endogvars_names_all'
-    }
-
-    local exogvars_names_all ""
-    local __n_exog_total = 0
-    if "`exogvars'" != "" {
-        fvexpand `exogvars' if `touse'
-        local exogvars_names_all "`r(varlist)'"
         local __n_exog_total : word count `exogvars_names_all'
-    }
-
-    local instruments_names_all ""
-    local __n_inst_total = 0
-    if "`instruments'" != "" {
-        fvexpand `instruments' if `touse'
-        local instruments_names_all "`r(varlist)'"
         local __n_inst_total : word count `instruments_names_all'
+    }
+    else {
+        local endogvars_names_all ""
+        local __n_endog_total = 0
+        if "`endogvars'" != "" {
+            fvexpand `endogvars' if `touse'
+            local endogvars_names_all "`r(varlist)'"
+            local __n_endog_total : word count `endogvars_names_all'
+        }
+
+        local exogvars_names_all ""
+        local __n_exog_total = 0
+        if "`exogvars'" != "" {
+            fvexpand `exogvars' if `touse'
+            local exogvars_names_all "`r(varlist)'"
+            local __n_exog_total : word count `exogvars_names_all'
+        }
+
+        local instruments_names_all ""
+        local __n_inst_total = 0
+        if "`instruments'" != "" {
+            fvexpand `instruments' if `touse'
+            local instruments_names_all "`r(varlist)'"
+            local __n_inst_total : word count `instruments_names_all'
+        }
     }
 
     * Single fvrevar call for all variable groups
@@ -864,10 +958,19 @@ program define civreghdfe, eclass byable(recall)
     local exogvars_coef ""
     local instruments_expanded ""
     local instruments_coef ""
-    local __all_fv `endogvars' `exogvars' `instruments'
+    local endogvars_fvlev ""
+    local exogvars_fvlev ""
+    local instruments_fvlev ""
     if `"`__all_fv'"' != "" {
-        fvrevar `__all_fv' if `touse'
-        local __all_exp "`r(varlist)'"
+        if `__fvn_ok' {
+            * one variable and one level (-1: an ordinary variable) per name
+            local __all_exp `__fvn_vars'
+            local __all_lev `__fvn_levels'
+        }
+        else {
+            fvrevar `__all_fv' if `touse'
+            local __all_exp "`r(varlist)'"
+        }
 
         * Base/omitted placeholders are not sent to the plugin, which also
         * detects collinearity. The fvrevar variables follow the three name
@@ -880,8 +983,10 @@ program define civreghdfe, eclass byable(recall)
         foreach __grp in endogvars exogvars instruments {
             local __grp_vars ""
             local __grp_names ""
+            local __grp_levs ""
             foreach __name of local `__grp'_names_all {
                 gettoken __v __all_exp : __all_exp
+                if `__fvn_ok' gettoken __l __all_lev : __all_lev
                 local __dup = `: list __name in __grp_names'
                 if "`__grp'" == "endogvars" & `: list __name in exogvars_names_all' local __dup = 1
                 if "`__grp'" == "instruments" & (`: list __name in exogvars_names_all' | ///
@@ -892,11 +997,16 @@ program define civreghdfe, eclass byable(recall)
                 }
                 local __grp_vars `__grp_vars' `__v'
                 local __grp_names `__grp_names' `__name'
+                if `__fvn_ok' local __grp_levs `__grp_levs' `__l'
             }
             local `__grp'_names_all `__grp_names'
             _ctools_fvsplit, names(``__grp'_names_all') vars(`__grp_vars')
             local `__grp'_expanded "`r(vars)'"
             local `__grp'_coef "`r(names)'"
+            if `__fvn_ok' {
+                _ctools_fvsplit, names(``__grp'_names_all') vars(`__grp_levs')
+                local `__grp'_fvlev "`r(vars)'"
+            }
         }
     }
 
@@ -909,8 +1019,7 @@ program define civreghdfe, eclass byable(recall)
         di as text "Duplicates:" _col(21) "`__dups'"
     }
 
-    * Load the platform-appropriate ctools plugin if not already loaded
-    _ctools_load
+    * Identity and capabilities were checked before sample preparation.
     * Stata scopes plugin registrations to the calling ado program.
     capture program ctools_plugin, plugin using("`__ctools_plugin'")
     if _rc != 0 & _rc != 110 exit 601
@@ -922,7 +1031,7 @@ program define civreghdfe, eclass byable(recall)
     local G : word count `absorb'
     if `G' == 0 & "`noconstant'" == "" {
         tempvar _cons_var
-        gen byte `_cons_var' = 1
+        quietly mark `_cons_var', noby
         local exogvars_expanded `exogvars_expanded' `_cons_var'
         local exogvars_coef `exogvars_coef' _cons
         local exogvars_names_all `exogvars_names_all' _cons
@@ -966,6 +1075,7 @@ program define civreghdfe, eclass byable(recall)
         tempvar evaluated_weight
         local weight_expr = trim(`"`exp'"')
         if substr(`"`weight_expr'"', 1, 1) == "=" local weight_expr = substr(`"`weight_expr'"', 2, .)
+        local __ctools_wvar `evaluated_weight'
         if "`weight'" == "iweight" {
             quietly gen double `evaluated_weight' = (`weight_expr') if `touse'
             markout `touse' `evaluated_weight'
@@ -975,8 +1085,8 @@ program define civreghdfe, eclass byable(recall)
                 exit 402
             }
         }
-        else _ctools_weight, generate(`evaluated_weight') touse(`touse') type(`weight') expression(`"= `weight_expr'"')
-        local weight_var "`evaluated_weight'"
+        else _ctools_weight, generate(`evaluated_weight') touse(`touse') type(`weight') expression(`"= `weight_expr'"') marked
+        local weight_var "`__ctools_wvar'"
     }
 
     * Kernel-based VCEs, as in ivreg2: bw() alone gives the AC estimator
@@ -1183,52 +1293,35 @@ program define civreghdfe, eclass byable(recall)
     if `kernel_type' > 0 local ts_mode = cond("`ts_ivar'" != "", 2, 1)
 
     * Mark out additional variables from sample (touse already created earlier for fvrevar)
-    markout `touse' `endogvars_expanded' `exogvars_expanded' `instruments_expanded'
+    if !`__plain_mark' {
+        if `__native_screen' == 2 {
+            _ctools_hdfe_screen mark `depvar_var' `endogvars_expanded' `exogvars_expanded' `instruments_expanded', ///
+                touse(`touse') plugin(`__ctools_plugin') threads(`threads')
+        }
+        else markout `touse' `endogvars_expanded' `exogvars_expanded' `instruments_expanded'
+    }
     if `ts_mode' == 2 markout `touse' `ts_ivar' `ts_tvar'
     else if `ts_mode' == 1 markout `touse' `ts_tvar'
-    * Count observations
-    qui count if `touse'
-    local N = r(N)
-
-    if `N' == 0 {
-        di as error "no observations"
-        exit 2001
+    * The plugin reports the final row count and removed singletons, which
+    * recover N_full without another full-data pass (with fweights from
+    * its count of rows; its N is then their total). A weight expression or
+    * iweights keep the explicit count. The verbose header is shown once the
+    * native sample count is known.
+    local N = .
+    if ("`weight'" == "" | `__wbare') & ("`verbose'" == "" | `__native_screen') {
+        capture assert !`touse', fast
+        if !_rc {
+            di as error "no observations"
+            exit 2001
+        }
     }
-
-    * Verbose output
-    if "`verbose'" != "" {
-        di as text ""
-        di as text "{hline 60}"
-        di as text "civreghdfe: C-Accelerated IV Regression with HDFE"
-        di as text "{hline 60}"
-        di as text "Dependent variable:    `depvar'"
-        di as text "Endogenous variables:  `endogvars' (`K_endog')"
-        di as text "Exogenous variables:   `exogvars' (`K_exog')"
-        di as text "Excluded instruments:  `instruments' (`K_inst_excl')"
-        di as text "Absorbed FE:           `absorb_names' (`G')"
-        di as text "Observations:          `N'"
-        if `vce_type' == 1 {
-            di as text "VCE:                   Robust"
+    else {
+        qui count if `touse'
+        local N = r(N)
+        if `N' == 0 {
+            di as error "no observations"
+            exit 2001
         }
-        else if `vce_type' == 2 {
-            di as text "VCE:                   Cluster (`cluster_var')"
-        }
-        else if `vce_type' == 3 {
-            di as text "VCE:                   Two-way Cluster (`cluster_var' `cluster_var2')"
-        }
-        else if `vce_type' == 4 {
-            di as text "VCE:                   Driscoll-Kraay (`cluster_var')"
-        }
-        else {
-            di as text "VCE:                   Unadjusted"
-        }
-        if `kernel_type' > 0 {
-            local __bwtxt = cond(`kiefer_val', "time span", "`bw_val'")
-            di as text "Kernel:                `kernel_name', bandwidth `__bwtxt' (" ///
-                cond(`vce_type' == 0, "AC", cond(`vce_type' == 1, "HAC", "Driscoll-Kraay")) ")"
-            di as text "tsset:                 panel `ts_ivar', time `ts_tvar' (delta `ts_delta')"
-        }
-        di as text "{hline 60}"
     }
 
     * Detect if cluster variable is nested within (same as) an absorb variable
@@ -1262,46 +1355,32 @@ program define civreghdfe, eclass byable(recall)
     if `liml_kclass' {
         local est_method = 3
         local kclass_val = `kclass'
-        if "`verbose'" != "" {
-            di as text "Estimation method:     k-class (k=`kclass')"
-        }
+        local __method_note "k-class (k=`kclass')"
     }
     else if "`liml'" != "" | `fuller' < 0 {
         local est_method = 1
-        if "`verbose'" != "" {
-            di as text "Estimation method:     LIML"
-        }
+        local __method_note "LIML"
     }
     else if `fuller' != 0 {
         local est_method = 2
         local fuller_val = `fuller'
-        if "`verbose'" != "" {
-            di as text "Estimation method:     Fuller LIML (alpha=`fuller')"
-        }
+        local __method_note "Fuller LIML (alpha=`fuller')"
     }
     else if `kclass' != 0 {
         local est_method = 3
         local kclass_val = `kclass'
-        if "`verbose'" != "" {
-            di as text "Estimation method:     k-class (k=`kclass')"
-        }
+        local __method_note "k-class (k=`kclass')"
     }
     else if "`gmm2s'" != "" {
         local est_method = 4
-        if "`verbose'" != "" {
-            di as text "Estimation method:     Two-step GMM"
-        }
+        local __method_note "Two-step GMM"
     }
     else if "`cue'" != "" {
         local est_method = 5
-        if "`verbose'" != "" {
-            di as text "Estimation method:     CUE (Continuously Updated GMM)"
-        }
+        local __method_note "CUE (Continuously Updated GMM)"
     }
     else {
-        if "`verbose'" != "" {
-            di as text "Estimation method:     2SLS"
-        }
+        local __method_note "2SLS"
     }
 
     * The bootstrap's restrictions (plan 4.6)
@@ -1375,6 +1454,23 @@ program define civreghdfe, eclass byable(recall)
     scalar __civreghdfe_K_endog = `K_endog'
     scalar __civreghdfe_K_exog = `K_exog'
     scalar __civreghdfe_K_iv = `K_iv'
+    * i.f indicators the plugin builds: the level of each regressor and
+    * excluded instrument, in the plugin's order (-1: an ordinary variable,
+    * as is the constant column)
+    if `__fvn_ok' {
+        local __fvl `endogvars_fvlev' `exogvars_fvlev'
+        if `has_cons' local __fvl `__fvl' -1
+        local __fvl `__fvl' `instruments_fvlev'
+        local __fvk : word count `__fvl'
+        if `__fvk' > 0 {
+            matrix __civreghdfe_fvlev = J(1, `__fvk', -1)
+            forvalues __c = 1/`__fvk' {
+                matrix __civreghdfe_fvlev[1, `__c'] = `: word `__c' of `__fvl''
+            }
+            scalar __civreghdfe_fvspec = 1
+        }
+        else local __fvn_ok 0
+    }
     scalar __civreghdfe_G = `G'
     scalar __civreghdfe_has_cluster = (`vce_type' == 2 | `vce_type' == 3)
     scalar __civreghdfe_has_cluster2 = (`vce_type' == 3)
@@ -1722,11 +1818,18 @@ program define civreghdfe, eclass byable(recall)
         }
     }
 
+    * Residuals are created and stored only when asked for. The estimation
+    * sample comes back in the sample marker, in which the plugin clears the
+    * rows it drops.
     tempvar stored_resid
-    quietly gen double `stored_resid' = .
-    local plugin_vars `plugin_vars' `stored_resid'
-    local resid_idx : word count `plugin_vars'
-    scalar __civreghdfe_resid_idx = `resid_idx'
+    scalar __civreghdfe_resid_idx = 0
+    if "`residuals'" != "" {
+        quietly mata: st_addvar("double", "`stored_resid'")
+        local plugin_vars `plugin_vars' `stored_resid'
+        local resid_idx : word count `plugin_vars'
+        scalar __civreghdfe_resid_idx = `resid_idx'
+    }
+    scalar __civreghdfe_sample_clear = 1
 
     * vce(bootstrap), fevce(bootstrap): the resampling units and strata
     scalar __civreghdfe_bs_unit_idx = 0
@@ -1774,6 +1877,65 @@ program define civreghdfe, eclass byable(recall)
         _ctools_cleanup civreghdfe
         exit `__rc'
     }
+    * a plugin that did not update the marker would leave the dropped rows
+    * in e(sample), and one that did not build the i.f indicators would have
+    * used the factor variables themselves
+    capture confirm scalar __civreghdfe_marked
+    if !_rc & `__fvn_ok' capture confirm scalar __civreghdfe_fvdone
+    if _rc {
+        di as error "civreghdfe: rebuild the ctools plugin alongside the ado files"
+        if `__bsrun' | `__wild' capture _civreghdfe_bs_release
+        _ctools_cleanup civreghdfe
+        exit 601
+    }
+    if missing(`N') & "`weight'" == "fweight" {
+        capture confirm scalar __civreghdfe_N_rows
+        if !_rc local N = scalar(__civreghdfe_N_rows) + scalar(__civreghdfe_num_singletons)
+        else {
+            * an older plugin: the marker holds just the estimation rows now
+            quietly count if `touse'
+            local N = r(N) + scalar(__civreghdfe_num_singletons)
+        }
+    }
+    if missing(`N') local N = scalar(__civreghdfe_N) + scalar(__civreghdfe_num_singletons)
+
+    * Verbose output
+    if "`verbose'" != "" {
+        di as text ""
+        di as text "{hline 60}"
+        di as text "civreghdfe: C-Accelerated IV Regression with HDFE"
+        di as text "{hline 60}"
+        di as text "Dependent variable:    `depvar'"
+        di as text "Endogenous variables:  `endogvars' (`K_endog')"
+        di as text "Exogenous variables:   `exogvars' (`K_exog')"
+        di as text "Excluded instruments:  `instruments' (`K_inst_excl')"
+        di as text "Absorbed FE:           `absorb_names' (`G')"
+        di as text "Observations:          `N'"
+        if `vce_type' == 1 {
+            di as text "VCE:                   Robust"
+        }
+        else if `vce_type' == 2 {
+            di as text "VCE:                   Cluster (`cluster_var')"
+        }
+        else if `vce_type' == 3 {
+            di as text "VCE:                   Two-way Cluster (`cluster_var' `cluster_var2')"
+        }
+        else if `vce_type' == 4 {
+            di as text "VCE:                   Driscoll-Kraay (`cluster_var')"
+        }
+        else {
+            di as text "VCE:                   Unadjusted"
+        }
+        if `kernel_type' > 0 {
+            local __bwtxt = cond(`kiefer_val', "time span", "`bw_val'")
+            di as text "Kernel:                `kernel_name', bandwidth `__bwtxt' (" ///
+                cond(`vce_type' == 0, "AC", cond(`vce_type' == 1, "HAC", "Driscoll-Kraay")) ")"
+            di as text "tsset:                 panel `ts_ivar', time `ts_tvar' (delta `ts_delta')"
+        }
+        di as text "{hline 60}"
+    }
+
+    if "`verbose'" != "" di as text "Estimation method:     `__method_note'"
 
     * ivreg2 removes collinear variables before it partials out the fixed
     * effects, in its own order (ivreg2's CheckDupsCollin), and an endogenous
@@ -1789,7 +1951,28 @@ program define civreghdfe, eclass byable(recall)
     capture local __plugin_dropped = `__plugin_dropped' + scalar(__civreghdfe_endo_in_z)
     if "`civrerun'`nocollin'" == "" & `__plugin_dropped' > 0 & `__plugin_dropped' < . {
         tempvar __civ_sample
-        quietly gen byte `__civ_sample' = `touse' & !missing(`stored_resid')
+        quietly gen byte `__civ_sample' = `touse'
+        * The collinearity rules below read the regressors as Stata
+        * variables: the i.f indicators the plugin built are made here, as
+        * fvrevar would have made them (only when the plugin dropped a column)
+        if `__fvn_ok' {
+            foreach __grp in endogvars exogvars instruments {
+                local __new
+                local __j = 0
+                foreach __v of local `__grp'_expanded {
+                    local ++__j
+                    local __l : word `__j' of ``__grp'_fvlev'
+                    if "`__l'" == "" local __l = -1
+                    if `__l' >= 0 {
+                        tempvar __ind
+                        quietly generate byte `__ind' = (`__v' == `__l') if `__civ_sample'
+                        local __new `__new' `__ind'
+                    }
+                    else local __new `__new' `__v'
+                }
+                local `__grp'_expanded `__new'
+            }
+        }
         local __cx_exog : list exogvars_expanded - _cons_var
         local __cx_exogn : list exogvars_coef - __pc
         _civreghdfe_collin, touse(`__civ_sample') endo(`endogvars_coef') endovars(`endogvars_expanded') ///
@@ -1865,7 +2048,6 @@ program define civreghdfe, eclass byable(recall)
             }
         }
     }
-    quietly replace `touse' = 0 if missing(`stored_resid')
     if "`residuals'" != "" {
         if "`residuals2'" != "" capture drop `residuals'
         rename `stored_resid' `residuals'
@@ -2583,8 +2765,6 @@ program define civreghdfe, eclass byable(recall)
     * (kernels, Driscoll-Kraay and Kiefer included), partial() and
     * noconstant, and report ivreg2's small-sample statistics. The IV
     * results are held so they are restored afterwards.
-    tempvar aux_sample
-    if "`first'`rf'" != "" quietly gen byte `aux_sample' = e(sample)
     local aux_wt ""
     if "`weight'" != "" local aux_wt "[`weight'=`weight_var']"
     local aux_opts small tolerance(`tolerance') maxiter(`maxiter') civaux
@@ -3215,14 +3395,36 @@ program define civreghdfe, eclass byable(recall)
         local __eqS_L : word count `__eqS_names'
         if `__eqS_L' != `__ffL' local __eqS_L = 0
     }
+    * An equation that is only displayed (first without savefirst, rf
+    * without saverf) is taken from the plugin's system of first-stage and
+    * reduced-form equations, which holds its coefficients and covariance,
+    * instead of a refit (one more civreghdfe, about 0.7 s at 10M rows).
+    * That system is the refit's model with absorbed effects and an iid,
+    * robust or one-way cluster VCE, every instrument and endogenous
+    * regressor kept, and no partial(), dofminus() or sdofminus(); anything
+    * else is refitted as before.
+    local __sysdisp = 0
+    if `__sys_ok' {
+        if `__eqS_L' > 0 & `__eqS_L' == `__ffL' {
+            local __sysdisp = inlist(`vce_type', 0, 1, 2) & `dkraay' == 0 & ///
+                `"`kernel'`bw'`kiefer'"' == "" & `G' > 0 & `n_partial' == 0 & ///
+                `__user_dofminus' == 0 & `__user_sdofminus' == 0 & `__inst_dropped' == 0
+        }
+    }
+    local __sys_eqs
     local save_eqs ""
     if "`savefirst'" != "" | ("`first'" != "" & "`output'" == "") {
         foreach save_dep of local endogvars_coef {
-            local save_eqs `save_eqs' first `save_dep'
+            capture confirm name `save_dep'
+            if !_rc & `__sysdisp' & "`savefirst'" == "" & `: list posof "`save_dep'" in __endo1' {
+                local __sys_eqs `__sys_eqs' first `save_dep'
+            }
+            else local save_eqs `save_eqs' first `save_dep'
         }
     }
     if "`saverf'" != "" | ("`rf'" != "" & "`output'" == "") {
-        local save_eqs `save_eqs' rf `depvar'
+        if `__sysdisp' & "`saverf'" == "" local __sys_eqs `__sys_eqs' rf `depvar'
+        else local save_eqs `save_eqs' rf `depvar'
     }
     local __firsteqs
     local __rfeq
@@ -3252,8 +3454,14 @@ program define civreghdfe, eclass byable(recall)
             gettoken save_dep save_eqs : save_eqs
             quietly fvrevar `save_dep'
             local save_y `r(varlist)'
+            * an equation stored only for the display is refitted without
+            * output of its own (its e(), dropped after the display, is
+            * otherwise the same)
+            local __aux_out
+            if ("`save_stage'" == "first" & "`savefirst'" == "") | ///
+                ("`save_stage'" == "rf" & "`saverf'" == "") local __aux_out nooutput
             capture quietly _civreghdfe_aux `save_y' `instruments' `exogvars' `aux_wt' ///
-                if `save_sample', `aux_opts'
+                if `save_sample', `aux_opts' `__aux_out'
             if _rc {
                 di as error "`save_stage' regression of `save_dep' failed (rc=`=_rc'); not stored"
                 continue
@@ -3304,6 +3512,59 @@ program define civreghdfe, eclass byable(recall)
         }
         _estimates unhold `save_hold'
     }
+    * The displayed-only equations from the system (__sysdisp above): each
+    * one's block of the system's coefficients and covariance, with the
+    * small-sample factor and residual dof of the stored system (those of
+    * the refit, df_r = N - L - sdofminus), for the display only
+    if "`__sys_eqs'" != "" {
+        local __sysN = e(N)
+        local __syssd = e(sdofminus)
+        local __sysnc = cond(`vce_type' == 2, e(N_clust), 0)
+        local __sysL = `__eqS_L'
+        local __sysdof = `__sysN' - `__sysL' - `__syssd'
+        local __sysfirst
+        while "`__sys_eqs'" != "" {
+            gettoken __st __sys_eqs : __sys_eqs
+            gettoken __sd __sys_eqs : __sys_eqs
+            local __vn = 0
+            if "`__st'" == "first" local __vn : list posof "`__sd'" in __endo1
+            local __c0 = 1 + `__vn' * `__sysL'
+            local __c1 = (`__vn' + 1) * `__sysL'
+            tempname __sb`__vn' __sV`__vn'
+            matrix `__sb`__vn'' = __civreghdfe_sfb[1, `__c0'..`__c1']
+            matrix `__sV`__vn'' = __civreghdfe_sfV[`__c0'..`__c1', `__c0'..`__c1']
+            matrix colnames `__sb`__vn'' = `__eqS_names'
+            matrix colnames `__sV`__vn'' = `__eqS_names'
+            matrix rownames `__sV`__vn'' = `__eqS_names'
+            if `vce_type' == 2 {
+                matrix `__sV`__vn'' = `__sV`__vn'' * (`__sysN' - 1) / (`__sysN' - `__sysL' - `__syssd') * ///
+                    `__sysnc' / (`__sysnc' - 1)
+            }
+            else matrix `__sV`__vn'' = `__sV`__vn'' * `__sysN' / (`__sysN' - `__sysL' - `__syssd')
+            mata: st_replacematrix(st_local("__sV`__vn'"), makesymmetric(st_matrix(st_local("__sV`__vn'"))))
+            ereturn hidden local _civ_sys___civsys`__vn' "`__sb`__vn'' `__sV`__vn'' `__sysdof' `__sd' `__sysN' `K_endog'"
+            if "`__st'" == "first" local __sysfirst `__sysfirst' `__sd'
+            else local __rfeq __civsys0
+        }
+        * the first stages in the order of the endogenous regressors
+        if "`__sysfirst'" != "" {
+            local __refit `__firsteqs'
+            local __nrefit : word count `__refit'
+            local __nsys : word count `__sysfirst'
+            local __ordered
+            foreach __d of local endogvars_coef {
+                local __p : list posof "`__d'" in __sysfirst
+                if `__p' local __ordered `__ordered' __civsys`: list posof "`__d'" in __endo1'
+                else {
+                    gettoken __nx __refit : __refit
+                    local __ordered `__ordered' `__nx'
+                }
+            }
+            * a refit that failed is not stored: keep the plain order then
+            if `__nrefit' + `__nsys' == `: word count `endogvars_coef'' local __firsteqs `__ordered'
+            else local __firsteqs `__firsteqs' `: list __ordered - __firsteqs'
+        }
+    }
     ereturn local firsteqs "`__firsteqs'"
     ereturn local rfeq "`__rfeq'"
     ereturn local sfirsteq "`__sfirsteq'"
@@ -3314,8 +3575,13 @@ program define civreghdfe, eclass byable(recall)
         if "`savesfirst'" != "" local __stored `__sfirsteq'
         if "`saverf'" != "" local __stored `__stored' `__rfeq'
         if "`savefirst'" != "" local __stored `__stored' `__firsteqs'
+        * the equations dropped after the display are restored with drop
+        local __consume
+        if "`savefirst'" == "" local __consume `__firsteqs'
+        if "`saverf'" == "" local __consume `__consume' `__rfeq'
+        if "`savesfirst'" == "" local __consume `__consume' `__sfirsteq'
         _civreghdfe_disp, `first' `ffirst' `rf' `sfirst' level(`level') `header' `footer' ///
-            dispopt(`dispopt') stored(`__stored') `nowildtable'
+            dispopt(`dispopt') stored(`__stored') `nowildtable' consume(`__consume')
     }
 
     * Equations stored only for the display are dropped, as in ivreg2
@@ -3332,6 +3598,10 @@ program define civreghdfe, eclass byable(recall)
     if "`savesfirst'" == "" {
         if "`__sfirsteq'" != "" capture estimates drop `__sfirsteq'
         ereturn local sfirsteq
+    }
+    * the system equations' display information is not kept
+    foreach __eq in `__firsteqs' `__rfeq' {
+        if substr("`__eq'", 1, 8) == "__civsys" ereturn hidden local _civ_sys_`__eq'
     }
 
     * Capture post-processing time (before cleanup)
@@ -4124,7 +4394,10 @@ end
 * the stored equation `eq'.
 program define _civreghdfe_dispeq, eclass
     version 14.1
-    syntax, kind(string) eq(string) [Level(cilevel) dispopt(string asis)]
+    * consume: the equation was stored only to be shown and is dropped
+    * after the display; restoring it with drop skips estimates restore's
+    * copy of it and of its e(sample) (about 0.7 s at 10M rows)
+    syntax, kind(string) eq(string) [Level(cilevel) dispopt(string asis) CONSUME]
     c_local __eqdep ""
     local hac `"`e(_civ_hacaux)'"'
     local hacV2 `"`e(_civ_hacV2)'"'
@@ -4138,9 +4411,27 @@ program define _civreghdfe_dispeq, eclass
     local nc = e(N_clust)
     local nc1 = e(N_clust1)
     local nc2 = e(N_clust2)
+    * __civsys#: an equation taken from the plugin's system, not stored
+    * (the main results hold its coefficient and covariance matrices, its
+    * residual dof, dependent variable, N and k_eq)
+    local sysinfo
+    if substr("`eq'", 1, 8) == "__civsys" local sysinfo `"`e(_civ_sys_`eq')'"'
+    * the main results are set aside, not copied: what the display needs
+    * of them was read above, and unhold puts them back
     tempname hold
-    _estimates hold `hold', copy
-    capture estimates restore `eq'
+    _estimates hold `hold'
+    if `"`sysinfo'"' != "" {
+        tokenize `"`sysinfo'"'
+        tempname sb sV
+        capture {
+            matrix `sb' = `1'
+            matrix `sV' = `2'
+            ereturn post `sb' `sV', depname(`4') obs(`5') dof(`3')
+            ereturn scalar k_eq = `6'
+        }
+    }
+    else if "`consume'" != "" capture estimates restore `eq', drop
+    else capture estimates restore `eq'
     if _rc {
         _estimates unhold `hold'
         exit 111
@@ -4195,7 +4486,9 @@ end
 program define _civreghdfe_disp, eclass
     version 14.1
     syntax [, FIRST FFIRst RF SFIRST Level(cilevel) noHEADer noFOOTer dispopt(string asis) ///
-        stored(string) NOWILDtable]
+        stored(string) NOWILDtable consume(string)]
+    * consume(): stored equations kept only for this display (dropped after
+    * it), restored with drop
     local K_endog = e(K_endog)
     local vce_type = e(_civ_vce)
     local est_method = e(_civ_est)
@@ -4229,7 +4522,8 @@ program define _civreghdfe_disp, eclass
             di
         }
         else {
-            capture noisily _civreghdfe_dispeq, kind(rf) eq(`e(rfeq)') level(`level') dispopt(`dispopt')
+            local __c = cond(`: list posof "`e(rfeq)'" in consume', "consume", "")
+            capture noisily _civreghdfe_dispeq, kind(rf) eq(`e(rfeq)') level(`level') dispopt(`dispopt') `__c'
             if _rc {
                 di
                 di as result "Unable to display stored reduced form estimation."
@@ -4262,7 +4556,8 @@ program define _civreghdfe_disp, eclass
                 di
             }
             foreach eqname of local firsteqs {
-                capture noisily _civreghdfe_dispeq, kind(first) eq(`eqname')
+                local __c = cond(`: list posof "`eqname'" in consume', "consume", "")
+                capture noisily _civreghdfe_dispeq, kind(first) eq(`eqname') `__c'
                 if _rc {
                     di
                     di as result "Unable to list stored estimation `eqname'."
@@ -4289,7 +4584,8 @@ program define _civreghdfe_disp, eclass
     if "`sfirst'" != "" {
         local done = 0
         if "`e(sfirsteq)'" != "" {
-            capture noisily _civreghdfe_dispeq, kind(sfirst) eq(`e(sfirsteq)') level(`level') dispopt(`dispopt')
+            local __c = cond(`: list posof "`e(sfirsteq)'" in consume', "consume", "")
+            capture noisily _civreghdfe_dispeq, kind(sfirst) eq(`e(sfirsteq)') level(`level') dispopt(`dispopt') `__c'
             local done = !_rc
         }
         if !`done' {

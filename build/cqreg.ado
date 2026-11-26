@@ -1,4 +1,6 @@
 *! version 1.3.1 20261124 github.com/mdroste/stata-ctools
+*! original: Stata's qreg (qreg.ado 4.4.2, May 8, 2020)
+*! original: see help cqreg for details
 
 * byable(recall) and the sw and mi properties as qreg declares them: by:,
 * stepwise, nestreg and mi estimate accept cqreg
@@ -66,7 +68,10 @@ program define cqreg, eclass byable(recall) prop(sw mi)
         di as error "cqreg: maxiter() must be positive"
         exit 198
     }
-    * nopreprocess() is parsed for backward compatibility only
+    * nopreprocess(#): # > 0 turns off the preprocessing of large samples
+    * (the plugin then solves every fit on all observations); 0, the
+    * default, leaves it on. nopreprocess(-1) once selected an experimental
+    * solver.
     if `nopreprocess' == -1 {
         di as error "cqreg: the experimental preprocessing solver, nopreprocess(-1), has been removed"
         exit 198
@@ -317,6 +322,7 @@ program define cqreg, eclass byable(recall) prop(sw mi)
     scalar __cqreg_verbose = ("`verbose'" != "")
     scalar __cqreg_tolerance = `tolerance'
     scalar __cqreg_maxiter = `maxiter'
+    scalar __cqreg_nopreprocess = (`nopreprocess' > 0)
     scalar __cqreg_bandwidth = `__bw'
     scalar __cqreg_wtype = `wtype_num'
 

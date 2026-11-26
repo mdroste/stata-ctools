@@ -865,6 +865,27 @@ capture cppmlhdfe accident op_75_79 co_65_69, absorb(ship) vce(robust) verbose
 if _rc == 0 test_pass "verbose option accepted"
 else test_fail "verbose option" "returned rc=`=_rc'"
 
+* verbose reports the plugin's time by step, as creghdfe's does
+tempfile verbose_log
+tempname verbose_audit verbose_handle
+log using "`verbose_log'", name(`verbose_audit') text replace
+capture noisily cppmlhdfe accident op_75_79 co_65_69, absorb(ship) vce(robust) verbose
+local verbose_rc = _rc
+log close `verbose_audit'
+local verbose_found = 0
+file open `verbose_handle' using "`verbose_log'", read text
+file read `verbose_handle' verbose_line
+while r(eof) == 0 {
+    foreach step in "Data load (SPI):" "Separation (ReLU):" "HDFE partial out:" "WLS solve:" ///
+        "VCE computation:" "C plugin total:" "Stata overhead total:" {
+        if strpos(`"`macval(verbose_line)'"', "`step'") local ++verbose_found
+    }
+    file read `verbose_handle' verbose_line
+}
+file close `verbose_handle'
+if `verbose_rc' == 0 & `verbose_found' == 7 test_pass "verbose shows the plugin's time by step"
+else test_fail "verbose shows the plugin's time by step" "rc=`verbose_rc' lines found=`verbose_found' of 7"
+
 * SECTION 23: Error handling
 noi di as text "--- Section 23: Error Handling ---"
 
@@ -1372,6 +1393,7 @@ foreach model in "|absorb(rep78)" "|noabsorb" "|absorb(rep78 foreign)" "|absorb(
 * The lines a command displays (between markers, in a text log)
 capture program drop _pq_lines
 program define _pq_lines, rclass
+    _ct_loud _pq_lines
     args file cmd
     capture log close _pqlog
     quietly log using `"`file'"', text replace name(_pqlog)

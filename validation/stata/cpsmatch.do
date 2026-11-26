@@ -731,7 +731,10 @@ else {
     }
 }
 
-/* Reused control: s1^2=4, s0^2=18, n1=3, sum(w0^2)=5; SE=sqrt(34/3).
+/* Reused control: s1^2=4, n1=3, sum(w0^2)=5. As in psmatch2 4.1.0, s0^2 is
+   the variance of every control on support, the unused third one (y=1000)
+   included: 990052/3 (4.0.12 took the two used controls, 18), so
+   SE^2=4/3+(990052/3)*5/9=4950296/27.
    Direct inference fixtures cover reused controls, constant outcomes, and an
    undefined SE when only one treated observation remains. */
 clear
@@ -745,10 +748,10 @@ input byte treat double(ps y)
 end
 capture noisily {
     cpsmatch treat, pscore(ps) outcome(y)
-    assert reldif(r(att_se),sqrt(34/3)) < 1e-12
-    assert reldif(r(att_t),-1/sqrt(34/3)) < 1e-12
+    assert reldif(r(att_se),sqrt(4950296/27)) < 1e-12
+    assert reldif(r(att_t),-1/sqrt(4950296/27)) < 1e-12
     assert r(seatt) == r(att_se)
-    assert _weight[1] == 2 & _weight[2] == 1
+    assert _weight[1] == 2 & _weight[2] == 1 & missing(_weight[6])
 }
 if _rc test_fail "inference with reused control" "r(`=_rc')"
 else test_pass "inference with reused control"

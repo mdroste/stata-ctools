@@ -145,6 +145,7 @@ end
 * a text log; c_local __logrc its return code
 capture program drop s2iv_log
 program define s2iv_log
+    _ct_loud s2iv_log
     gettoken file 0 : 0
     gettoken colon 0 : 0
     quietly log using `"`file'"', text replace name(s2iv)

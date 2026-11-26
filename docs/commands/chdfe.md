@@ -1,9 +1,13 @@
 # chdfe
 
 Remove one or more sets of fixed effects from numeric variables. `chdfe`
-follows the user-written `hdfe` command, using the shared C solver that also
+follows `hdfe` by Sergio Correia, using the shared C solver that also
 supports `creghdfe`. It returns transformed variables and absorbed degrees of
 freedom; it does not fit a regression.
+
+`chdfe` is pinned to the version of `hdfe` on SSC (distributed August 6, 2016;
+file header `reghdfe 3.2.9 21feb2016`). See
+[Attribution](../ATTRIBUTION.md#chdfe) for details.
 
 ## Syntax
 

@@ -19,7 +19,7 @@ by the package and validation inventories.
 | `cencode` | `CTOOLS_CMD_CENCODE` | `cencode_main` | `NULL` |
 | `cdecode` | `CTOOLS_CMD_CDECODE` | `cdecode_main` | `NULL` |
 | `cwinsor` | `CTOOLS_CMD_CWINSOR` | `cwinsor_main` | `cwinsor_cleanup_state` |
-| `cdestring` | `CTOOLS_CMD_CDESTRING` | `cdestring_main` | `NULL` |
+| `cdestring` | `CTOOLS_CMD_CDESTRING` | `cdestring_main` | `cdestring_cleanup_state` |
 | `csample` | `CTOOLS_CMD_CSAMPLE` | `csample_main` | `NULL` |
 | `cbsample` | `CTOOLS_CMD_CBSAMPLE` | `cbsample_main` | `NULL` |
 | `crangestat` | `CTOOLS_CMD_CRANGESTAT` | `crangestat_main` | `NULL` |
@@ -32,6 +32,7 @@ by the package and validation inventories.
 | `cexport_xlsx` | `CTOOLS_CMD_CEXPORT` | `cexport_xlsx_main` | `cexport_cleanup_state` |
 | `cdecode_scan` | `CTOOLS_CMD_CDECODE` | `cdecode_scan_main` | `NULL` |
 | `group` | `CTOOLS_CMD_OTHER` | `cgroup_main` | `NULL` |
+| `hdfe_markout` | `CTOOLS_CMD_OTHER` | `hdfe_markout_main` | `NULL` |
 | `strlcheck` | `CTOOLS_CMD_OTHER` | `cgroup_strlcheck_main` | `NULL` |
 | `cdistinct` | `CTOOLS_CMD_CDISTINCT` | `cdistinct_main` | `NULL` |
 | `chdfe` | `CTOOLS_CMD_CHDFE` | `chdfe_main` | `NULL` |

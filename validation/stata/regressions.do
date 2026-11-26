@@ -2069,6 +2069,7 @@ set seed 20261104
 * nov04_log <file> : <command> runs the command with its output also written
 * to a text log, and returns the command's return code
 program nov04_log
+    _ct_loud nov04_log
     gettoken file 0 : 0
     gettoken colon 0 : 0
     quietly log using `"`file'"', text replace name(nov04)

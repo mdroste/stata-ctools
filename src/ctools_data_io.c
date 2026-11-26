@@ -1,4 +1,5 @@
 #include "ctools_transport_internal.h"
+#include "ctools_release.h"
 
 int ctools_io_load_single_variable(stata_variable *var, int var_idx, size_t obs1,
                                  size_t nobs, int is_string, int str_width)
@@ -517,6 +518,27 @@ void ctools_filtered_data_free(ctools_filtered_data *fd)
     fd->was_filtered = 0;
 }
 
+static void filtered_data_release_held(void *held)
+{
+    ctools_filtered_data_free((ctools_filtered_data *)held);
+    free(held);
+}
+
+void ctools_filtered_data_release(ctools_filtered_data *fd)
+{
+    if (fd == NULL) return;
+    ctools_filtered_data *held = NULL;
+    /* outside a session nothing is allocated here: the same frees as before */
+    if (ctools_release_active()) held = (ctools_filtered_data *)malloc(sizeof(*held));
+    if (held == NULL) {
+        ctools_filtered_data_free(fd);
+        return;
+    }
+    *held = *fd;
+    ctools_filtered_data_init(fd);
+    ctools_release_later_call(filtered_data_release_held, held);
+}
+
 int ctools_io_load_filtered_variable(stata_variable *var, int var_idx,
                                    perm_idx_t *obs_map, size_t n_filtered,
                                    int is_string, int str_width)
@@ -822,8 +844,24 @@ stata_retcode ctools_data_load_ex(ctools_filtered_data *result,
                 n_filtered > (2048ULL * 1024 * 1024) / ((size_t)width + 1)) tile_ok = 0;
         }
     }
+    /* ROW_TILES asks for tiles from two columns on, when the rows are many */
+    #ifdef _OPENMP
+    if (!tile_ok && (flags & CTOOLS_LOAD_ROW_TILES) && nvars >= 2 && n_filtered >= MIN_OBS_PER_THREAD * 2) {
+        tile_ok = 1;
+        for (size_t j = 0; j < nvars && tile_ok; j++) {
+            int idx = var_indices[j];
+            if (SF_var_is_string(idx)) {
+                int width = str_widths ? str_widths[idx - 1] : 0;
+                if (width > 0) string_bytes += (size_t)width;
+                if (SF_var_is_strl(idx) || width < 1 || width >= STATA_STR_MAXLEN ||
+                    n_filtered > (2048ULL * 1024 * 1024) / ((size_t)width + 1)) tile_ok = 0;
+            }
+        }
+    }
+    #endif
     if (tile_ok &&
-        ((n_filtered >= MIN_OBS_PER_THREAD * 2 && string_bytes >= IO_MIN_TILED_STRING_BYTES) ||
+        ((flags & CTOOLS_LOAD_ROW_TILES) ||
+         (n_filtered >= MIN_OBS_PER_THREAD * 2 && string_bytes >= IO_MIN_TILED_STRING_BYTES) ||
          (string_bytes == 0 && nvars >= IO_NUMERIC_TILE_MIN_VARS && n_filtered >= IO_NUMERIC_TILE_MIN_ROWS))) {
         rc = ctools_io_load_tiled_variables(&result->data, var_indices, obs_map, str_widths);
         if (rc != STATA_ERR_MEMORY) {

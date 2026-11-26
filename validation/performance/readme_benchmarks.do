@@ -13,8 +13,13 @@
 *     pairs(names)    comparisons to run, named by the Stata command; default all:
 *                     export import sort merge sample bsample encode decode
 *                     destring distinct ipolate cipolate split rangejoin winsor
-*                     rangestat binscatter reghdfe ivreghdfe ppmlhdfe hdfe
-*                     psmatch2 qreg
+*                     winsor2 rangestat binscatter binscatter2 binsreg reghdfe
+*                     fereg ivreghdfe ppmlhdfe feppml hdfe psmatch2 qreg
+*                     (winsor is gstats winsor). A ctools command with several
+*                     Stata counterparts has one comparison for each: cwinsor
+*                     (winsor, winsor2), cbinscatter (binscatter, binscatter2,
+*                     binsreg), creghdfe (reghdfe, fereg), cppmlhdfe (ppmlhdfe,
+*                     feppml).
 *     processors(#)   Stata/MP processors for the Stata commands; default 4 (or
 *                     all available, if fewer), as in the published run. ctools
 *                     commands use their default thread count.
@@ -22,6 +27,9 @@
 *
 * The timed workloads are the profile_readme block of profiles.do, which
 * produced the published numbers; this file adds checks and a report.
+*
+* qreg and ppmlhdfe take minutes per run at 25M observations, so those two
+* comparisons are not run above 10M observations.
 *
 * Run time: a comparison times only the command itself. Making the test data
 * for each size, reloading it before each command and checking each result are
@@ -39,14 +47,17 @@
 * The speedup table is also left in memory.
 *
 * The full run needs several GB of memory and tens of GB of free disk space and
-* can take an hour or more. A comparison whose reference command (an SSC
-* package) is not installed is skipped and listed, with the ssc install
-* commands that add it. The published figures ran each comparison in its own
-* Stata session on an otherwise idle machine; see docs/benchmarks/readme_profile/.
+* can take most of an hour. A comparison whose reference command (a
+* user-written package) is not installed is skipped and listed, with how to
+* install it. For the machine and settings behind the published figures, see
+* docs/benchmarks/readme_profile/.
 
 * Messages print with noisily; quietly blocks keep the code out of the output.
 quietly {
-    local allpairs "export import sort merge sample bsample encode decode destring distinct ipolate cipolate split rangejoin winsor rangestat binscatter reghdfe ivreghdfe ppmlhdfe hdfe psmatch2 qreg"
+    local allpairs "export import sort merge sample bsample encode decode destring distinct ipolate cipolate split rangejoin winsor winsor2 rangestat binscatter binscatter2 binsreg reghdfe fereg ivreghdfe ppmlhdfe feppml hdfe psmatch2 qreg"
+    * Largest size at which these comparisons run, as in profiles.do.
+    local limit_qreg 10000000
+    local limit_ppmlhdfe 10000000
 
     capture confirm file "validation/performance/profiles.do"
     if _rc {
@@ -129,18 +140,28 @@ quietly {
         exit `rc'
     }
 
-    * Reference commands from SSC, and the packages they call.
-    local need_distinct   distinct
-    local need_cipolate   cipolate
-    local need_rangejoin  rangejoin rangestat
-    local need_winsor     gstats
-    local need_rangestat  rangestat
-    local need_psmatch2   psmatch2
-    local need_binscatter binscatter
-    local need_reghdfe    reghdfe ftools
-    local need_ivreghdfe  ivreghdfe ivreg2 ranktest reghdfe ftools
-    local need_ppmlhdfe   ppmlhdfe reghdfe ftools
-    local need_hdfe       hdfe
+    * User-written reference commands, and the packages they call.
+    local need_distinct    distinct
+    local need_cipolate    cipolate
+    local need_rangejoin   rangejoin rangestat
+    local need_winsor      gstats
+    local need_winsor2     winsor2
+    local need_rangestat   rangestat
+    local need_psmatch2    psmatch2
+    local need_binscatter  binscatter
+    local need_binscatter2 binscatter2 gstats
+    local need_binsreg     binsreg
+    local need_reghdfe     reghdfe ftools
+    local need_fereg       fereg
+    local need_ivreghdfe   ivreghdfe ivreg2 ranktest reghdfe ftools
+    local need_ppmlhdfe    ppmlhdfe reghdfe ftools
+    local need_feppml      feppml
+    local need_hdfe        hdfe
+    * Packages that are not on SSC.
+    local from_binsreg     "net install binsreg, from(https://raw.githubusercontent.com/nppackages/binsreg/main/stata)"
+    local from_binscatter2 "net install binscatter2, from(https://raw.githubusercontent.com/mdroste/stata-binscatter2/master/)"
+    local from_fereg       "see https://github.com/johannes-schmieder/fereg"
+    local from_feppml      "it comes with fereg; see https://github.com/johannes-schmieder/fereg"
     local run
     local skipped
     local missing
@@ -178,7 +199,8 @@ quietly {
             noisily di as text "To include them, install the missing packages and rerun:"
             foreach ado of local missing {
                 local package = cond("`ado'" == "gstats", "gtools", "`ado'")
-                noisily di as text "    ssc install `package'"
+                if `"`from_`ado''"' == "" noisily di as text "    ssc install `package'"
+                else noisily di as text `"    `ado': `from_`ado''"'
             }
         }
         if `"`stale_cipolate'"' != "" {
@@ -201,7 +223,20 @@ quietly {
     noisily di as text "  A PROFILE_STEP line after each step gives its seconds. Press Break to stop."
     if `largest' >= 10000000 {
         noisily di as text "  This needs several GB of memory and tens of GB of free disk space, and"
-        noisily di as text "  can take an hour or more."
+        noisily di as text "  can take most of an hour."
+    }
+    local limited
+    foreach pair of local run {
+        if "`limit_`pair''" != "" {
+            if `largest' > `limit_`pair'' {
+                local shown = strtrim(string(`limit_`pair'', "%15.0fc"))
+                local limited "`limited' `pair' (`shown')"
+            }
+        }
+    }
+    local limited = strtrim("`limited'")
+    if "`limited'" != "" {
+        noisily di as text "  Largest size run for the slowest comparisons: `limited'"
     }
     noisily di as text "{hline 78}" _n
 }
@@ -251,6 +286,10 @@ quietly {
         replace ctools_command = "cinterpolate" if command == "ipolate"
         replace ctools_command = "cinterpolate, cubic" if command == "cipolate"
         replace ctools_command = "cpsmatch" if command == "psmatch2"
+        replace ctools_command = "cwinsor" if command == "winsor2"
+        replace ctools_command = "cbinscatter" if inlist(command, "binscatter2", "binsreg")
+        replace ctools_command = "creghdfe" if command == "fereg"
+        replace ctools_command = "cppmlhdfe" if command == "feppml"
         sort order observations
 
         noisily di as text _n "Timed seconds; speedup = Stata time / ctools time"
@@ -273,16 +312,25 @@ quietly {
         noisily di as text "{hline 92}"
 
         * Ranges are rounded outward as in the README: tenths below 2x, whole
-        * numbers below 10x, then tens. A range needs every size.
+        * numbers below 10x, then tens. A range needs every size the
+        * comparison runs at.
         noisily di as text _n "Approximate speedup, as in the README table (observations: `sizes')"
+        if "`limited'" != "" {
+            noisily di as text "Largest size run for the slowest comparisons: `limited'"
+        }
         noisily di as text "{hline 54}"
         noisily di as text %-15s "Stata command" %-21s "ctools command" %18s "Approx. speedup"
         noisily di as text "{hline 54}"
         foreach pair of local run {
             count if command == "`pair'"
             if r(N) == 0 continue
+            local expected 0
+            foreach N of local sizes {
+                if "`limit_`pair''" == "" local ++expected
+                else if `N' <= `limit_`pair'' local ++expected
+            }
             summarize speedup if command == "`pair'"
-            if r(N) == `count' {
+            if r(N) == `expected' {
                 local low = r(min)
                 local high = r(max)
                 if `low' < 2 local low = strtrim(string(floor(`low' * 10) / 10, "%9.1f"))
@@ -324,6 +372,10 @@ quietly {
         replace name = "cinterpolate" if command == "ipolate" & method == "c"
         replace name = "cinterpolate, cubic" if command == "cipolate" & method == "c"
         replace name = "cpsmatch" if command == "psmatch2" & method == "c"
+        replace name = "cwinsor" if command == "winsor2" & method == "c"
+        replace name = "cbinscatter" if inlist(command, "binscatter2", "binsreg") & method == "c"
+        replace name = "creghdfe" if command == "fereg" & method == "c"
+        replace name = "cppmlhdfe" if command == "feppml" & method == "c"
         replace name = "make test data" if command == "setup"
         sort order
         summarize total, meanonly

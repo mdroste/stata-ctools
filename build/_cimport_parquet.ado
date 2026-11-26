@@ -95,7 +95,9 @@ program define _cimport_parquet, rclass
         }
         plugin call ctools_plugin, "cparquet scan"
         quietly drop _all
-        quietly set obs `nobs'
+        * The variables are created before the observations: a variable
+        * added to `nobs' observations is filled, and the dataset rewritten,
+        * once per variable; set obs fills them all in one pass.
         forvalues j = 1/`nout' {
             local type ${CTOOLS_PQ_vtype_`j'}
             local name ${CTOOLS_PQ_vname_`j'}
@@ -106,6 +108,7 @@ program define _cimport_parquet, rclass
             if "${CTOOLS_PQ_fmt_`j'}" != "" format ${CTOOLS_PQ_fmt_`j'} `name'
         }
         mata: _cpq_labels(`nout')
+        quietly set obs `nobs'
         plugin call ctools_plugin *, "cparquet load"
         forvalues j = 1/`nout' {
             if ${CTOOLS_PQ_blob_`j'} {

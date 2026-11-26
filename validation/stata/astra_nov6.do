@@ -196,18 +196,11 @@ gen double key = 21-_n
 gen str8 payload = string(x)
 tempfile original
 save `original'
-global CTOOLS_csort_fault post
-capture noisily csort key, stream(1)
-local rc = _rc
-capture cf _all using `original', all
-if `rc' == 1 & !_rc test_pass "ASTRA-01 streaming failure restores all columns"
-else test_fail "ASTRA-01 streaming recovery" "status or data differs"
-macro drop CTOOLS_csort_fault
 csort key, stream(2) nosortedby
 assert key == _n
 assert x == 21-_n
 assert payload == string(x)
-test_pass "ASTRA-01 streaming mixed payload success after failure"
+test_pass "ASTRA-01 streaming sort moves every column of a mixed payload"
 use `original', clear
 foreach scale in 1 1e306 1e307 1e-300 {
     gen double w = `scale'

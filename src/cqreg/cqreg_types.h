@@ -81,6 +81,9 @@ typedef struct {
     ST_double tol_gap;        /* Duality gap tolerance */
     ST_int verbose;           /* Verbosity level (0=none, 1=summary, 2=detailed) */
     ST_int skip_crossover;    /* Skip crossover + residuals (for auxiliary solves) */
+    const ST_double *start_beta; /* Starting coefficients (K), or NULL for least squares */
+    ST_int start_is_solution; /* start_beta solves the problem: only the crossover runs */
+    ST_int no_preprocess;     /* nopreprocess(#), # > 0: every fit is solved on all rows */
 } cqreg_ipm_config;
 
 /* Solver state of the Frisch-Newton interior point method (cqreg_fn_solve) */

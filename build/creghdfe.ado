@@ -1,4 +1,6 @@
 *! version 1.3.1 20261124 github.com/mdroste/stata-ctools
+*! original: reghdfe 6.13.1 (January 10, 2026) by Sergio Correia and Noah Constantine
+*! original: see help creghdfe for details
 
 program define creghdfe, eclass
     version 14.1
@@ -76,7 +78,9 @@ program define _creghdfe_impl, eclass
         Group_id(string) Individual_id(string) AGgregation(string) *]
 
     * Freeze incoming-r() qualifiers before parsing helpers replace r().
-    if `"`if'"' != "" {
+    * An if that names no r() or s() result goes to marksample as it is,
+    * which saves a marker variable (a pass over the data).
+    if `"`if'"' != "" & ustrregexm(`"`if'"', "(^|[^A-Za-z0-9_])[rs][(]") {
         tempvar __incoming_sample
         mark `__incoming_sample' `if' `in'
         local if "if `__incoming_sample'"
@@ -135,6 +139,17 @@ program define _creghdfe_impl, eclass
     local __teams = ("`group_id'" != "")
     local __indiv = ("`individual_id'" != "")
     local __indiv_mean = ("`s(aggregation)'" == "mean")
+    * Do not silently substitute MAP for the requested Krylov solver.
+    * The individual-effects path implements LSMR; categorical effects do not.
+    if "`__technique'" == "lsqr" | ("`__technique'" == "lsmr" & !`__indiv') {
+        di as error "creghdfe: technique(`__technique') is not implemented for this model; no estimates computed"
+        di as error "use technique(map), or reghdfe with the requested solver"
+        exit 198
+    }
+    if `__indiv' & "`technique'" != "" & "`__technique'" != "lsmr" {
+        di as error "creghdfe: individual() supports technique(lsmr) only; no estimates computed"
+        exit 198
+    }
     * reghdfe's verbose(-1) suppresses its notes and warnings
     local __quiet = (`__verbose_level' < 0)
 
@@ -174,12 +189,22 @@ program define _creghdfe_impl, eclass
     }
     local __do_timing = ("`verbose'" != "")
 
+    * Stata can reuse the old e(sample) storage when it is released before
+    * marksample allocates a new marker (posting is about 45 ms faster at
+    * 10M rows). A failed creghdfe already clears e(). Keep previous results
+    * when the qualifiers, weights or options can refer to them: e() or
+    * _b[], _se[], _coef[] as a token. A word ending in "e(" (vce(,
+    * tolerance(, iterate(, technique() is not such a reference.
+    if !ustrregexm(`"`__creghdfe_args'"', "(^|[^A-Za-z0-9_])(e[(]|_b\[|_se\[|_coef\[)") {
+        ereturn clear
+    }
+
     * If absorb is not specified, create a constant FE (absorb the intercept only)
     local __noabsorb = 0
     if `"`absorb'"' == "" {
         local __noabsorb = 1
         tempvar _cons_fe
-        quietly gen byte `_cons_fe' = 1
+        quietly mark `_cons_fe', noby
         local absorb "`_cons_fe'"
     }
 
@@ -202,8 +227,51 @@ program define _creghdfe_impl, eclass
     local dof_clusters = `s(clusters)'
     local dofmethods `s(methods)'
 
-    * Mark sample - include absorb and cluster variables
-    marksample touse
+    * Numeric absorb varlists can share marksample's missing-value pass.
+    * Interactions, slopes, strings and named targets use the parser below.
+    local __absorb_mark
+    capture confirm numeric variable `absorb_vars'
+    if !_rc local __absorb_mark nomark
+    local __model_varlist `varlist'
+    if "`__absorb_mark'" != "" local varlist `varlist' `absorb_vars'
+    * A weight that is one numeric variable is passed to the plugin as it is
+    * (see _ctools_weight): no preparation of it depends on the sample
+    local __wbare = 0
+    if "`weight'" != "" {
+        local __wexp = strtrim(substr(strtrim(`"`exp'"'), 2, .))
+        if `: word count `__wexp'' == 1 {
+            capture confirm numeric variable `__wexp', exact
+            if !_rc local __wbare = 1
+        }
+    }
+
+    * Plain inputs screen after loading, also with a weight variable whose
+    * rows marksample has checked. Weight expressions, individual() and
+    * factors use the streaming native pass before sample-dependent
+    * preparation. marksample still validates weights and handles if/in/by
+    * restrictions.
+    local __ctools_plugin_hdfe_screen = 0
+    local __ctools_plugin_hdfe_markout = 0
+    _ctools_load
+    local __native_screen = 0
+    if "`fevce'" == "" & !`__teams' & !`__wild' & ///
+        substr(lower(strtrim(`"`vce'"')), 1, 4) != "boot" {
+        capture confirm numeric variable `__model_varlist'
+        if !_rc & "`__absorb_mark'" != "" & ("`weight'" == "" | (`__wbare' & `"`individual_id'"' == "")) ///
+            local __native_screen = `__ctools_plugin_hdfe_screen'
+        else if `__ctools_plugin_hdfe_markout' {
+            _ctools_hdfe_screen plan `__model_varlist'
+            if `__screen_ok' local __native_screen = 2
+        }
+    }
+    if `__native_screen' marksample touse, novarlist
+    else marksample touse
+    local varlist `__model_varlist'
+    if `__native_screen' == 2 {
+        local __early_inputs `__screen_inputs'
+        if "`__absorb_mark'" != "" local __early_inputs `__early_inputs' `absorb_vars'
+        _ctools_hdfe_screen mark `__early_inputs', touse(`touse') plugin(`__ctools_plugin') threads(`threads')
+    }
     if "`__refit_sample'" != "" quietly replace `touse' = 0 if !`__refit_sample'
 
     * One variable per absorbed effect, in order: the FE count and every
@@ -212,7 +280,7 @@ program define _creghdfe_impl, eclass
     * interactions are numbered first (the plugin renumbers every effect on
     * the estimation sample). absorb_names holds the effects as reghdfe
     * names them, for e(absorb) and the output.
-    capture noisily _ctools_hdfe_absorb `absorb_vars', touse(`touse') cmd(creghdfe) slopes ///
+    capture noisily _ctools_hdfe_absorb `absorb_vars', touse(`touse') cmd(creghdfe) slopes `__absorb_mark' ///
         `=cond(`absorb_replace', "replace", "")'
     if _rc {
         local __rc = _rc
@@ -356,8 +424,8 @@ program define _creghdfe_impl, eclass
     if "`weight'" != "" {
         * Evaluate the weight expression; marks out and validates the weights
         tempvar evaluated_weight
-        _ctools_weight, generate(`evaluated_weight') touse(`touse') type(`weight') expression(`"`exp'"')
-        local weight_var "`evaluated_weight'"
+        _ctools_weight, generate(`evaluated_weight') touse(`touse') type(`weight') expression(`"`exp'"') marked
+        local weight_var "`__ctools_wvar'"
         local weight_type = cond("`weight'" == "aweight", 1, cond("`weight'" == "fweight", 2, 3))
     }
 
@@ -564,7 +632,8 @@ program define _creghdfe_impl, eclass
     }
 
     if `"`vce'"' != "" {
-        _ctools_hdfe_vce, spec(`"`vce'"') touse(`touse') cmd(creghdfe)
+        * with the native screen the plugin drops missing cluster values
+        _ctools_hdfe_vce, spec(`"`vce'"') touse(`touse') cmd(creghdfe) `=cond(`__native_screen' == 1, "nomark", "")'
         local vce_kind `r(kind)'
         if "`vce_kind'" == "cluster" {
             local vcetype = 2
@@ -661,17 +730,39 @@ program define _creghdfe_impl, eclass
     local depvar "`r(varlist)'"
 
     * Expand factor variables to temporary numeric variables
+    local __fvn_ok 0
+    local __fvn_kept
     if "`indepvars'" != "" {
-        * Expand factor variables to temp numeric vars
-        fvrevar `indepvars' if `touse'
-        local __indepvars_all "`r(varlist)'"
+        * Plain i.f terms: the plugin builds the indicators from f and the
+        * levels come from one plugin pass (_ctools_fvnative), not from
+        * fvrevar and fvexpand (about 0.2 s each per term at 10M rows).
+        * The bootstrap, wild bootstrap, savefe, fevce() and group() paths
+        * read the regressors again, so they keep fvrevar's variables.
+        if `__ctools_plugin_hdfe_fvlevels' & !`__bs' & !`__fe' & !`__wild' & !`__teams' & !`savefe' & ///
+            strpos("`indepvars'", ".") {
+            _ctools_fvnative `indepvars', touse(`touse') plugin(`__ctools_plugin') threads(`threads')
+        }
+        if `__fvn_ok' {
+            local __indepvars_all `__fvn_vars'
+            local coef_names_all `__fvn_names'
+        }
+        else {
+            * Expand factor variables to temp numeric vars
+            fvrevar `indepvars' if `touse'
+            local __indepvars_all "`r(varlist)'"
 
-        * Get coefficient names (same count as fvrevar, one per level)
-        fvexpand `indepvars' if `touse'
-        local coef_names_all "`r(varlist)'"
+            * Get coefficient names (same count as fvrevar, one per level)
+            fvexpand `indepvars' if `touse'
+            local coef_names_all "`r(varlist)'"
+        }
 
         * Base/omitted placeholders are not sent to the plugin, which also
         * detects collinearity (detect_collinearity)
+        if `__fvn_ok' {
+            * the level of each estimated term (-1: not an indicator)
+            _ctools_fvsplit, names(`coef_names_all') vars(`__fvn_levels')
+            local __fvn_kept "`r(vars)'"
+        }
         _ctools_fvsplit, names(`coef_names_all') vars(`__indepvars_all')
         local indepvars_expanded "`r(vars)'"
         local coef_names "`r(names)'"
@@ -728,17 +819,14 @@ program define _creghdfe_impl, eclass
         }
     }
 
-    * Count observations
-    qui count if `touse'
-    local nobs = r(N)
-
-    if `nobs' == 0 {
+    * An empty sample (assert stops at the first observation in the sample)
+    capture assert !`touse', fast
+    if !_rc {
         di as error "creghdfe: no observations"
         exit 2000
     }
 
-    * Load the platform-appropriate ctools plugin if not already loaded
-    _ctools_load
+    * Identity and capabilities were checked before sample preparation.
     * Stata scopes plugin registrations to the calling ado program.
     capture program ctools_plugin, plugin using("`__ctools_plugin'")
     if _rc != 0 & _rc != 110 exit 601
@@ -814,11 +902,23 @@ program define _creghdfe_impl, eclass
         capture novarabbrev drop `__v'
     }
     if "`output_names'" != "" _ctools_newvars `output_names'
-    if `compute_resid' quietly gen double `resid_varname' = .
+    * st_addvar initializes to missing without generate's expression pass.
+    * Excluded observations in all optional outputs must remain missing.
+    if `compute_resid' quietly mata: st_addvar("double", "`resid_varname'")
 
     * Set up parameters via Stata scalars (expected by C plugin)
     scalar __creghdfe_K = `nvars'           // depvar + indepvars
     scalar __creghdfe_G = `next'            // number of FE factors (intercepts and slopes)
+    * i.f indicators the plugin builds: the level of each regressor in the
+    * plugin varlist (-1: an ordinary variable)
+    if "`__fvn_kept'" != "" {
+        local __fvk : word count `__fvn_kept'
+        matrix __creghdfe_fvlev = J(1, `__fvk', -1)
+        forvalues __c = 1/`__fvk' {
+            matrix __creghdfe_fvlev[1, `__c'] = `: word `__c' of `__fvn_kept''
+        }
+        scalar __creghdfe_fvspec = 1
+    }
     scalar __creghdfe_drop_singletons = ("`keepsingletons'" == "")
     scalar __creghdfe_verbose = ("`verbose'" != "")
     scalar __creghdfe_maxiter = `iterate'
@@ -879,7 +979,7 @@ program define _creghdfe_impl, eclass
     * Handle groupvar - create variable and add to plugin varlist
     local groupvar_var_pos = 0
     if "`groupvar'" != "" {
-        quietly gen long `groupvar' = .
+        quietly mata: st_addvar("long", "`groupvar'")
         local groupvar_var_pos = `nvars' + `next' + `ncl' + (`weight_type' > 0) + `compute_resid' + 1
         local plugin_varlist `plugin_varlist' `groupvar'
         scalar __creghdfe_groupvar_idx = `groupvar_var_pos'
@@ -891,7 +991,7 @@ program define _creghdfe_impl, eclass
     * Handle savefe - create FE variables and add to plugin varlist
     if `savefe' {
         forval g = 1/`next' {
-            quietly gen double `ext_out_`g'' = .
+            quietly mata: st_addvar("double", "`ext_out_`g''")
             if `__fe' quietly gen double `: word `g' of `fe_sevars'' = .
             if `__fe' & `fe_nreps' quietly gen long `: word `g' of `fe_nrepvars'' = .
             if `__fe' & `fe_ci' quietly gen double `: word `g' of `fe_lbvars'' = .
@@ -906,9 +1006,10 @@ program define _creghdfe_impl, eclass
         scalar __creghdfe_savefe_idx = 0
     }
 
-    * The plugin returns the final sample after internal row removals.
-    tempvar final_sample
-    quietly generate byte `final_sample' = 0
+    * The plugin returns the final sample after internal row removals: the
+    * sample marker itself, in which it clears the rows it removes
+    local final_sample `touse'
+    scalar __creghdfe_sample_prefilled = 1
     local plugin_varlist `plugin_varlist' `final_sample'
     local sample_idx : word count `plugin_varlist'
     scalar __creghdfe_sample_idx = `sample_idx'
@@ -954,6 +1055,7 @@ program define _creghdfe_impl, eclass
     * it in parallel, where Stata answers an if one observation at a time
     local plugin_varlist `plugin_varlist' `touse'
     scalar __creghdfe_touse = 1
+    scalar __creghdfe_screen = (`__native_screen' == 1)
 
     * Create matrix to store results (plugin will fill __creghdfe_V)
     local K_x = `nvars' - 1  // number of indepvars (excluding depvar)
@@ -968,6 +1070,18 @@ program define _creghdfe_impl, eclass
         "creghdfe `threads_code' full_regression`=cond(`__bsrun' | `__wild', " retain", "")'"
 
     local reg_rc = _rc
+    if !`reg_rc' {
+        * a plugin that did not update the marker would leave the dropped
+        * rows in e(sample)
+        capture confirm scalar __creghdfe_marked
+        * and one that did not build the i.f indicators would have
+        * regressed on the factor variables themselves
+        if !_rc & "`__fvn_kept'" != "" capture confirm scalar __creghdfe_fvdone
+        if _rc {
+            di as error "creghdfe: rebuild the ctools plugin alongside the ado files"
+            local reg_rc = 601
+        }
+    }
     if `reg_rc' {
         _ctools_cleanup creghdfe
         di as error "Error in regression (rc=`reg_rc')"
@@ -987,8 +1101,20 @@ program define _creghdfe_impl, eclass
     * occurs only on singleton rows. Singletons are a fixed point, so the
     * refit drops none; it reports the first run's count.
     if `num_singletons' > 0 & "`indepvars'" != "" & "`__refit_sample'" == "" {
-        fvexpand `indepvars' if `final_sample'
-        if "`r(varlist)'" != "`coef_names_all'" {
+        local __names_final
+        if `__fvn_ok' {
+            * the same terms' levels on the final sample (one plugin pass)
+            local __fvn_save_kept `__fvn_kept'
+            _ctools_fvnative `indepvars', touse(`final_sample') plugin(`__ctools_plugin') threads(`threads')
+            if `__fvn_ok' local __names_final `__fvn_names'
+            local __fvn_ok 1
+            local __fvn_kept `__fvn_save_kept'
+        }
+        if "`__names_final'" == "" {
+            fvexpand `indepvars' if `final_sample'
+            local __names_final `r(varlist)'
+        }
+        if "`__names_final'" != "`coef_names_all'" {
             if "`resid_varname'" != "" drop `resid_varname'
             if "`groupvar'" != "" drop `groupvar'
             if `savefe' {
@@ -1522,6 +1648,7 @@ program define _creghdfe_impl, eclass
         di as text "{hline 55}"
         di as text "  C plugin internals:"
         di as text "    Data load (SPI):        " as result %8.4f _creghdfe_time_load " sec"
+        if `__native_screen' == 1 di as text "    Missing screening:      " as result %8.4f _creghdfe_time_screen " sec"
         di as text "    Data copy + sums:       " as result %8.4f _creghdfe_time_copy " sec"
         di as text "    FE remap + counts:      " as result %8.4f _creghdfe_time_remap " sec"
         di as text "    Singleton removal:      " as result %8.4f _creghdfe_time_singleton " sec"
@@ -1782,9 +1909,9 @@ end
 * reghdfe's names, abbreviations and errors, and parallel() as reghdfe
 * parses it. creghdfe runs reghdfe's MAP solver (symmetric Kaczmarz with
 * conjugate gradient by default); transform() and acceleration() select
-* its variants, as in reghdfe. technique(lsmr|lsqr) and preconditioner()
-* are accepted: creghdfe still solves with MAP, to the same tolerance, as
-* it does with individual(). Returns s(technique), s(transform_code) (0
+* its variants, as in reghdfe. The caller rejects unsupported LSMR/LSQR
+* requests after resolving individual() (which implements LSMR).
+* Returns s(technique), s(transform_code) (0
 * symmetric Kaczmarz, 1 Kaczmarz, 2 Cimmino) and s(accel_code) (0 none, 1
 * conjugate gradient, 2 steepest descent, 3 Aitken).
 program define _creghdfe_solver_opts, sclass

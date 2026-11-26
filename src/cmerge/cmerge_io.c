@@ -25,6 +25,7 @@ void *cmerge_write_keepusing_var_thread(void *arg)
         /* Numeric keepusing variable */
         for (size_t i = a->row_start; i < output_nobs; i++) {
             int32_t using_row = specs[i].using_sorted_row;
+            if (using_row >= 0) using_row = cmerge_using_row(using_row);
             int8_t merge_result = specs[i].merge_result;
 
             /* Determine if we should write using value */
@@ -78,6 +79,7 @@ void *cmerge_write_keepusing_var_thread(void *arg)
         char str_buf[2049];
         for (size_t i = a->row_start; i < output_nobs; i++) {
             int32_t using_row = specs[i].using_sorted_row;
+            if (using_row >= 0) using_row = cmerge_using_row(using_row);
             int8_t merge_result = specs[i].merge_result;
 
             /* Determine if we should write using value */

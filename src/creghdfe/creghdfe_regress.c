@@ -13,6 +13,7 @@
 #include "creghdfe_input.h"
 #include "hdfe/hdfe_remap.h"
 #include "hdfe/hdfe_sample.h"
+#include "hdfe/hdfe_missing.h"
 #include "creghdfe_hdfe.h"
 #include "hdfe/hdfe_solver.h"
 #include "hdfe/hdfe_fe_recover.h"
@@ -26,6 +27,7 @@
 #include "../ctools_config.h"
 #include "../ctools_types.h"  /* For ctools_data_load */
 #include "../ctools_spi.h"  /* Error-checking SPI wrappers */
+#include "../ctools_release.h"
 
 /* Recover the fixed effects from the FE component d = y - Xb - _cons -
  * residual (not the already orthogonal regression residual) with
@@ -208,7 +210,8 @@ ST_retcode creghdfe_full_regression(int retain)
     perm_idx_t *obs_map = NULL;  /* Maps filtered index to 1-based Stata obs */
 
     ST_int *root_to_group = NULL;
-    ST_double *weights = NULL;
+    /* the loaded weight column (filtered.data owns it), until STEP 5 */
+    const ST_double *weights = NULL;
     double *cluster_raw_values = NULL;
     ST_int *group_assignments = NULL;
     ST_double *data_compact = NULL;
@@ -352,6 +355,17 @@ ST_retcode creghdfe_full_regression(int retain)
         return ctools_stata_rc(load_rc);
     }
 
+    ST_double screen_requested = 0;
+    const int screen_missing = input.touse &&
+        SF_scal_use("__creghdfe_screen", &screen_requested) == 0 && screen_requested == 1;
+    double t_screen = 0;
+    if (screen_missing) {
+        double start = get_time_sec();
+        ST_retcode screen_rc = hdfe_screen_missing(&filtered, SF_nvars());
+        t_screen = get_time_sec() - start;
+        if (screen_rc) { ctools_filtered_data_free(&filtered); return screen_rc; }
+    }
+
     /* Get filtered observation count and obs_map */
     N_orig = (ST_int)filtered.data.nobs;
     obs_map = filtered.obs_map;
@@ -359,7 +373,7 @@ ST_retcode creghdfe_full_regression(int retain)
     if (N_orig <= 0) {
         ctools_filtered_data_free(&filtered);
         SF_error("creghdfe: no observations\n");
-        return 198;
+        return screen_missing ? 2000 : 198;
     }
 
     /* Verify all variables were loaded successfully (defensive check) */
@@ -408,14 +422,7 @@ ST_retcode creghdfe_full_regression(int retain)
     stdevs = (ST_double *)malloc(K * sizeof(ST_double));
     tss = (ST_double *)malloc(K * sizeof(ST_double));
 
-    /* Allocate weight array if using weights */
-
-    if (has_weights) {
-        weights = (ST_double *)ctools_safe_malloc2((size_t)N_orig, sizeof(ST_double));
-    }
-
-    if (!factors || !mask || !means || !stdevs || !tss ||
-        (has_weights && !weights)) {
+    if (!factors || !mask || !means || !stdevs || !tss) {
 
         SF_error("creghdfe: memory allocation failed\n");
         output_rc = 920;
@@ -424,10 +431,9 @@ ST_retcode creghdfe_full_regression(int retain)
 
     /* Initialize */
     for (i = 0; i < N_orig; i++) mask[i] = 1;
-    if (has_weights) {
-        ST_int weight_var_pos = K + G + ncl;
-        memcpy(weights, filtered.data.vars[weight_var_pos].data.dbl, N_orig * sizeof(ST_double));
-    }
+    /* The weights are read from the loaded column until STEP 5 compacts
+     * them, before the loaded data are released */
+    if (has_weights) weights = filtered.data.vars[K + G + ncl].data.dbl;
 
     t_copy = get_time_sec();
 
@@ -698,34 +704,87 @@ ST_retcode creghdfe_full_regression(int retain)
         }
     }
 
-    /* Compute sum_w_compact */
-    ST_double sum_w_compact = 0.0;
+    /* The weights of the kept rows (rows in parallel) */
+    ST_double sum_w = 0.0;
     if (has_weights) {
+        weights_compact = (ST_double *)malloc((size_t)N * sizeof(ST_double));
+        if (!weights_compact) {
+            output_rc = 920;
+            goto cleanup;
+        }
+        #pragma omp parallel for schedule(static) if(N > 200000)
         for (idx = 0; idx < N; idx++) {
-            sum_w_compact += weights[compact_map[idx]];
+            weights_compact[idx] = weights[compact_map[idx]];
         }
     }
 
-    /* Parallel copy + mean accumulation per column */
+    /* Factor-variable indicators built here instead of by fvrevar (the
+     * ado's _ctools_fvnative): with __creghdfe_fvspec, regressor k (column
+     * k of the loaded data) holds a factor variable when entry k of
+     * __creghdfe_fvlev is a level (>= 0), and becomes 1 where the variable
+     * equals it, 0 elsewhere: the doubles fvrevar's indicator holds */
+    ST_double *fv_level = NULL;
+    {
+        ST_double use_fv = 0;
+        if (SF_scal_use("__creghdfe_fvspec", &use_fv) == 0 && use_fv == 1 && K > 1) {
+            fv_level = (ST_double *)malloc((size_t)K * sizeof(ST_double));
+            if (!fv_level) { output_rc = 920; goto cleanup; }
+            fv_level[0] = -1;
+            for (k = 1; k < K; k++) {
+                if (SF_mat_el("__creghdfe_fvlev", 1, k, &fv_level[k]) != 0 ||
+                    !(fv_level[k] >= -1 && fv_level[k] == floor(fv_level[k]))) {
+                    free(fv_level);
+                    SF_error("creghdfe: invalid factor-variable specification\n");
+                    output_rc = 198; goto cleanup;
+                }
+            }
+            if ((output_rc = ctools_scal_save("__creghdfe_fvdone", 1.0))) {
+                free(fv_level);
+                goto cleanup;
+            }
+        }
+    }
+
+    /* Parallel copy + mean accumulation per column; with weights one more
+     * task adds them up in row order */
+    const ST_int n_tasks = K + (has_weights ? 1 : 0);
     #pragma omp parallel for schedule(static) if(K > 1)
-    for (k = 0; k < K; k++) {
+    for (k = 0; k < n_tasks; k++) {
+        if (k == K) {
+            ST_double total = 0.0;
+            for (ST_int ii = 0; ii < N; ii++) total += weights_compact[ii];
+            sum_w = total;
+            continue;
+        }
         ST_double col_mean = 0.0;
         const ST_double *src_col = filtered.data.vars[k].data.dbl;
         ST_double *dst_col = data_compact + (size_t)k * N;
+        const ST_double level = fv_level ? fv_level[k] : -1.0;
         ST_int ii;
-        for (ii = 0; ii < N; ii++) {
-            ST_int orig_i = compact_map[ii];
-            ST_double val = src_col[orig_i];
-            dst_col[ii] = val;
-            ST_double w = (has_weights) ? weights[orig_i] : 1.0;
-            col_mean += w * val;
+        if (level >= 0) {
+            for (ii = 0; ii < N; ii++) {
+                ST_double val = src_col[compact_map[ii]] == level ? 1.0 : 0.0;
+                dst_col[ii] = val;
+                ST_double w = (has_weights) ? weights_compact[ii] : 1.0;
+                col_mean += w * val;
+            }
+        } else {
+            for (ii = 0; ii < N; ii++) {
+                ST_int orig_i = compact_map[ii];
+                ST_double val = src_col[orig_i];
+                dst_col[ii] = val;
+                ST_double w = (has_weights) ? weights_compact[ii] : 1.0;
+                col_mean += w * val;
+            }
         }
         means_compact[k] = col_mean;
     }
+    free(fv_level);
+    fv_level = NULL;
     free(compact_map); compact_map = NULL;
 
     /* Divide by sum of weights (or N if unweighted) */
-    ST_double mean_divisor = (has_weights) ? sum_w_compact : (ST_double)N;
+    ST_double mean_divisor = (has_weights) ? sum_w : (ST_double)N;
     if (!isfinite(mean_divisor) || mean_divisor <= 0.0) {
         output_rc = 498; goto cleanup;
     }
@@ -734,6 +793,7 @@ ST_retcode creghdfe_full_regression(int retain)
     }
 
     /* The loaded columns are no longer needed; use the compacted matrix */
+    weights = NULL;
     stata_data_free(&filtered.data);
     data = data_compact; data_compact = NULL;
     free(means);
@@ -745,46 +805,28 @@ ST_retcode creghdfe_full_regression(int retain)
         memcpy(bs_raw, data, (size_t)N * K * sizeof(ST_double));
     }
 
-    /* Compact weights and assign to g_state */
+    /* The compacted weights (above) to g_state */
     if (has_weights) {
-        weights_compact = (ST_double *)malloc(N * sizeof(ST_double));
-        if (!weights_compact) {
-            output_rc = 920;
-            goto cleanup;
-        }
-
-        /* Copy weights for non-singleton observations */
-        ST_double sum_w = 0.0;
-        idx = 0;
-        for (i = 0; i < N_orig; i++) {
-            if (mask[i]) {
-                weights_compact[idx] = weights[i];
-                sum_w += weights[i];
-                idx++;
-            }
-        }
-
         /* For aweight/pweight: normalize weights so sum(w) = N
          * This is what reghdfe does (reghdfe.mata line 3598)
          * For fweight: keep raw weights (no normalization) */
         if (weight_type == 1 || weight_type == 3) {
-            ST_double scale = (ST_double)N / sum_w;
+            const ST_double scale = (ST_double)N / sum_w;
+            #pragma omp parallel for schedule(static) if(N > 200000)
             for (idx = 0; idx < N; idx++) {
                 weights_compact[idx] *= scale;
             }
             /* Also normalize the weighted_counts in factors and recompute inv_weighted_counts */
             for (g = 0; g < G; g++) {
-                if (g_state->factors[g].weighted_counts) {
-                    for (i = 0; i < g_state->factors[g].num_levels; i++) {
-                        g_state->factors[g].weighted_counts[i] *= scale;
-                    }
-                    /* Recompute inv_weighted_counts after scaling */
-                    if (g_state->factors[g].inv_weighted_counts) {
-                        for (i = 0; i < g_state->factors[g].num_levels; i++) {
-                            g_state->factors[g].inv_weighted_counts[i] =
-                                (g_state->factors[g].weighted_counts[i] > 0) ?
-                                1.0 / g_state->factors[g].weighted_counts[i] : 0.0;
-                        }
+                FE_Factor *f = &g_state->factors[g];
+                if (f->weighted_counts) {
+                    #pragma omp parallel for schedule(static) if(f->num_levels > 200000)
+                    for (i = 0; i < f->num_levels; i++) {
+                        f->weighted_counts[i] *= scale;
+                        /* Recompute inv_weighted_counts after scaling */
+                        if (f->inv_weighted_counts)
+                            f->inv_weighted_counts[i] =
+                                (f->weighted_counts[i] > 0) ? 1.0 / f->weighted_counts[i] : 0.0;
                     }
                 }
             }
@@ -792,7 +834,6 @@ ST_retcode creghdfe_full_regression(int retain)
             /* But we keep the original sum_w for fweight calculations */
         }
 
-        free(weights); weights = NULL;
         g_state->weights = weights_compact; weights_compact = NULL;
         g_state->sum_weights = sum_w;
 
@@ -802,6 +843,8 @@ ST_retcode creghdfe_full_regression(int retain)
      * STEP 6: Compute TSS and stdevs on compacted data (weighted if using weights)
      * Note: for aweight/pweight, weights have been normalized so sum(w) = N
      * ================================================================ */
+    /* Each column's sums run in row order as before; the columns are independent */
+    #pragma omp parallel for schedule(static) private(idx) if(K > 1 && (size_t)N * (size_t)K > 200000)
     for (k = 0; k < K; k++) {
         ST_double *col = &data[(size_t)k * N];
         ST_double mean_k = means[k];
@@ -870,12 +913,23 @@ ST_retcode creghdfe_full_regression(int retain)
      * STEP 7: Standardize and partial out
      * ================================================================ */
     if (standardize) {
+        /* An arbitrary response multiplier rounds small identifying components
+         * beside a large fitted component before OLS ever sees them. A power
+         * of two preserves the response's bits (away from under/overflow),
+         * keeps its standard deviation in [1,2), and uses the existing pass.
+         * Regressor scaling/rank decisions are unchanged. */
+        if (isfinite(stdevs[0]) && stdevs[0] > 0.0) {
+            int exponent;
+            frexp(stdevs[0], &exponent);
+            stdevs[0] = ldexp(1.0, exponent - 1);
+        }
+        #pragma omp parallel for schedule(static) if(K > 1 && (size_t)N * (size_t)K > 200000)
         for (k = 0; k < K; k++) {
             ST_double *col = &data[(size_t)k * N];
             ST_double inv_stdev = 1.0 / stdevs[k];
             #pragma omp simd
-            for (idx = 0; idx < N; idx++) {
-                col[idx] *= inv_stdev;
+            for (ST_int row = 0; row < N; row++) {
+                col[row] *= inv_stdev;
             }
         }
     }
@@ -887,6 +941,7 @@ ST_retcode creghdfe_full_regression(int retain)
         output_rc = 920;
         goto cleanup;
     }
+    #pragma omp parallel for schedule(static) if(K > 1 && (size_t)N * (size_t)K > 200000)
     for (k = 0; k < K; k++) {
         norm2[k] = fast_dot(&data[(size_t)k * N], &data[(size_t)k * N], N);
     }
@@ -909,6 +964,12 @@ ST_retcode creghdfe_full_regression(int retain)
     if (projection.status == 920) {
         SF_error("creghdfe: memory allocation failed in the fixed-effect projection\n");
         output_rc = 920;
+        goto cleanup;
+    }
+    if (projection.status == 498) {
+        SF_error("creghdfe: numerical breakdown in fixed-effect projection; coefficients are not reliable\n");
+        SF_error("check fixed-effect connectivity and scaling; abort(0) cannot override numerical breakdown\n");
+        output_rc = 498;
         goto cleanup;
     }
     /* abort(0): as reghdfe, the projection after iterate() iterations stands
@@ -999,7 +1060,20 @@ ST_retcode creghdfe_full_regression(int retain)
     ST_int sample_var_idx = 0;
     if (SF_scal_use("__creghdfe_sample_idx", &val) == 0)
         sample_var_idx = (ST_int)val;
-    if (sample_var_idx > 0) {
+    /* A wrapper that passes its sample marker as the output (it is 1 on every
+     * loaded row) sets __creghdfe_sample_prefilled: only the dropped rows are
+     * then written, one store per dropped row, where a separate sample
+     * variable takes one per kept row and a fill in Stata.
+     * __creghdfe_marked tells the wrapper that the marker was updated. */
+    ST_int sample_prefilled = 0;
+    if (SF_scal_use("__creghdfe_sample_prefilled", &val) == 0)
+        sample_prefilled = (val == 1.0);
+    if (sample_var_idx > 0 && sample_prefilled) {
+        for (i = 0; i < N_orig && !output_rc && N < N_orig; i++) {
+            if (!mask[i]) output_rc = SF_vstore(sample_var_idx, (ST_int)obs_map[i], 0.0);
+        }
+        if (!output_rc) output_rc = ctools_scal_save("__creghdfe_marked", 1.0);
+    } else if (sample_var_idx > 0) {
         for (i = 0; i < N_orig && !output_rc; i++) {
             if (mask[i]) output_rc = SF_vstore(sample_var_idx, (ST_int)obs_map[i], 1.0);
         }
@@ -1545,7 +1619,8 @@ ST_retcode creghdfe_full_regression(int retain)
     }
 
     /* Save timing results to Stata scalars */
-    if ((output_rc = ctools_scal_save("_creghdfe_time_load", t_load - t_start))) goto cleanup;
+    if ((output_rc = ctools_scal_save("_creghdfe_time_load", t_load - t_start - t_screen))) goto cleanup;
+    if (screen_missing && (output_rc = ctools_scal_save("_creghdfe_time_screen", t_screen))) goto cleanup;
     if ((output_rc = ctools_scal_save("_creghdfe_time_copy", t_copy - t_load))) goto cleanup;
     if ((output_rc = ctools_scal_save("_creghdfe_time_remap", t_remap - t_copy))) goto cleanup;
     if ((output_rc = ctools_scal_save("_creghdfe_time_singleton", t_singleton - t_remap))) goto cleanup;
@@ -1560,39 +1635,46 @@ ST_retcode creghdfe_full_regression(int retain)
      * Cleanup
      * ================================================================ */
 cleanup:
-    ctools_filtered_data_free(&filtered);
-    ctools_aligned_free(obs_map);
+    /* Everything below is returned by a helper thread after the plugin
+     * call (ctools_release.h): at 10M rows that is 1-2 GB, 40 ms or more
+     * on Windows */
+    ctools_filtered_data_release(&filtered);
+    ctools_release_later_aligned(obs_map);
     for (g = 0; g < G; g++) {
         if (factors) {
-            free(factors[g].levels);
-            free(factors[g].counts);
+            ctools_release_later(factors[g].levels);
+            ctools_release_later(factors[g].counts);
         }
     }
-    free(factors); free(mask);
+    ctools_release_later(factors); ctools_release_later(mask);
     if (data_keep == data) data_keep = NULL;  /* shared when nothing was omitted */
-    free(data); free(means); free(stdevs); free(tss);
-    free(data_keep); free(xtx_keep); free(xty_keep); free(beta_keep);
-    free(inv_xx_keep); free(V_keep); free(V_psd); free(keep_idx); free(xtx); free(is_collinear);
-    free(norm2); free(xty_all); free(inv_rmcoll); free(fe_raw);
-    free(cluster_ids);
-    free(cluster_ids_all);
-    free(means_zero);
-    free(weights);
-    free(cluster_raw_values);
-    free(group_assignments);
-    free(data_compact);
-    free(means_compact);
-    free(compact_map);
-    free(weights_compact);
-    free(means_x);
-    free(inv_xx_x);
-    free(data_with_cons);
-    free(cluster_values_compact);
-    free(root_to_group);
-    free(resid);
-    free(bs_raw); free(bs_tilde); free(bs_ones);
+    ctools_release_later(data); ctools_release_later(means);
+    ctools_release_later(stdevs); ctools_release_later(tss);
+    ctools_release_later(data_keep); ctools_release_later(xtx_keep);
+    ctools_release_later(xty_keep); ctools_release_later(beta_keep);
+    ctools_release_later(inv_xx_keep); ctools_release_later(V_keep); ctools_release_later(V_psd);
+    ctools_release_later(keep_idx); ctools_release_later(xtx); ctools_release_later(is_collinear);
+    ctools_release_later(norm2); ctools_release_later(xty_all);
+    ctools_release_later(inv_rmcoll); ctools_release_later(fe_raw);
+    ctools_release_later(cluster_ids);
+    ctools_release_later(cluster_ids_all);
+    ctools_release_later(means_zero);
+    /* weights pointed into the loaded data, released with them */
+    ctools_release_later(cluster_raw_values);
+    ctools_release_later(group_assignments);
+    ctools_release_later(data_compact);
+    ctools_release_later(means_compact);
+    ctools_release_later(compact_map);
+    ctools_release_later(weights_compact);
+    ctools_release_later(means_x);
+    ctools_release_later(inv_xx_x);
+    ctools_release_later(data_with_cons);
+    ctools_release_later(cluster_values_compact);
+    ctools_release_later(root_to_group);
+    ctools_release_later(resid);
+    ctools_release_later(bs_raw); ctools_release_later(bs_tilde); ctools_release_later(bs_ones);
     hdfe_indiv_free(&indiv);
-    cleanup_state();
+    cleanup_state_later();
     return output_rc;
 }
 

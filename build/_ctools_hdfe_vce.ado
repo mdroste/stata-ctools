@@ -16,9 +16,12 @@
 *   r(group_d)  1 when they must be numbered with _ctools_group first (a
 *               string variable or an interaction), 0 when the numeric
 *               variable goes to the plugin as it is
+* Option nomark leaves the dimensions with r(group_d) 0 in touse: the
+* caller's plugin drops the rows where such a variable is missing (its
+* native missing-value screen), so a markout would be a second pass.
 program define _ctools_hdfe_vce, rclass
     version 14.1
-    syntax, TOUSE(varname) CMD(name) [SPEC(string)]
+    syntax, TOUSE(varname) CMD(name) [SPEC(string) NOMARK]
     _ctools_vce kind unused : `spec'
     return local kind `kind'
     local n = 0
@@ -32,10 +35,11 @@ program define _ctools_hdfe_vce, rclass
                 foreach v of local expanded {
                     local ++n
                     capture confirm numeric variable `v'
-                    return scalar group_`n' = (_rc != 0)
+                    local group = (_rc != 0)
+                    return scalar group_`n' = `group'
                     return local name_`n' `v'
                     return local vars_`n' `v'
-                    markout `touse' `v', strok
+                    if `group' | "`nomark'" == "" markout `touse' `v', strok
                 }
                 continue
             }
@@ -61,7 +65,7 @@ program define _ctools_hdfe_vce, rclass
             return scalar group_`n' = `group'
             return local name_`n' `name'
             return local vars_`n' `vars'
-            markout `touse' `vars', strok
+            if `group' | "`nomark'" == "" markout `touse' `vars', strok
         }
     }
     return scalar ndims = `n'

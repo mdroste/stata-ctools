@@ -1,4 +1,6 @@
 *! version 1.3.1 20261124 github.com/mdroste/stata-ctools
+*! original: rangestat 1.1.1 (May 9, 2017) by Robert Picard, Nicholas J. Cox, and Roberto Ferrer
+*! original: see help crangestat for details
 
 program define crangestat, rclass
     version 14.1

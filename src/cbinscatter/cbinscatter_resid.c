@@ -586,7 +586,7 @@ static ST_retcode partial_out_shared(
         ST_int iters = cg_solve_column_threaded(&S, cols[c], resid_thread_id());
         if (iters < 0) {
             failed |= 1;
-            iters = -iters;
+            iters = iters == HDFE_CG_BREAKDOWN ? 0 : -iters;
         }
         if (iters > max_iters) max_iters = iters;
     }

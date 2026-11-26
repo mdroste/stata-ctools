@@ -6,10 +6,16 @@ program define _ctools_clock
     tempname held
     _return hold `held'
     capture noisily {
-        _ctools_load
-        capture program ctools_clock_plugin, plugin using("`__ctools_plugin'")
-        if _rc != 0 & _rc != 110 exit _rc
-        plugin call ctools_clock_plugin, "clock"
+        * Once registered, this plugin stays loaded for the Stata session.
+        * Resolve its path and check its protocol only on first use (or
+        * after discard), rather than searching the ado-path at every lap.
+        capture plugin call ctools_clock_plugin, "clock"
+        if _rc {
+            _ctools_load
+            capture program ctools_clock_plugin, plugin using("`__ctools_plugin'")
+            if _rc != 0 & _rc != 110 exit _rc
+            plugin call ctools_clock_plugin, "clock"
+        }
     }
     local rc = _rc
     _return restore `held'

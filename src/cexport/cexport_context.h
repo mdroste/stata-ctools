@@ -33,6 +33,16 @@ typedef enum {
     VARTYPE_FORMATTED = 6
 } vartype_t;
 
+/* How the cells of a numeric variable are written */
+typedef enum {
+    CEXPORT_CELL_PLAIN = 0, /* the number */
+    CEXPORT_CELL_TIME  = 1, /* in its %t display format, never quoted */
+    CEXPORT_CELL_LABEL = 2  /* its value label's text; the number when unlabeled */
+} cexport_cell_t;
+
+/* A compiled %t display format (cexport_format.c) */
+typedef struct cexport_timefmt cexport_timefmt;
+
 /* ========================================================================
    Export Context and Configuration
    ======================================================================== */
@@ -57,7 +67,7 @@ typedef struct {
 
     /* I/O backend configuration */
     cexport_io_backend_t io_backend;  /* PWRITE or MMAP */
-    cexport_io_flags_t io_flags;      /* I/O flags (DIRECT, NOFSYNC, PREFAULT) */
+    cexport_io_flags_t io_flags;      /* I/O flags (DIRECT, PREFAULT) */
     bool use_parallel_io;        /* True to use parallel offset writes */
     bool skip_if;                /* No if condition: select the in-range */
     bool touse;                  /* Last plugin variable is a sample marker */
@@ -79,6 +89,20 @@ typedef struct {
 
     /* Variable storage types (for numeric precision) */
     vartype_t *vartypes;
+
+    /* Display handling of numeric variables, [nvars] each; all NULL when
+     * every cell is the plain number. timefmt[j] and labelmap[j] are owned
+     * and set for the matching cell_kind[j]; cell_reserve[j] bounds the
+     * bytes such a cell can take. */
+    unsigned char *cell_kind;     /* cexport_cell_t */
+    cexport_timefmt **timefmt;
+    void **labelmap;              /* cdecode label maps */
+    size_t *cell_reserve;
+    /* Set with them by their owner (cexport_impl.c): the label of a value
+     * in a map (NULL when it has none), and the release of all of the
+     * above, which cexport_context_cleanup() calls. */
+    const char *(*label_text)(const void *map, double value);
+    void (*cells_free)(void *ctx);
 
     /* Optimization flags */
     bool all_numeric;    /* True if all variables are numeric (fast path) */

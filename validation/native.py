@@ -28,6 +28,7 @@ COMPANIONS = {
         "creghdfe/creghdfe_core.c",
         "hdfe/hdfe_fe_recover.c",
         "hdfe/hdfe_indiv.c",
+        "hdfe/hdfe_missing.c",
     ],
     "crangestat/crangestat_impl.c": ["crangestat/crangestat_kernels.c"],
     "hdfe/hdfe_solver.c": [
@@ -58,6 +59,7 @@ COMPANIONS = {
         "cppmlhdfe/cppmlhdfe_simplex.c",
         "cppmlhdfe/cppmlhdfe_relu.c",
         "cppmlhdfe/cppmlhdfe_moments.c",
+        "hdfe/hdfe_missing.c",
     ],
     "io/cio.c": [
         "io/cio_context.c",
@@ -118,6 +120,11 @@ def compile_native(command, **kwargs):
     cancel = (source_root / "ctools_cancel.c").resolve()
     if cancel not in all_present and cancel.is_file():
         command.append(str(cancel))
+    # The release queue of command cleanups (ctools_release.h) is likewise
+    # SPI-free command state; outside stata_call() it frees at once.
+    release = (source_root / "ctools_release.c").resolve()
+    if release not in all_present and release.is_file():
+        command.append(str(release))
     with tempfile.TemporaryDirectory(prefix="ctools-native-modules-") as tmp:
         for index, path in sources:
             present = included_sources(path, includes)

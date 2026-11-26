@@ -691,6 +691,57 @@ benchmark_qreg y x1 x2, quantile(0.25) testname("50K obs: q=0.25")
 
 benchmark_qreg y x1 x2, quantile(0.75) testname("50K obs: q=0.75")
 
+* 500K observations: from 400,000 rows the main fit, and from 200,000 rows the
+* two auxiliary fits behind the fitted density, are solved on a band of rows
+* around a first fit and verified on every row (Portnoy-Koenker
+* preprocessing). The samples above all take the full solve.
+clear
+set seed 24680
+set obs 500000
+gen double x1 = rnormal()
+gen double x2 = runiform()
+gen double x3 = rnormal()
+gen double y = 1 + x1 - 2*x2 + 0.5*x3 + rnormal()
+* the spread of yh grows with |x3|, so the fitted slopes differ across
+* quantiles and rows outside the band can change sides
+gen double yh = 1 + x1 + (1 + 0.8*abs(x3))*rnormal()
+
+benchmark_qreg y x1 x2 x3, testname("500K obs: median (preprocessed)")
+
+benchmark_qreg y x1 x2 x3, quantile(0.10) testname("500K obs: q=0.10 (preprocessed)")
+
+benchmark_qreg yh x1 x3, quantile(0.75) vce(robust) testname("500K obs: heteroskedastic q=0.75, robust (preprocessed)")
+
+* 250K rows: the auxiliary fits use a band, the main fit the full solve
+benchmark_qreg y x1 x2 x3 in 1/250000, quantile(0.25) testname("250K obs: q=0.25 (band for the auxiliary fits)")
+
+* nopreprocess(1) solves the same fits on all rows: the coefficients and
+* standard errors agree with the preprocessed run, and the iteration counts
+* differ because the preprocessed run adds up several smaller solves
+cqreg y x1 x2 x3
+tempname b_pre V_pre
+matrix `b_pre' = e(b)
+matrix `V_pre' = e(V)
+local it_pre = e(iterations)
+cqreg y x1 x2 x3, nopreprocess(1)
+local it_full = e(iterations)
+local b_dif = mreldif(e(b), `b_pre')
+local V_dif = mreldif(e(V), `V_pre')
+if `b_dif' < 1e-12 & `V_dif' < 1e-9 & `it_full' != `it_pre' {
+    test_pass "500K obs: nopreprocess(1) solves on all rows and agrees with the preprocessed fit"
+}
+else {
+    test_fail "500K obs: nopreprocess(1)" "b reldif `b_dif', V reldif `V_dif', iterations `it_pre' (preprocessed) and `it_full' (full)"
+}
+* nopreprocess(0) is the default
+cqreg y x1 x2 x3, nopreprocess(0)
+if e(iterations) == `it_pre' & mreldif(e(b), `b_pre') == 0 {
+    test_pass "500K obs: nopreprocess(0) is the default"
+}
+else {
+    test_fail "500K obs: nopreprocess(0)" "iterations `=e(iterations)' against `it_pre' by default"
+}
+
 * SECTION 20: Numeric Precision - Very Large/Small Dependent Variables
 print_section "Numeric Precision - Large/Small Values"
 

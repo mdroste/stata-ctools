@@ -206,6 +206,28 @@ foreach pair in "qreg cqreg" "reghdfe creghdfe" "ivreghdfe civreghdfe" "ppmlhdfe
 program drop audit_estimator
 macro drop AUDIT_REFERENCE
 
+* A helper that reads a command's output back from a log captures nothing
+* when the call reaches it quietly, and then compares nothing with nothing.
+* _ct_loud must stop a quiet call, including one whose callee says noisily
+* (noisily cannot undo a caller's quietly), and let a noisy call run.
+program audit_loud_nested
+    noisily _ct_loud audit_loud_nested
+end
+capture quietly _ct_loud negative_control
+assert _rc == 198
+capture quietly audit_loud_nested
+assert _rc == 198
+quietly {
+    capture audit_loud_nested
+    assert _rc == 198
+    capture noisily audit_loud_nested
+    assert _rc == 0
+}
+capture noisily _ct_loud negative_control
+assert _rc == 0
+program drop audit_loud_nested
+global AUDIT_GUARDS = $AUDIT_GUARDS + 1
+
 * Summary/runner state must never describe skipped work as all tests passed.
 test_skip "injected skip" "negative control"
 capture print_summary "injected skip"

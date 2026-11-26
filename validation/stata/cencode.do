@@ -2365,6 +2365,7 @@ else test_fail "DATA-12 too many values" "encode r(`rc_native'), cencode r(`=_rc
 * code, variable names and types, and (unless "nodata") values agree.
 capture program drop _ct_output
 program define _ct_output, rclass
+    _ct_loud _ct_output
     tempfile f
     tempname fh
     capture log close _ctout
@@ -2461,7 +2462,7 @@ count if price > `mean'
 if `n_rich' == r(N) test_pass "ENC-01 if may name the caller's r()"
 else test_fail "ENC-01 if may name the caller's r()" "`n_rich' encoded"
 drop native_code make_code rich
-_ct_same_output "ENC-01 numeric source message" "encode price, gen(bad)" "cencode price, gen(bad)"
+noisily _ct_same_output "ENC-01 numeric source message" "encode price, gen(bad)" "cencode price, gen(bad)"
 * End of cencode validation
 do "validation/support/six_release_regressions.do" cencode
 noi print_summary "cencode"

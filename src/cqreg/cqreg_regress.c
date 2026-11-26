@@ -11,6 +11,7 @@
 #include "cqreg_sparsity.h"
 #include "cqreg_vce.h"
 #include "cqreg_linalg.h"
+#include "cqreg_blas.h"
 #include "../ctools_runtime.h"
 #include "../ctools_config.h"
 #include "../ctools_types.h"  /* For ctools_data_load */
@@ -295,6 +296,194 @@ static void cqreg_vce_iterations_error(void)
  * solver return codes are in *rc_lo and *rc_hi (<= 0: not converged).
  * Returns 0, or 920 on allocation failure (after reporting it).
  */
+/* Rows from which an auxiliary fit is solved on a band of rows */
+#define CQREG_GLOB_MIN_N 200000
+/* Half-width of the band in ranks of the residuals, as a share of N */
+#define CQREG_GLOB_DELTA 0.04
+#define CQREG_GLOB_SAMPLE 200000
+#define CQREG_GLOB_ROUNDS 5
+
+static int cqreg_glob_cmp(const void *a, const void *b)
+{
+    const ST_double x = *(const ST_double *)a, z = *(const ST_double *)b;
+    return (x > z) - (x < z);
+}
+
+/*
+ * One auxiliary quantile fit at tau, solved on a band of rows (Portnoy and
+ * Koenker 1997). start is a nearby solution (the main fit). Each round:
+ * residuals r = y - X b of the current coefficients; when the previous
+ * round's rows outside the band all kept their sign, b is the optimum of the
+ * full problem and the fit is done. Otherwise the rows whose residual lies
+ * between the tau -/+ delta quantiles of r (cut values from a systematic
+ * sample) form the band, the rows above and below it are summed into one
+ * pseudo-observation each, and the reduced problem is solved to an exact
+ * basic solution.
+ *
+ * Returns the solver's code (> 0) with beta filled in, or 0 when the fit
+ * should be made on all rows instead (small N, no gain, no verification
+ * within CQREG_GLOB_ROUNDS, allocation failure or a solver failure).
+ */
+static ST_int cqreg_aux_fit_globbed(const ST_double *y, const ST_double *X,
+                                    ST_int N, ST_int K, ST_double tau,
+                                    const ST_double *start,
+                                    const cqreg_ipm_config *aux_config,
+                                    ST_double *beta, ST_int *iterations)
+{
+    if (N < CQREG_GLOB_MIN_N) return 0;
+    ST_int result = 0, solver_rc = 0, have_side = 0, total_iterations = 0;
+    ST_double delta = CQREG_GLOB_DELTA;
+    ST_double *r = (ST_double *)malloc((size_t)N * sizeof(ST_double));
+    unsigned char *side = (unsigned char *)malloc((size_t)N);
+    ST_double *cur = (ST_double *)malloc((size_t)K * sizeof(ST_double));
+    const ST_int n_sample = N < CQREG_GLOB_SAMPLE ? N : CQREG_GLOB_SAMPLE;
+    ST_double *sample = (ST_double *)malloc((size_t)n_sample * sizeof(ST_double));
+    ST_double *Xs = NULL, *ys = NULL;
+    if (!r || !side || !cur || !sample) goto done;
+    memcpy(cur, start, (size_t)K * sizeof(ST_double));
+
+    for (int round = 0; round <= CQREG_GLOB_ROUNDS; round++) {
+        ST_int i;
+        blas_dgemv(0, N, K, 1.0, X, N, cur, 0.0, r);
+        #pragma omp parallel for schedule(static)
+        for (i = 0; i < N; i++) r[i] = y[i] - r[i];
+
+        if (have_side) {
+            /* 1 = summed as above the fit, 2 = as below it */
+            ST_int wrong = 0;
+            #pragma omp parallel for schedule(static) reduction(+ : wrong)
+            for (i = 0; i < N; i++)
+                wrong += (side[i] == 1 && !(r[i] > 0.0)) || (side[i] == 2 && !(r[i] < 0.0));
+            if (wrong == 0) {
+                memcpy(beta, cur, (size_t)K * sizeof(ST_double));
+                if (iterations) *iterations = total_iterations;
+                result = solver_rc;
+                goto done;
+            }
+            if ((ST_double)wrong > 0.001 * (ST_double)N) delta *= 2.0;
+        }
+        if (round == CQREG_GLOB_ROUNDS) break;
+
+        /* Cut values: the tau -/+ delta quantiles of a systematic sample */
+        const ST_int stride = N / n_sample;
+        for (i = 0; i < n_sample; i++) sample[i] = r[(size_t)i * stride];
+        qsort(sample, (size_t)n_sample, sizeof(ST_double), cqreg_glob_cmp);
+        const ST_double p_lo = tau - delta, p_hi = tau + delta;
+        const ST_double cut_lo = p_lo > 0.0 ? sample[(ST_int)(p_lo * (n_sample - 1))] : -DBL_MAX;
+        const ST_double cut_hi = p_hi < 1.0 ? sample[(ST_int)ceil(p_hi * (n_sample - 1))] : DBL_MAX;
+
+        ST_int n_band = 0, n_up = 0, n_dn = 0;
+        #pragma omp parallel for schedule(static) reduction(+ : n_band, n_up, n_dn)
+        for (i = 0; i < N; i++) {
+            const unsigned char where = r[i] > cut_hi ? 1 : (r[i] < cut_lo ? 2 : 0);
+            side[i] = where;
+            n_band += where == 0;
+            n_up += where == 1;
+            n_dn += where == 2;
+        }
+        /* No gain from a band of most rows; too few rows cannot carry the fit */
+        if (n_band > N / 2 || n_band < 20 * K + 1000) break;
+
+        const ST_int n_s = n_band + (n_up > 0) + (n_dn > 0);
+        free(Xs); free(ys);
+        Xs = (ST_double *)malloc((size_t)n_s * (size_t)K * sizeof(ST_double));
+        ys = (ST_double *)malloc((size_t)n_s * sizeof(ST_double));
+        if (!Xs || !ys) break;
+        /* Column by column (y last): the band's rows in order, then the sums
+         * of the rows above and of the rows below, each in row order */
+        ST_int col;
+        #pragma omp parallel for schedule(static)
+        for (col = 0; col <= K; col++) {
+            const ST_double *source = col < K ? X + (size_t)col * N : y;
+            ST_double *dest = col < K ? Xs + (size_t)col * n_s : ys;
+            ST_double sum_up = 0.0, sum_dn = 0.0;
+            ST_int pos = 0;
+            for (ST_int row = 0; row < N; row++) {
+                if (side[row] == 0) dest[pos++] = source[row];
+                else if (side[row] == 1) sum_up += source[row];
+                else sum_dn += source[row];
+            }
+            if (n_up > 0) dest[pos++] = sum_up;
+            if (n_dn > 0) dest[pos++] = sum_dn;
+        }
+
+        cqreg_ipm_config config = *aux_config;
+        config.skip_crossover = 0;      /* the reduced problem's exact basic solution */
+        config.start_beta = cur;
+        cqreg_ipm_state *ipm = cqreg_ipm_create_lite(n_s, K, &config);
+        if (!ipm) break;
+        solver_rc = cqreg_fn_solve(ipm, ys, Xs, tau, cur);
+        const int ok = solver_rc > 0 && ipm->converged;
+        total_iterations += ipm->iterations;
+        cqreg_ipm_free(ipm);
+        if (!ok) break;
+        have_side = 1;
+    }
+
+done:
+    free(r); free(side); free(cur); free(sample); free(Xs); free(ys);
+    return result;
+}
+
+/*
+ * Preprocessing for the main fit (Portnoy and Koenker 1997): the fit of a
+ * systematic subsample of about (K N)^(2/3) rows (a few times that, at least
+ * 100,000) starts the globbed fit of all rows. On success beta holds
+ * coefficients that solve the full problem (verified on every row) and
+ * *iterations the interior-point iterations used; returns 0 when the caller
+ * should run the full solve.
+ */
+static ST_int cqreg_main_fit_preprocessed(const ST_double *y, const ST_double *X,
+                                          ST_int N, ST_int K, ST_double tau,
+                                          const cqreg_ipm_config *main_config,
+                                          ST_double *beta, ST_int *iterations)
+{
+    if (N < CQREG_GLOB_MIN_N) return 0;
+    ST_double want = 3.0 * pow((ST_double)K * (ST_double)N, 2.0 / 3.0);
+    if (want < 100000.0) want = 100000.0;
+    if (want > (ST_double)N / 4.0) return 0;
+    const ST_int m = (ST_int)want;
+    const ST_int stride = N / m;
+    ST_int result = 0;
+    ST_double *Xm = (ST_double *)malloc((size_t)m * (size_t)K * sizeof(ST_double));
+    ST_double *ym = (ST_double *)malloc((size_t)m * sizeof(ST_double));
+    ST_double *start = (ST_double *)malloc((size_t)K * sizeof(ST_double));
+    cqreg_ipm_state *ipm = NULL;
+    if (!Xm || !ym || !start) goto done;
+    ST_int col;
+    #pragma omp parallel for schedule(static)
+    for (col = 0; col <= K; col++) {
+        const ST_double *source = col < K ? X + (size_t)col * N : y;
+        ST_double *dest = col < K ? Xm + (size_t)col * m : ym;
+        for (ST_int row = 0; row < m; row++) dest[row] = source[(size_t)row * stride];
+    }
+    cqreg_ipm_config config = *main_config;
+    config.verbose = 0;
+    config.skip_crossover = 1;      /* only a starting point for the band */
+    config.tol_gap = 1e-8;
+    config.start_beta = NULL;
+    config.start_is_solution = 0;
+    ipm = cqreg_ipm_create_lite(m, K, &config);
+    if (!ipm) goto done;
+    ST_int sub_rc = cqreg_fn_solve(ipm, ym, Xm, tau, start);
+    if (!(sub_rc > 0 && ipm->converged)) goto done;
+    ST_int sub_iterations = ipm->iterations, glob_iterations = 0;
+    cqreg_ipm_free(ipm);
+    ipm = NULL;
+    free(Xm); Xm = NULL;
+    free(ym); ym = NULL;
+
+    config = *main_config;
+    config.verbose = 0;
+    result = cqreg_aux_fit_globbed(y, X, N, K, tau, start, &config, beta, &glob_iterations);
+    if (result > 0 && iterations) *iterations = sub_iterations + glob_iterations;
+
+done:
+    cqreg_ipm_free(ipm);
+    free(Xm); free(ym); free(start);
+    return result;
+}
+
 static ST_retcode cqreg_auxiliary_fits(const ST_double *y, const ST_double *X,
                                        ST_int N, ST_int K,
                                        ST_double q_lo, ST_double q_hi,
@@ -324,6 +513,27 @@ static ST_retcode cqreg_auxiliary_fits(const ST_double *y, const ST_double *X,
     aux_config.tol_gap = 1e-8;
     aux_config.verbose = 0;
     aux_config.skip_crossover = skip_cross;
+
+    /* Large samples: both fits on bands of rows around the main fit, which
+     * the main state still holds; a fit that does not verify is redone on
+     * all rows below. nopreprocess() leaves both to the full solves. */
+    if (N >= CQREG_GLOB_MIN_N && main_ipm->beta != NULL && !main_ipm->config.no_preprocess) {
+        double t_glob_start = ctools_timer_seconds();
+        ST_double *start = (ST_double *)malloc((size_t)K * sizeof(ST_double));
+        if (start != NULL) {
+            memcpy(start, main_ipm->beta, (size_t)K * sizeof(ST_double));
+            ST_int glob_lo = cqreg_aux_fit_globbed(y, X, N, K, q_lo, start, &aux_config, *beta_lo, NULL);
+            ST_int glob_hi = glob_lo > 0
+                ? cqreg_aux_fit_globbed(y, X, N, K, q_hi, start, &aux_config, *beta_hi, NULL) : 0;
+            free(start);
+            if (glob_lo > 0 && glob_hi > 0) {
+                SF_scal_save("_cqreg_time_sparsity_aux", ctools_timer_seconds() - t_glob_start);
+                *rc_lo = glob_lo;
+                *rc_hi = glob_hi;
+                return 0;
+            }
+        }
+    }
 
     cqreg_ipm_state *ipm_hi = cqreg_ipm_create_lite(N, K, &aux_config);
     if (ipm_hi == NULL) {
@@ -920,6 +1130,9 @@ ST_retcode cqreg_full_regression(const char *args)
     ST_int verbose = read_scalar_int("__cqreg_verbose", 0);
     ST_double tolerance = read_scalar("__cqreg_tolerance", 1e-12);
     ST_int maxiter = read_scalar_int("__cqreg_maxiter", 200);
+    /* nopreprocess(#) with # > 0: no preprocessing in large samples. A wrapper
+     * that predates the option does not set the scalar. */
+    ST_int nopreprocess = read_scalar_int("__cqreg_nopreprocess", 0) != 0;
     /* Kernel method: kernel and invnormal(q+h) - invnormal(q-h) from Stata */
     ST_int kernel = read_scalar_int("__cqreg_kernel", CQREG_KERNEL_EPANECHNIKOV);
     ST_double kfactor = read_scalar("__cqreg_kfactor", -1.0);
@@ -1376,6 +1589,7 @@ ST_retcode cqreg_full_regression(const char *args)
     cqreg_ipm_config_init(&ipm_config);
     ipm_config.maxiter = maxiter;
     ipm_config.tol_gap = tolerance;
+    ipm_config.no_preprocess = nopreprocess;
     ipm_config.verbose = verbose;
 
 
@@ -1392,7 +1606,36 @@ ST_retcode cqreg_full_regression(const char *args)
     main_debug_log("IPM state created. Solving...\n");
 
     /* Solve quantile regression with the Frisch-Newton interior point method */
-    ST_int ipm_result = cqreg_fn_solve(state->ipm, Ys, Xs, quantile, state->beta);
+    /* Large samples: preprocessing finds the solution on a band of rows; the
+     * solver then only crosses over from it on all rows. Anything that does
+     * not verify is solved in full, as is everything with nopreprocess(). */
+    ST_int ipm_result = 0;
+    {
+        ST_int pre_iterations = 0;
+        const double pre_start = ctools_timer_seconds();
+        ST_double *pre_beta = (ST_double *)malloc((size_t)K * sizeof(ST_double));
+        if (pre_beta != NULL && !nopreprocess &&
+            cqreg_main_fit_preprocessed(Ys, Xs, N, K, quantile, &ipm_config, pre_beta,
+                                        &pre_iterations) > 0) {
+            const double pre_seconds = ctools_timer_seconds() - pre_start;
+            cqreg_ipm_config saved_main = state->ipm->config;
+            state->ipm->config.start_beta = pre_beta;
+            state->ipm->config.start_is_solution = 1;
+            ipm_result = cqreg_fn_solve(state->ipm, Ys, Xs, quantile, state->beta);
+            state->ipm->config = saved_main;
+            if (ipm_result > 0 && state->ipm->converged) {
+                state->ipm->iterations = pre_iterations;
+                /* reported as the iteration phase in the verbose timing */
+                state->ipm->time_iterate = pre_seconds;
+                ipm_result = pre_iterations > 0 ? pre_iterations : 1;
+            } else {
+                ipm_result = 0;
+            }
+        }
+        free(pre_beta);
+    }
+    if (ipm_result <= 0)
+        ipm_result = cqreg_fn_solve(state->ipm, Ys, Xs, quantile, state->beta);
 
     main_debug_log("Solver returned %d\n", ipm_result);
 

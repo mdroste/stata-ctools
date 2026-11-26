@@ -45,15 +45,19 @@ int remap_values_sorted(const double *values, ST_int N, ST_int *levels_out, ST_i
  * ======================================================================== */
 
 /*
- * Remap FE values to contiguous 1-based levels with fused counting.
- * Uses direct counting for dense integer values and hashing for sparse
- * or non-integer values.
+ * Remap FE values to contiguous 1-based levels, numbered in order of first
+ * appearance, with optional counts.
+ * Uses O(N) counting-based approach for integer values (common case) and a
+ * hash for non-integer or very sparse values; a table that cannot be
+ * allocated is an error. The direct-table path runs in parallel over row
+ * blocks (same levels) outside parallel regions.
  *
  * @param values      Input: N FE values (already filtered, no missing)
  * @param N           Number of observations
  * @param levels_out  Output: 1-based level per obs (pre-allocated, N elements)
  * @param num_levels  Output: number of unique levels
- * @param counts_out  Output: per-level counts, allocated here (caller frees)
+ * @param counts_out  Output: per-level counts, allocated here (caller frees);
+ *                    NULL skips the counts
  * @param weights     Optional: per-obs weights (NULL if no weights)
  * @param wcounts_out Output: weighted counts, allocated if weights != NULL (caller frees)
  * @return 0 on success, -1 on error
@@ -62,5 +66,14 @@ int remap_values_sorted(const double *values, ST_int N, ST_int *levels_out, ST_i
  * may be partially written and must not be read until the call succeeds. */
 int remap_and_count(const double *values, ST_int N, ST_int *levels_out, ST_int *num_levels,
                     ST_int **counts_out, const double *weights, ST_double **wcounts_out);
+
+/*
+ * The levels of remap_and_count() without counts, for callers that
+ * renumber them (hdfe_build_factors) or need only the partition they define
+ * (singleton removal): sparse and non-integer codes are then also hashed in
+ * parallel, and numbered in an order that depends on the values and N but
+ * is not first appearance. Returns 0, or -1 with num_levels zero.
+ */
+int hdfe_remap_levels(const double *values, ST_int N, ST_int *levels_out, ST_int *num_levels);
 
 #endif /* CTOOLS_HDFE_REMAP_H */

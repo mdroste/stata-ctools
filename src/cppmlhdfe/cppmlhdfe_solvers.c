@@ -166,6 +166,17 @@ int ppml_qrsolve(const double *X, const double *y, const double *w, int N, int K
     return 0;
 }
 
+/* A loop over the rows whose iterations are independent: in parallel, unless
+ * the caller already runs one column per thread. Such a loop computes each
+ * row from that row alone, so the threads change no result. */
+#ifdef _OPENMP
+#define PPML_PRAGMA(text) _Pragma(#text)
+#define PPML_ROWS_PARALLEL(n)                                                                      \
+    PPML_PRAGMA(omp parallel for schedule(static) if ((n) > 100000 && !omp_in_parallel()))
+#else
+#define PPML_ROWS_PARALLEL(n)
+#endif
+
 int ppml_joint_slope(const HDFE_State *S, int g)
 {
     if (S->factors[g].slope || g + 1 >= S->G)
@@ -208,7 +219,11 @@ static void ppml_project_slot(HDFE_State *S, double *y, int g, int tid)
         for (int l = 0; l < f->num_levels; l++)
             b[l] *= h->inv_weighted_counts[l];
     }
-    for (int i = 0; i < S->N; i++)
+    /* (the sums above run over the rows in order; each row's own update
+     * below is independent of the others) */
+    int i;
+    PPML_ROWS_PARALLEL(S->N)
+    for (i = 0; i < S->N; i++)
     {
         int l = f->levels[i] - 1;
         double x = f->slope ? f->slope[i] - (f->slope_center ? f->slope_center[l] : 0) : 1;
@@ -226,7 +241,10 @@ void ppml_project(HDFE_State *S, double *y, int g)
 
 static void ppml_transform_slot(HDFE_State *S, const double *y, double *ans, int tid)
 {
-    memcpy(ans, y, (size_t)S->N * sizeof(double));
+    int i;
+    PPML_ROWS_PARALLEL(S->N)
+    for (i = 0; i < S->N; i++)
+        ans[i] = y[i];
     int groups[10], n = 0;
     for (int g = 0; g < S->G; g++)
     {
@@ -238,13 +256,37 @@ static void ppml_transform_slot(HDFE_State *S, const double *y, double *ans, int
         ppml_project_slot(S, ans, groups[g], tid);
     for (int g = n - 2; g >= 0; g--)
         ppml_project_slot(S, ans, groups[g], tid);
-    for (int i = 0; i < S->N; i++)
+    PPML_ROWS_PARALLEL(S->N)
+    for (i = 0; i < S->N; i++)
         ans[i] = y[i] - ans[i];
 }
 
 void ppml_transform(HDFE_State *S, const double *y, double *ans)
 {
     ppml_transform_slot(S, y, ans, 0);
+}
+
+/* Rounding floor of the conjugate-gradient loops below, as in
+ * cg_solve_column_threaded() (hdfe_solver.c, where the margin is derived):
+ * no step is taken from a residual within PPML_CG_ROUNDING^2 of the sum of
+ * squares its round started from. reghdfe's absolute thresholds, which these
+ * loops keep, end a solve before that for ordinary columns; a column whose
+ * mean is around 1e6 standard deviations got past them and diverged until
+ * the iteration limit. Returns 1 when the column is finished, else starts
+ * the next round from the column as it is (the caller recomputes residual
+ * and direction). */
+#define PPML_CG_ROUNDING (32.0 * 2.220446049250313e-16)
+#define PPML_CG_ROUNDS 3
+static int ppml_round_end(const HDFE_State *S, const double *y, int N, int *round,
+                          double *potential, double *scale, double *rounding)
+{
+    double left = ppml_quad_dot(y, y, S->weights, N);
+    if (*round >= PPML_CG_ROUNDS || 4.0 * left >= *scale)
+        return 1;
+    (*round)++;
+    *potential = *scale = left;
+    *rounding = PPML_CG_ROUNDING * PPML_CG_ROUNDING * left;
+    return 0;
 }
 
 /* Reference projection: CG on the symmetric Kaczmarz operator with
@@ -257,8 +299,23 @@ HDFE_SolveResult ppml_reference_partial(HDFE_State *S, double *data, int N, int 
     if (ctools_cancel_requested()) return (HDFE_SolveResult){1, 0, 0};
     if (S->G == 1)
         return partial_out_columns(S, data, N, K, 1);
+    /* This stays the iteration on the rows, stopped at its tolerance: the
+     * ReLU separation check reads the residuals of rows a million times
+     * lighter than the others, and what it concludes on quasi-separated
+     * panels follows that iteration's (and ppmlhdfe's) inexactness there. An
+     * exact solve for the coefficients flagged one more observation on the
+     * low-mobility panels of validation/stata/cppmlhdfe.do.
+     *
+     * With columns to spare the columns run in parallel, each on its own
+     * thread. With few columns (the single column of each ReLU step, the two
+     * or three of its basis) most threads would idle: the columns then run
+     * one after the other and the loops over the rows inside them run in
+     * parallel. Every sum is taken in the same order either way, so the
+     * result is the same bit for bit. */
     int slots = S->num_threads < K ? S->num_threads : K;
     if (slots < 1)
+        slots = 1;
+    if (2 * K <= S->num_threads)
         slots = 1;
     int maxiter = 0, failed = 0;
     int k;
@@ -280,15 +337,29 @@ HDFE_SolveResult ppml_reference_partial(HDFE_State *S, double *data, int N, int 
             ppml_transform_slot(S, y, r, tid);
             double ssr = ppml_quad_dot(r, r, S->weights, N);
             memcpy(u, r, N * sizeof(double));
+            double scale = potential, rounding = isfinite(scale) ? PPML_CG_ROUNDING * PPML_CG_ROUNDING * scale : -1;
+            int round = 1;
             int iter;
             for (iter = 1; iter <= S->maxiter; iter++)
             {
                 if (ctools_cancel_requested()) break;
+                if (ssr <= rounding)
+                {
+                    if (ppml_round_end(S, y, N, &round, &potential, &scale, &rounding))
+                        break;
+                    ppml_transform_slot(S, y, r, tid);
+                    ssr = ppml_quad_dot(r, r, S->weights, N);
+                    memcpy(u, r, N * sizeof(double));
+                    if (ssr <= rounding)
+                        break;
+                }
                 ppml_transform_slot(S, u, v, tid);
                 double alpha = ssr / fmax(ppml_quad_dot(u, v, S->weights, N), DBL_EPSILON);
                 double recent = alpha * ssr;
                 potential -= recent;
-                for (int i = 0; i < N; i++)
+                int i;
+                PPML_ROWS_PARALLEL(N)
+                for (i = 0; i < N; i++)
                 {
                     y[i] -= alpha * u[i];
                     r[i] -= alpha * v[i];
@@ -296,7 +367,8 @@ HDFE_SolveResult ppml_reference_partial(HDFE_State *S, double *data, int N, int 
                 double old = ssr;
                 ssr = ppml_quad_dot(r, r, S->weights, N);
                 double beta = ssr / fmax(old, DBL_EPSILON);
-                for (int i = 0; i < N; i++)
+                PPML_ROWS_PARALLEL(N)
+                for (i = 0; i < N; i++)
                     u[i] = r[i] + beta * u[i];
                 double error = fabs(recent) < 1e-15 ? 0 : recent / fmax(potential, DBL_EPSILON);
                 if (error <= S->tolerance * S->tolerance)
@@ -537,7 +609,8 @@ HDFE_SolveResult ppml_map_options(const PPML_Options *options, HDFE_State *S, do
         double *y = data + (size_t)k * N;
         double initial = ppml_quad_dot(y, y, NULL, N),
                potential = ppml_quad_dot(y, y, S->weights, N), ssr = 0;
-        int method = options->acceleration, iter;
+        int method = options->acceleration, iter, round = 1;
+        double scale = potential, rounding = isfinite(scale) ? PPML_CG_ROUNDING * PPML_CG_ROUNDING * scale : -1;
         if (method == 0 || method == 4)
         {
             ppml_transform_option(options, S, y, r, work);
@@ -556,6 +629,19 @@ HDFE_SolveResult ppml_map_options(const PPML_Options *options, HDFE_State *S, do
                     ssr = ppml_quad_dot(r, r, S->weights, N);
                     potential = ppml_quad_dot(y, y, S->weights, N);
                     memcpy(u, r, (size_t)N * sizeof(double));
+                    scale = potential;
+                    rounding = isfinite(scale) ? PPML_CG_ROUNDING * PPML_CG_ROUNDING * scale : -1;
+                    round = 1;
+                }
+                if (ssr <= rounding)
+                {
+                    if (ppml_round_end(S, y, N, &round, &potential, &scale, &rounding))
+                        break;
+                    ppml_transform_option(options, S, y, r, work);
+                    ssr = ppml_quad_dot(r, r, S->weights, N);
+                    memcpy(u, r, (size_t)N * sizeof(double));
+                    if (ssr <= rounding)
+                        break;
                 }
                 ppml_transform_option(options, S, u, v, work);
                 double alpha = ssr / fmax(ppml_quad_dot(u, v, S->weights, N), DBL_EPSILON);
@@ -638,19 +724,20 @@ HDFE_SolveResult ppml_partial(const PPML_Options *options, HDFE_State *S, double
     HDFE_SolveResult out = {0, 1, 0};
     for (int k = 0; k < K; k += pool)
     {
-        /* The iteration on the rows, not the coefficient-space solve that
-         * partial_out_columns() would choose (hdfe_coef.h). The IRLS weights
-         * of zero outcomes whose mean heads to zero fall without bound, and
-         * an effect tied to the others only through such rows then has a
-         * pivot below rounding: a solve for the coefficients cannot place
-         * it, and the refit of eta after the last iteration threw those rows
-         * back by several units (low-mobility two-way panels at
-         * tolerance(1e-12), validation/stata/cppmlhdfe.do). The row
-         * iteration never divides by that pivot, and the IRLS above is
-         * built around how it treats those rows. */
-        (void)threads;
-        HDFE_SolveResult part = partial_out_columns_options(S, data + (size_t)k * N, N,
-                                                            K - k < pool ? K - k : pool, 0, 1);
+        /* partial_out_columns() solves categorical effects for their
+         * coefficients (hdfe_coef.h), with every thread on the rows whatever
+         * K is; the iteration on the rows runs one column per thread. The
+         * IRLS weights of zero outcomes whose mean heads to zero fall
+         * without bound, and an effect tied to the others only through such
+         * rows then has a pivot below rounding that a solve for the
+         * coefficients cannot place (the refit of eta after the last
+         * iteration threw those rows back by several units on low-mobility
+         * two-way panels at tolerance(1e-12), validation/stata/cppmlhdfe.do).
+         * hdfe_coef_applies() therefore declines weights that span more than
+         * HDFE_COEF_WEIGHT_SPAN, and those iterations run on the rows, which
+         * never divide by that pivot. */
+        HDFE_SolveResult part = partial_out_columns(S, data + (size_t)k * N, N,
+                                                    K - k < pool ? K - k : pool, threads);
         if (part.status)
             return part;
         if (part.iterations > out.iterations)

@@ -3,6 +3,7 @@
 #include "cppmlhdfe_options.h"
 #include "cppmlhdfe_irls.h"
 #include "hdfe/hdfe_solver.h"
+#include "hdfe/hdfe_coef.h"
 #include "ctools_types.h"
 #include "ctools_ols.h"
 #include "ctools_config.h"
@@ -58,4 +59,9 @@ ST_double ppml_compute_deviance(const ST_double *y, const ST_double *eta, const 
                                 const ST_double *w_user, ST_int N);
 ST_double ppml_compute_loglik(const ST_double *y, const ST_double *eta, const ST_double *offset,
                               ST_double log_scale, const ST_double *w_user, ST_int N);
+/* ppml_compute_loglik for eta and for the constant eta0 (no offset or
+ * scale) in one pass: the same two results as two calls */
+void ppml_compute_loglik_pair(const ST_double *y, const ST_double *eta, const ST_double *offset,
+                              ST_double log_scale, const ST_double *w_user, ST_double eta0, ST_int N,
+                              ST_double *ll, ST_double *ll0);
 #endif

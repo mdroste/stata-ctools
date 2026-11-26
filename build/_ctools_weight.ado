@@ -1,8 +1,25 @@
 *! version 1.3.1 20261124 github.com/mdroste/stata-ctools
 *! ctools weight-expression staging; caller owns generate() tempvar
+* Sets the caller's local __ctools_wvar to the variable that holds the
+* weights: generate(), filled here and checked. With option marked the
+* caller's marksample has seen this weight: the sample then leaves out zero
+* and missing weights, and Stata has refused negative weights (r(402)) and
+* noninteger frequency weights (r(401)). A weight that is one numeric
+* variable is then used as it is, and generate() is not created.
 program define _ctools_weight
     version 14.1
-    syntax, Generate(name) TOUse(varname) TYPE(string) EXPression(string)
+    syntax, Generate(name) TOUse(varname) TYPE(string) EXPression(string) [MARKED]
+    c_local __ctools_wvar `generate'
+    if "`marked'" != "" {
+        local wexp = strtrim(substr(strtrim(`"`expression'"'), 2, .))
+        if `: word count `wexp'' == 1 {
+            capture confirm numeric variable `wexp', exact
+            if !_rc {
+                c_local __ctools_wvar `wexp'
+                exit
+            }
+        }
+    }
     confirm new variable `generate'
     quietly generate double `generate' `expression' if `touse'
     markout `touse' `generate'

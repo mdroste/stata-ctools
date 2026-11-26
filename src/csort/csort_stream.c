@@ -59,6 +59,7 @@
 #include "ctools_config.h"
 #include "ctools_runtime.h"
 #include "ctools_spi.h"
+#include "ctools_rowstage.h"
 #include "csort_stream.h"
 
 /* ============================================================================
@@ -389,9 +390,11 @@ static stata_retcode stream_permute_string_var_flat(
     return STATA_OK;
 }
 
-/* The ado owns a preserve/restore transaction for every streaming call,
- * including automatic streaming. A failed transfer stops this pass and the
- * caller restores the entire dataset, including already permuted columns. */
+/* No copy of the dataset exists while this runs: the ado keeps none, and
+ * streaming never holds the non-key columns in C. Every buffer is allocated
+ * before the first write, so only an SPI transfer can fail from here on. A
+ * failed transfer stops the pass and leaves the columns permuted so far in
+ * their new order. */
 static stata_retcode stream_plan_run(
     const stream_plan *plan, size_t nobs, const perm_idx_t *obs_map,
     csort_stream_timings *timings)
@@ -518,6 +521,32 @@ stata_retcode csort_stream_apply_permutation(
     return rc;
 }
 
+/* Stream in groups of variables: each group of vars_per_batch variables, in
+ * dataset order and keys included, is staged row by row and written back in
+ * sorted order before the next group is read. Reading or writing one variable
+ * walks every Stata observation, so moving a group of them in one row-tiled
+ * pass replaces two walks per variable with two per group, while C still holds
+ * one group at a time. A failed store puts that group's original observations
+ * back; earlier groups stay in their new order, as in the column stream. */
+static stata_retcode stream_rowstaged(const int *all_vars, size_t nvars, const int *str_widths,
+                                      const perm_idx_t *order, size_t obs1, size_t nobs,
+                                      int vars_per_batch)
+{
+    size_t batch = vars_per_batch > 0 ? (size_t)vars_per_batch : 1;
+    for (size_t first = 0; first < nvars; first += batch) {
+        size_t count = nvars - first < batch ? nvars - first : batch;
+        ctools_rowstage rs;
+        stata_retcode rc = ctools_rowstage_load(&rs, all_vars + first, count, str_widths, obs1, nobs);
+        if (rc != STATA_OK) return rc;
+        rc = ctools_rowstage_store(&rs, order, nobs, obs1);
+        if (rc != STATA_OK && ctools_rowstage_store(&rs, NULL, nobs, obs1) != STATA_OK)
+            SF_error("csort: could not restore the original observations\n");
+        ctools_rowstage_free(&rs);
+        if (rc != STATA_OK) return rc;
+    }
+    return STATA_OK;
+}
+
 /* ============================================================================
    Main Entry Point
    ============================================================================ */
@@ -630,6 +659,22 @@ stata_retcode csort_stream_sort(
     local_timings.sort_time = ctools_timer_seconds() - t_phase;
 
     if (rc != STATA_OK) {
+        goto cleanup;
+    }
+
+    /* Every column can be staged and the observations are one range: move
+       the dataset in groups of staged variables (keys included). */
+    if (!key_filtered.was_filtered &&
+        ctools_rowstage_supported(all_var_indices, nvars, str_widths, nobs)) {
+        t_phase = ctools_timer_seconds();
+        const perm_idx_t *order = key_filtered.data.sort_order;
+        int identity = 1;
+        for (i = 0; i < nobs && identity; i++) identity = order[i] == (perm_idx_t)i;
+        if (!identity) {
+            rc = stream_rowstaged(all_var_indices, nvars, str_widths, order, (size_t)obs_map[0],
+                                  nobs, vars_per_batch);
+        }
+        local_timings.stream_nonkeys_time = ctools_timer_seconds() - t_phase;
         goto cleanup;
     }
 

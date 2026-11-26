@@ -8,6 +8,8 @@
 #include "hdfe/hdfe_sample.h"
 #include "hdfe/hdfe_remap.h"
 #include "hdfe/hdfe_solver.h"
+#include "hdfe/hdfe_missing.h"
+#include "ctools_release.h"
 #include <limits.h>
 #include <float.h>
 
@@ -47,6 +49,12 @@ static double chdfe_unit_scale(double *x, int n)
     return scale;
 }
 
+static void chdfe_release_state(void *arg)
+{
+    ctools_hdfe_state_cleanup((HDFE_State *)arg);
+    free(arg);
+}
+
 ST_retcode chdfe_main(const char *args)
 {
     int k, g, c, weighted, keepsingletons, maxiter, flags, pool, transform, accel, groupout;
@@ -67,6 +75,13 @@ ST_retcode chdfe_main(const char *args)
     if (!isfinite(tolerance) || tolerance < 1e-16 || tolerance >= 1)
         return 198;
     const int rowspace = ctools_parse_bool_option(cursor, "rowspace");
+    /* fillall: every output (and sample()/groupvar()) is written on every
+     * observation, missing (or 0 for sample()) outside the sample, so the
+     * wrapper creates them without filling; _chdfe_filled acknowledges it.
+     * screen: rows missing in any loaded variable are dropped here (the
+     * marker cleared) instead of by the wrapper's markouts. */
+    const int fillall = ctools_parse_bool_option(cursor, "fillall");
+    const int screen = ctools_parse_bool_option(cursor, "screen");
     ST_retcode rc = 920;
     HDFE_State state = {0};
     ctools_filtered_data fd;
@@ -80,6 +95,9 @@ ST_retcode chdfe_main(const char *args)
     FE_Factor *intercepts = calloc(g, sizeof(*intercepts));
     int *imap = calloc(g, sizeof(*imap)), *inested = calloc(g, sizeof(*inested));
     int *ired = calloc(g, sizeof(*ired)), *clusters = NULL, *mobility = NULL;
+    const double **store_cols = NULL;
+    int *store_vars = NULL;
+    double *store_mobility = NULL;
     ctools_UnionFind *uf = NULL;
     if (!raw || !slopes || !levels || !sizes || !nested || !redundant || !values || !intercepts ||
         !imap || !inested || !ired)
@@ -124,23 +142,36 @@ ST_retcode chdfe_main(const char *args)
                                           CTOOLS_LOAD_MARKER | CTOOLS_LOAD_NO_SORT_ORDER));
     if (rc)
         goto cleanup;
+    if (screen && (rc = hdfe_screen_missing(&fd, SF_nvars())))
+        goto cleanup;
     int nin = (int)fd.data.nobs;
     if (!nin)
     {
         rc = 2000;
         goto cleanup;
     }
-    /* Ado marks missing values; validate the private protocol before remapping. */
-    for (int j = 0; j < inputs; j++)
-        for (int i = 0; i < nin; i++)
+    /* Without screen the ado marked missing values out: validate the private
+     * protocol before remapping (Stata holds no infinities or NaNs, and every
+     * value at or above missval is missing). */
+    if (!screen)
+    {
+        const double missval = SV_missval;
+        int invalid = 0;
+#pragma omp parallel for schedule(static) reduction(| : invalid) if (inputs > 1 && (size_t)nin * inputs > 200000)
+        for (int j = 0; j < inputs; j++)
         {
-            if (SF_is_missing(fd.data.vars[j].data.dbl[i]) ||
-                !isfinite(fd.data.vars[j].data.dbl[i]))
-            {
-                rc = 198;
-                goto cleanup;
-            }
+            const double *column = fd.data.vars[j].data.dbl;
+            int bad = 0;
+            for (int i = 0; i < nin; i++)
+                bad |= !(column[i] < missval && column[i] > -INFINITY);
+            invalid |= bad;
         }
+        if (invalid)
+        {
+            rc = 198;
+            goto cleanup;
+        }
+    }
     const double *win = weighted ? fd.data.vars[inputs - 1].data.dbl : NULL;
     if (win)
         for (int i = 0; i < nin; i++)
@@ -199,14 +230,21 @@ ST_retcode chdfe_main(const char *args)
         rc = 920;
         goto cleanup;
     }
-    for (int i = 0, q = 0; i < nin; i++)
-        if (keep[i])
-        {
-            obs[q] = fd.obs_map[i];
-            if (weights)
-                weights[q] = win[i];
-            q++;
-        }
+    if (n == nin)
+    {
+        memcpy(obs, fd.obs_map, (size_t)n * sizeof(*obs));
+        if (weights)
+            memcpy(weights, win, (size_t)n * sizeof(*weights));
+    }
+    else
+        for (int i = 0, q = 0; i < nin; i++)
+            if (keep[i])
+            {
+                obs[q] = fd.obs_map[i];
+                if (weights)
+                    weights[q] = win[i];
+                q++;
+            }
     state.weights = weights;
     state.has_weights = weighted != 0;
     state.tolerance = tolerance;
@@ -426,7 +464,9 @@ ST_retcode chdfe_main(const char *args)
     }
     data = malloc((size_t)n * batch * sizeof(*data));
     scales = malloc((size_t)batch * sizeof(*scales));
-    if (!data || !scales)
+    store_cols = malloc((size_t)(batch > 2 ? batch : 2) * sizeof(*store_cols));
+    store_vars = malloc((size_t)(batch > 2 ? batch : 2) * sizeof(*store_vars));
+    if (!data || !scales || !store_cols || !store_vars)
     {
         rc = 920;
         goto cleanup;
@@ -436,25 +476,36 @@ ST_retcode chdfe_main(const char *args)
     for (int base = 0; base < k; base += batch)
     {
         int width = k - base < batch ? k - base : batch;
-        for (int j = 0; j < width; j++)
-            for (int i = 0, q = 0; i < nin; i++)
-                if (keep[i])
-                    data[(size_t)j * n + q++] = fd.data.vars[base + j].data.dbl[i];
+        /* The columns are independent: compact, rescale and check each on its
+         * own thread; the first failure in column order is reported as before */
+        int column_error = 0;
+#pragma omp parallel for schedule(static) reduction(max : column_error) if (width > 1 && (size_t)n * width > 200000)
         for (int j = 0; j < width; j++) {
-            scales[j] = chdfe_unit_scale(data + (size_t)j * n, n);
-            if (!isfinite(scales[j])) {
-                ctools_error("chdfe", "variable range is too wide to preserve the projection; rescale or restrict the input");
-                rc = 498;
-                goto cleanup;
+            double *column = data + (size_t)j * n;
+            const double *loaded = fd.data.vars[base + j].data.dbl;
+            if (n == nin)
+                memcpy(column, loaded, (size_t)n * sizeof(*column));
+            else
+                for (int i = 0, q = 0; i < nin; i++)
+                    if (keep[i])
+                        column[q++] = loaded[i];
+            scales[j] = chdfe_unit_scale(column, n);
+            int status = 0;
+            if (!isfinite(scales[j]))
+                status = 2 * (width - j) + 1;
+            for (int i = 0; !status && weights && i < n; i++) {
+                double value = column[i];
+                if (value != 0 && weights[i] * value * value == 0)
+                    status = 2 * (width - j);
             }
-            for (int i = 0; weights && i < n; i++) {
-                double value = data[(size_t)j * n + i];
-                if (value != 0 && weights[i] * value * value == 0) {
-                    ctools_error("chdfe", "weighted variable norm underflows; rescale or restrict the input");
-                    rc = 498;
-                    goto cleanup;
-                }
-            }
+            if (status > column_error) column_error = status;
+        }
+        if (column_error) {
+            ctools_error("chdfe", (column_error & 1)
+                ? "variable range is too wide to preserve the projection; rescale or restrict the input"
+                : "weighted variable norm underflows; rescale or restrict the input");
+            rc = 498;
+            goto cleanup;
         }
         double tick = ctools_timer_seconds();
         /* transform() or acceleration() given: that iteration, on the rows */
@@ -472,19 +523,9 @@ ST_retcode chdfe_main(const char *args)
         if (result.iterations > iterations)
             iterations = result.iterations;
         tick = ctools_timer_seconds();
-        for (int j = 0; j < width; j++)
-            for (int i = 0; i < n; i++)
-            {
-                double *value = data + (size_t)j * n + i;
-                *value *= scales[j];
-                if (!isfinite(*value) || SF_is_missing(*value))
-                {
-                    rc = 498;
-                    goto cleanup;
-                }
-            }
         /* A retained singleton intercept spans its row exactly. Publishing
-         * zero avoids reporting solver roundoff as a nonzero residual. */
+         * zero avoids reporting solver roundoff as a nonzero residual (zero
+         * stays zero when the column's scale is applied in the store). */
         if (keepsingletons)
             for (int h = 0; h < g; h++)
                 if (!slopes[h])
@@ -495,21 +536,90 @@ ST_retcode chdfe_main(const char *args)
                             for (int j = 0; j < width; j++)
                                 data[(size_t)j * n + i] = 0;
                 }
-        for (int j = 0; j < width; j++)
+        /* One pass over the records for the whole batch: the outputs are
+         * adjacent in each record (one st_addvar), the power-of-two scale is
+         * undone and every value checked as it is stored. With fillall the
+         * rows outside the sample get missing, as a filled variable has. */
         {
-            rc = ctools_stata_rc(
-                ctools_store_filtered(data + (size_t)j * n, n, inputs + base + j + 1, obs));
+            int unstorable = 0;
+            for (int j = 0; j < width; j++)
+            {
+                store_cols[j] = data + (size_t)j * n;
+                store_vars[j] = inputs + base + j + 1;
+            }
+            rc = ctools_stata_rc(ctools_store_filtered_cols(
+                store_cols, scales, NULL, store_vars, (size_t)width, (size_t)n, obs,
+                fillall ? (size_t)SF_nobs() : 0, &unstorable));
             if (rc)
                 goto cleanup;
+            if (unstorable)
+            {
+                rc = 498;
+                goto cleanup;
+            }
         }
         write_time += ctools_timer_seconds() - tick;
     }
-    for (int i = 0; i < n; i++)
+    /* With "prefilled" the wrapper passes its sample marker (1 on every
+     * loaded row) as the output: only the dropped rows are written, one store
+     * per dropped row, and _chdfe_marked tells the wrapper that it was done. */
+    const int prefilled = ctools_parse_bool_option(cursor, "prefilled");
+    if (prefilled)
     {
-        rc = (_stata_)->safestore(sampleout, obs[i], 1);
-        if (rc)
+        for (int i = 0; i < nin && n < nin; i++)
+            if (!keep[i])
+            {
+                rc = (_stata_)->safestore(sampleout, fd.obs_map[i], 0);
+                if (rc)
+                    goto cleanup;
+            }
+        if ((rc = save_number("_chdfe_marked", 1)))
             goto cleanup;
+    }
+    if (fillall)
+    {
+        /* sample() (1 in the sample, 0 elsewhere) and groupvar() (missing
+         * elsewhere) together, on every observation */
+        double scale_one[2] = {1.0, 1.0}, other[2];
+        size_t nout = 0;
+        if (!prefilled)
+        {
+            store_cols[nout] = NULL;
+            store_vars[nout] = sampleout;
+            other[nout++] = 0.0;
+        }
         if (mobility)
+        {
+            store_mobility = malloc((size_t)n * sizeof(*store_mobility));
+            if (!store_mobility)
+            {
+                rc = 920;
+                goto cleanup;
+            }
+            const int *codes = intercepts[first].levels;
+#pragma omp parallel for schedule(static) if (n > 200000)
+            for (int i = 0; i < n; i++)
+                store_mobility[i] = mobility[codes[i] - 1];
+            store_cols[nout] = store_mobility;
+            store_vars[nout] = sampleout + 1;
+            other[nout++] = SV_missval;
+        }
+        if (nout && (rc = ctools_stata_rc(ctools_store_filtered_cols(
+                         store_cols, scale_one, other, store_vars, nout, (size_t)n, obs,
+                         (size_t)SF_nobs(), NULL))))
+            goto cleanup;
+        if ((rc = save_number("_chdfe_filled", 1)))
+            goto cleanup;
+    }
+    else
+    {
+        for (int i = 0; !prefilled && i < n; i++)
+        {
+            rc = (_stata_)->safestore(sampleout, obs[i], 1);
+            if (rc)
+                goto cleanup;
+        }
+        for (int i = 0; mobility && i < n; i++)
         {
             rc = (_stata_)->safestore(sampleout + 1, obs[i],
                                       mobility[intercepts[first].levels[i] - 1]);
@@ -578,33 +688,48 @@ ST_retcode chdfe_main(const char *args)
         ctools_msg("chdfe", "Load and prepare %.3fs; project %.3fs; store %.3fs; %d iterations",
                    prepared - start, solve_time, write_time, iterations);
 cleanup:
-    ctools_hdfe_state_cleanup(&state);
-    ctools_filtered_data_free(&fd);
+    /* The loaded columns, factors, solver buffers and row arrays (over 1 GB
+     * at 10M rows) are returned by the helper thread after the call
+     * (ctools_release.h); small blocks are freed here */
+    {
+        HDFE_State *held = ctools_release_active() ? malloc(sizeof(*held)) : NULL;
+        if (held)
+        {
+            *held = state;
+            ctools_release_later_call(chdfe_release_state, held);
+        }
+        else
+            ctools_hdfe_state_cleanup(&state);
+    }
+    ctools_filtered_data_release(&fd);
     if (raw)
         for (int j = 0; j < g; j++)
         {
-            free(raw[j].levels);
-            free(raw[j].counts);
+            ctools_release_later(raw[j].levels);
+            ctools_release_later(raw[j].counts);
         }
     free(raw);
     free(slopes);
     free(levels);
     free(sizes);
-    free(keep);
+    ctools_release_later(keep);
     free(columns);
     free(nested);
     free(redundant);
     free(values);
-    free(weights);
-    free(data);
+    ctools_release_later(weights);
+    ctools_release_later(data);
     free(scales);
-    free(obs);
+    ctools_release_later(obs);
     free(intercepts);
     free(imap);
     free(inested);
     free(ired);
-    free(clusters);
+    ctools_release_later(clusters);
     free(mobility);
+    free(store_cols);
+    free(store_vars);
+    ctools_release_later(store_mobility);
     ctools_uf_destroy(uf);
     return rc;
 }

@@ -1,14 +1,14 @@
 {
-  "date": "2026-10-29",
+  "date": "2026-11-25",
   "timezone": "America/Los_Angeles",
-  "cpu": "Apple M4 Pro",
-  "logical_processors": 12,
-  "physical_processors": 12,
-  "memory_bytes": 51539607552,
-  "os": "macOS 26.7.1 (25G241)",
-  "stata": "StataNow/MP 19.5 for Unix (Apple Silicon), revision 12 Aug 2026",
+  "cpu": "AMD Ryzen 9 9950X 16-Core Processor",
+  "logical_processors": 32,
+  "physical_processors": 16,
+  "memory_bytes": 100453961728,
+  "os": "Windows 11 Pro 10.0.26200",
+  "stata": "StataNow/MP 19.5 for Windows (64-bit x86-64), revision 14 Oct 2026",
   "stata_processors": 4,
-  "ctools_threads": 12,
+  "ctools_threads": 16,
   "seed": 95183,
   "sortseed": 95183,
   "observations": [
@@ -16,644 +16,623 @@
     10000000,
     25000000
   ],
+  "observation_limits": {
+    "qreg": 10000000,
+    "ppmlhdfe": 10000000
+  },
   "variables": 20,
   "warmups": 0,
-  "repetitions": 1,
+  "repetitions": 2,
+  "repetition_note": "4 passes over the sizes, each a separate set of sessions; a published time is the smallest of the passes that timed that command at that size",
   "order": [
     "reference",
     "ctools"
   ],
   "timer": "Stata timer around complete command; preparation/reloads/checks excluded",
-  "git_head_context": "35ef9723ce9c8d3dab9428ea71dfe7eae6df7dcd",
-  "source_identity": "working tree on top of HEAD 35ef9723ce9c8d3dab9428ea71dfe7eae6df7dcd, including uncommitted changes; the measured plugin and wrappers are identified by the hashes below",
-  "build_note": "Mac ARM OpenMP plugin built with scripts/build_plugin.py using the `make macos-arm` flags, CTOOLS_BUILD_REVISION=readme-20261028 and the repo-local libomp archive; build/*.ado and *.sthlp copied beside it. Stata ran from that frozen directory with CTOOLS_TEST_PLUGIN_DIR pointing at it, so the repository's build/ was not used.",
-  "execution_note": "Each pair ran at each size in its own batch Stata session (export and import share one session because import reads the reference export). Before each session the machine had to be quiet for one minute (other processes below 80% CPU in total, sampled every 15 s); a session in which other processes exceeded 150% CPU (sampled every 5 s) was killed and rerun. Earlier whole-profile attempts on 2026-10-28/29 were discarded because other sessions' builds and scripts ran concurrently.",
-  "cells": {
-    "cell_binscatter_1000000": {
-      "samples": 1,
-      "max_other_cpu_percent": 5
-    },
-    "cell_binscatter_10000000": {
-      "samples": 5,
-      "max_other_cpu_percent": 9
-    },
-    "cell_binscatter_25000000": {
-      "samples": 12,
-      "max_other_cpu_percent": 39
-    },
-    "cell_bsample_1000000": {
-      "samples": 2,
-      "max_other_cpu_percent": 47
-    },
-    "cell_bsample_10000000": {
-      "samples": 5,
-      "max_other_cpu_percent": 41
-    },
-    "cell_bsample_25000000": {
-      "samples": 10,
-      "max_other_cpu_percent": 18
-    },
-    "cell_decode_1000000": {
-      "samples": 1,
-      "max_other_cpu_percent": 21
-    },
-    "cell_decode_10000000": {
-      "samples": 4,
-      "max_other_cpu_percent": 20
-    },
-    "cell_decode_25000000": {
-      "samples": 9,
-      "max_other_cpu_percent": 108
-    },
-    "cell_destring_1000000": {
-      "samples": 2,
-      "max_other_cpu_percent": 21
-    },
-    "cell_destring_10000000": {
-      "samples": 5,
-      "max_other_cpu_percent": 117
-    },
-    "cell_destring_25000000": {
-      "samples": 11,
-      "max_other_cpu_percent": 22
-    },
-    "cell_encode_1000000": {
-      "samples": 1,
-      "max_other_cpu_percent": 17
-    },
-    "cell_encode_10000000": {
-      "samples": 4,
-      "max_other_cpu_percent": 21
-    },
-    "cell_encode_25000000": {
-      "samples": 10,
-      "max_other_cpu_percent": 71
-    },
-    "cell_export+import_1000000": {
-      "samples": 3,
-      "max_other_cpu_percent": 9
-    },
-    "cell_export+import_10000000": {
-      "samples": 18,
-      "max_other_cpu_percent": 40
-    },
-    "cell_export+import_25000000": {
-      "samples": 45,
-      "max_other_cpu_percent": 21
-    },
-    "cell_ipolate_1000000": {
-      "samples": 2,
-      "max_other_cpu_percent": 27
-    },
-    "cell_ipolate_10000000": {
-      "samples": 6,
-      "max_other_cpu_percent": 27
-    },
-    "cell_ipolate_25000000": {
-      "samples": 15,
-      "max_other_cpu_percent": 20
-    },
-    "cell_ivreghdfe_1000000": {
-      "samples": 2,
-      "max_other_cpu_percent": 5
-    },
-    "cell_ivreghdfe_10000000": {
-      "samples": 8,
-      "max_other_cpu_percent": 19
-    },
-    "cell_ivreghdfe_25000000": {
-      "samples": 19,
-      "max_other_cpu_percent": 96
-    },
-    "cell_merge_1000000": {
-      "samples": 1,
-      "max_other_cpu_percent": 25
-    },
-    "cell_merge_10000000": {
-      "samples": 4,
-      "max_other_cpu_percent": 4
-    },
-    "cell_merge_25000000": {
-      "samples": 10,
-      "max_other_cpu_percent": 23
-    },
-    "cell_ppmlhdfe_1000000": {
-      "samples": 2,
-      "max_other_cpu_percent": 7
-    },
-    "cell_ppmlhdfe_10000000": {
-      "samples": 16,
-      "max_other_cpu_percent": 43
-    },
-    "cell_ppmlhdfe_25000000": {
-      "samples": 38,
-      "max_other_cpu_percent": 37
-    },
-    "cell_psmatch2_1000000": {
-      "samples": 2,
-      "max_other_cpu_percent": 10
-    },
-    "cell_psmatch2_10000000": {
-      "samples": 9,
-      "max_other_cpu_percent": 39
-    },
-    "cell_psmatch2_25000000": {
-      "samples": 21,
-      "max_other_cpu_percent": 26
-    },
-    "cell_qreg_1000000": {
-      "samples": 2,
-      "max_other_cpu_percent": 11
-    },
-    "cell_qreg_10000000": {
-      "samples": 17,
-      "max_other_cpu_percent": 24
-    },
-    "cell_qreg_25000000": {
-      "samples": 45,
-      "max_other_cpu_percent": 49
-    },
-    "cell_rangejoin_1000000": {
-      "samples": 2,
-      "max_other_cpu_percent": 10
-    },
-    "cell_rangejoin_10000000": {
-      "samples": 12,
-      "max_other_cpu_percent": 101
-    },
-    "cell_rangejoin_25000000": {
-      "samples": 29,
-      "max_other_cpu_percent": 24
-    },
-    "cell_rangestat_1000000": {
-      "samples": 2,
-      "max_other_cpu_percent": 10
-    },
-    "cell_rangestat_10000000": {
-      "samples": 8,
-      "max_other_cpu_percent": 5
-    },
-    "cell_rangestat_25000000": {
-      "samples": 20,
-      "max_other_cpu_percent": 17
-    },
-    "cell_reghdfe_1000000": {
-      "samples": 2,
-      "max_other_cpu_percent": 9
-    },
-    "cell_reghdfe_10000000": {
-      "samples": 6,
-      "max_other_cpu_percent": 2
-    },
-    "cell_reghdfe_25000000": {
+  "git_head_context": "070f1b21f95c8ab7de6137e65ff56e9880e13efd",
+  "source_identity": "uncommitted working tree on top of 070f1b21f95c8ab7de6137e65ff56e9880e13efd, exported at 2026-11-25T21:57:36Z (git stash create object fb30cb521b74454adbd89073a56baa41ed8fa45f, not on any branch); the measured plugin and wrappers are identified by the hashes below",
+  "build_note": "Windows x86-64 OpenMP plugin built locally from that export with MSYS2 MINGW64 gcc 16.2 using the `make windows` flags; Stata loaded the export's build/ directory through CTOOLS_TEST_PLUGIN_DIR, ahead of the repository's build/.",
+  "execution_note": "Each size ran in one batch Stata session: the test data was made once, then every comparison ran in turn, the Stata command first and the ctools command second, each on a fresh copy of the data. A ctools command with several Stata counterparts was timed again in each of its comparisons. The run did not wait for an idle machine. The machine was a desktop in use, with other Stata sessions and compilations running: other processes used 612% of one logical processor on average (per session below, sampled every 5 s; percentages are of one logical processor).",
+  "sessions": {
+    "pub_1000000": {
+      "wall": 74.4,
       "samples": 14,
-      "max_other_cpu_percent": 4
+      "max_other_cpu_percent": 334,
+      "mean_other_cpu_percent": 233
     },
-    "cell_sample_1000000": {
-      "samples": 1,
-      "max_other_cpu_percent": 8
+    "pub_10000000": {
+      "wall": 830.4,
+      "samples": 165,
+      "max_other_cpu_percent": 697,
+      "mean_other_cpu_percent": 463
     },
-    "cell_sample_10000000": {
+    "pub_25000000": {
+      "wall": 2090.3,
+      "samples": 417,
+      "max_other_cpu_percent": 2201,
+      "mean_other_cpu_percent": 753
+    },
+    "pub2_1000000": {
+      "wall": 67.1,
+      "samples": 13,
+      "max_other_cpu_percent": 208,
+      "mean_other_cpu_percent": 107
+    },
+    "pub2_10000000": {
+      "wall": 1006.5,
+      "samples": 200,
+      "max_other_cpu_percent": 1833,
+      "mean_other_cpu_percent": 719
+    },
+    "pub2_25000000": {
+      "wall": 1899.3,
+      "samples": 379,
+      "max_other_cpu_percent": 1625,
+      "mean_other_cpu_percent": 542
+    },
+    "b2a_1000000": {
+      "wall": 3.4,
+      "samples": 0,
+      "max_other_cpu_percent": 0,
+      "mean_other_cpu_percent": 0
+    },
+    "b2a_10000000": {
+      "wall": 27.3,
       "samples": 5,
-      "max_other_cpu_percent": 3
+      "max_other_cpu_percent": 207,
+      "mean_other_cpu_percent": 148
     },
-    "cell_sample_25000000": {
-      "samples": 10,
-      "max_other_cpu_percent": 49
+    "b2a_25000000": {
+      "wall": 83.5,
+      "samples": 16,
+      "max_other_cpu_percent": 332,
+      "mean_other_cpu_percent": 232
     },
-    "cell_sort_1000000": {
-      "samples": 1,
-      "max_other_cpu_percent": 4
+    "b2b_1000000": {
+      "wall": 3.2,
+      "samples": 0,
+      "max_other_cpu_percent": 0,
+      "mean_other_cpu_percent": 0
     },
-    "cell_sort_10000000": {
-      "samples": 4,
-      "max_other_cpu_percent": 28
+    "b2b_10000000": {
+      "wall": 32.3,
+      "samples": 6,
+      "max_other_cpu_percent": 249,
+      "mean_other_cpu_percent": 208
     },
-    "cell_sort_25000000": {
-      "samples": 10,
-      "max_other_cpu_percent": 22
-    },
-    "cell_split_1000000": {
-      "samples": 2,
-      "max_other_cpu_percent": 56
-    },
-    "cell_split_10000000": {
-      "samples": 7,
-      "max_other_cpu_percent": 16
-    },
-    "cell_split_25000000": {
-      "samples": 15,
-      "max_other_cpu_percent": 39
-    },
-    "cell_winsor_1000000": {
-      "samples": 2,
-      "max_other_cpu_percent": 8
-    },
-    "cell_winsor_10000000": {
-      "samples": 4,
-      "max_other_cpu_percent": 3
-    },
-    "cell_winsor_25000000": {
-      "samples": 9,
-      "max_other_cpu_percent": 19
+    "b2b_25000000": {
+      "wall": 67.0,
+      "samples": 13,
+      "max_other_cpu_percent": 127,
+      "mean_other_cpu_percent": 85
     }
   },
+  "comparisons_not_measured": {},
   "files": {
-    "frozen-build/_cio_export.ado": {
-      "sha256": "e7dcdff4330a96e0ac412e0b5d3c46c7798e90879996f0996e355842ec94c52d",
+    "measured-build/_cimport_parquet.ado": {
+      "sha256": "747aa1b2b16877269b1839a00687c7ef8bc1e86ca35d3256934309187444164b",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools",
+        "*! cimport parquet: a native C Parquet reader with import parquet's syntax,",
+        "*! variables, messages and stored results."
+      ]
+    },
+    "measured-build/_cio_export.ado": {
+      "sha256": "31fa6ba117ee049411775cf8c98462e9b8adb617afe33520d88b7a73bcc42d00",
+      "version_comments": [
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools",
         "*! Binary statistical writers; serialization is provided by C."
       ]
     },
-    "frozen-build/_cio_import.ado": {
-      "sha256": "67ea0c9a451bfbebdaec1857b68c735d846f0bb349e3ff7d630667f4fb9eda60",
+    "measured-build/_cio_import.ado": {
+      "sha256": "1e69631bcebb08a412cd504934b8804451764bc9141fb87477235b6730f6102e",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools",
         "*! Binary statistical readers; parsing and values are provided by C."
       ]
     },
-    "frozen-build/_cio_shp_export.ado": {
-      "sha256": "0795aa1c121f68dd68397430a88afa21db0b060fea682d1034fa03218a44d14c",
+    "measured-build/_cio_shp_export.ado": {
+      "sha256": "bdd1cba116d3b8f327a8c5cfbf1243d61de79580bca1a8cdbcbd4c06b90bc411",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools"
       ]
     },
-    "frozen-build/_civreghdfe_fvstrip.ado": {
-      "sha256": "c564aaeacef8c1b67b8f66ba912c4ddd058eee1a2f7206a2e41d07cb2b8994b5",
+    "measured-build/_civreghdfe_collin.ado": {
+      "sha256": "ed59bbeb2f2b4bb78718c60180154838995dc177206f9546da6178d3c3f8bacb",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools",
+        "*! civreghdfe: ivreg2's collinearity rules for the variable lists"
+      ]
+    },
+    "measured-build/_civreghdfe_fvstrip.ado": {
+      "sha256": "ff5002b56c6f4299bd1c57a88dfc94d49573c0992b397db0a9c5c72f0a5de691",
+      "version_comments": [
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools",
         "*! Private helper for civreghdfe."
       ]
     },
-    "frozen-build/_civreghdfe_optflags.ado": {
-      "sha256": "3aa3e0f364d09e2bba289ad2b3d0e434ba10201903b374b8ad796ed686738295",
+    "measured-build/_civreghdfe_optflags.ado": {
+      "sha256": "3b9e8621ba3814f0bebc3d6beb5c160721a121306202137bdf072df4d0bed712",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools",
         "*! Private helper for civreghdfe."
       ]
     },
-    "frozen-build/_cmerge_assert.ado": {
-      "sha256": "eca4f6a71cc6fd1eba50e49ec0f4a8bc812e04ab83873349de1d2cff1509b1be",
+    "measured-build/_cmerge_assert.ado": {
+      "sha256": "e85f516e992df2f65f234afb96f2bc0f3c7d40ec246539294fa5cee5df284c55",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools",
         "*! Private helper for cmerge."
       ]
     },
-    "frozen-build/_cmerge_clear_sortedby.ado": {
-      "sha256": "d6f5839df47622d11f46f24ce772b01aa938c47c02ddd438c97aca6f1f3328a4",
+    "measured-build/_cmerge_clear_sortedby.ado": {
+      "sha256": "a9e65835eb536c1e7bd4430f851dfc166868b0f7f20025cf1e42775350001e5b",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools",
         "*! Private helper for cmerge."
       ]
     },
-    "frozen-build/_cmerge_keys_sorted.ado": {
-      "sha256": "767f0e2a44aafe190b87608f09d2b9a49e684c5602847d7566c3e514cdbd0ad9",
+    "measured-build/_cmerge_keys_sorted.ado": {
+      "sha256": "2ad2f4eef180e846ccd659ef0cccaa26c12e5e561ae9618bb66ae274a8019fe6",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools",
         "*! Private helper for cmerge."
       ]
     },
-    "frozen-build/_cmerge_label_mergevar.ado": {
-      "sha256": "68ca2fcd0b57d2481f49e57849d98d4b716bd077729ac1d08b4d700e4b70ebac",
+    "measured-build/_cmerge_label_mergevar.ado": {
+      "sha256": "3acc5444c8c67e7d85bdc8cfa03cc90ed0157790ca647c6d550d3e80daa775aa",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools",
         "*! Private helper for cmerge."
       ]
     },
-    "frozen-build/_cmerge_native.ado": {
-      "sha256": "ee972a4ed7b10dd18a8ee09cc4e59cb215727d6fc52f90d85ef96edbd01a2c16",
+    "measured-build/_cmerge_native.ado": {
+      "sha256": "b444bbb1b927e25495b12cfceace29b6989041680bbfd8073546d427afe89c14",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools",
         "*! Private helper for cmerge."
       ]
     },
-    "frozen-build/_cmerge_results.ado": {
-      "sha256": "4d844737eb72e58d7198dfad2aba506d69e003e6595201d93165ecae29d82d37",
+    "measured-build/_cmerge_results.ado": {
+      "sha256": "2c0c70ed9f00cfe6a2dfe4080f56e12f3a1b23b575d31b6fa22f46e752672efd",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools",
         "*! Private helper for cmerge."
       ]
     },
-    "frozen-build/_cmerge_table.ado": {
-      "sha256": "3b117af4db91340663188d9849b169d8510b61606015c4edb877e4a8198f8568",
+    "measured-build/_cmerge_table.ado": {
+      "sha256": "6aa36a9ded38e7b1592f9684a494fe2cff8ba50555ca37d93e0a751889e303c1",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools",
         "*! Private helper for cmerge."
       ]
     },
-    "frozen-build/_cmerge_template.ado": {
-      "sha256": "d9fb8bdc2cadd07a80abcb9f0722ad612ea92c791bcf4d3bc040b62dc6460683",
+    "measured-build/_cmerge_template.ado": {
+      "sha256": "d336bf5fc0b43b3a05a16889497183b5b318854f3a93ed5448838c437b15a22a",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools",
         "*! Private helper for cmerge."
       ]
     },
-    "frozen-build/_cppmlhdfe_abs_options.ado": {
-      "sha256": "64977129c24570095f0b2514c05c35ad0d746c465811a6e741174dbf559d59a2",
+    "measured-build/_cppmlhdfe_abs_options.ado": {
+      "sha256": "f93793dcb16f9bc3c64c4807d920fb48f0e0b391b9007dba329df38e887f6cbf",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools",
         "*! Private helper for cppmlhdfe."
       ]
     },
-    "frozen-build/_ctools_cleanup.ado": {
-      "sha256": "5fb322e24eeae6371b9f61e5cce3d7544e9301220ea011382c012a5e0f6b9e39",
+    "measured-build/_cppmlhdfe_estat.ado": {
+      "sha256": "fa019c6d4776d05c66d2c858d3ee272e2af5be0ebb19d7e80e990bef184f5926",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools"
+      ]
+    },
+    "measured-build/_cppmlhdfe_footnote.ado": {
+      "sha256": "a78a0214811b2ed6143aa32cbd1ad5cb7af431857d5ad9120f988c8040a1fd59",
+      "version_comments": [
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools"
+      ]
+    },
+    "measured-build/_creghdfe_estat.ado": {
+      "sha256": "b3105db8c20deae35c8620225a7eece257710fe2fcc37b690dd69dd3c35a8c72",
+      "version_comments": [
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools"
+      ]
+    },
+    "measured-build/_creghdfe_footnote.ado": {
+      "sha256": "2a9ee586b937153aaa6d1bb64cd2d05773d7ec45efad230758c0580730ca39ff",
+      "version_comments": [
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools"
+      ]
+    },
+    "measured-build/_ctools_cleanup.ado": {
+      "sha256": "744bf23b446b68a444c15ea502fcf6a58584035e18db8e26725b02d19df564bf",
+      "version_comments": [
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools",
         "*! ctools: drop the scalars and matrices a command and its plugin leave behind"
       ]
     },
-    "frozen-build/_ctools_clock.ado": {
-      "sha256": "e101ee03b2d3476cabda2afb986f37123daf46d5bc3aa3d020fc88c247d55e4f",
+    "measured-build/_ctools_clock.ado": {
+      "sha256": "82d7a64e236b55467fdde63457fe33e80b05cf654ad3b0237c0276b901974983",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools",
         "*! Private monotonic timestamp in seconds; no public Stata timer IDs."
       ]
     },
-    "frozen-build/_ctools_ebv.ado": {
-      "sha256": "af3a977acfbe6ec81cdb9c1320b0bccc11cc571d2eec9342cd109941baaa5697",
+    "measured-build/_ctools_ebv.ado": {
+      "sha256": "75562d2e9786750fc450b7308b43e2030af103790f40040314fbc5de827e7a42",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools",
         "*! ctools: e(b) and e(V) from a plugin's compact results"
       ]
     },
-    "frozen-build/_ctools_fvsplit.ado": {
-      "sha256": "614c100c56e62afe2944c3da49dbaac8f2b1a428068dd67f993e6933d7f21ef5",
+    "measured-build/_ctools_fvsplit.ado": {
+      "sha256": "51e46946b528963d2983418ddffadbd835e464625ef541d86400ddaabf56588e",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools",
         "*! ctools: estimated terms and base/omitted placeholders of an fvexpand-ed list"
       ]
     },
-    "frozen-build/_ctools_group.ado": {
-      "sha256": "2e3b784d9b2d18bae8e0af9a2532fc9fff2fc22ac955272757d66badcdb6a85d",
+    "measured-build/_ctools_group.ado": {
+      "sha256": "609645c5382a5b0ab2c0d3e796981f84d038717b6ab263588d646b148f761719",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools",
         "*! _ctools_group \u2014 group identifiers from the ctools plugin, in place of egen group()",
         "*!",
         "*! Usage:  _ctools_group varlist [if] [in], generate(newvar) [label]",
-        "*!         _ctools_group varlist [if] [in], count",
+        "*!         _ctools_group varlist [if] [in], count [strict]",
+        "*! strict returns plugin errors instead of sorting in Stata.",
         "*!",
         "*! Numbers the distinct values of varlist 1, 2, ... in sort order, as",
-        "*! egen group() does: observations excluded by if/in, or with a missing value"
+        "*! egen group() does: observations excluded by if/in, or with a missing value",
+        "*! in any variable of varlist (string \"\" counts as missing), get missing. The",
+        "*! new variable is a long labeled \"group(varlist)\". label also defines a value",
+        "*! label named after the new variable, with egen group(, label)'s text for",
+        "*! each group. count only counts the groups. Returns r(N_groups), and with",
+        "*! label r(reps), one observation number of each group in group order.",
+        "*!",
+        "*! The plugin reads, sorts and numbers the keys. Stata numbers them by sorting",
+        "*! only when the plugin is unavailable or cannot read a key (strL text over",
+        "*! 2,045 bytes)."
       ]
     },
-    "frozen-build/_ctools_hdfe_absorb.ado": {
-      "sha256": "15753d309c10890d25a75787063b0d5276f57e60ec2863bd9ffa798444dd4cca",
+    "measured-build/_ctools_hdfe_absorb.ado": {
+      "sha256": "d6b6a3c5614358b95472de06211c6f160f3224cc93249938f24150c9dc9b85b8",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools",
         "*! Absorbed effects of creghdfe and civreghdfe."
       ]
     },
-    "frozen-build/_ctools_hdfe_dof.ado": {
-      "sha256": "120641ed77b148e90049db4202a799ae45325e2a02495ca68102e9a4c1b39994",
+    "measured-build/_ctools_hdfe_boot.ado": {
+      "sha256": "c8b94381fe4474e225b510ac58f9d801df80a20dbaa56aff64f1ad46a7192412",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools",
+        "*! Bootstrap options and Stata-RNG draws of the HDFE estimators."
+      ]
+    },
+    "measured-build/_ctools_hdfe_dof.ado": {
+      "sha256": "1d2e8a1534ae8b908848a6c4fade21b33ea4b95d62fefb6ab3a01187ae1a4253",
+      "version_comments": [
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools",
         "*! dofadjustments() of the HDFE estimators."
       ]
     },
-    "frozen-build/_ctools_hdfe_post.ado": {
-      "sha256": "7dc6c506c19abe72c924ee8d83e9894170e54724781b0b4347f348750b4026d7",
+    "measured-build/_ctools_hdfe_post.ado": {
+      "sha256": "f14eb58242aae28f7486eaa6a7318b7fcdbe68440467f444e345b8ba88f28261",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools",
         "*! e() results shared by creghdfe and cppmlhdfe."
       ]
     },
-    "frozen-build/_ctools_hdfe_vce.ado": {
-      "sha256": "595e1c2b27d5d95bb658cf0125a1e09021d1103bd64fb1d0482bcba4518e9e7a",
+    "measured-build/_ctools_hdfe_vce.ado": {
+      "sha256": "554675c9594917448a9eac605677d319fa313c8169554869cc260f8bbd0b2d72",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools",
         "*! vce() of the HDFE estimators."
       ]
     },
-    "frozen-build/_ctools_lap.ado": {
-      "sha256": "f055a8590455413c323d9381601526b6b51ffa8d2e1d3c45c572882cc7c8135f",
+    "measured-build/_ctools_home.ado": {
+      "sha256": "9d1eb11b8bd2670fe50fd0b872962d86911da18786763ea7e236c2a1be387356",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools",
+        "*! ctools: a file name with a leading ~ read as the home directory"
+      ]
+    },
+    "measured-build/_ctools_lap.ado": {
+      "sha256": "20d5438eaaca41825bcb385e48cdfdeec0174ded8e4e6cc96a1009149cea7e85",
+      "version_comments": [
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools",
         "*! ctools: seconds since the previous lap of a caller-local wall clock"
       ]
     },
-    "frozen-build/_ctools_load.ado": {
-      "sha256": "f59897bf300044e8fc30fd8617186d569a40f7d1cb7b0adff4ba4665d687fa90",
+    "measured-build/_ctools_load.ado": {
+      "sha256": "49f8e3427f9f12b455490f16b4b1fc86fc720409e161bc541d073d2d9eb1fbd3",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools",
         "*! Shared plugin loader and identity contract"
       ]
     },
-    "frozen-build/_ctools_mode.ado": {
-      "sha256": "88a025694805f9960cf298f5ae0741683f2e3558e8fcfe18e137fcc916e84fed",
+    "measured-build/_ctools_mode.ado": {
+      "sha256": "835b86031e05884d5abfdce1e6d684977f9ebc3e408768daeb7edbdf8f7ac944",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools",
         "*! Failure-handling mode in a ctools wrapper's options."
       ]
     },
-    "frozen-build/_ctools_newvars.ado": {
-      "sha256": "2fbdd4c1376098543b5fe5aeec5869dc22ee8b512bc6817ddbc0b0d58b30e707",
+    "measured-build/_ctools_newvars.ado": {
+      "sha256": "789530fffe734fc8a9a4bfb63b7683a5774c580b849921954578b0af9b5a01de",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools",
         "*! ctools output-name validation"
       ]
     },
-    "frozen-build/_ctools_strw.ado": {
-      "sha256": "e058c1d65c266f37a144908b5889827390026d72454792361619acb0ee3471c7",
+    "measured-build/_ctools_strlkey.ado": {
+      "sha256": "ae53825ec1bd84d2d48c3abb44c3c0379fe32e468129e2ea2bee073b3d83aa69",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools",
+        "*! _ctools_strlkey \u2014 numeric stand-ins for strL keys the plugin cannot read",
+        "*!",
+        "*! Usage:  _ctools_strlkey varlist, generate(namelist) [missing]",
+        "*!         _ctools_strlkey varlist, check",
+        "*!",
+        "*! The plugin reads strL text of at most 2,045 bytes and no binary values.",
+        "*! Each strL variable of varlist that holds another value anywhere in the",
+        "*! data gets a stand-in: the corresponding name of generate() becomes a long",
+        "*! holding the rank of the value among the variable's distinct values, in",
+        "*! Stata's sort order. Grouping by the ranks, ordering by them and counting",
+        "*! their distinct values give what the strL values give. With missing, \"\"",
+        "*! (a missing string) gets a missing rank, so that commands that leave out",
+        "*! missing keys still leave it out; otherwise \"\" ranks first, as it sorts.",
+        "*!",
+        "*! Sets local __ctools_keys in the caller: varlist with each such variable",
+        "*! replaced by its stand-in. Variables the plugin can read stay as they are.",
+        "*! The order of the observations, the sort marker and r() are left alone.",
+        "*! check only sets local __ctools_strl_bad in the caller: the variables of",
+        "*! varlist that would get a stand-in."
+      ]
+    },
+    "measured-build/_ctools_strw.ado": {
+      "sha256": "3198c500c1f2e904bd8d7e181a952aa819586150ad036910f3fff3b43665dc74",
+      "version_comments": [
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools",
         "*! _ctools_strw \u2014 set string width metadata for ctools flat buffer optimization",
         "*!",
         "*! Usage:  _ctools_strw varlist",
         "*!",
         "*! Sets local __ctools_strw in CALLER's scope containing comma-separated",
         "*! string variable widths (0 = numeric, >0 = str width e.g. 17 for str17).",
-        "*! The ctools C plugin reads this local automatically via SF_macro_use"
+        "*! The ctools C plugin reads this local automatically via SF_macro_use",
+        "*! to enable flat buffer string I/O (eliminates per-string strlen, memcpy,",
+        "*! and arena atomic CAS overhead).",
+        "*!",
+        "*! Example:",
+        "*!   _ctools_strw `allvars'",
+        "*!   plugin call ctools_plugin `allvars', \"mycommand args\"",
+        "*!   * C plugin automatically detects __ctools_strw local"
       ]
     },
-    "frozen-build/_ctools_undo.ado": {
-      "sha256": "fd9f79c9c475d542875a639543881fb7ee40afe52a2e30cdde1796b9afcf1373",
+    "measured-build/_ctools_undo.ado": {
+      "sha256": "42c1ba0e5d20a58d78c6f5113aecded9e8c8ed65f14d363d382c6d86408c3b6b",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools",
         "*! Exact undo of a ctools wrapper's changes without a dataset snapshot."
       ]
     },
-    "frozen-build/_ctools_vce.ado": {
-      "sha256": "2221e5b155d2ccb7890952c6f31a9da1f45bfe8b3d3d0c65af0ad66b6ec9e9c7",
+    "measured-build/_ctools_vce.ado": {
+      "sha256": "9cfc27d92497acbef1c6d201277d07270a131d02f650ea0dde1fde737eeb0c25",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools",
         "*! ctools: classify a vce() specification"
       ]
     },
-    "frozen-build/_ctools_weight.ado": {
-      "sha256": "6d0673b554ee8df071a810a4ed57fbe09b0ae94cf89294655e7d276992f60a5c",
+    "measured-build/_ctools_weight.ado": {
+      "sha256": "558e28bea94c7ddde8b028b3e7c9eeb88ad8cde766eaf92ced857fc6e0144783",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools",
         "*! ctools weight-expression staging; caller owns generate() tempvar"
       ]
     },
-    "frozen-build/cbinscatter.ado": {
-      "sha256": "fcc35f5191b73024286d88940825987565397f81d0c984dd270ad04dda1362c0",
+    "measured-build/_ctools_wild_table.ado": {
+      "sha256": "26f3b6ce6bd3a8692ff5ccc3ed74160ff273eaaa1d81a22e091615ad566b387c",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools",
+        "*! The wild bootstrap table after the coefficient table of an HDFE estimator."
       ]
     },
-    "frozen-build/cbsample.ado": {
-      "sha256": "9723c8942919f781a8e8f99b5e23e645cf741d08d01a9fa239a6da29211e5294",
+    "measured-build/cbinscatter.ado": {
+      "sha256": "92b298f2714c04d6a56ae1bbe8d58422d8e5d47a390d657a50e7ba7221a12b6d",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools"
       ]
     },
-    "frozen-build/cdecode.ado": {
-      "sha256": "741908b407a08fb8b6634deebfeafe9e09bea74e1a66f6e5e05f1f51f34033c0",
+    "measured-build/cbsample.ado": {
+      "sha256": "af4adb7aba10cb0fae9078e0e6e9801b31a658342e9e6d711d5b54cdd31dcf5b",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools"
       ]
     },
-    "frozen-build/cdestring.ado": {
-      "sha256": "b587973d6d274dcf2eb8f96c9d3d5f7c3d6a356bbee5f566d03d41bb39608de5",
+    "measured-build/cdecode.ado": {
+      "sha256": "c25c16ace690f6010faea754f450ce9fdfa27fc7c2cd7a0879900fd4cee11502",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools"
       ]
     },
-    "frozen-build/cencode.ado": {
-      "sha256": "52a1c656718d92fab87feee46147e829366d9aad288346b6b1b7f907aa7925c1",
+    "measured-build/cdestring.ado": {
+      "sha256": "26c7273eba88439a16871be5f7333be0c317f5ec97b7b12af6f50b555cda0d58",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools"
       ]
     },
-    "frozen-build/cexport.ado": {
-      "sha256": "9b41ada6b867c7ea19ac1ebc14df8a88170c76a29a8264f85c091406a222a109",
+    "measured-build/cdistinct.ado": {
+      "sha256": "488a81dbef26789b98e55f5c92665e50109a42b3c420991482ada3eebd69edf7",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools",
+        "*! C-accelerated distinct value counts"
       ]
     },
-    "frozen-build/cimport.ado": {
-      "sha256": "77e4c9aee40d07b40324e2f4d2a6efa9cdf20eb97efa663a808e15bb1a08e223",
+    "measured-build/cencode.ado": {
+      "sha256": "cca0ea1b663c15d34d4ff90641b80541afd892d30ef78106b0a8cd4320989690",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools"
       ]
     },
-    "frozen-build/cipolate.ado": {
-      "sha256": "cba9f5110c97235155267cf8bac9904c46f5b2a53904bf3679391b8b1403c9dd",
+    "measured-build/cexport.ado": {
+      "sha256": "375794334f875a0d2301b0cce141db01668d449b94b200e2b0a2bbf52693540f",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
-        "*! C-accelerated linear interpolation (ctools)"
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools"
       ]
     },
-    "frozen-build/civreghdfe.ado": {
-      "sha256": "5d65ff104aa46bcdca8855df11f93de62ef85ba371ed10ab1eb8a8e89f738af3",
+    "measured-build/chdfe.ado": {
+      "sha256": "8a2e1208c6edd1ac16374e143eefa709aa14204c413c89e58633f44be5e4fc17",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools",
+        "*! Remove absorbed fixed effects from a list of variables"
       ]
     },
-    "frozen-build/civreghdfe_p.ado": {
-      "sha256": "0753632b0cf2a9239bfdcdfbdae0e1fb71c0ceb7890dab8ad37cf70a2ad809c1",
+    "measured-build/cimport.ado": {
+      "sha256": "089834398c46a49dcdd33154a8f7fe7f3cae455100c962812b59ded9a1864150",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools"
       ]
     },
-    "frozen-build/cmerge.ado": {
-      "sha256": "1062238959e81795c2503e25853432d2eefbd46b9e3f5cdb5dd84c50571880d1",
+    "measured-build/cinterpolate.ado": {
+      "sha256": "745098176b9ce0b1b47c86674ad7794fc7878d3f4a31c4ac2420e431f4186fe8",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools",
+        "*! C-accelerated linear and cubic interpolation (ctools)"
       ]
     },
-    "frozen-build/cppmlhdfe.ado": {
-      "sha256": "597565c78bb994d36067becac9222df2c03f8cdad826f834ab978111033cd7da",
+    "measured-build/civreghdfe.ado": {
+      "sha256": "4a790ccd573a72eaa7668073369918b962d81892871c3d06cba2df00f8be7510",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools"
       ]
     },
-    "frozen-build/cppmlhdfe_p.ado": {
-      "sha256": "ca310d595f078247ca19d81c3fc493427313c82fe4da550b5fa2e8c8cc52cc91",
+    "measured-build/civreghdfe_p.ado": {
+      "sha256": "fb145a1bb4deb010b344c7af9beab2e15005f3ca5f16a4c8607555666643a1d9",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools"
       ]
     },
-    "frozen-build/cpsmatch.ado": {
-      "sha256": "c47d752c123fa58aab48579b92bcb4a585c979beb57828d3051275b78d3c7dab",
+    "measured-build/cmerge.ado": {
+      "sha256": "13488161db24b99c6fa39dbc1bd11b5205b16181941abd792a2184666bbcf740",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools"
       ]
     },
-    "frozen-build/cqreg.ado": {
-      "sha256": "01b0baf10ffc85c9498988c37463f2955305a1b96152ab8862efd6663d6dc148",
+    "measured-build/cppmlhdfe.ado": {
+      "sha256": "1f8f1816d376f3a54e4e2ab476533c28af8e9f81b5022c3ad35d6ea133053bd3",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools"
       ]
     },
-    "frozen-build/crangejoin.ado": {
-      "sha256": "956c50df34f9c42385170f8a21d9e94f9d42ed73cdc1bacd75c6063e437c4bf1",
+    "measured-build/cppmlhdfe_p.ado": {
+      "sha256": "44f235880636d3fd6e6108f199fce8caf56dd21a8fbae0fa84286889bcc7d9fb",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools"
+      ]
+    },
+    "measured-build/cpsmatch.ado": {
+      "sha256": "d87bd2e746c29112b0c2033d2b7799ef58f60054928b526e53c7ec86d4f123e0",
+      "version_comments": [
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools"
+      ]
+    },
+    "measured-build/cqreg.ado": {
+      "sha256": "80251fc8e910ca0e3abd6d1f2f3c6719970865d72e3c357939508534221c3e2d",
+      "version_comments": [
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools"
+      ]
+    },
+    "measured-build/crangejoin.ado": {
+      "sha256": "dd4329ee8706f7916b5fce9eeb109f75cece3fa69f2b4df8f956e2bfa2de7f22",
+      "version_comments": [
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools",
         "*! C-accelerated interval joins (ctools)"
       ]
     },
-    "frozen-build/crangestat.ado": {
-      "sha256": "d70e86365daa9b07789a9e398f8d0bca577ec5000b4ed45b136406179eb9b0ea",
+    "measured-build/crangestat.ado": {
+      "sha256": "f0ddb9198a5df909c626321b591e486fd04016dc4e17fb5cc387f11788773251",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools"
       ]
     },
-    "frozen-build/creghdfe.ado": {
-      "sha256": "56c311e196d81e129c785c77a35cacbe9c70ed2a5468b559993dcc5917c465ea",
+    "measured-build/creghdfe.ado": {
+      "sha256": "48a86f41a0db996f9ee3a583d93c14ffff2f2ddf76830fb129faa1ddb0b7c7a2",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools"
       ]
     },
-    "frozen-build/creghdfe_p.ado": {
-      "sha256": "e23c28dcedd7d55fb82ef69a6eb05de9ea2207974dd0bab9c75beb55a997e5c7",
+    "measured-build/creghdfe_p.ado": {
+      "sha256": "78661dfba7f0e43b7168c494e98fc06c64e789c900b8aad5bebf067fe61a924b",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools"
       ]
     },
-    "frozen-build/csample.ado": {
-      "sha256": "7cab8b40c66869feb65bce593f2d105c2e284034346af06d8276597474bd883b",
+    "measured-build/csample.ado": {
+      "sha256": "fc4fcedf7c708243f03a059092e99b39c01fadaacc29c87bd17e9b55290bd972",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools"
       ]
     },
-    "frozen-build/csort.ado": {
-      "sha256": "4a18cee70a96f32d05fef99c1c6ebbd18becfbe44104ecafc4fd54f249ab120d",
+    "measured-build/csort.ado": {
+      "sha256": "dbfccaaf55ffa9fd07f698417a33ea456a19947b4e5776df84cb0520ad830afb",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools"
       ]
     },
-    "frozen-build/csplit.ado": {
-      "sha256": "a0d2f144f06f2a3c904c1a1f415ee51974862b389d0eabdeaba849e9e25713d9",
+    "measured-build/csplit.ado": {
+      "sha256": "723030724e873650f2bf8bb6245fc020a7b0d85a003752ccac6fa3bef2825031",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools",
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools",
         "*! C-accelerated string splitting (ctools)"
       ]
     },
-    "frozen-build/ctools.ado": {
-      "sha256": "ead7ebc9d92d18931bf9a16c0126ee38fb72bedaadeaf9c00258deb4ea738c26",
+    "measured-build/ctools.ado": {
+      "sha256": "642ee07ce2cbf28dd3b8f3da7de3d5b35d0340f2f8c8d0ea8e2b47e5cbf00765",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools"
       ]
     },
-    "frozen-build/cwinsor.ado": {
-      "sha256": "8e66ccc0e934342a348a3f209afc90f49d5b0cd5a347750a8358dd1bf502aa5b",
+    "measured-build/ctools_windows.plugin": {
+      "sha256": "d6731a882a1ce567c0d242151066cc89725b462c3ac9d5f36a3b780e228c8050"
+    },
+    "measured-build/cwinsor.ado": {
+      "sha256": "cc9619a48a4641d7f0aee26fef52f16c0bb423007b759f40d05cc02eb4aa55ee",
       "version_comments": [
-        "*! version 1.1.0 20261016 github.com/mdroste/stata-ctools"
+        "*! version 1.3.0 20261124 github.com/mdroste/stata-ctools"
       ]
     },
-    "frozen-build/ctools_mac_arm.plugin": {
-      "sha256": "07a4ad699d561cf69441589a3d652cfa41688d868edb70cc544747d962a6a61d"
+    "validation/performance/profiles.do": {
+      "sha256": "6c8122fe100e885ad47a2384cc3046042a919b079aca054aa9500db2e1ba9cb6"
     },
-    "validation/performance/profile_readme.do": {
-      "sha256": "e4ccdfc31a1a398c4ffe12e9ee264886dc23d9fa44c0162cc49890e3d5927390"
-    },
-    "validation/performance/summarize_readme_profile.py": {
-      "sha256": "c1160eea14915edd276ea479e966973ae7ab28d887d00076449edcdc2e8488d8"
+    "generated-workload": {
+      "sha256": "0ff7c08b9b83757949a8a4343133b064ea595b7cec78a46add75520b6acbf0cc"
     }
   },
   "reference_files": {
-    "/Users/Mike/Library/Application Support/Stata/ado/plus/r/rangejoin.ado": {
-      "sha256": "7b646bb7f9f3c93a13806666f6637f830c1706a67eb247aa2d7de86dac626111",
+    "C:/Users/Mike/ado/plus/d/distinct.ado": {
+      "sha256": "a3533d8951b745b34b7389049177157767e93a863c795682d9574f422a991dbe",
+      "version_comments": [
+        "*! 1.2.1 NJC 1 March 2012",
+        "*! 1.2.0 NJC 15 September 2008"
+      ]
+    },
+    "C:/Users/Mike/ado/plus/c/cipolate.ado": {
+      "sha256": "f51f4d34aaf81962998dd30d80bea48d086ad758b8beab5a8542168aa6805909",
+      "version_comments": [
+        "*! NJC 1.0.0 4 July 2002"
+      ]
+    },
+    "C:/Users/Mike/ado/plus/r/rangejoin.ado": {
+      "sha256": "4ad1654fee1677eeba5b6ff7f96b035969e83f39a6626af37a58923117d1710a",
       "version_comments": [
         "*! version 1.1.3, 13apr2021, Robert Picard, robertpicard@gmail.com",
         "*! requires -rangestat- version 1.1.0, available from SSC"
       ]
     },
-    "/Users/Mike/Library/Application Support/Stata/ado/plus/r/rangestat.ado": {
-      "sha256": "7bde60817b53fd3897ac2c626b82086b98de7ba45e54a895b8619346c778d552",
+    "C:/Users/Mike/ado/plus/r/rangestat.ado": {
+      "sha256": "44d62a97d889195e2228cba6b83c2e64fbb072792c7d27b817f141ee6ffa8ff0",
       "version_comments": [
         "*! 1.1.1\t\t\t09may2017",
         "*! 1.1.0\t\t\t16apr2017",
@@ -663,33 +642,57 @@
         "*! Roberto Ferrer   refp16@gmail.com"
       ]
     },
-    "/Users/Mike/Library/Application Support/Stata/ado/plus/g/gstats.ado": {
-      "sha256": "2bff86fa8036d0fdb282c0ba1437076dc2338d648cc153d384b00ee6205e7611",
+    "C:/Users/Mike/ado/plus/g/gstats.ado": {
+      "sha256": "8b7eac7beba592e411d32e59c26334b12baa14b6c214feba603d480340ca8fbd",
       "version_comments": [
         "*! version 0.5.0 11Jun2019 Mauricio Caceres Bravo, mauricio.caceres.bravo@gmail.com",
         "*! Implementation of several statistical functions and transformations"
       ]
     },
-    "/Users/Mike/Library/Application Support/Stata/ado/plus/p/psmatch2.ado": {
-      "sha256": "d8ea98dbd1a6c8514dc8086d32aaa8f0f5af3842657a88ad91de60547d125ed5",
+    "C:/Users/Mike/ado/plus/w/winsor2.ado": {
+      "sha256": "1b3cdaa8fc752a845863c5a27e22107fa9273cc4d861dd31f59e652728770f82"
+    },
+    "C:/Users/Mike/ado/plus/p/psmatch2.ado": {
+      "sha256": "e197609ab82234e3da7fd828d44184ae8e72550f77947741699dd182c8d84685",
       "version_comments": [
-        "*! version 4.0.12 30jan2016 E. Leuven, B. Sianesi"
+        "*! version 4.1.0 11jun2026 E. Leuven, B. Sianesi"
       ]
     },
-    "/Users/Mike/Library/Application Support/Stata/ado/plus/b/binscatter.ado": {
-      "sha256": "22fdea36d927459d3b0a470a088479986040ed31c63fb1b7813f9227582d0496",
+    "C:/Users/Mike/ado/plus/b/binscatter.ado": {
+      "sha256": "bbe1cb71673a4d39c2f177e3560a4ab6d7d6761b682e6b24d470272a42db7631",
       "version_comments": [
         "*! version 7.02  24nov2013  Michael Stepner, stepner@mit.edu"
       ]
     },
-    "/Users/Mike/Library/Application Support/Stata/ado/plus/r/reghdfe.ado": {
-      "sha256": "0c700ea38de4ed110d0cbb57acd3e24351a5ab68b61dd84fcb0e5bc8f02d941a",
+    "C:/Users/Mike/ado/plus/b/binscatter2.ado": {
+      "sha256": "c377c682dbeee38dc4b2cad5064543b7a82004b6dfa5b0f7964baa66e280e746",
+      "version_comments": [
+        "*! binscatter2, v0.91 (19jan2023), Michael Droste, mdroste@fas.harvard.edu"
+      ]
+    },
+    "C:/Users/Mike/ado/plus/b/binsreg.ado": {
+      "sha256": "801c2349c157ed8509336998ad77f71cf2c8b1bb0dce3739f5bcafe128049960",
+      "version_comments": [
+        "*! version 2.2 20-AUG-2026"
+      ]
+    },
+    "C:/Users/Mike/ado/plus/r/reghdfe.ado": {
+      "sha256": "f9462bb7364055b138b223a495d4b0fd4b3c5e3bedc1fc886b75bf1546f9d66a",
       "version_comments": [
         "*! version 6.13.1 10Jan2026"
       ]
     },
-    "/Users/Mike/Library/Application Support/Stata/ado/plus/i/ivreghdfe.ado": {
-      "sha256": "d1605318c15d3b7975b28a365e2176cd885fbf6b9378a60feaf97458c32d966e",
+    "C:/Users/Mike/ado/plus/f/fereg.ado": {
+      "sha256": "c86d8625737761b3030d9f73f8fcb57dd06b57b7ff7264babe6a0c6ca6a80cf7",
+      "version_comments": [
+        "*! fereg 0.6.8 OLS 22nov2026"
+      ]
+    },
+    "C:/Users/Mike/ado/plus/f/fereg_windows.plugin": {
+      "sha256": "7ab69e08483878c10ea90da839b475e678f36397c85ff7b94829216a4ed47a21"
+    },
+    "C:/Users/Mike/ado/plus/i/ivreghdfe.ado": {
+      "sha256": "b52ead3626c5aab41a6d6c58f928bdfca0aa91537ff762149ef3d8b700ee04ea",
       "version_comments": [
         "*! ivreghdfe 1.1.4  29nov2025 (bugfix for github issue #61)",
         "*! ivreghdfe 1.1.3  04Jan2023 (bugfix for github issue #48)",
@@ -701,108 +704,60 @@
         "*! see end of file for version comments"
       ]
     },
-    "/Users/Mike/Library/Application Support/Stata/ado/plus/p/ppmlhdfe.ado": {
-      "sha256": "92888a6e4e67213c71e09a50f9ec043c0320828105b553757d6cee01ca5a0b82",
+    "C:/Users/Mike/ado/plus/p/ppmlhdfe.ado": {
+      "sha256": "634177e7002345eb6b17f2e42a1f4c1685ea59e3f9839dbb316452876cab8b5c",
       "version_comments": [
         "*! version 2.3.3 02nov2025",
         "*! Authors: Sergio Correia, Paulo Guimar\u00e3es, Thomas Zylkin",
         "*! URL: https://github.com/sergiocorreia/ppmlhdfe"
       ]
     },
-    "/Users/Mike/Library/Application Support/Stata/ado/plus/f/ftools.ado": {
-      "sha256": "c7eba3272b5fcd1dfa157e65c37840a051c6e2bf327d5ee31d42df65cf330b00",
+    "C:/Users/Mike/ado/plus/f/feppml.ado": {
+      "sha256": "88b81443c4d56aafaccbec756403c4c7456e65726e05027be833c7ee0ea340a6",
+      "version_comments": [
+        "*! version 0.6.8 22nov2026"
+      ]
+    },
+    "C:/Users/Mike/ado/plus/h/hdfe.ado": {
+      "sha256": "3eb14309652a9be9186105ecc97a32f1c1437f3e9eb3bcee8736b7e4d4b73bec",
+      "version_comments": [
+        "*! reghdfe 3.2.9 21feb2016",
+        "*! Sergio Correia (sergio.correia@duke.edu)"
+      ]
+    },
+    "C:/Users/Mike/ado/plus/f/ftools.ado": {
+      "sha256": "459666a26fdcc67b798b0a38eab3dcefa6714c4e679745f99eca945f41b3cd88",
       "version_comments": [
         "*! version 2.50.0 09jan2026"
       ]
     },
-    "/Users/Mike/Library/Application Support/Stata/ado/plus/i/ivreg2.ado": {
-      "sha256": "0e93b020dcd4d9b2806db9e4bb432fa0381756ec2c64dc50275957ad58ef3fb4",
+    "C:/Users/Mike/ado/plus/i/ivreg2.ado": {
+      "sha256": "218a4066a075f4a33d2b476c96dad87b554d9b02319181b0f8f3faf1ca6629df",
       "version_comments": [
         "*! ivreg2 4.1.12  14aug2024",
         "*! authors cfb & mes",
         "*! see end of file for version comments"
       ]
+    },
+    "C:/Users/Mike/ado/plus/r/ranktest.ado": {
+      "sha256": "197ad146f8937e562c2e04b55a2f78d43f293ea90c5886a6d08069c8c77e6657",
+      "version_comments": [
+        "*! ranktest 2.0.04  21sept2020",
+        "*! authors mes & fw; KP stat based on code by fk",
+        "*! see end of file for version comments"
+      ]
     }
   },
-  "completed_calls": 126,
+  "completed_calls": 328,
   "command_failures": 0,
   "basic_check_failures": 0,
   "result_files": {
     "timings.csv": {
-      "sha256": "4f9400f68e8958505b3d27943c449d78f4719a4eedaf3698410f5f6e6d63361a"
+      "sha256": "c82fced70c1325a6f386973cbbb9bfe84927e0fdeb59ec6ad28bc513c47b012e"
     },
     "results.md": {
-      "sha256": "c7b6d15b0c20bb88b36a2f9be3d5104f58fee2f31d26b9e9c4f33013f916cdf0"
+      "sha256": "f94f017d355b06196e6f8a743c3673cfc8464a08457dacd56932245fd65fefc4"
     }
   },
-  "ctools_threads_note": "ctools commands ran without threads(); the thread policy resolved to 12 (usable CPUs, at most 16). Stata references used set processors 4, the license limit.",
-  "command_runs": {
-    "distinct": {
-      "platform": "macOS-26.7.1-arm64-arm-64bit-Mach-O",
-      "machine": "arm64",
-      "stata_processors": 4,
-      "ctools_threads": 12,
-      "seed": 95183,
-      "sortseed": 95183,
-      "observations": [
-        1000000,
-        10000000,
-        25000000
-      ],
-      "variables": 20,
-      "keys": [
-        "firm",
-        "group",
-        "region",
-        "sector"
-      ],
-      "reference": "distinct 1.2.1 (1 March 2012)",
-      "warmups": 0,
-      "repetitions": 1,
-      "order": [
-        "reference",
-        "ctools"
-      ],
-      "timer": "Stata timer around the complete four-variable command; generation, reloads, and correctness checks excluded",
-      "checks": "r(N), r(ndistinct), and original row order; each column checked separately outside timing",
-      "files": {
-        "frozen-build/cdistinct.ado": {
-          "sha256": "1094bade5c90d2f93cf68dd6811fa28b18e808c5f3cc53267395c5f6a30eb37f"
-        },
-        "frozen-build/_ctools_load.ado": {
-          "sha256": "7e4144423400b8a484db1f7c6aba38abe132571d2535b85c9198ac2fb7eaba39"
-        },
-        "frozen-build/_ctools_strw.ado": {
-          "sha256": "833d82832c9019efa9ed03ecb6745b8369072dd4d67cbb49860ee477a6703883"
-        },
-        "frozen-build/ctools.ado": {
-          "sha256": "269255982f52ebcd29fea9ea09fdeb75d1a613676341c25f16fdfd6b1c9de75f"
-        },
-        "frozen-build/ctools_mac_arm.plugin": {
-          "sha256": "533d62b1070dc6e8cae214d3b334bb76b334c78b22f295b469a02bcfb688211a"
-        },
-        "frozen-build/distinct.ado": {
-          "sha256": "84b9e238385e1baf2cb338e75c2e20d6c5d1fadf5866e1a3a98551b533f123e1"
-        },
-        "validation/performance/profiles.do": {
-          "sha256": "954d627a14899e03564a967d4b9f6facad99c9b28446b2950d9f5f7f0ddb8b8c"
-        },
-        "generated-workload": {
-          "sha256": "381545dc46dc100842c1f5401a7e5b48c2ccd02df13396619b3461e77cd1d423"
-        }
-      },
-      "reference_sha256": "84b9e238385e1baf2cb338e75c2e20d6c5d1fadf5866e1a3a98551b533f123e1",
-      "date": "2026-10-30",
-      "timezone": "America/Los_Angeles",
-      "stata": "StataNow/MP 19.5 for Unix (Apple Silicon); Revision 14 Oct 2026",
-      "logical_processors": 12,
-      "command": "distinct firm group region sector",
-      "candidate": "cdistinct firm group region sector",
-      "completed_calls": 6,
-      "command_failures": 0,
-      "basic_check_failures": 0,
-      "execution_note": "The three sizes ran sequentially in one Stata batch using frozen plugin and ado files. Thread settings were queried using the same frozen build and launch environment immediately afterward.",
-      "source_identity": "Local working tree; the frozen plugin and wrappers are identified by their SHA-256 hashes."
-    }
-  }
+  "ctools_threads_note": "ctools commands ran without threads(); the thread policy resolved to 16 (automatic: usable CPUs, at most 16). Stata references used set processors 4, the license limit; fereg and feppml used their own default thread count."
 }

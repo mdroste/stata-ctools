@@ -86,6 +86,9 @@ void cexport_context_cleanup(cexport_context *ctx)
     free(ctx->is_string);
     ctx->is_string = NULL;
 
+    /* display handling of numeric columns, released by its owner */
+    if (ctx->cells_free) ctx->cells_free(ctx);
+
     ctools_arena_free(&ctx->chunk_arena);
     ctools_filtered_data_free(&ctx->filtered);
 }
@@ -157,9 +160,6 @@ int cexport_parse_args(cexport_context *ctx, const char *args)
             } else if (strcmp(token, "touse") == 0) {
                 /* A sample marker follows the exported variables */
                 ctx->touse = true;
-            } else if (strcmp(token, "nofsync") == 0) {
-                /* Skip final fsync for faster but less durable writes */
-                ctx->io_flags |= CEXPORT_IO_FLAG_NOFSYNC;
             } else if (strcmp(token, "direct") == 0) {
                 /* Direct I/O bypasses OS cache (for very large files) */
                 ctx->io_flags |= CEXPORT_IO_FLAG_DIRECT;
@@ -240,3 +240,4 @@ int cexport_load_varnames(cexport_context *ctx)
     }
     return 0;
 }
+

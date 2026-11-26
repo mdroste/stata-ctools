@@ -67,11 +67,70 @@ typedef struct {
 
 
 /* ===========================================================================
+   Compaction
+   =========================================================================== */
+
+/*
+    Move the kept observations to the top of the dataset, in their order.
+
+    The keep flags are in the last plugin variable; every other variable is
+    moved. The kept observations are read (the flags select them), the
+    observations the move overwrites are copied, and the kept ones are
+    written to observations 1..kept; the ado then drops the rest by range.
+    If a write fails, the copy is written back, so the data are as they were
+    and *done stays 0: the ado then drops by the flags, as without compact.
+    The same holds when the data cannot be moved this way (a strL variable,
+    or a failed read). Nothing here polls for Break, so the move completes
+    once it starts.
+
+    Returns a Stata return code only when the data could not be put back.
+*/
+static stata_retcode csample_compact(size_t kept, int *done)
+{
+    const int nvars = (int)SF_nvars() - 1;
+    *done = 0;
+    if (nvars < 1) return STATA_OK;
+    for (int v = 1; v <= nvars; v++)
+        if (SF_var_is_strl(v)) return STATA_OK;
+
+    const size_t first = (size_t)SF_in1();
+    ctools_filtered_data rows, saved;
+    ctools_filtered_data_init(&rows);
+    ctools_filtered_data_init(&saved);
+    stata_retcode rc = ctools_data_load(&rows, NULL, 0, 0, 0,
+                                        CTOOLS_LOAD_MARKER | CTOOLS_LOAD_NO_SORT_ORDER);
+    if (rc == STATA_OK && (rows.data.nobs != kept || rows.data.nvars != (size_t)nvars))
+        rc = STATA_ERR_INVALID_INPUT;
+    if (rc == STATA_OK)
+        rc = ctools_data_load(&saved, NULL, 0, first, first + kept - 1,
+                              CTOOLS_LOAD_SKIP_IF | CTOOLS_LOAD_NO_SORT_ORDER);
+    if (rc == STATA_OK && saved.data.nobs != kept) rc = STATA_ERR_INVALID_INPUT;
+    if (rc != STATA_OK) {
+        /* nothing was written */
+        ctools_filtered_data_free(&rows);
+        ctools_filtered_data_free(&saved);
+        return STATA_OK;
+    }
+
+    rc = ctools_data_store(&rows.data, first);
+    if (rc == STATA_OK) {
+        *done = 1;
+    } else {
+        /* put the overwritten observations (and their flags) back */
+        rc = ctools_data_store(&saved.data, first);
+    }
+    ctools_filtered_data_free(&rows);
+    ctools_filtered_data_free(&saved);
+    return rc;
+}
+
+/* ===========================================================================
    Main Entry Point
    =========================================================================== */
 
 ST_retcode csample_main(const char *args) {
     double t_start, t_load, t_sort, t_sample, t_store;
+    int compacted = 0;
     int *by_indices = NULL;
     int *sort_vars = NULL;
     uint8_t *keep_flags = NULL;
@@ -441,6 +500,17 @@ ST_retcode csample_main(const char *args) {
     }
     size_t dropped = nobs - kept;
 
+    /* compact: with the whole dataset in the sample and the keep flags in
+     * the last plugin variable, move the kept observations to the top, in
+     * their order, so that the ado only truncates the dataset. Only for a
+     * small sample: every kept observation crosses the plugin interface
+     * twice, where Stata's drop if moves memory. */
+    if (ctools_parse_bool_option(args, "compact") && skip_if && keep_idx == SF_nvars() &&
+        kept > 0 && kept <= nobs / 4) {
+        rc = csample_compact(kept, &compacted);
+        if (rc) goto cleanup;
+    }
+
 cleanup:
     /* === Cleanup === */
     free(work_indices);
@@ -463,6 +533,7 @@ cleanup:
     if ((rc = SF_scal_save("_csample_time_total", total))) return rc;
     if ((rc = SF_scal_save("_csample_nobs", (double)nobs))) return rc;
     if ((rc = SF_scal_save("_csample_kept", (double)kept))) return rc;
+    if ((rc = SF_scal_save("_csample_compacted", (double)compacted))) return rc;
     if ((rc = SF_scal_save("_csample_dropped", (double)dropped))) return rc;
     if ((rc = SF_scal_save("_csample_ngroups", (double)ngroups))) return rc;
 

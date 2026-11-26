@@ -769,11 +769,8 @@ foreach o in "idcluster(x)" "strata(id) idcluster(x)" "cluster(id) idcluster(x) 
     restore, preserve
     capture cbsample `opt'
     local rc_c = _rc
-    * An unweighted error now rolls back, even where bsample leaves a sort.
-    if `rc_b' & !strpos("`o'", "weight(") {
-        local vars_b `vars_original'
-        local meta_b `"`meta_original'"'
-    }
+    * (cbsample keeps no copy of the data: after an error it leaves the
+    * variables and the sort that bsample leaves)
     unab vars_c : *
     local meta_c "`c(N)' [`: sortedby']"
     capture local meta_c "`meta_c' `: type nid' `: variable label nid'"
@@ -834,6 +831,7 @@ foreach call in "sz, strata(s)" "sz, strata(s) weight(w)" "sz, strata(s) cluster
 * code, variable names and types, and (unless "nodata") values agree.
 capture program drop _ct_output
 program define _ct_output, rclass
+    _ct_loud _ct_output
     tempfile f
     tempname fh
     capture log close _ctout
@@ -917,13 +915,13 @@ foreach pair in `""' `"20"' `", cluster(c)"' `"4, cluster(c)"' `"4, cluster(c) i
     local npair : subinstr local pair "threads(2) verbose" ""
     preserve
     set seed 23
-    _ct_output version 7: bsample `npair'
+    noisily _ct_output version 7: bsample `npair'
     local want_text `"`r(text)'"'
     local want_rc = r(rc)
     quietly save `want'
     restore, preserve
     set seed 23
-    _ct_output version 7: cbsample `pair'
+    noisily _ct_output version 7: cbsample `pair'
     local got_text `"`r(text)'"'
     local got_rc = r(rc)
     capture cf _all using `want'

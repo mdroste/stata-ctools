@@ -1838,7 +1838,7 @@
     },
     "technique": {
       "kind": "differential",
-      "reason": "e(b) equals reghdfe's with the same option at tolerance(1e-12); invalid values give reghdfe's r(9)/r(3498).",
+      "reason": "MAP results agree with reghdfe; unsupported LSMR/LSQR requests are explicitly rejected with r(198). Invalid names retain r(9)/r(3498). LSMR remains available with individual().",
       "evidence": [
         {
           "path": "validation/stata/s2_hdfe.do",
@@ -2230,17 +2230,7 @@
   "cdistinct": {
     "missing": {
       "kind": "differential",
-      "reason": "The command suite checks reference counts or residuals and saved results, with output and failure contracts for this option.",
-      "evidence": [
-        {
-          "path": "validation/stata/cdistinct.do",
-          "anchor": "distinct oracle: numeric, string, joint, missing, if and in"
-        }
-      ]
-    },
-    "joint": {
-      "kind": "differential",
-      "reason": "The command suite checks reference counts or residuals and saved results, with output and failure contracts for this option.",
+      "reason": "The command suite compares counts, return codes and stored results with distinct 1.4.3 for this option.",
       "evidence": [
         {
           "path": "validation/stata/cdistinct.do",
@@ -2249,52 +2239,116 @@
       ]
     },
     "abbrev": {
-      "kind": "contract",
-      "reason": "The command suite checks reference counts or residuals and saved results, with output and failure contracts for this option.",
+      "kind": "differential",
+      "reason": "The command suite compares everything printed, the return code and the stored results with distinct 1.4.3 for this option.",
       "evidence": [
         {
           "path": "validation/stata/cdistinct.do",
-          "anchor": "display filters do not affect results; thread parity"
+          "anchor": "table layout, abbrev(), width(), minimum(), maximum() and the note match distinct"
+        }
+      ]
+    },
+    "joint": {
+      "kind": "differential",
+      "reason": "The command suite compares everything printed, the return code and the stored results with distinct 1.4.3 for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/cdistinct.do",
+          "anchor": "distinct oracle: numeric, string, joint, missing, if and in"
+        },
+        {
+          "path": "validation/stata/cdistinct.do",
+          "anchor": "joint table, no observations and syntax errors match distinct"
         }
       ]
     },
     "minimum": {
-      "kind": "contract",
-      "reason": "The command suite checks reference counts or residuals and saved results, with output and failure contracts for this option.",
+      "kind": "differential",
+      "reason": "The command suite compares everything printed, the return code and the stored results with distinct 1.4.3 for this option.",
       "evidence": [
         {
           "path": "validation/stata/cdistinct.do",
-          "anchor": "display filters do not affect results; thread parity"
+          "anchor": "distinct oracle: numeric, string, joint, missing, if and in"
+        },
+        {
+          "path": "validation/stata/cdistinct.do",
+          "anchor": "table layout, abbrev(), width(), minimum(), maximum() and the note match distinct"
+        },
+        {
+          "path": "validation/stata/cdistinct.do",
+          "anchor": "minimum and maximum hide rows; results are zero only when no row is shown; thread parity"
         }
       ]
     },
     "maximum": {
-      "kind": "contract",
-      "reason": "The command suite checks reference counts or residuals and saved results, with output and failure contracts for this option.",
+      "kind": "differential",
+      "reason": "The command suite compares everything printed, the return code and the stored results with distinct 1.4.3 for this option.",
       "evidence": [
         {
           "path": "validation/stata/cdistinct.do",
-          "anchor": "display filters do not affect results; thread parity"
+          "anchor": "distinct oracle: numeric, string, joint, missing, if and in"
+        },
+        {
+          "path": "validation/stata/cdistinct.do",
+          "anchor": "table layout, abbrev(), width(), minimum(), maximum() and the note match distinct"
+        },
+        {
+          "path": "validation/stata/cdistinct.do",
+          "anchor": "minimum and maximum hide rows; results are zero only when no row is shown; thread parity"
+        }
+      ]
+    },
+    "width": {
+      "kind": "differential",
+      "reason": "The command suite compares everything printed, the return code and the stored results with distinct 1.4.3 for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/cdistinct.do",
+          "anchor": "table layout, abbrev(), width(), minimum(), maximum() and the note match distinct"
+        }
+      ]
+    },
+    "sort": {
+      "kind": "differential",
+      "reason": "The command suite compares everything printed, the return code and the stored results with distinct 1.4.3 for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/cdistinct.do",
+          "anchor": "sort() orders rows, and its errors, as distinct does"
+        }
+      ]
+    },
+    "sort2": {
+      "kind": "differential",
+      "reason": "The command suite compares everything printed, the return code and the stored results with distinct 1.4.3 for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/cdistinct.do",
+          "anchor": "sort() orders rows, and its errors, as distinct does"
         }
       ]
     },
     "verbose": {
       "kind": "contract",
-      "reason": "The command suite checks reference counts or residuals and saved results, with output and failure contracts for this option.",
+      "reason": "The option is an addition of ctools; the command suite checks its contract.",
       "evidence": [
         {
           "path": "validation/stata/cdistinct.do",
-          "anchor": "display filters do not affect results; thread parity"
+          "anchor": "verbose timing placement; no Mata globals are created"
         }
       ]
     },
     "threads": {
-      "kind": "differential",
-      "reason": "The command suite checks reference counts or residuals and saved results, with output and failure contracts for this option.",
+      "kind": "contract",
+      "reason": "The option is an addition of ctools; the command suite checks its contract.",
       "evidence": [
         {
           "path": "validation/stata/cdistinct.do",
-          "anchor": "display filters do not affect results; thread parity"
+          "anchor": "minimum and maximum hide rows; results are zero only when no row is shown; thread parity"
+        },
+        {
+          "path": "validation/stata/cdistinct.do",
+          "anchor": "hash growth, high-cardinality fallback, and sorted missing keys"
         }
       ]
     }
@@ -2552,13 +2606,13 @@
         }
       ]
     },
-    "population": {
+    "samplevar": {
       "kind": "differential",
-      "reason": "The population variance with ai() is compared with psmatch2.",
+      "reason": "The sample variance with ai() is compared with psmatch2.",
       "evidence": [
         {
           "path": "validation/stata/s2_psm.do",
-          "anchor": "ai(3) population ate neighbor(2)"
+          "anchor": "ai(3) samplevar ate neighbor(2)"
         }
       ]
     },
@@ -2568,7 +2622,17 @@
       "evidence": [
         {
           "path": "validation/stata/s2_psm.do",
-          "anchor": "ai(2) altvariance population ate"
+          "anchor": "ai(2) altvariance samplevar ate"
+        }
+      ]
+    },
+    "debug": {
+      "kind": "differential",
+      "reason": "The parts of the Abadie-Imbens (2016) correction that debug returns are compared with psmatch2.",
+      "evidence": [
+        {
+          "path": "validation/stata/s2_psm.do",
+          "anchor": "ai(3) neighbor(3) ate logit debug"
         }
       ]
     },

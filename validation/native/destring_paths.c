@@ -2,18 +2,18 @@
 #include "newcommands_mock.h"
 #include "ctools_runtime.h"
 static int scalar_calls,fail_scalar;
-static double scalars[9];
-static char failed_counts[256];
+static double scalars[10];
+static char failed_counts[256],type_words[256],missing_words[256],seen_words[256];
 static const char *raw_ignore = "";
 static int ignore_read;
 static const char *scalar_names[]={"_cdestring_n_converted","_cdestring_n_failed",
     "_cdestring_time_parse","_cdestring_time_load","_cdestring_time_convert",
     "_cdestring_time_store","_cdestring_time_total","_cdestring_threads_max",
-    "_cdestring_openmp_enabled"};
+    "_cdestring_openmp_enabled","_cdestring_nobs"};
 static ST_retcode save_scalar(char *name,double value)
 {
     if(++scalar_calls==fail_scalar)return 459;
-    for(int i=0;i<9;i++)if(!strcmp(name,scalar_names[i])) { scalars[i]=value;return 0; }
+    for(int i=0;i<10;i++)if(!strcmp(name,scalar_names[i])) { scalars[i]=value;return 0; }
     abort();
 }
 static ST_retcode save_macro(char *name,char *value)
@@ -21,8 +21,12 @@ static ST_retcode save_macro(char *name,char *value)
     if(!strcmp(name,"_cdestring_ignore_read")) {
         assert(!strcmp(value,"1"));ignore_read=1;return fail_macro?459:0;
     }
-    assert(!strcmp(name,"_cdestring_failed"));if(fail_macro)return 459;
-    assert(strlen(value)<sizeof(failed_counts));strcpy(failed_counts,value);return 0;
+    if(fail_macro)return 459;
+    char *into=!strcmp(name,"_cdestring_failed")?failed_counts:
+        !strcmp(name,"_cdestring_types")?type_words:
+        !strcmp(name,"_cdestring_missing")?missing_words:
+        !strcmp(name,"_cdestring_seen")?seen_words:NULL;
+    assert(into&&strlen(value)<sizeof(failed_counts));strcpy(into,value);return 0;
 }
 static ST_retcode read_macro(char *name,char *value,ST_int size)
 {
@@ -40,8 +44,9 @@ static void init(int rows,int vars)
     assert(!live);clear_fixture();resize_fixture(rows);nv=2*vars;
     for(int v=0;v<vars;v++)types[v]=1;
     for(int v=0;v<vars;v++)for(int r=0;r<rows;r++)numbers[vars+v][r]=-12345;
-    scalar_calls=fail_scalar=ignore_read=0;failed_counts[0]=0;
-    for(int i=0;i<9;i++)scalars[i]=-999;
+    scalar_calls=fail_scalar=ignore_read=0;
+    failed_counts[0]=type_words[0]=missing_words[0]=seen_words[0]=0;
+    for(int i=0;i<10;i++)scalars[i]=-999;
 #ifdef _OPENMP
     omp_set_dynamic(0);omp_set_num_threads(threads);
 #endif
@@ -166,6 +171,83 @@ static int pipeline(int rows,int vars,int force,int percent,int filter,int af,in
     }
     clear_fixture();return rc;
 }
+/* parse keeps the numbers and describes them; the destinations exist only
+ * for store, one per variable parse reported a type for. */
+static void staged_rows(void)
+{
+    const char *a[]={"1","2","100",".a","","-127"};
+    const char *b[]={"1.5","x","3","4","5","6"};
+    const char *c[]={"$1,000","2","3","40000","5","6"};
+    for(int r=0;r<6;r++) { text_cell(0,r,a[r]);text_cell(1,r,b[r]);text_cell(2,r,c[r]); }
+}
+static void staged(void)
+{
+    const double a[]={1,2,100,missing(1),missing(0),-127};
+    const double c[]={1000,2,3,40000,5,6};
+    raw_ignore="$,";
+    /* force: every variable is stored, the nonnumeric value as missing */
+    init(6,3);staged_rows();nv=3;
+    assert(!cdestring_main("parse nvars=3 skipif force ignorelen=2")&&live>0&&!stores);
+    assert(!strcmp(failed_counts,"0 1 0")&&!strcmp(type_words,"byte double long"));
+    assert(!strcmp(missing_words,"2 1 0")&&!strcmp(seen_words,". . 0,1"));
+    assert(scalars[9]==6&&scalars[0]==17&&scalars[1]==1);
+    assert(!cdestring_main("store")&&!live);
+    for(int r=0;r<6;r++) {
+        assert(numbers[0][r]==a[r]&&numbers[2][r]==c[r]);
+        assert(numbers[1][r]==(r==0?1.5:r==1?mock.missval:r+1));
+    }
+    /* without force the variable with a nonnumeric value has no destination */
+    init(6,3);staged_rows();nv=3;
+    assert(!cdestring_main("parse nvars=3 skipif ignorelen=2")&&live>0);
+    assert(!strcmp(type_words,"byte . long")&&!strcmp(missing_words,"2 . 0"));
+    nv=3;assert(cdestring_main("store")==198&&!live&&!stores);
+    init(6,3);staged_rows();nv=3;
+    assert(!cdestring_main("parse nvars=3 skipif ignorelen=2"));
+    nv=2;assert(!cdestring_main("store")&&!live);
+    for(int r=0;r<6;r++)assert(numbers[0][r]==a[r]&&numbers[1][r]==c[r]);
+    /* discard, a store with nothing parsed, and another call free the numbers */
+    init(6,3);staged_rows();nv=3;
+    assert(!cdestring_main("parse nvars=3 skipif force ignorelen=2")&&live>0);
+    assert(!cdestring_main("discard")&&!live&&!stores);
+    assert(cdestring_main("store")==198&&!live);
+    init(6,3);staged_rows();nv=3;
+    assert(!cdestring_main("parse nvars=3 skipif force ignorelen=2")&&live>0);
+    nv=6;assert(!run("nvars=3 seqpairs force ignorelen=2"));
+    /* the data must not change between the calls */
+    init(6,3);staged_rows();nv=3;
+    assert(!cdestring_main("parse nvars=3 skipif force ignorelen=2"));
+    nr=5;assert(cdestring_main("store")==459&&!live&&!stores);nr=6;
+    raw_ignore="";
+    /* float: values are rounded to float before the type is chosen */
+    init(3,3);nv=3;
+    text_cell(0,0,"0.1");text_cell(0,1,"16777217");text_cell(0,2,"3");
+    text_cell(1,0,"1");text_cell(1,1,"2");text_cell(1,2,"40000");
+    text_cell(2,0,"1");text_cell(2,1,"32740");text_cell(2,2,"-32767");
+    assert(!cdestring_main("parse nvars=3 skipif float"));
+    assert(!strcmp(type_words,"float float int"));
+    assert(!cdestring_main("store")&&!live);
+    assert(numbers[0][0]==(double)0.1f&&numbers[0][1]==16777216&&numbers[2][1]==32740);
+    /* no observation selected: byte destinations that stay missing */
+    init(3,1);nv=1;memset(selected,0,3);
+    assert(!cdestring_main("parse nvars=1")&&scalars[9]==0);
+    assert(!strcmp(type_words,"byte")&&!strcmp(missing_words,"0")&&!strcmp(seen_words,"."));
+    assert(!cdestring_main("store")&&!live&&!stores);
+    /* an allocation failure in parse keeps nothing */
+    raw_ignore="$,";
+    init(6,3);staged_rows();nv=3;
+    assert(!cdestring_main("parse nvars=3 skipif force ignorelen=2"));
+    int count=allocations;
+    assert(!cdestring_main("discard")&&!live);
+    for(int fault=1;fault<=count;fault++) {
+        init(6,3);staged_rows();nv=3;fail_alloc=fault;
+        assert(cdestring_main("parse nvars=3 skipif force ignorelen=2")==920&&!live&&!stores);
+    }
+    /* a failed write frees the numbers */
+    init(6,3);staged_rows();nv=3;
+    assert(!cdestring_main("parse nvars=3 skipif force ignorelen=2"));
+    fail_store=1;assert(cdestring_main("store")==459&&!live);
+    raw_ignore="";clear_fixture();
+}
 int main(void)
 {
     mock.nobs=nobs;mock.nvars=nvars;mock.nvar=nvars;mock.isstr=isstr;mock.isstrl=isstrl;
@@ -175,6 +257,7 @@ int main(void)
     values();
     for(threads=1;threads<=4;threads*=4) {
         release_regressions();
+        staged();
         for(int vars=1;vars<=3;vars+=2)for(int force=0;force<2;force++)
             for(int percent=0;percent<2;percent++)for(int filter=0;filter<2;filter++)
                 assert(!pipeline(12001,vars,force,percent,filter,0,0,0,0));
@@ -192,5 +275,5 @@ int main(void)
         }
         assert(!pipeline(20,3,1,1,0,0,0,0,0));
     }
-    clear_fixture();puts("PASS destring values, filters, parallelism, allocation and publication faults");return 0;
+    clear_fixture();puts("PASS destring values, filters, staged parse/store, parallelism, allocation and publication faults");return 0;
 }

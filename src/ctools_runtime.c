@@ -207,6 +207,11 @@ int ctools_command_begin(const ctools_command_descriptor *cmd, const char *args)
         else if (!strcmp(op, "apply")) { required = 1; next_phase = 2; }
         else next_phase = 1;
         break;
+    case CTOOLS_CMD_CDESTRING:
+        /* parse keeps the converted values for store; any other call frees them */
+        if (!strcmp(op, "parse")) next_phase = 1;
+        else if (!strcmp(op, "store")) required = 1;
+        break;
     case CTOOLS_CMD_CIMPORT:
         if (!strcmp(op, "scan")) next_phase = 1;
         else if (!strcmp(op, "blob") || !strcmp(op, "blobs") || !strcmp(op, "strldta") ||

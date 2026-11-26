@@ -1,4 +1,6 @@
 *! version 1.3.1 20261124 github.com/mdroste/stata-ctools
+*! original: Stata's merge (merge.ado 3.2.13, September 12, 2023)
+*! original: see help cmerge for details
 
 * Mata helpers for optimized operations
 capture mata: mata drop _cmerge_shared_flags()
@@ -534,15 +536,10 @@ program define _cmerge_impl, rclass
         }
     }
 
-    * The sorted C join checks every group, including unmatched keys.
-    * Retain isid for an explicit sorted promise, which can bypass C sorting.
-    if !`merge_by_n' & "`sorted'" != "" & inlist(`merge_code', 0, 2) & _N > 0 {
-        capture isid `keyvars', missok
-        if _rc {
-            di as error "cmerge: key variables do not uniquely identify observations in master"
-            exit 459
-        }
-    }
+    * The C join checks the key order promised by sorted (r(5)) and the
+    * uniqueness of every key group, unmatched keys included (r(459)), so
+    * neither is checked here with isid, which costs a pass and a sort check
+    * of its own. Merges with an empty side bypass the C join; see below.
 
     * Default generate variable name
     if "`generate'" == "" & "`nogenerate'" == "" {
@@ -793,7 +790,7 @@ program define _cmerge_impl, rclass
         }
 
         * Empty-master merges bypass the C join and still need uniqueness checks.
-        if inlist(`merge_code', 0, 1) & _N > 0 & (`master_nobs' == 0 | "`sorted'" != "") {
+        if inlist(`merge_code', 0, 1) & _N > 0 & `master_nobs' == 0 {
             capture isid `keyvars', missok
             if _rc {
                 di as error "cmerge: key variables do not uniquely identify observations in using"
@@ -1091,7 +1088,7 @@ program define _cmerge_impl, rclass
 
         * Empty-using merges also bypass the C join.
         if !`merge_by_n' & `using_nobs' == 0 & `master_nobs' > 0 & ///
-            inlist(`merge_code', 0, 2) & "`sorted'" == "" {
+            inlist(`merge_code', 0, 2) {
             capture isid `keyvars', missok
             if _rc {
                 di as error "cmerge: key variables do not uniquely identify observations in master"
@@ -1308,6 +1305,17 @@ program define _cmerge_impl, rclass
         else {
             restore
         }
+        * merge reports duplicate keys in a sorted master before an unsorted
+        * using file. The plugin found the using file first, so the master
+        * is checked here, on the error path only.
+        if `plugin_rc' == 5 & "`sorted'" != "" & !`merge_by_n' & inlist(`merge_code', 0, 2) ///
+            & `master_sorted' & _N > 1 {
+            capture isid `keyvars', missok
+            if _rc {
+                di as error "cmerge: key variables do not uniquely identify observations in master"
+                exit 459
+            }
+        }
         exit `plugin_rc'
     }
 
@@ -1375,6 +1383,21 @@ program define _cmerge_impl, rclass
     * master does not define (not only those of new variables), give shared
     * variables without a master label the using label under update, and
     * append the using notes of shared variables to the master's
+    * One observation of the using file, in a frame of its own, supplies
+    * merge's whole label set (keepusing() loaded only the labels of the kept
+    * variables) and the template the master appends: use in 1 without a
+    * varlist reads that observation alone, where cutting the template from
+    * the using frame drops variables and observations of the whole file.
+    local __one_frame ""
+    if `__use_frames' & !`is_url' {
+        tempname __one_frame
+        frame create `__one_frame'
+        capture frame `__one_frame': quietly use in 1 using `"`using'"', clear
+        if _rc {
+            frame drop `__one_frame'
+            local __one_frame ""
+        }
+    }
     tempfile __using_labels
     local __new_labels ""
     if "`nolabel'" == "" {
@@ -1383,10 +1406,14 @@ program define _cmerge_impl, rclass
         local __label_frame ""
         local __label_reload 0
         tempfile __label_subset
-        if "`keepusing'" != "" & `__use_frames' {
+        if "`keepusing'" != "" & "`__one_frame'" != "" local __label_frame `__one_frame'
+        else if "`keepusing'" != "" & `__use_frames' {
             tempname __label_frame
             frame create `__label_frame'
-            capture frame `__label_frame': quietly use if 0 using `"`using'"', clear
+            * One observation carries the whole label set; if 0 would read
+            * every observation of the file to keep none
+            capture frame `__label_frame': quietly use in 1 using `"`using'"', clear
+            if _rc capture frame `__label_frame': quietly use if 0 using `"`using'"', clear
             if _rc {
                 frame drop `__label_frame'
                 local __label_frame ""
@@ -1394,7 +1421,8 @@ program define _cmerge_impl, rclass
         }
         if "`keepusing'" != "" & !`__use_frames' {
             quietly save `"`__label_subset'"'
-            quietly use if 0 using `"`using'"', clear
+            capture quietly use in 1 using `"`using'"', clear
+            if _rc quietly use if 0 using `"`using'"', clear
             local __label_reload 1
         }
         if "`__label_frame'" != "" frame `__label_frame': quietly label dir
@@ -1407,7 +1435,7 @@ program define _cmerge_impl, rclass
             }
             else quietly label save `__new_labels' using `"`__using_labels'"', replace
         }
-        if "`__label_frame'" != "" frame drop `__label_frame'
+        if "`__label_frame'" != "" & "`__label_frame'" != "`__one_frame'" frame drop `__label_frame'
         if `__label_reload' quietly use `"`__label_subset'"', clear
     }
     local __shared_i = 0
@@ -1438,16 +1466,20 @@ program define _cmerge_impl, rclass
     * Using data is already cached in plugin, so we can clear and reuse memory
     * Benchmark shows template+append is 3.5x faster than Mata st_addvar
     tempfile empty_vars_template
-    if `n_new_vars' > 0 {
-        _cmerge_template `"`empty_vars_template'"' "`new_var_names'" ///
-            "`generate' `temp_merge_var'"
-    }
-    else {
+    local __tpl_new `new_var_names'
+    local __tpl_merge `generate' `temp_merge_var'
+    if `n_new_vars' == 0 {
         * Without new variables, append a placeholder anyway: like merge, the
         * master then gains the using _dta notes and characteristics
         tempvar __meta_var
-        _cmerge_template `"`empty_vars_template'"' "`__meta_var'" "`__meta_var'"
+        local __tpl_new `__meta_var'
+        local __tpl_merge `__meta_var'
     }
+    if "`__one_frame'" != "" {
+        frame `__one_frame': _cmerge_template `"`empty_vars_template'"' "`__tpl_new'" "`__tpl_merge'"
+        frame drop `__one_frame'
+    }
+    else _cmerge_template `"`empty_vars_template'"' "`__tpl_new'" "`__tpl_merge'"
 
     if `__do_timing' {
         quietly _ctools_clock __ct_now

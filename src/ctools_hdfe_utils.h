@@ -15,6 +15,9 @@
 #define CTOOLS_HDFE_UTILS_H
 
 #include "stplugin.h"
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 /* ========================================================================
  * Fixed Effect Factor structure
@@ -344,5 +347,45 @@ ST_int ctools_hdfe_alloc_buffers(HDFE_State *state, ST_int alloc_proj, ST_int ma
     Does NOT free state->weights (caller manages weight ownership).
 */
 void ctools_hdfe_state_cleanup(HDFE_State *state);
+
+/*
+    Row blocks for the parallel sample-construction passes (FE remap, factor
+    renumbering, connected components, nesting): one per OpenMP thread, with
+    at least CTOOLS_HDFE_BLOCK_ROWS rows each. Returns 1, meaning serial, inside
+    any parallel region, active or not (bootstrap replicates run there), or
+    for few rows.
+    Callers share the blocks out with work-sharing loops, so a runtime that
+    supplies fewer threads still covers every block.
+*/
+#define CTOOLS_HDFE_BLOCK_ROWS 65536
+static inline int ctools_hdfe_row_blocks(ST_int N)
+{
+#ifdef _OPENMP
+    /* Inside any parallel region, active or not (a bootstrap batch of one
+       replicate): regions nested there would each need a new thread team */
+    if (omp_get_level() > 0) return 1;
+    int threads = omp_get_max_threads();
+    long long most = (long long)N / CTOOLS_HDFE_BLOCK_ROWS;
+    if (threads < 2 || most < 2) return 1;
+    return most < threads ? (int)most : threads;
+#else
+    (void)N;
+    return 1;
+#endif
+}
+
+/* Rows [*i0, *i1) of block b of B over N rows */
+static inline void ctools_hdfe_block_range(ST_int N, int B, int b, ST_int *i0, ST_int *i1)
+{
+    *i0 = (ST_int)(((long long)N * b) / B);
+    *i1 = (ST_int)(((long long)N * (b + 1)) / B);
+}
+
+/* Relaxed atomic access to the int tables these passes share (GCC and
+   Clang builtins; plain loads and stores on x86-64 and ARM64) */
+#define CTOOLS_HDFE_LOAD(p) __atomic_load_n((p), __ATOMIC_RELAXED)
+#define CTOOLS_HDFE_STORE(p, v) __atomic_store_n((p), (v), __ATOMIC_RELAXED)
+#define CTOOLS_HDFE_CAS(p, expected, v) \
+    __atomic_compare_exchange_n((p), (expected), (v), 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED)
 
 #endif /* CTOOLS_HDFE_UTILS_H */

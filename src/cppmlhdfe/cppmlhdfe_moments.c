@@ -33,14 +33,44 @@ void ppml_uncenter_vce(double *V, const double *means, int K)
     V[K * stride + K] = corner.hi + corner.lo;
 }
 
+/* The sum of x over fixed blocks of rows, each summed in order and the blocks
+ * then added in order: the same value at every thread count. */
+#define PPML_SUM_BLOCK 32768
+static ST_double ppml_block_sum(const ST_double *x, ST_int N)
+{
+    const ST_int nblocks = N / PPML_SUM_BLOCK + (N % PPML_SUM_BLOCK != 0);
+    ST_double total = 0.0;
+    ST_double *part =
+        nblocks > 8 ? (ST_double *)malloc((size_t)nblocks * sizeof(ST_double)) : NULL;
+    ST_int b;
+    /* without the scratch the blocks run on this thread and add up directly */
+    #pragma omp parallel for schedule(static) if (part != NULL)
+    for (b = 0; b < nblocks; b++)
+    {
+        const ST_int lo = b * PPML_SUM_BLOCK;
+        const ST_int hi = N - lo > PPML_SUM_BLOCK ? lo + PPML_SUM_BLOCK : N;
+        ST_double sum = 0.0;
+        for (ST_int row = lo; row < hi; row++)
+            sum += x[row];
+        if (part)
+            part[b] = sum;
+        else
+            total += sum;
+    }
+    if (part)
+    {
+        for (b = 0; b < nblocks; b++)
+            total += part[b];
+        free(part);
+    }
+    return total;
+}
+
 void ppml_update_fe_weights(HDFE_State *S, const ST_double *irls_w, ST_int N)
 {
     ST_int g, i, lev;
-    ST_double sum_w = 0.0;
 
-    for (i = 0; i < N; i++)
-        sum_w += irls_w[i];
-    S->sum_weights = sum_w;
+    S->sum_weights = ppml_block_sum(irls_w, N);
 
     /* each factor's counts are an independent pass over the rows */
 #pragma omp parallel for schedule(static) private(i, lev) if (S->G > 1 && N > 100000)
@@ -84,9 +114,8 @@ void ppml_update_fe_weights(HDFE_State *S, const ST_double *irls_w, ST_int N)
    large mean the two terms nearly cancel and y*(log(y) - eta) keeps only
    about eps*|log y|/|y/mu - 1| of its digits; mu*((1+r)*log1p(r) - r) with
    r = y/mu - 1 is exact to rounding. y = 0 gives mu. */
-static ST_double ppml_unit_deviance(ST_double y, ST_double eta_total)
+static ST_double ppml_unit_deviance_mu(ST_double y, ST_double mu, ST_double eta_total)
 {
-    ST_double mu = exp(eta_total);
     if (y <= 0.0) return mu;
     ST_double r = (y - mu) / mu;
     if (fabs(r) < 1e-2) {
@@ -100,6 +129,11 @@ static ST_double ppml_unit_deviance(ST_double y, ST_double eta_total)
     }
     if (fabs(r) < 1.0) return mu * ((1.0 + r) * log1p(r) - r);
     return y * (log(y) - eta_total) - (y - mu);
+}
+
+static ST_double ppml_unit_deviance(ST_double y, ST_double eta_total)
+{
+    return ppml_unit_deviance_mu(y, exp(eta_total), eta_total);
 }
 
 /* y*log(y) - y - lngamma(y+1), the saturated Poisson log likelihood of one
@@ -193,4 +227,59 @@ ST_double ppml_compute_loglik(const ST_double *y, const ST_double *eta, const ST
     for (ST_int b = 0; b < nblocks; b++) ll = ppml_dd_add_dd(ll, part[b]);
     free(part);
     return ll.hi + ll.lo;
+}
+
+/* The terms of ppml_compute_loglik for eta and, in the same pass, for the
+ * constant eta0 (the null model, no offset or scale), each summed as
+ * ppml_compute_loglik sums them: the two results are those of two separate
+ * calls, while the saturated term and exp(eta0) are evaluated once */
+static void ppml_loglik_pair_block(const ST_double *y, const ST_double *eta, const ST_double *offset,
+                                   ST_double log_scale, const ST_double *w_user, ST_double eta0,
+                                   ST_double mu0, ST_int lo, ST_int hi, dd_real *ll, dd_real *ll0)
+{
+    dd_real a = {0.0, 0.0}, b = {0.0, 0.0};
+    for (ST_int i = lo; i < hi; i++) {
+        ST_double w = (w_user != NULL) ? w_user[i] : 1.0;
+        ST_double eta_total = eta[i] + (offset != NULL ? offset[i] : 0.0) + log_scale;
+        ST_double saturated = ppml_saturated_loglik(y[i]);
+        a = dd_add_d(a, w * (saturated - ppml_unit_deviance(y[i], eta_total)));
+        b = dd_add_d(b, w * (saturated - ppml_unit_deviance_mu(y[i], mu0, eta0)));
+    }
+    *ll = a;
+    *ll0 = b;
+}
+
+void ppml_compute_loglik_pair(const ST_double *y, const ST_double *eta, const ST_double *offset,
+                              ST_double log_scale, const ST_double *w_user, ST_double eta0, ST_int N,
+                              ST_double *ll_out, ST_double *ll0_out)
+{
+    /* the null model's eta_total as ppml_compute_loglik forms it */
+    eta0 = eta0 + 0.0 + 0.0;
+    const ST_double mu0 = exp(eta0);
+    ST_int nblocks = (N + PPML_SUM_BLOCK - 1) / PPML_SUM_BLOCK;
+    dd_real *part = nblocks > 1 ? (dd_real *)malloc((size_t)nblocks * 2 * sizeof(dd_real)) : NULL;
+    dd_real ll = {0.0, 0.0}, ll0 = {0.0, 0.0};
+    if (!part) {
+        for (ST_int b = 0; b < nblocks; b++) {
+            ST_int lo = b * PPML_SUM_BLOCK, hi = lo + PPML_SUM_BLOCK < N ? lo + PPML_SUM_BLOCK : N;
+            dd_real a, c;
+            ppml_loglik_pair_block(y, eta, offset, log_scale, w_user, eta0, mu0, lo, hi, &a, &c);
+            ll = ppml_dd_add_dd(ll, a);
+            ll0 = ppml_dd_add_dd(ll0, c);
+        }
+    } else {
+        #pragma omp parallel for schedule(static)
+        for (ST_int b = 0; b < nblocks; b++) {
+            ST_int lo = b * PPML_SUM_BLOCK, hi = lo + PPML_SUM_BLOCK < N ? lo + PPML_SUM_BLOCK : N;
+            ppml_loglik_pair_block(y, eta, offset, log_scale, w_user, eta0, mu0, lo, hi,
+                                   &part[2 * (size_t)b], &part[2 * (size_t)b + 1]);
+        }
+        for (ST_int b = 0; b < nblocks; b++) {
+            ll = ppml_dd_add_dd(ll, part[2 * (size_t)b]);
+            ll0 = ppml_dd_add_dd(ll0, part[2 * (size_t)b + 1]);
+        }
+        free(part);
+    }
+    *ll_out = ll.hi + ll.lo;
+    *ll0_out = ll0.hi + ll0.lo;
 }

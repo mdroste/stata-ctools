@@ -231,7 +231,7 @@ void ctools_matmul_ata(const ST_double *A, ST_int N, ST_int K, ST_double *C)
  * C = X * B (and y += X * b): row blocks in parallel, columns in order
  */
 static void matmul_xb_blocks(const ST_double *X, ST_int N, ST_int K, const ST_double *B, ST_int M,
-                             ST_double *C, int zero_first)
+                             ST_double *C, int zero_first, const ST_double *w)
 {
     /* N + CTOOLS_ROW_BLOCK - 1 would overflow int for N within a block of
      * INT_MAX, leaving every row uncomputed */
@@ -242,6 +242,12 @@ static void matmul_xb_blocks(const ST_double *X, ST_int N, ST_int K, const ST_do
     for (blk = 0; blk < num_blocks; blk++) {
         const ST_int i0 = blk * CTOOLS_ROW_BLOCK;
         const ST_int i1 = (N - i0 < CTOOLS_ROW_BLOCK) ? N : i0 + CTOOLS_ROW_BLOCK;
+        /* with w, each row of the block is multiplied by sqrt(w) once its
+         * sums are complete, while the block is still in the cache */
+        ST_double sw[CTOOLS_ROW_BLOCK];
+        if (w) {
+            for (ST_int i = i0; i < i1; i++) sw[i - i0] = sqrt(w[i]);
+        }
         for (ST_int m = 0; m < M; m++) {
             ST_double *c = C + (size_t)m * N;
             const ST_double *b = B + (size_t)m * K;
@@ -253,19 +259,28 @@ static void matmul_xb_blocks(const ST_double *X, ST_int N, ST_int K, const ST_do
                 const ST_double bk = b[k];
                 for (ST_int i = i0; i < i1; i++) c[i] += x[i] * bk;
             }
+            if (w) {
+                for (ST_int i = i0; i < i1; i++) c[i] = sw[i - i0] * c[i];
+            }
         }
     }
 }
 
 void ctools_matvec_add(const ST_double *X, ST_int N, ST_int K, const ST_double *b, ST_double *y)
 {
-    matmul_xb_blocks(X, N, K, b, 1, y, 0);
+    matmul_xb_blocks(X, N, K, b, 1, y, 0, NULL);
 }
 
 void ctools_matmul_xb(const ST_double *X, ST_int N, ST_int K, const ST_double *B, ST_int M,
                       ST_double *C)
 {
-    matmul_xb_blocks(X, N, K, B, M, C, 1);
+    matmul_xb_blocks(X, N, K, B, M, C, 1, NULL);
+}
+
+void ctools_matmul_xb_sqrtw(const ST_double *X, ST_int N, ST_int K, const ST_double *B, ST_int M,
+                            const ST_double *w, ST_double *C)
+{
+    matmul_xb_blocks(X, N, K, B, M, C, 1, w);
 }
 
 /*
@@ -313,6 +328,12 @@ void ctools_matmul_atdb(const ST_double * restrict A, const ST_double * restrict
                         ST_double * restrict C)
 {
     cross_product(A, B, w, N, K1, K2, A == B && K1 == K2, C);
+}
+
+void ctools_matmul_atdb_full(const ST_double *A, const ST_double *B, const ST_double *w,
+                             ST_int N, ST_int K1, ST_int K2, ST_double *C)
+{
+    cross_product(A, B, w, N, K1, K2, 0, C);
 }
 
 /* ============================================================================
@@ -376,16 +397,16 @@ ST_retcode ctools_vce_robust(const ctools_vce_data *d, ST_double dof_adj, ST_dou
     if (N < 1 || K < 1 || !isfinite(dof_adj) || dof_adj <= 0)
         return 498;
 
-    /* Normalize weights for aweight/pweight (OLS convention) */
-    ST_double *w_norm = NULL;
-    if (d->normalize_weights && d->weights != NULL && (d->weight_type == 1 || d->weight_type == 3)) {
+    /* Normalize weights for aweight/pweight (OLS convention): w * scale,
+     * rounded to a double, formed where it is used */
+    const int w_norm = d->normalize_weights && d->weights != NULL &&
+                       (d->weight_type == 1 || d->weight_type == 3);
+    ST_double scale = 1.0;
+    if (w_norm) {
         ST_double sum_w = 0.0;
-        w_norm = (ST_double *)malloc(N * sizeof(ST_double));
-        if (!w_norm) return 920;
         for (idx = 0; idx < N; idx++) sum_w += d->weights[idx];
-        if (!isfinite(sum_w) || sum_w <= 0) { free(w_norm); return 498; }
-        ST_double scale = (ST_double)N / sum_w;
-        for (idx = 0; idx < N; idx++) w_norm[idx] = d->weights[idx] * scale;
+        if (!isfinite(sum_w) || sum_w <= 0) return 498;
+        scale = (ST_double)N / sum_w;
     }
 
     /* Allocate high-precision meat and temp matrices */
@@ -395,7 +416,6 @@ ST_retcode ctools_vce_robust(const ctools_vce_data *d, ST_double dof_adj, ST_dou
     if (!meat || !temp) {
         if (meat) free(meat);
         if (temp) free(temp);
-        if (w_norm) free(w_norm);
         return 920;
     }
 
@@ -409,9 +429,10 @@ ST_retcode ctools_vce_robust(const ctools_vce_data *d, ST_double dof_adj, ST_dou
     ST_double *obs_w = (ST_double *)malloc((size_t)N * sizeof(ST_double));
     if (!obs_w) {
         free(meat); free(temp);
-        if (w_norm) free(w_norm);
         return 920;
     }
+    /* one value per row, rows in parallel */
+    #pragma omp parallel for schedule(static) if(N > 200000)
     for (idx = 0; idx < N; idx++) {
         ST_double w_i;
         ST_double e = d->resid[idx];
@@ -421,7 +442,8 @@ ST_retcode ctools_vce_robust(const ctools_vce_data *d, ST_double dof_adj, ST_dou
         } else if (d->weight_type == 2) {
             w_i = e * e * d->weights[idx];
         } else if (w_norm) {
-            ST_double ew = e * w_norm[idx];
+            const ST_double wn = d->weights[idx] * scale;
+            ST_double ew = e * wn;
             w_i = ew * ew;
         } else {
             /* Raw weights (IV path): w * e^2 */
@@ -445,8 +467,6 @@ ST_retcode ctools_vce_robust(const ctools_vce_data *d, ST_double dof_adj, ST_dou
             meat[(size_t)k * K + j] = meat[(size_t)j * K + k];
         }
     }
-
-    if (w_norm) free(w_norm);
 
     /* High-precision V = D * meat * D * dof_adj (column-major). */
     for (j = 0; j < K; j++) {
@@ -574,16 +594,16 @@ ST_retcode ctools_vce_cluster(const ctools_vce_data *d,
         if (cluster_ids[idx] < 0 || cluster_ids[idx] >= num_clusters) return 498;
     }
 
-    /* Normalize weights for aweight/pweight (OLS convention) */
-    ST_double *w_norm = NULL;
-    if (d->normalize_weights && d->weights != NULL && (d->weight_type == 1 || d->weight_type == 3)) {
+    /* Normalize weights for aweight/pweight (OLS convention): w * scale,
+     * rounded to a double, formed where it is used */
+    const int w_norm = d->normalize_weights && d->weights != NULL &&
+                       (d->weight_type == 1 || d->weight_type == 3);
+    ST_double scale = 1.0;
+    if (w_norm) {
         ST_double sum_w = 0.0;
-        w_norm = (ST_double *)malloc(N * sizeof(ST_double));
-        if (!w_norm) return 920;
         for (idx = 0; idx < N; idx++) sum_w += d->weights[idx];
-        if (!isfinite(sum_w) || sum_w <= 0) { free(w_norm); return 498; }
-        ST_double scale = (ST_double)N / sum_w;
-        for (idx = 0; idx < N; idx++) w_norm[idx] = d->weights[idx] * scale;
+        if (!isfinite(sum_w) || sum_w <= 0) return 498;
+        scale = (ST_double)N / sum_w;
     }
 
     /* Allocate high-precision buffers */
@@ -598,16 +618,18 @@ ST_retcode ctools_vce_cluster(const ctools_vce_data *d,
         free(temp);
         free(ecX);
         free(e_w);
-        if (w_norm) free(w_norm);
         return 920;
     }
+    /* one value per row, rows in parallel */
+    #pragma omp parallel for schedule(static) if(N > 200000)
     for (idx = 0; idx < N; idx++) {
         if (d->weights == NULL) {
             e_w[idx] = d->resid[idx];
         } else if (d->weight_type == 2) {
             e_w[idx] = d->resid[idx] * d->weights[idx];
         } else if (w_norm) {
-            e_w[idx] = d->resid[idx] * w_norm[idx];
+            const ST_double wn = d->weights[idx] * scale;
+            e_w[idx] = d->resid[idx] * wn;
         } else {
             e_w[idx] = d->resid[idx] * d->weights[idx];
         }
@@ -660,7 +682,6 @@ ST_retcode ctools_vce_cluster(const ctools_vce_data *d,
     }
     free(e_w);
     free(ecX);
-    if (w_norm) free(w_norm);
     if (meat_rc) {
         free(meat);
         free(temp);

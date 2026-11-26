@@ -19,6 +19,7 @@ ST_plugin *_stata_=&mock;
 #include "hdfe/hdfe_coef_multi.c"
 #include "hdfe/hdfe_coef_lap.c"
 #include "cppmlhdfe/cppmlhdfe_irls.c"
+#include "hdfe/hdfe_missing.c"
 #include "cppmlhdfe/cppmlhdfe_result.c"
 #include "cppmlhdfe/cppmlhdfe_input.c"
 #include "cppmlhdfe/cppmlhdfe_options.c"
@@ -258,6 +259,30 @@ static void solver_checks(void) {
         assert(cqreg_fn_solve(s,y,x,.5,b)<0 && !s->converged);
         cqreg_ipm_free(s);
     }
+    /* Enough rows for several chunks of the fused passes, on several threads:
+     * the same tied design must give the same exact quantile lines. */
+    enum {BIG=24000};
+    static double bx[BIG*K], by[BIG];
+    for (int group = 0; group < BIG/3; group++) {
+        double a = 2*uniform()-1, c = 2*uniform()-1;
+        for (int e = 0; e < 3; e++) {
+            int i=3*group+e;
+            bx[i]=a; bx[BIG+i]=c; bx[2*BIG+i]=1;
+            by[i]=2*a-3*c+4+e-1;
+        }
+    }
+    for (int aux=0; aux<2; aux++) {
+        cqreg_ipm_config c; cqreg_ipm_config_init(&c);
+        c.tol_gap=1e-12; c.maxiter=100; c.skip_crossover=aux;
+        cqreg_ipm_state *s=cqreg_ipm_create_lite(BIG,K,&c); assert(s);
+        for (int q=1;q<=9;q+=4) {
+            int rc=cqreg_fn_solve(s,by,bx,q/10.0,b);
+            assert(rc>0 && s->converged);
+            assert(fabs(b[0]-2)<1e-8 && fabs(b[1]+3)<1e-8);
+            assert(fabs(b[2]-(q==1?3:q==5?4:5))<1e-8);
+        }
+        cqreg_ipm_free(s);
+    }
 }
 static void benchmark(int n, int k) {
     double *x=malloc((size_t)n*k*sizeof(*x)), *y=malloc(n*sizeof(*y));
@@ -415,6 +440,7 @@ stata_retcode ctools_data_load(ctools_filtered_data *d, int *v, size_t n, size_t
 }
 #include "creghdfe/creghdfe_hdfe.c"
 #include "creghdfe/creghdfe_regress.c"
+#include "hdfe/hdfe_missing.c"
 #include "creghdfe/creghdfe_result.c"
 #include "creghdfe/creghdfe_input.c"
 #include "creghdfe/creghdfe_core.c"
@@ -566,6 +592,7 @@ stata_retcode ctools_data_load(ctools_filtered_data *d, int *v, size_t n, size_t
     return STATA_OK;
 }
 #include "cppmlhdfe/cppmlhdfe_irls.c"
+#include "hdfe/hdfe_missing.c"
 #include "cppmlhdfe/cppmlhdfe_result.c"
 #include "cppmlhdfe/cppmlhdfe_input.c"
 #include "cppmlhdfe/cppmlhdfe_options.c"

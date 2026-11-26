@@ -49,10 +49,10 @@ python3 validation/run.py cencode
 | `cbinscatter` | `x_q` | Compare command results |
 | `cbinscatter` | `symbols` | Compare command results |
 | `cbinscatter` | `unique` | Compare command results |
-| `cbsample` | `weight` | Check option behavior |
 | `cbsample` | `strata` | Compare command results |
 | `cbsample` | `cluster` | Compare command results |
 | `cbsample` | `idcluster` | Compare command results |
+| `cbsample` | `weight` | Check option behavior |
 | `cbsample` | `verbose` | Compare command results |
 | `cbsample` | `threads` | Compare command results |
 | `cdecode` | `generate` | Compare command results |
@@ -74,6 +74,9 @@ python3 validation/run.py cencode
 | `cdistinct` | `joint` | Compare command results |
 | `cdistinct` | `minimum` | Compare command results |
 | `cdistinct` | `maximum` | Compare command results |
+| `cdistinct` | `width` | Compare command results |
+| `cdistinct` | `sort` | Compare command results |
+| `cdistinct` | `sort2` | Compare command results |
 | `cdistinct` | `verbose` | Compare command results |
 | `cdistinct` | `threads` | Compare command results |
 | `cencode` | `generate` | Compare command results |
@@ -401,8 +404,9 @@ python3 validation/run.py cencode
 | `cpsmatch` | `descending` | Compare command results |
 | `cpsmatch` | `ate` | Compare command results |
 | `cpsmatch` | `ai` | Compare command results |
-| `cpsmatch` | `population` | Compare command results |
+| `cpsmatch` | `samplevar` | Compare command results |
 | `cpsmatch` | `altvariance` | Compare command results |
+| `cpsmatch` | `debug` | Compare command results |
 | `cpsmatch` | `warnings` | Compare command results |
 | `cpsmatch` | `verbose` | Compare command results |
 | `cpsmatch` | `threads` | Compare command results |
@@ -495,12 +499,12 @@ python3 validation/run.py cencode
 | `csample` | `verbose` | Compare command results |
 | `csample` | `threads` | Compare command results |
 | `csample` | `pduplicates` | Check option behavior |
-| `csort` | `stream` | Compare command results |
-| `csort` | `nostream` | Compare command results |
 | `csort` | `verbose` | Compare command results |
 | `csort` | `algorithm` | Compare command results |
+| `csort` | `stream` | Compare command results |
 | `csort` | `threads` | Compare command results |
 | `csort` | `nosortedby` | Compare command results |
+| `csort` | `nostream` | Compare command results |
 | `csort` | `stable` | Compare command results |
 | `csplit` | `generate` | Compare command results |
 | `csplit` | `notrim` | Compare command results |

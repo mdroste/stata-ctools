@@ -18,6 +18,7 @@ if _rc {
 
 capture program drop _pq_run
 program define _pq_run, rclass
+    _ct_loud _pq_run
     * Runs one command with its output logged; returns rc, r() and the log
     args command log
     label drop _all

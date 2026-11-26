@@ -212,6 +212,41 @@ static inline const char *cdecode_lookup(const cdecode_map *m, double value)
     return (lo < m->count && m->values[lo] == key) ? m->text[lo] : NULL;
 }
 
+void *cdecode_label_map_create(char *text, size_t maplen, size_t width, ST_retcode *rc)
+{
+    cdecode_map *m = (cdecode_map *)calloc(1, sizeof(*m));
+    if (!m)
+    {
+        free(text);
+        *rc = 920;
+        return NULL;
+    }
+    m->map = text;
+    int parse_rc = strlen(text) == maplen ? cdecode_map_parse(m, maplen, width) : 198;
+    if (parse_rc)
+    {
+        cdecode_map_free(m);
+        free(m);
+        *rc = (ST_retcode)parse_rc;
+        return NULL;
+    }
+    *rc = 0;
+    return m;
+}
+
+const char *cdecode_label_map_text(const void *map, double value)
+{
+    return cdecode_lookup((const cdecode_map *)map, value);
+}
+
+void cdecode_label_map_free(void *map)
+{
+    if (!map)
+        return;
+    cdecode_map_free((cdecode_map *)map);
+    free(map);
+}
+
 static ST_retcode cdecode_reject_legacy(void)
 {
     SF_error("cdecode: legacy plugin protocol retired; install the matching cdecode.ado\n");

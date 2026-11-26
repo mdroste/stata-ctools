@@ -123,6 +123,7 @@ else test_fail "DATA-10 destring_cmd characteristic" "differs from split"
 * code, variable names and types, and (unless "nodata") values agree.
 capture program drop _ct_output
 program define _ct_output, rclass
+    _ct_loud _ct_output
     tempfile f
     tempname fh
     capture log close _ctout
@@ -208,7 +209,7 @@ foreach pair in `"s, parse(,) destring"' `"s, parse(,) gen(t)"' `"s, parse(,) ge
     `"s, parse(,) gen(y) ignore("a")"' `"s, parse(,) gen(y) percent"' ///
     `"s, parse(,) gen(z) destring ignore(a,b)"' `"s, parse(,) gen(z) destring ignore("a", asbytes illegal)"' {
     local ++i
-    _ct_same_output "SPLIT-01/02 output `i'" `"split `pair'"' `"csplit `pair'"'
+    noisily _ct_same_output "SPLIT-01/02 output `i'" `"split `pair'"' `"csplit `pair'"'
 }
 split one, gen(ref) limit(1)
 local want `"`r(varlist)'"'

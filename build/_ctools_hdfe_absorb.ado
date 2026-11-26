@@ -23,10 +23,14 @@
 *   r(intercept_g)  1 when the effect has an intercept, 0 for slopes only
 *   r(cvars_g)      its slope variables, in order (empty without slopes)
 *   r(target_g)     the newvar= target, or empty
+* Option nomark skips marking when the caller has already checked these
+* variables together with the model variables in marksample.
 program define _ctools_hdfe_absorb, rclass
     version 14.1
-    syntax anything(name=terms id="absorb()" equalok), TOUSE(varname) CMD(name) [SLOPES REPLACE]
+    syntax anything(name=terms id="absorb()" equalok), TOUSE(varname) CMD(name) [SLOPES REPLACE NOMARK]
     local n = 0
+    * Plain terms are marked out in one pass over the data at the end
+    local markvars
     if "`slopes'" != "" {
         * Terms are bound by parentheses, c.(x z); a target may be written
         * with spaces around the equal sign, as reghdfe allows
@@ -54,12 +58,13 @@ program define _ctools_hdfe_absorb, rclass
                 return scalar intercept_`n' = `s_intercept'
                 return local cvars_`n' `s_cvars'
                 return local target_`n' `target'
-                markout `touse' `s_ivars' `s_cvars'
+                if "`nomark'" == "" markout `touse' `s_ivars' `s_cvars'
                 continue
             }
             local before = `n'
             PlainTerm `cmd' `"`term'"' `touse' `n'
             local n = `r_n'
+            local markvars `markvars' `r_markvars'
             forvalues g = `=`before'+1'/`n' {
                 return scalar group_`g' = `r_group_`g''
                 return local name_`g' `r_name_`g''
@@ -73,6 +78,7 @@ program define _ctools_hdfe_absorb, rclass
                 exit 198
             }
         }
+        if "`nomark'" == "" & "`markvars'" != "" markout `touse' `markvars', strok
         return scalar n = `n'
         exit
     }
@@ -93,7 +99,7 @@ program define _ctools_hdfe_absorb, rclass
                 return scalar group_`n' = (_rc != 0)
                 return local name_`n' `v'
                 return local vars_`n' `v'
-                markout `touse' `v', strok
+                local markvars `markvars' `v'
             }
             continue
         }
@@ -123,8 +129,10 @@ program define _ctools_hdfe_absorb, rclass
         return scalar group_`n' = `group'
         return local name_`n' `name'
         return local vars_`n' `vars'
-        markout `touse' `vars', strok
+        local markvars `markvars' `vars'
     }
+    if "`nomark'" == "" & "`markvars'" != "" markout `touse' `markvars', strok
+    return local markvars `markvars'
     return scalar n = `n'
 end
 
@@ -135,7 +143,8 @@ program define PlainTerm
     if strpos(`"`term'"', "##") | strpos(`"`term'"', "(") | strpos(`"`term'"', ",") {
         Unsupported `cmd' `"`term'"'
     }
-    _ctools_hdfe_absorb `term', touse(`touse') cmd(`cmd')
+    _ctools_hdfe_absorb `term', touse(`touse') cmd(`cmd') nomark
+    c_local r_markvars `r(markvars)'
     forvalues g = 1/`r(n)' {
         local ++n
         c_local r_name_`n' `r(name_`g')'

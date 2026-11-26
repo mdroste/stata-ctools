@@ -95,6 +95,23 @@ program define test_skip
 end
 
 /*******************************************************************************
+ * _ct_loud - Stop a helper that captures command output from running quietly
+ *
+ * A log records no command output while Stata is quiet, and noisily inside a
+ * called program cannot undo a quietly in its caller. A helper that reads a
+ * command's output back from a log would then compare nothing with nothing
+ * and pass. Such helpers call _ct_loud <name> first: when the call reached
+ * them quietly it stops with r(198), and the call in the suite's quietly
+ * block needs a noisily prefix.
+ ******************************************************************************/
+capture program drop _ct_loud
+program define _ct_loud
+    if c(noisily) exit
+    di as error "`0' was called quietly, so its log would capture no output; prefix the call with noisily"
+    exit 198
+end
+
+/*******************************************************************************
  * print_failures - Print all recorded failures (called by the test runner)
  ******************************************************************************/
 capture program drop print_failures

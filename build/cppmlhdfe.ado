@@ -1,4 +1,6 @@
 *! version 1.3.1 20261124 github.com/mdroste/stata-ctools
+*! original: ppmlhdfe 2.3.3 (November 2, 2025) by Sergio Correia, Paulo Guimarães, and Thomas Zylkin
+*! original: see help cppmlhdfe for details
 
 program define cppmlhdfe, eclass
     version 14.1
@@ -195,7 +197,7 @@ program define cppmlhdfe, eclass
     local has_absorb = ("`absorb'" != "")
     if !`has_absorb' {
         tempvar constant_fe
-        quietly generate byte `constant_fe' = 1
+        quietly mark `constant_fe', noby
         local absorb `constant_fe'
         local absorb_orig _cons
     }
@@ -214,8 +216,57 @@ program define cppmlhdfe, eclass
     local dofmethods `s(methods)'
     local dof_adjust_type = cond(`dof_flags'==0,1,cond(mod(`dof_flags',4)==2,2,0))
 
-    * Mark sample
-    marksample touse
+    * Batch plain numeric effects with the model's missing-value check.
+    local __absorb_mark = 0
+    capture confirm numeric variable `absorb'
+    if !_rc local __absorb_mark = 1
+    local __model_varlist `varlist'
+    if `__absorb_mark' local varlist `varlist' `absorb'
+    * Screen plain inputs after loading, also with a weight that is one
+    * numeric variable (marksample checks its rows; the plugin reads it as
+    * it is). Weight expressions, offsets and factors use a native streaming
+    * pass before weight staging and factor expansion.
+    local __wbare = 0
+    if "`weight'" != "" {
+        local __wexp = strtrim(substr(strtrim(`"`exp'"'), 2, .))
+        if `: word count `__wexp'' == 1 {
+            capture confirm numeric variable `__wexp', exact
+            if !_rc local __wbare = 1
+        }
+    }
+    local __ctools_plugin_hdfe_screen = 0
+    local __ctools_plugin_hdfe_markout = 0
+    _ctools_load
+    local __native_screen = 0
+    if "`fevce'" == "" & !`__wild' & ///
+        substr(lower(strtrim(`"`vce'"')), 1, 4) != "boot" {
+        capture confirm numeric variable `__model_varlist'
+        if !_rc & `__absorb_mark' & "`offset'`exposure'" == "" & ("`weight'" == "" | `__wbare') ///
+            local __native_screen = `__ctools_plugin_hdfe_screen'
+        else if `__ctools_plugin_hdfe_markout' {
+            _ctools_hdfe_screen plan `__model_varlist'
+            if `__screen_ok' local __native_screen = 2
+        }
+    }
+    * Stata can reuse the old e(sample) storage when it is released before
+    * marksample allocates a new marker (posting is about 45 ms faster at
+    * 10M rows). Keep previous results when the qualifiers, weights or
+    * options can refer to them: e() or _b[], _se[], _coef[] as a token
+    * (vce( or tolerance( is not one), and with tagsep(), which posts no
+    * fit. A fit that fails after this point leaves e() empty, as a failed
+    * creghdfe does.
+    if "`tagsep'" == "" & ///
+        !ustrregexm(`"`cmdline_typed'"', "(^|[^A-Za-z0-9_])(e[(]|_b\[|_se\[|_coef\[)") {
+        ereturn clear
+    }
+    if `__native_screen' marksample touse, novarlist
+    else marksample touse
+    local varlist `__model_varlist'
+    if `__native_screen' == 2 {
+        local __early_inputs `__screen_inputs'
+        if `__absorb_mark' local __early_inputs `__early_inputs' `absorb'
+        _ctools_hdfe_screen mark `__early_inputs', touse(`touse') plugin(`__ctools_plugin') threads(`threads')
+    }
     * Parse categorical interactions and heterogeneous slopes without Mata
     * estimation or a dependency on reghdfe/ppmlhdfe.
     local absorb_numeric
@@ -317,9 +368,20 @@ program define cppmlhdfe, eclass
         }
         if "`categories'" == "" error 198
         local absorb_model_vars `absorb_model_vars' `categories' `continuous'
-        markout `touse' `categories' `continuous', strok
-        tempvar fe_id
-        quietly _ctools_group `categories' if `touse', generate(`fe_id')
+        if !`__absorb_mark' markout `touse' `categories' `continuous', strok
+        * A numeric variable goes to the plugin as it is (the plugin
+        * renumbers every effect on the sample); strings and interactions
+        * are numbered first
+        local fe_direct = 0
+        if `: word count `categories'' == 1 {
+            capture confirm numeric variable `categories', exact
+            local fe_direct = !_rc
+        }
+        if `fe_direct' local fe_id `categories'
+        else {
+            tempvar fe_id
+            quietly _ctools_group `categories' if `touse', generate(`fe_id')
+        }
         local ncontinuous : word count `continuous'
         if `ncontinuous' > 1 {
             di as error "multiple continuous factors in an absorb interaction"
@@ -367,8 +429,8 @@ program define cppmlhdfe, eclass
     if "`weight'" != "" {
         * Evaluate the weight expression; marks out and validates the weights
         tempvar evaluated_weight
-        _ctools_weight, generate(`evaluated_weight') touse(`touse') type(`weight') expression(`"`exp'"')
-        local weight_var "`evaluated_weight'"
+        _ctools_weight, generate(`evaluated_weight') touse(`touse') type(`weight') expression(`"`exp'"') marked
+        local weight_var "`__ctools_wvar'"
         local weight_type = cond("`weight'" == "aweight", 1, cond("`weight'" == "fweight", 2, 3))
     }
 
@@ -622,7 +684,8 @@ program define cppmlhdfe, eclass
         }
         else if substr("`vce_word'", 1, 1) == "r" local vce_word robust
         local vce `"`vce_word'`vce_rest'"'
-        _ctools_hdfe_vce, spec(`"`vce'"') touse(`touse') cmd(cppmlhdfe)
+        * with the native screen the plugin drops missing cluster values
+        _ctools_hdfe_vce, spec(`"`vce'"') touse(`touse') cmd(cppmlhdfe) `=cond(`__native_screen' == 1, "nomark", "")'
         local vce_kind `r(kind)'
         if "`vce_kind'" == "cluster" {
             local vcetype = 2
@@ -725,19 +788,34 @@ program define cppmlhdfe, eclass
     tsrevar `depvar'
     local depvar "`r(varlist)'"
 
-    * Check y >= 0
-    qui count if `depvar' < 0 & `touse'
-    if r(N) > 0 {
-        di as error "cppmlhdfe: dependent variable must be non-negative"
-        exit 198
-    }
+    * The plugin checks y >= 0 on the loaded sample before singleton or
+    * separation removal, returning r(198). Do not scan the data twice.
 
     * Expand factor variables
+    local __fvn_ok 0
+    local __fvn_kept
     if "`indepvars'" != "" {
-        fvrevar `indepvars' if `touse'
-        local __indepvars_all "`r(varlist)'"
-        fvexpand `indepvars' if `touse'
-        local coef_names_all "`r(varlist)'"
+        * Plain i.f terms: the plugin builds the indicators from f and the
+        * levels come from one plugin pass (_ctools_fvnative), not from
+        * fvrevar and fvexpand (about 0.2 s each per term at 10M rows). The
+        * bootstraps and fevce() keep fvrevar's variables.
+        if `__ctools_plugin_hdfe_fvlevels' & "`fevce'" == "" & !`__wild' & ///
+            substr(lower(strtrim(`"`vce'"')), 1, 4) != "boot" & strpos("`indepvars'", ".") {
+            _ctools_fvnative `indepvars', touse(`touse') plugin(`__ctools_plugin') threads(`threads')
+        }
+        if `__fvn_ok' {
+            local __indepvars_all `__fvn_vars'
+            local coef_names_all `__fvn_names'
+            * the level of each estimated term (-1: not an indicator)
+            _ctools_fvsplit, names(`coef_names_all') vars(`__fvn_levels')
+            local __fvn_kept "`r(vars)'"
+        }
+        else {
+            fvrevar `indepvars' if `touse'
+            local __indepvars_all "`r(varlist)'"
+            fvexpand `indepvars' if `touse'
+            local coef_names_all "`r(varlist)'"
+        }
 
         * Base/omitted placeholders are not sent to the plugin
         _ctools_fvsplit, names(`coef_names_all') vars(`__indepvars_all')
@@ -780,16 +858,14 @@ program define cppmlhdfe, eclass
         }
     }
 
-    * Count observations
-    qui count if `touse'
-    local nobs = r(N)
-    if `nobs' == 0 {
+    * Only existence is needed here; stop at the first included row.
+    capture assert !`touse', fast
+    if !_rc {
         di as error "cppmlhdfe: no observations"
         exit 2000
     }
 
-    * Load plugin
-    _ctools_load
+    * Identity and capabilities were checked before sample preparation.
     * Stata scopes plugin registrations to the calling ado program.
     capture program ctools_plugin, plugin using("`__ctools_plugin'")
     if _rc != 0 & _rc != 110 exit 601
@@ -816,6 +892,16 @@ program define cppmlhdfe, eclass
     scalar __cppmlhdfe_certificate_idx = 0
     scalar __cppmlhdfe_K = `nvars'
     scalar __cppmlhdfe_G = `nfe'
+    * i.f indicators the plugin builds: the level of each regressor in the
+    * plugin varlist (-1: an ordinary variable)
+    if "`__fvn_kept'" != "" {
+        local __fvk : word count `__fvn_kept'
+        matrix __cppmlhdfe_fvlev = J(1, `__fvk', -1)
+        forvalues __c = 1/`__fvk' {
+            matrix __cppmlhdfe_fvlev[1, `__c'] = `: word `__c' of `__fvn_kept''
+        }
+        scalar __cppmlhdfe_fvspec = 1
+    }
     scalar __cppmlhdfe_verbose = `verbose'
     * ppmlhdfe's iteration log, printed by the plugin unless nolog or
     * verbose(-1)
@@ -870,19 +956,19 @@ program define cppmlhdfe, eclass
         local plugin_varlist `plugin_varlist' `offset_var'
     }
 
-    * The plugin returns the final sample after internal row removals.
-    tempvar final_sample
-    quietly generate byte `final_sample' = 0
-    local plugin_varlist `plugin_varlist' `final_sample'
-    local sample_idx : word count `plugin_varlist'
-    scalar __cppmlhdfe_sample_idx = `sample_idx'
+    * The plugin returns the final sample after internal row removals: the
+    * sample marker itself (the last plugin variable), in which it clears the
+    * rows it removes, so no second marker has to be created and filled
+    local final_sample `touse'
+    scalar __cppmlhdfe_sample_prefilled = 1
 
     * Optional outputs get a variable only when requested; index 0 tells the
     * plugin to skip that column's per-observation stores.
+    * st_addvar fills these with missing, including all excluded rows.
     tempvar saved_d
     scalar __cppmlhdfe_d_idx = 0
     if "`d'" != "" {
-        quietly generate double `saved_d' = .
+        quietly mata: st_addvar("double", "`saved_d'")
         local plugin_varlist `plugin_varlist' `saved_d'
         scalar __cppmlhdfe_d_idx = `: word count `plugin_varlist''
     }
@@ -903,7 +989,7 @@ program define cppmlhdfe, eclass
         scalar __cppmlhdfe_save_fe_`g' = 0
         if "`fe_target_`g''"!="" {
             tempvar fe_output_`g'
-            quietly generate double `fe_output_`g'' = .
+            quietly mata: st_addvar("double", "`fe_output_`g''")
             local plugin_varlist `plugin_varlist' `fe_output_`g''
             scalar __cppmlhdfe_save_fe_`g' = `: word count `plugin_varlist''
         }
@@ -916,12 +1002,12 @@ program define cppmlhdfe, eclass
     scalar __cppmlhdfe_tag_idx = 0
     scalar __cppmlhdfe_certificate_idx = 0
     if "`tagsep'" != "" {
-        quietly generate byte `separation_tag' = .
+        quietly mata: st_addvar("byte", "`separation_tag'")
         local plugin_varlist `plugin_varlist' `separation_tag'
         scalar __cppmlhdfe_tag_idx = `: word count `plugin_varlist''
     }
     if "`zvarname'" != "" {
-        quietly generate double `separation_certificate' = .
+        quietly mata: st_addvar("double", "`separation_certificate'")
         local plugin_varlist `plugin_varlist' `separation_certificate'
         scalar __cppmlhdfe_certificate_idx = `: word count `plugin_varlist''
     }
@@ -942,7 +1028,9 @@ program define cppmlhdfe, eclass
     * The sample marker goes last, in place of if `touse': the plugin reads
     * it in parallel, where Stata answers an if one observation at a time
     local plugin_varlist `plugin_varlist' `touse'
+    scalar __cppmlhdfe_sample_idx = `: word count `plugin_varlist''
     scalar __cppmlhdfe_touse = 1
+    scalar __cppmlhdfe_screen = (`__native_screen' == 1)
 
     * Create V matrix
     local K_x = `nvars' - 1
@@ -963,17 +1051,30 @@ program define cppmlhdfe, eclass
         di as error "warning: keeping singleton groups will keep fixed effects that cause separation"
     }
     local refit = 1
+    local refit_pass = 0
     while `refit' {
         scalar __cppmlhdfe_refit = 0
-        quietly replace `final_sample' = 0
+        capture scalar drop __cppmlhdfe_marked
+        local ++refit_pass
         capture noisily plugin call ctools_plugin `plugin_varlist', ///
             "cppmlhdfe `threads_code' full_regression`=cond(`__bsrun' | `__wild', " retain", "")'"
         local reg_rc = _rc
-        if !`reg_rc' & __cppmlhdfe_api != 3 {
-            di as error "cppmlhdfe: rebuild the ctools plugin alongside the ado files"
-            local reg_rc = 601
+        if !`reg_rc' {
+            * a plugin that did not update the marker would leave the
+            * dropped rows in e(sample)
+            capture confirm scalar __cppmlhdfe_marked
+            * and one that did not build the i.f indicators would have
+            * fitted the factor variables themselves
+            if !_rc & "`__fvn_kept'" != "" capture confirm scalar __cppmlhdfe_fvdone
+            if _rc | __cppmlhdfe_api != 3 {
+                di as error "cppmlhdfe: rebuild the ctools plugin alongside the ado files"
+                local reg_rc = 601
+            }
         }
         if `reg_rc' continue, break
+        * A separation refit only restricts this complete-case sample.
+        * The inputs do not change, so it needs no further missing scan.
+        scalar __cppmlhdfe_screen = 0
         if "`tagsep'"!="" {
             quietly generate byte `tagsep' = `separation_tag'
             label variable `tagsep' "[cppmlhdfe: ReLU] Obs. is separated"
@@ -1015,7 +1116,8 @@ program define cppmlhdfe, eclass
         local total_separated = `total_separated' + __cppmlhdfe_num_separated
         local refit = __cppmlhdfe_refit
         if `refit' {
-            quietly replace `touse' = `final_sample'
+            * the refit reads the marker, from which the plugin has cleared
+            * the separated rows
             scalar __cppmlhdfe_scale_fixed = 1
             if `refit'==1 scalar __cppmlhdfe_check_simplex = 0
             if `refit'==2 scalar __cppmlhdfe_check_relu = 0
@@ -1469,6 +1571,23 @@ program define cppmlhdfe, eclass
     if "$CTOOLS_cppmlhdfe_fault" == "display" error 1
     _cppmlhdfe_replay, `diopts' `eform' `irr' `nowildtable'
 
+    * The plugin's own timers (those of its last pass), read before its
+    * scalars are dropped; a timer the plugin did not leave is missing
+    if `__do_timing' {
+        foreach __t in load screen remap singleton dof setup simplex relu start irls irls_working irls_partial ///
+            irls_solve irls_update final vce post total {
+            local __pt_`__t' .
+            capture confirm scalar _cppmlhdfe_time_`__t'
+            if !_rc local __pt_`__t' = scalar(_cppmlhdfe_time_`__t')
+        }
+        foreach __t in iterations subiterations relusteps {
+            local __pt_`__t' .
+            capture confirm scalar _cppmlhdfe_irls_`__t'
+            if !_rc local __pt_`__t' = scalar(_cppmlhdfe_irls_`__t')
+        }
+        * a plugin without the breakdown leaves only the totals
+        if `__pt_start' >= . local __pt_total .
+    }
     _ctools_cleanup cppmlhdfe
 
     * Display timing if verbose
@@ -1480,11 +1599,49 @@ program define cppmlhdfe, eclass
         di as text "{hline 55}"
         di as text "cppmlhdfe timing breakdown:"
         di as text "{hline 55}"
-        di as text "  Stata setup:              " as result %8.4f `__time_setup' " sec"
-        di as text "  C plugin total:           " as result %8.4f `__time_plugin_call' " sec"
-        di as text "  Results building:         " as result %8.4f `__time_build' " sec"
-        di as text "  ereturn posting:          " as result %8.4f `__time_ereturn' " sec"
-        di as text "  Display output:           " as result %8.4f `__time_display' " sec"
+        if `__pt_total' < . {
+            di as text "  C plugin internals:"
+            di as text "    Data load (SPI):        " as result %8.4f `__pt_load' " sec"
+            if `__pt_screen' < . di as text "      of it, missing screen:" as result %8.4f `__pt_screen' " sec"
+            di as text "    FE remap + counts:      " as result %8.4f `__pt_remap' " sec"
+            di as text "    Singleton removal:      " as result %8.4f `__pt_singleton' " sec"
+            di as text "    DOF computation:        " as result %8.4f `__pt_dof' " sec"
+            di as text "    Compact + standardize:  " as result %8.4f `__pt_setup' " sec"
+            di as text "    Separation (simplex):   " as result %8.4f `__pt_simplex' " sec"
+            di as text "    Separation (ReLU):      " as result %8.4f `__pt_relu' " sec" ///
+                as text cond(`__pt_relusteps' < . & `__pt_relusteps' > 0, ///
+                    "  (`__pt_relusteps' step" + cond(`__pt_relusteps' == 1, "", "s") + ")", "")
+            di as text "    Start values, collinear:" as result %8.4f `__pt_start' " sec"
+            di as text "    IRLS loop:              " as result %8.4f `__pt_irls' " sec" ///
+                as text "  (" as result `__pt_iterations' as text " iterations)"
+            di as text "      Working variable:     " as result %8.4f `__pt_irls_working' " sec"
+            di as text "      HDFE partial out:     " as result %8.4f `__pt_irls_partial' " sec" ///
+                as text "  (" as result `__pt_subiterations' as text " subiterations)"
+            di as text "      WLS solve:            " as result %8.4f `__pt_irls_solve' " sec"
+            di as text "      Update + deviance:    " as result %8.4f `__pt_irls_update' " sec"
+            di as text "    Final projection, solve:" as result %8.4f `__pt_final' " sec"
+            di as text "    VCE computation:        " as result %8.4f `__pt_vce' " sec"
+            di as text "    Results + stored vars:  " as result %8.4f `__pt_post' " sec"
+            di as text "  {hline 53}"
+            di as text "    C plugin total:         " as result %8.4f `__pt_total' " sec"
+            if `refit_pass' > 1 di as text "    (the last of `refit_pass' passes; the earlier ones are in the call overhead)"
+            di as text ""
+            di as text "  Stata overhead:"
+            di as text "    Setup (parsing, etc):   " as result %8.4f `__time_setup' " sec"
+            di as text "    Plugin call overhead:   " as result %8.4f (`__time_plugin_call' - `__pt_total') " sec"
+            di as text "    Results building:       " as result %8.4f `__time_build' " sec"
+            di as text "    ereturn posting:        " as result %8.4f `__time_ereturn' " sec"
+            di as text "    Display output:         " as result %8.4f `__time_display' " sec"
+            di as text "  {hline 53}"
+            di as text "    Stata overhead total:   " as result %8.4f (`__time_total' - `__pt_total') " sec"
+        }
+        else {
+            di as text "  Stata setup:              " as result %8.4f `__time_setup' " sec"
+            di as text "  C plugin total:           " as result %8.4f `__time_plugin_call' " sec"
+            di as text "  Results building:         " as result %8.4f `__time_build' " sec"
+            di as text "  ereturn posting:          " as result %8.4f `__time_ereturn' " sec"
+            di as text "  Display output:           " as result %8.4f `__time_display' " sec"
+        }
         di as text "{hline 55}"
         di as text "  Wall clock total:         " as result %8.4f `__time_total' " sec"
         di as text "{hline 55}"

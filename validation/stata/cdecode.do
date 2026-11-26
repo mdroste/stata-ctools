@@ -2290,6 +2290,7 @@ else test_fail "DATA-11 cdecode replace keeps notes and chars" "lost"
 * code, variable names and types, and (unless "nodata") values agree.
 capture program drop _ct_output
 program define _ct_output, rclass
+    _ct_loud _ct_output
     tempfile f
     tempname fh
     capture log close _ctout
@@ -2362,9 +2363,9 @@ end
 * DEC-01, DEC-02: decode's messages and return codes; the caller's r() is
 * kept (cdecode adds r(N_vars) and r(N_plugin))
 sysuse auto, clear
-_ct_same_output "DEC-01 string source message" "decode make, gen(bad)" "cdecode make, gen(bad)"
-_ct_same_output "DEC-01 unlabeled source message" "decode price, gen(bad)" "cdecode price, gen(bad)"
-_ct_same_output "DEC-01 labeled source output" "decode foreign, gen(dec)" "cdecode foreign, gen(dec)"
+noisily _ct_same_output "DEC-01 string source message" "decode make, gen(bad)" "cdecode make, gen(bad)"
+noisily _ct_same_output "DEC-01 unlabeled source message" "decode price, gen(bad)" "cdecode price, gen(bad)"
+noisily _ct_same_output "DEC-01 labeled source output" "decode foreign, gen(dec)" "cdecode foreign, gen(dec)"
 quietly summarize price
 local mean = r(mean)
 local sd = r(sd)

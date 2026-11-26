@@ -62,6 +62,14 @@ void ctools_matmul_xb(const ST_double *X, ST_int N, ST_int K, const ST_double *B
                       ST_double *C);
 
 /*
+ * C = diag(sqrt(w)) * X * B: ctools_matmul_xb(), then every C[i,m] replaced
+ * by sqrt(w[i]) * C[i,m] (the same values as that multiply done afterwards,
+ * without another pass over C).
+ */
+void ctools_matmul_xb_sqrtw(const ST_double *X, ST_int N, ST_int K, const ST_double *B, ST_int M,
+                            const ST_double *w, ST_double *C);
+
+/*
  * Matrix multiply C = A * B
  * A is K1 x K2, B is K2 x K3, Result C is K1 x K3
  * All matrices stored in column-major order.
@@ -80,6 +88,15 @@ void ctools_matmul_ab(const ST_double * restrict A, const ST_double * restrict B
 void ctools_matmul_atdb(const ST_double * restrict A, const ST_double * restrict B,
                         const ST_double * restrict w, ST_int N, ST_int K1, ST_int K2,
                         ST_double * restrict C);
+/*
+ * ctools_matmul_atdb() with every element computed, also when A and B are the
+ * same array: element (i, j) sums (w[r] * A[r,i]) * B[r,j], so with A == B
+ * element (j, i) is the sum of A[r,i] * (w[r] * A[r,j]), what
+ * ctools_matmul_atb(A, WA) gives as its element (i, j) when WA = w * A was
+ * stored first, at no more than the cost of that product and without WA.
+ */
+void ctools_matmul_atdb_full(const ST_double *A, const ST_double *B, const ST_double *w,
+                             ST_int N, ST_int K1, ST_int K2, ST_double *C);
 
 /* ============================================================================
  * Sandwich VCE

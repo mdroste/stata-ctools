@@ -69,12 +69,21 @@ void ctools_filtered_data_init(ctools_filtered_data *fd);
 void ctools_filtered_data_free(ctools_filtered_data *fd);
 
 /*
+    As ctools_filtered_data_free, but at a command's final cleanup inside a
+    release session the memory is returned by the helper thread after the
+    plugin call (ctools_release.h). Resets the structure either way.
+*/
+void ctools_filtered_data_release(ctools_filtered_data *fd);
+
+/*
     Flags for ctools_data_load()
 */
 #define CTOOLS_LOAD_CHECK_IF 0x00      /* Default: check SF_ifobs for each observation */
 #define CTOOLS_LOAD_SKIP_IF 0x01       /* Skip SF_ifobs checks, assume all observations pass */
 #define CTOOLS_LOAD_NO_SORT_ORDER 0x02 /* Omit identity sort_order; caller will not sort */
 #define CTOOLS_LOAD_MARKER 0x04        /* Select by a sample marker, the last plugin variable */
+#define CTOOLS_LOAD_ROW_TILES 0x08     /* Read every variable of a tile of rows together (one pass over the
+                                          Stata observations) whenever the columns can be tiled */
 
 /*
     Load variables with if/in filtering applied at load time.
@@ -176,6 +185,29 @@ stata_retcode ctools_store_filtered(double *values, size_t n_filtered, int var_i
 */
 stata_retcode ctools_store_filtered_rowpar(double *values, size_t n_filtered, int var_idx,
                                            perm_idx_t *obs_map);
+
+/*
+    Several filtered numeric columns in one pass over Stata's records.
+
+    For each filtered row i and column j, writes columns[j][i] * scale[j] to
+    variable var_idx[j] at observation obs_map[i] (scale NULL: unscaled; a
+    NULL column is the constant scale[j], or 1). Workers own contiguous row
+    ranges and write every column of a tile of rows before the next tile, so
+    each record is fetched once for all of its outputs instead of once per
+    column, which is what bounds a one-column-at-a-time store.
+
+    With fill_rows > 0 every observation 1..fill_rows is written: the rows
+    not in obs_map get fill[j] (fill NULL: missing). Variables may then be
+    created without filling them (st_addvar's nofill).
+
+    obs_map must be strictly increasing (checked before any write). A value
+    that is not storable (missing, infinite or NaN after scaling) is written
+    as missing and reported through *unstorable (may be NULL).
+*/
+stata_retcode ctools_store_filtered_cols(const double *const *columns, const double *scale,
+                                         const double *fill, const int *var_idx, size_t ncols,
+                                         size_t n_filtered, const perm_idx_t *obs_map,
+                                         size_t fill_rows, int *unstorable);
 
 /*
     Write filtered string values back to Stata using obs_map.

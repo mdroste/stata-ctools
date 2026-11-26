@@ -7,7 +7,11 @@ Run these commands in a terminal from the ctools folder.
 1. Install Python 3 and Stata, then [build ctools](../docs/development/PLATFORMS.md).
 2. In Stata, install `reghdfe`, `ivreghdfe`, `ppmlhdfe`, `psmatch2`,
    `binscatter`, `binsreg`, `rangestat`, `rangejoin`, `winsor2`, `cipolate`, `hdfe`, `distinct` and `gtools`, along with
-   any packages they require.
+   any packages they require. [docs/ATTRIBUTION.md](../docs/ATTRIBUTION.md)
+   lists the versions ctools is pinned to; `which <command>` shows the version
+   you have. If you update ctools to a newer version of an original command,
+   record the new version in `config/attribution.json` and run
+   `python3 scripts/sync_attribution.py`.
 3. On this Mac, the runner invokes the `stata` alias from `~/.zshrc` through
    `/bin/zsh -lic`. Check it with `/bin/zsh -lic 'type stata'`. On other machines,
    configure the launcher for that environment; `CTOOLS_STATA_EXECUTABLE` accepts
@@ -22,6 +26,15 @@ Install `binsreg` from its upstream Stata package (it is not on SSC):
 
 ```stata
 net install binsreg, from(https://raw.githubusercontent.com/nppackages/binsreg/main/stata) replace
+```
+
+Install `distinct` from the *Stata Journal* archive. SSC distributes version
+1.2.1; `cdistinct` follows 1.4.3, and its suite stops if another version comes
+first on the adopath. If the SSC copy is installed, remove it first with
+`ado uninstall distinct`.
+
+```stata
+net install dm0042_5, from(http://www.stata-journal.com/software/sj23-4) replace
 ```
 
 ## Run all tests
@@ -47,6 +60,7 @@ python3 validation/run.py --native
 ```sh
 python3 scripts/sync_release.py --check
 python3 scripts/sync_architecture.py --check
+python3 scripts/sync_attribution.py --check
 python3 validation/run.py --checks options
 python3 validation/run.py --checks docs
 python3 validation/run.py --checks seeds
@@ -90,6 +104,15 @@ after a long identical file prefix. Correct controls must pass and each mutation
 must be rejected. Matching nonzero native/ctools return codes remain valid
 passing error-compatibility tests; different codes or success versus error fail.
 
+A helper that compares what two commands print (`_ct_same_output` and similar)
+reads the output back from a log. Stata writes nothing to a log while output
+is quiet, and `noisily` inside a called program does not undo a `quietly` in
+its caller, so a helper called from a suite's `quietly {` block would compare
+two empty texts and pass. These helpers call `_ct_loud` (in
+`validation/support/validate_setup.do`) first, which stops a quiet call with
+r(198). Prefix the call with `noisily` at the level of the `quietly` block, and
+call `_ct_loud <name>` at the top of any new helper that captures output.
+
 The runner rejects incomplete results, recorded failures and skipped checks.
 Python optimization is refused because it disables assertions. Native test
 compilation keeps C assertions enabled and makes sanitizer findings fatal,
@@ -104,6 +127,15 @@ host-poll cancellation tests with and without OpenMP. It checks weighted and
 unweighted solver families, nested teams, a host that finishes before its workers,
 bootstrap abort/cleanup, and successful reuse after cancellation. Only the calling
 thread may invoke the simulated host callback.
+
+`python3 validation/run.py --native test_hdfe_rounding_native` checks the
+row-space conjugate gradient at the rounding of its input: columns with a level
+of 40, 2000 and 1e6 against their centered copy at tolerances from 1e-12 to
+1e-16, a column the effects explain, a column that is already projected, a
+random and a balanced design, with and without weights. It also requires the
+plain Hestenes-Stiefel iteration, bit for bit, where the rounding is not
+reached, the same bits for one and four threads, and r(430) when one iteration
+is not enough.
 
 For licensed rollback checks, generate a test entry point with
 `python3 validation/support/hdfe_cancel_plugin.py --output temp/cancel/ctools_plugin.c`.
@@ -172,6 +204,25 @@ builds the clustered meat both ways (`CTOOLS_VCE_CLUSTER_SUMS`).
 All three run through `python3 validation/run.py --native <test_name>` with serial and
 OpenMP sanitizer variants. The licensed `chdfe` suite additionally compares every
 per-effect DoF/exact/nested/owner field with `hdfe`.
+
+`test_hdfe_sample_parallel_native` runs the HDFE sample construction in parallel
+row blocks and serially, on dense, negative, signed-zero, non-integer, sparse,
+wide-range, single-level and unique codes: the loaded levels must define the same
+partition, singleton removal (with and without fweights) must keep the rows a
+round-by-round recount keeps, PPML sample selection must remove and classify the
+rows a recount every round does, the renumbered factors (levels, counts and
+weighted counts) must match bit for bit with and without dropped rows, connected
+components must match a rank-based union-find on disconnected designs, and the
+nesting check must agree. It also checks that every path runs serially inside a
+parallel region.
+
+`test_hdfe_numerics_native` checks weak-connection breakdown, healthy small CG
+steps, fully absorbed columns, and invariance to column/weight units. The
+`creghdfe` suite also runs `support/creghdfe_numerics.do`: six-row weak-FE and
+eight-row near-collinearity/scaling regressions with analytical coefficient
+oracles, and explicit rejection of unsupported solver requests. Performance
+comparisons for the affected paths are in `performance/creghdfe_numerics.do`;
+select each build with `CTOOLS_TEST_PLUGIN_DIR` in a fresh Stata process.
 
 `test_labels_paths_native` exercises the production encoder and decoder, including
 200,001-row worker paths, existing-label mappings, malformed protocols and

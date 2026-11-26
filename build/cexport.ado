@@ -1,4 +1,7 @@
 *! version 1.3.1 20261124 github.com/mdroste/stata-ctools
+*! original: Stata's export delimited (export_delimited.ado 1.0.9, June 13, 2020)
+*! original: Stata's export excel (export_excel.ado 1.1.1, July 30, 2018)
+*! original: see help cexport for details
 
 program define cexport, rclass
     version 14.1
@@ -127,6 +130,19 @@ program define cexport, rclass
         mata: st_local("plugin_delim", "byte="+strofreal(ascii(st_local("delimiter"))))
     }
 
+    * The writer displays value labels and the usual %t formats itself, read
+    * straight from the numeric variable, where Stata would first build a
+    * string copy of the whole column. fmtcheck asks the plugin whether it
+    * displays a format; a plugin without it leaves everything to Stata.
+    _ctools_load
+    capture program ctools_plugin, plugin using("`__ctools_plugin'")
+    if _rc != 0 & _rc != 110 exit 601
+    local __cexport_fmtq "%td"
+    local __cexport_fmtok 0
+    capture plugin call ctools_plugin, "cexport fmtcheck"
+    local __cx_cells = (_rc == 0 & "`__cexport_fmtok'" == "1")
+    capture confirm number 0
+
     * Handle value labels: decode labeled variables unless nolabel specified
     local export_varlist ""
     local decoded_vars ""
@@ -136,10 +152,26 @@ program define cexport, rclass
     local ndec 0
     if "`nolabel'" == "" {
         * Default: export value labels
+        local __cx_i = 0
         foreach var of local varlist {
+            local ++__cx_i
             * Check if variable has a value label attached
             local vallbl : value label `var'
-            if "`vallbl'" != "" {
+            * The writer looks the label text up itself when the label fits
+            * its mapping; a labeled date, a label that does not fit and a
+            * label never defined are decoded below.
+            local __cx_ok 0
+            if "`vallbl'" != "" & `__cx_cells' {
+                local labfmt : format `var'
+                if !(substr("`labfmt'",1,2) == "%t" | substr("`labfmt'",1,3) == "%-t") {
+                    mata: _cexport_pack_label(st_local("vallbl"), `__cx_i')
+                }
+            }
+            if `__cx_ok' {
+                local __cexport_cell_`__cx_i' 2
+                local export_varlist `export_varlist' `var'
+            }
+            else if "`vallbl'" != "" {
                 * Has value label - decode to temporary string variable. The
                 * tempvar is named by a counter, so any variable name fits; the
                 * replace statements below widen the decoded str# as needed.
@@ -197,8 +229,66 @@ program define cexport, rclass
         local fmt : format `origvar'
         local is_time = substr("`fmt'",1,2) == "%t" | substr("`fmt'",1,3) == "%-t"
         capture confirm numeric variable `var'
-        if !_rc & ("`datafmt'" != "" | `is_time') {
+        if !_rc & "`__cexport_cell_`export_idx''" == "2" {
+            * its value label is displayed by the writer
+            local new_export_varlist `new_export_varlist' `var'
+        }
+        else if !_rc & ("`datafmt'" != "" | `is_time') {
             if `"`datestring'"' != "" & `is_time' local fmt `"`datestring'"'
+            * A %t format the writer displays, on values Stata displays as
+            * dates (years 100 to 9999; others it shows as numbers), needs no
+            * formatted copy of the column.
+            local __cx_ok 0
+            if `is_time' & `__cx_cells' {
+                local __cexport_fmtq `"`fmt'"'
+                local __cexport_fmtok 0
+                capture plugin call ctools_plugin, "cexport fmtcheck"
+                if !_rc & "`__cexport_fmtok'" == "1" {
+                    local __cx_unit = substr(`"`fmt'"', strpos(`"`fmt'"', "t") + 1, 1)
+                    local __cx_lo .
+                    if "`__cx_unit'" == "d" {
+                        local __cx_lo -679350
+                        local __cx_hi 2936549
+                    }
+                    else if "`__cx_unit'" == "c" {
+                        local __cx_lo -58695840000000
+                        local __cx_hi 253717919999999
+                    }
+                    else if "`__cx_unit'" == "w" {
+                        local __cx_lo -96720
+                        local __cx_hi 418079
+                    }
+                    else if "`__cx_unit'" == "m" {
+                        local __cx_lo -22320
+                        local __cx_hi 96479
+                    }
+                    else if "`__cx_unit'" == "q" {
+                        local __cx_lo -7440
+                        local __cx_hi 32159
+                    }
+                    else if "`__cx_unit'" == "h" {
+                        local __cx_lo -3720
+                        local __cx_hi 16079
+                    }
+                    else if "`__cx_unit'" == "y" {
+                        local __cx_lo 100
+                        local __cx_hi 9999
+                    }
+                    if `__cx_lo' < . {
+                        quietly summarize `var', meanonly
+                        if r(N) == 0 local __cx_ok 1
+                        else if floor(r(min)) >= `__cx_lo' & floor(r(max)) <= `__cx_hi' local __cx_ok 1
+                    }
+                }
+                capture confirm number 0
+            }
+            if `__cx_ok' {
+                local __cexport_cell_`export_idx' 1
+                local __cexport_fmt_`export_idx' `"`fmt'"'
+                local __cexport_fmt_`export_idx'_len = strlen(`"`fmt'"')
+                local new_export_varlist `new_export_varlist' `var'
+                continue
+            }
             * As export delimited does, a decimal-comma format is written with
             * a decimal point (%9,2fc as %9.2fc) and only leading blanks
             * removed; any other comma format loses its thousands separators
@@ -250,9 +340,9 @@ program define cexport, rclass
     local opt_noquoteif = cond("`noquoteif'" != "", "noquoteif", "")
     local opt_verbose = cond("`verbose'" != "", "verbose", "")
 
-    * Performance options
+    * Performance options. nofsync is accepted for compatibility and has no
+    * effect: cexport no longer waits for the file to reach the disk.
     local opt_mmap = cond("`mmap'" != "", "mmap", "")
-    local opt_nofsync = cond("`nofsync'" != "", "nofsync", "")
     local opt_direct = cond("`direct'" != "", "direct", "")
     local opt_prefault = cond("`prefault'" != "", "prefault", "")
     local opt_crlf = cond("`crlf'" != "", "crlf", "")
@@ -340,7 +430,7 @@ program define cexport, rclass
     * Plugin expects options only; paths/metadata are length-checked locals.
     * Use export_varlist (may contain decoded temp vars for value labels)
     capture noisily plugin call ctools_plugin `export_varlist' `marker' `ifcond' `in', ///
-        "cexport `threads_code' `plugin_delim' `opt_replace' `opt_noheader' `opt_quote' `opt_noquoteif' `opt_verbose' `opt_mmap' `opt_nofsync' `opt_direct' `opt_prefault' `opt_crlf' `opt_noparallel' `opt_select'"
+        "cexport `threads_code' `plugin_delim' `opt_replace' `opt_noheader' `opt_quote' `opt_noquoteif' `opt_verbose' `opt_mmap' `opt_direct' `opt_prefault' `opt_crlf' `opt_noparallel' `opt_select'"
 
     local export_rc = _rc
 
@@ -938,4 +1028,38 @@ program define _cexport_excel_sheet, rclass
     }
     return local sheet `"`macval(sheet)'"'
     return local action "`action'"
+end
+
+version 14.1
+mata:
+/* The value label named label in cdecode's mapping format, for the writer:
+   "<count> " then "<value> <bytes> <text> " per mapping and a closing "|".
+   Sets the caller's locals __cexport_map_<j>, its _len and
+   __cexport_mapwidth_<j> (the longest text) and __cx_ok to 1; leaves __cx_ok
+   0 for a label that is not defined, has no mappings, holds a text over
+   2,045 bytes or a NUL byte, or does not fit a macro. */
+void _cexport_pack_label(string scalar label, real scalar j)
+{
+    real colvector values, lengths
+    string colvector text, entries
+    string scalar packed, stub
+    real scalar width
+
+    st_local("__cx_ok", "0")
+    if (!st_vlexists(label)) return
+    st_vlload(label, values, text)
+    if (rows(values) == 0) return
+    lengths = strlen(text)
+    width = max((1 \ lengths))
+    if (width > 2045) return
+    entries = strtrim(strofreal(values, "%21.0f")) :+ " " :+ strofreal(lengths) :+ " " :+ text
+    packed = strofreal(rows(values)) + " " + invtokens(entries', " ") + " |"
+    if (strlen(packed) != strlen(strofreal(rows(values))) + sum(strlen(entries)) + rows(values) + 2) return
+    if (strlen(packed) >= c("macrolen") | strlen(packed) > 1000000) return
+    stub = "__cexport_map_" + strofreal(j)
+    st_local(stub, packed)
+    st_local(stub + "_len", strofreal(strlen(packed), "%21.0f"))
+    st_local("__cexport_mapwidth_" + strofreal(j), strofreal(width))
+    st_local("__cx_ok", "1")
+}
 end

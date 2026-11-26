@@ -1,4 +1,7 @@
 *! version 1.3.1 20261124 github.com/mdroste/stata-ctools
+*! original: Stata's import delimited (import_delimited.ado 1.3.5, April 18, 2022)
+*! original: Stata's import excel (import_excel.ado 1.0.15, September 20, 2019)
+*! original: see help cimport for details
 
 program define cimport, rclass
     version 14.1

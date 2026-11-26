@@ -35,9 +35,15 @@ ST_retcode creghdfe_collinear(ST_double *data, ST_int N, ST_int K, const ST_doub
      * coefficients, rss and tss_within are exactly zero. */
     *depvar_explained = 0;
     ST_int num_fe_collinear = 0;
+    /* The partialled sums of squares: one independent sum per column, each in
+     * row order, so the columns run in parallel */
+    ST_double *ss_all = (ST_double *)malloc((size_t)K * sizeof(ST_double));
+    if (!ss_all)
+        return 920;
+#pragma omp parallel for schedule(static) if (K > 1 && (size_t)N * (size_t)K > 200000)
     for (k = 0; k < K; k++)
     {
-        ST_double *col = &data[(size_t)k * N];
+        const ST_double *col = &data[(size_t)k * N];
         ST_double ss;
         if (count_w)
         {
@@ -47,6 +53,12 @@ ST_retcode creghdfe_collinear(ST_double *data, ST_int N, ST_int K, const ST_doub
         }
         else
             ss = fast_dot(col, col, N);
+        ss_all[k] = ss;
+    }
+    for (k = 0; k < K; k++)
+    {
+        ST_double *col = &data[(size_t)k * N];
+        ST_double ss = ss_all[k];
         ST_double ratio = ss / norm2[k];
         ST_int flagged = (ratio <= collinear_tol);
         if (k == 0)
@@ -65,6 +77,7 @@ ST_retcode creghdfe_collinear(ST_double *data, ST_int N, ST_int K, const ST_doub
         }
         fe_flagged[k - 1] = flagged;
     }
+    free(ss_all);
 
     /* The remaining collinearity as reghdfe_rmcoll: Mata's invsym() of the
      * (weighted) cross products of the partialled regressors, sweeping them

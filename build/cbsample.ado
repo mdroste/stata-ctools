@@ -1,35 +1,14 @@
 *! version 1.3.1 20261124 github.com/mdroste/stata-ctools
+*! original: Stata's bsample (bsample.ado 2.0.8, January 17, 2025)
+*! original: see help cbsample for details
 
 program define cbsample
     version 14.1
-    local caller = _caller()
-    local cmdline `"`0'"'
     * Legacy draws use bsample_7; parse the ctools-only options under 14.1.
-    if `caller' < 8 {
-        _cbsample_version7 `cmdline'
+    if _caller() < 8 {
+        _cbsample_version7 `0'
         exit
     }
-    syntax [anything] [if] [in], [Weight(varname) *]
-    if "`weight'" != "" {
-        version `caller': _cbsample_impl `cmdline'
-        exit
-    }
-    * Expansion can fail after dropping observations. Keep the entire data
-    * transaction recoverable, including an existing idcluster() variable.
-    nobreak {
-        preserve
-        capture noisily break version `caller': _cbsample_impl `cmdline'
-        local rc = _rc
-        if `rc' {
-            restore
-            exit `rc'
-        }
-        restore, not
-    }
-end
-
-program define _cbsample_impl
-    version 14.1
 
     * Check observation limit (Stata plugin API limitation)
     if _N > 2147483647 {
@@ -299,27 +278,30 @@ program define _cbsample_impl
             }
             local idmax = scalar(_cbsample_idmax)
             local idtype = cond(`idmax' <= 100, "byte", cond(`idmax' <= 32740, "int", "long"))
+            * (the temporary key first: if either variable cannot be added,
+            * no idcluster() variable is left behind)
+            quietly generate double `__cbsample_key__' = .
             quietly generate `idtype' `idcluster' = .
             format `idcluster' %8.0g
-            quietly generate double `__cbsample_key__' = .
         }
-        * Drop observations with zero weight first
-        quietly drop if `__cbsample_weight__' == 0
-        if "$CTOOLS_cbsample_fault" == "drop" exit 459
-        * Expand based on weight (creates duplicates for weight > 1)
-        quietly expand `__cbsample_weight__'
-        if "$CTOOLS_cbsample_fault" == "expand" exit 459
-        if "$CTOOLS_cbsample_fault" == "break" error 1
-        if `"`idcluster'"' != "" {
-            local id_pass "seedhi=`seed_hi' seedlo=`seed_lo'"
-            if _caller() > 13 local id_pass "`id_pass' iduniq"
-            if scalar(_cbsample_idrandom) local id_pass "`id_pass' idrandom"
-            plugin call ctools_plugin `__cbsample_pos__' `__cbsample_cl__' `__cbsample_st__' ///
-                `idcluster' `__cbsample_key__', "cbsample idpass `id_pass'"
-            if "$CTOOLS_cbsample_fault" == "idpass" exit 459
-            label variable `idcluster' "Bootstrap sample cluster id"
-            * bsample's row order: strata, id, then the observation order
-            sort `strata' `__cbsample_key__'
+        * No copy of the data is kept, as in bsample: an error from here on
+        * leaves the observations dropped or expanded so far. Break waits
+        * until the sample is complete.
+        nobreak {
+            * Drop observations with zero weight first
+            quietly drop if `__cbsample_weight__' == 0
+            * Expand based on weight (creates duplicates for weight > 1)
+            quietly expand `__cbsample_weight__'
+            if `"`idcluster'"' != "" {
+                local id_pass "seedhi=`seed_hi' seedlo=`seed_lo'"
+                if _caller() > 13 local id_pass "`id_pass' iduniq"
+                if scalar(_cbsample_idrandom) local id_pass "`id_pass' idrandom"
+                plugin call ctools_plugin `__cbsample_pos__' `__cbsample_cl__' `__cbsample_st__' ///
+                    `idcluster' `__cbsample_key__', "cbsample idpass `id_pass'"
+                label variable `idcluster' "Bootstrap sample cluster id"
+                * bsample's row order: strata, id, then the observation order
+                sort `strata' `__cbsample_key__'
+            }
         }
     }
 

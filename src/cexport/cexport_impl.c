@@ -49,6 +49,7 @@
 #include "cexport_format.h"
 #include "cexport_parse.h"
 #include "cexport_xlsx.h"
+#include "../cdecode/cdecode_impl.h"
 
 /* ========================================================================
    Configuration Constants
@@ -90,6 +91,7 @@ static size_t row_reserve_bytes(void)
     size_t bytes = 64 + (size_t)g_ctx.line_ending_len;
     for (size_t j = 0; j < g_ctx.nvars; j++) {
         size_t add = 64;
+        if (g_ctx.cell_kind && g_ctx.cell_kind[j]) add = g_ctx.cell_reserve[j] + 4;
         if (g_ctx.stream) {
             if (g_ctx.is_string[j]) add = 2 * 2046 + 4;
         } else if (j < g_ctx.filtered.data.nvars && g_ctx.filtered.data.vars[j].type == STATA_TYPE_STRING) {
@@ -749,12 +751,103 @@ static ST_retcode export_pwrite(size_t nobs, size_t mean_row_size, size_t chunk_
    Main Export Function
    ======================================================================== */
 
+/* Release the display handling of numeric columns (the context's cells_free). */
+static void cexport_cells_free(void *context)
+{
+    cexport_context *ctx = (cexport_context *)context;
+    for (size_t j = 0; j < ctx->nvars; j++) {
+        if (ctx->timefmt) free(ctx->timefmt[j]);
+        if (ctx->labelmap) cdecode_label_map_free(ctx->labelmap[j]);
+    }
+    free(ctx->cell_kind);
+    free(ctx->timefmt);
+    free(ctx->labelmap);
+    free(ctx->cell_reserve);
+    ctx->cell_kind = NULL;
+    ctx->timefmt = NULL;
+    ctx->labelmap = NULL;
+    ctx->cell_reserve = NULL;
+    ctx->cells_free = NULL;
+}
+
+/* Display handling of numeric columns. Local __cexport_cell_<j> is 1 for a
+ * %t display format, in __cexport_fmt_<j>, or 2 for a value label, whose
+ * mapping (cdecode's wire format) is in __cexport_map_<j> with label texts
+ * of at most __cexport_mapwidth_<j> bytes; absent or 0, the plain number.
+ * The ado sends only formats that cexport_timefmt_compile() accepts. */
+static int cexport_load_cells(cexport_context *ctx)
+{
+    for (size_t j = 0; j < ctx->nvars; j++) {
+        char macro[96], value[64], field[64];
+        int kind = 0;
+        snprintf(macro, sizeof(macro), "___cexport_cell_%zu", j + 1);
+        if (SF_macro_use(macro, value, sizeof(value)) || !value[0]) continue;
+        if (!ctools_safe_atoi(value, &kind) || kind < 0 || kind > 2) return 198;
+        if (kind == CEXPORT_CELL_PLAIN) continue;
+        if (ctx->vartypes[j] < VARTYPE_BYTE || ctx->vartypes[j] > VARTYPE_DOUBLE) return 198;
+        if (!ctx->cell_kind) {
+            ctx->cells_free = cexport_cells_free;
+            ctx->label_text = cdecode_label_map_text;
+            ctx->cell_kind = ctools_safe_calloc2(ctx->nvars, 1);
+            ctx->timefmt = ctools_safe_calloc2(ctx->nvars, sizeof(*ctx->timefmt));
+            ctx->labelmap = ctools_safe_calloc2(ctx->nvars, sizeof(*ctx->labelmap));
+            ctx->cell_reserve = ctools_safe_calloc2(ctx->nvars, sizeof(*ctx->cell_reserve));
+            if (!ctx->cell_kind || !ctx->timefmt || !ctx->labelmap || !ctx->cell_reserve) return 920;
+        }
+        char *text = NULL;
+        if (kind == CEXPORT_CELL_TIME) {
+            snprintf(field, sizeof(field), "fmt_%zu", j + 1);
+            ST_retcode rc = cexport_read_local(field, &text);
+            if (rc) return rc;
+            ctx->timefmt[j] = cexport_timefmt_compile(text);
+            free(text);
+            if (!ctx->timefmt[j]) return 198;
+            ctx->cell_reserve[j] = cexport_timefmt_reserve(ctx->timefmt[j]);
+            if (ctx->cell_reserve[j] < CEXPORT_NUMBER_RESERVE) ctx->cell_reserve[j] = CEXPORT_NUMBER_RESERVE;
+        } else {
+            int width = 0;
+            snprintf(macro, sizeof(macro), "___cexport_mapwidth_%zu", j + 1);
+            if (SF_macro_use(macro, value, sizeof(value)) || !ctools_safe_atoi(value, &width) ||
+                width < 1 || width > 2045) return 198;
+            snprintf(field, sizeof(field), "map_%zu", j + 1);
+            ST_retcode rc = cexport_read_local(field, &text);
+            if (rc) return rc;
+            /* the map takes the text */
+            ctx->labelmap[j] = cdecode_label_map_create(text, strlen(text), (size_t)width, &rc);
+            if (!ctx->labelmap[j]) return rc;
+            /* quoting can double the text; an unlabeled value is a number */
+            ctx->cell_reserve[j] = 2 * (size_t)width + 4;
+            if (ctx->cell_reserve[j] < 2 * CEXPORT_NUMBER_RESERVE + 4)
+                ctx->cell_reserve[j] = 2 * CEXPORT_NUMBER_RESERVE + 4;
+        }
+        ctx->cell_kind[j] = (unsigned char)kind;
+    }
+    return 0;
+}
+
+/* fmtcheck: tell the ado whether the %t display format in its local
+ * __cexport_fmtq is one the writer displays itself, in its local
+ * __cexport_fmtok (1 or 0). No data are read and no file is opened. */
+static ST_retcode cexport_fmtcheck(void)
+{
+    char format[256];
+    cexport_timefmt *compiled = NULL;
+    if (SF_macro_use("___cexport_fmtq", format, sizeof(format)) == 0 && format[0] &&
+        strlen(format) < sizeof(format) - 1)
+        compiled = cexport_timefmt_compile(format);
+    ST_retcode rc = SF_macro_save("___cexport_fmtok", compiled ? "1" : "0");
+    free(compiled);
+    return rc;
+}
+
 ST_retcode cexport_main(const char *args)
 {
     double t_start, t_phase;
     char msg[512];
     ST_retcode rc;
     size_t nobs, nvars;
+
+    if (args && strstr(args, "fmtcheck")) return cexport_fmtcheck();
 
     /* Initialize context */
     cexport_context_init(&g_ctx);
@@ -795,6 +888,12 @@ ST_retcode cexport_main(const char *args)
         SF_error("cexport: failed to load variable types\n");
         cexport_context_cleanup(&g_ctx);
         return 920;
+    }
+    rc = (ST_retcode)cexport_load_cells(&g_ctx);
+    if (rc) {
+        SF_error("cexport: invalid display metadata\n");
+        cexport_context_cleanup(&g_ctx);
+        return rc;
     }
 
     /* Format cells straight from Stata's observation-major storage unless a

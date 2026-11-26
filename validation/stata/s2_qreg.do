@@ -397,6 +397,7 @@ foreach m in "price weight length" "price weight length [fw=fw]" "price weight l
 * The header as qreg's Replay prints it (estimation and replay)
 capture program drop _s2q_header
 program define _s2q_header, rclass
+    _ct_loud _s2q_header
     args file cmd
     capture log close _s2qh
     quietly log using `"`file'"', text replace name(_s2qh)

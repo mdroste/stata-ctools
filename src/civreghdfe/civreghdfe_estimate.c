@@ -822,7 +822,9 @@ static ST_retcode civ_first_stage_robust_wald(
     ST_int L1 = K_iv - K_exog;
     *wald = NAN;
     if (L1 <= 0) return 0;
-    for (ST_int i = 0; i < N; i++) fitted[i] = X_e[i] - fitted[i];
+    ST_int i;
+    #pragma omp parallel for schedule(static) if(N > 200000)
+    for (i = 0; i < N; i++) fitted[i] = X_e[i] - fitted[i];
 
     ST_double *S = (ST_double *)calloc((size_t)K_iv * K_iv, sizeof(ST_double));
     ST_double *T = (ST_double *)calloc((size_t)K_iv * L1, sizeof(ST_double));
@@ -1111,14 +1113,10 @@ ST_retcode ivest_fit_core(civ_fit_io *io)
     /* X_hat[i,j] = sum_{k=0}^{K_iv-1} Z[i,k] * temp1[k,j], accumulated in
      * that order for every element (row blocks in parallel).
      * For weighted: X_hat = sqrt(W) * Z * temp1 so X_hat'X_hat = X'W*PzX */
-    ctools_matmul_xb(Z, N, K_iv, temp1, K_total, X_hat);
-    if (weights && weight_type != 0) {
-        #pragma omp parallel for schedule(static) if((size_t)N * K_total > 200000)
-        for (j = 0; j < K_total; j++) {
-            ST_double *xh = X_hat + (size_t)j * N;
-            for (ST_int row = 0; row < N; row++) xh[row] = sqrt(weights[row]) * xh[row];
-        }
-    }
+    /* weighted: each row times sqrt(w) in the same pass */
+    const int root_w = weights && weight_type != 0;
+    if (root_w) ctools_matmul_xb_sqrtw(Z, N, K_iv, temp1, K_total, weights, X_hat);
+    else ctools_matmul_xb(Z, N, K_iv, temp1, K_total, X_hat);
 
     /* X'Pzy = X_hat' * y_hat where y_hat = Z * (Z'Z)^{-1} * Z'y */
     /* Step 6: Compute (Z'Z)^-1 * Z'y */
@@ -1145,11 +1143,8 @@ ST_retcode ivest_fit_core(civ_fit_io *io)
             est_rc = 920;
             goto est_cleanup;
         }
-        ctools_matmul_xb(Z, N, K_iv, ZtZ_inv_Zty, 1, y_hat);
-        if (weights && weight_type != 0) {
-            #pragma omp parallel for schedule(static) if(N > 200000)
-            for (i = 0; i < N; i++) y_hat[i] = sqrt(weights[i]) * y_hat[i];
-        }
+        if (root_w) ctools_matmul_xb_sqrtw(Z, N, K_iv, ZtZ_inv_Zty, 1, weights, y_hat);
+        else ctools_matmul_xb(Z, N, K_iv, ZtZ_inv_Zty, 1, y_hat);
         ctools_kahan_cross(X_hat, y_hat, N, K_total, XtPzX, XtPzy);
         free(y_hat);
     }
@@ -2062,13 +2057,10 @@ ST_retcode ivest_compute_2sls(
     if (first_stage_F) {
         for (ST_int e = 0; e < K_endog; e++) {
             const ST_double *X_e = X_endog + (size_t)e * N;
+            const ST_double *w_fs = (weights && weight_type != 0) ? weights : NULL;
 
-            /* Compute X_e'X_e */
-            ST_double xx = 0.0;
-            for (i = 0; i < N; i++) {
-                ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
-                xx += w * X_e[i] * X_e[i];
-            }
+            /* Compute X_e'WX_e (fixed blocks of rows on all threads) */
+            ST_double xx = civ_block_dot(X_e, X_e, w_fs, N);
             if (xx <= 0) xx = 1.0;
 
             /* Compute R²_full: R² from projecting X_e onto all instruments Z.
@@ -2093,10 +2085,7 @@ ST_retcode ivest_compute_2sls(
                     fs_coef[k] = ziz_inv_zx;
                 }
                 ctools_matmul_xb(Z, N, K_iv, fs_coef, 1, pz_xe);
-                for (i = 0; i < N; i++) {
-                    ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
-                    xpx_full += w * X_e[i] * pz_xe[i];
-                }
+                xpx_full = civ_block_dot(X_e, pz_xe, w_fs, N);
                 /* ivreg2 robustifies the first-stage F under robust, cluster
                    and kernel VCEs (s_ffirst) */
                 ST_retcode fs_rc = s_noniid
@@ -2137,15 +2126,11 @@ ST_retcode ivest_compute_2sls(
                         }
                     }
 
-                    /* Compute Z_exog'X_e */
-                    for (ST_int l = 0; l < K_exog; l++) {
-                        ST_double sum = 0.0;
-                        for (i = 0; i < N; i++) {
-                            ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
-                            sum += w * Z[(size_t)l * N + i] * X_e[i];
-                        }
-                        ZeXe[l] = sum;
-                    }
+                    /* Z_exog'WX_e: the fit's Z'WX already holds it (the same
+                       products (w * z) * x, summed by the cross-product
+                       kernel), so no pass over the rows */
+                    for (ST_int l = 0; l < K_exog; l++)
+                        ZeXe[l] = ZtX[(size_t)(K_exog + e) * K_iv + l];
 
                     /* Invert Z_exog'Z_exog */
                     memcpy(ZeZe_inv, ZeZe, K_exog * K_exog * sizeof(ST_double));
@@ -2245,7 +2230,8 @@ ST_retcode ivest_compute_2sls(
         fd.nclust = s_nclust;
         fd.robust = s_noniid;
         est_rc = civ_ffirst(y, X_endog, K_endog, Z, K_iv, K_exog,
-                            (weights && weight_type != 0) ? weights : NULL, N, &om, &fd);
+                            (weights && weight_type != 0) ? weights : NULL, N, &om, &fd,
+                            ZtZ, Zty, ZtX);
         if (est_rc) {
             SF_error("civreghdfe: Memory allocation failed for the first-stage statistics\n");
             goto est_cleanup;
@@ -2274,7 +2260,7 @@ ST_retcode ivest_compute_2sls(
     est_rc = civreghdfe_compute_underid_test(
         X_endog, Z,
         weights, weight_type, N, N_eff, K_exog, K_endog, K_iv, df_a_full + n_absorbed_iv_all,
-        dofminus, &rk_om, rk_cluster, s_nclust,
+        dofminus, &rk_om, rk_cluster, s_nclust, ZtZ, ZtX,
         &underid_stat, &underid_df, &cd_f, &kp_f
     );
     if (est_rc) {

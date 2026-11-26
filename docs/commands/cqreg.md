@@ -38,7 +38,7 @@ Without `indepvars` the constant-only model is fitted. Typed without a variable 
 |--------|-------------|
 | `tolerance(#)` | Convergence tolerance (default: 1e-12) |
 | `maxiter(#)` | Maximum IPM iterations (default: 200) |
-| `nopreprocess(#)` | Accepted for backward compatibility; has no effect (`nopreprocess(-1)` returns error 198) |
+| `nopreprocess(#)` | # > 0 turns off the preprocessing of large samples (see [Algorithm](#algorithm)): every fit is solved on all observations. Default: `nopreprocess(0)`, preprocessing on. Negative values return error 198 |
 | `wlsiter(#)`, `iterate(#)`, `trace` | `qreg`'s options for its simplex solver (WLS starting iterations, its iteration limit, a coefficient trace), checked as `qreg` checks them (error 198 unless # is a positive integer). The interior-point solver uses neither starting values nor `iterate()`; `trace` shows the log line and the solution's coefficients |
 
 Under `version 12` or earlier, `qreg` reports its old standard errors; `cqreg` reports those of
@@ -115,6 +115,8 @@ where:
 - `vᵢ` represents negative deviations
 
 The IPM solver converts this to a barrier problem and uses Newton steps with predictor-corrector improvements.
+
+In large samples the problem is first solved on part of the data (Portnoy and Koenker 1997). From 400,000 observations a subsample is fitted; the fit of all observations is then found on the observations whose residuals from that fit lie near zero, with the observations above and below them entering as two sums. The solution is accepted only when every summed observation has the sign it was given, which makes it a solution of the full problem; otherwise the band is rebuilt, and if that does not succeed the full problem is solved. From 200,000 observations the two auxiliary fits behind the fitted density are found the same way, starting from the main fit. `nopreprocess(1)` solves the full problem instead; both solve the same linear program.
 
 ## Standard Errors
 
@@ -197,7 +199,7 @@ solution, so a value of 0 does not establish uniqueness.
 | `e(sparsity)` | Estimated sparsity (1/f(0)); missing with a robust or cluster VCE, as in `qreg` |
 | `e(bwidth)` | Bandwidth used for sparsity estimation |
 | `e(kbwidth)` | Kernel bandwidth (kernel method) |
-| `e(iterations)` | Number of IPM iterations |
+| `e(iterations)` | Number of IPM iterations (in large samples, the total over the preprocessing solves, each limited by `maxiter()`) |
 | `e(convcode)` | 0 for a successfully converged fit |
 | `e(df_r)` | Residual degrees of freedom, N - `e(rank)` |
 | `e(rank)` | Rank of `e(V)`, assessed in the scaled response units |
@@ -256,7 +258,7 @@ coefficients with the same `e(sum_adev)`. `validation/stata/cqreg.do` checks suc
 `benchmark_qreg_altopt`, which verifies that cqreg's coefficients attain qreg's minimum.
 
 ### Solver
-`cqreg` uses the Frisch–Newton interior-point solver. `nopreprocess(0)` and `nopreprocess(1)` are accepted for compatibility and do not change the solver.
+`cqreg` uses the Frisch–Newton interior-point solver, with preprocessing in large samples (see [Algorithm](#algorithm)). `nopreprocess(1)` turns the preprocessing off; `nopreprocess(0)` is the default.
 
 ## Comparison with qreg
 

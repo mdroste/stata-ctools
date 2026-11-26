@@ -705,6 +705,7 @@ set seed 20261109
 * iterations: caller local s2h_lines, the lines joined by "|"
 capture program drop _s2h_log
 program define _s2h_log
+    _ct_loud _s2h_log
     gettoken name 0 : 0
     gettoken colon 0 : 0, parse(":")
     tempfile f
@@ -852,7 +853,7 @@ else test_pass "HDFE-12/13/14/21 nosample, timeit, version(), nowarn, nohe"
 * HDFE-15: solver options, as reghdfe parses them; transform() and
 * acceleration() run reghdfe's MAP variants
 local fails
-foreach o in "technique(map)" "technique(lsmr)" "tech(lsqr)" "transform(cim)" "transform(kac)" ///
+foreach o in "technique(map)" "transform(cim)" "transform(kac)" ///
     "tra(sym)" "acceleration(sd)" "accel(none)" "acceleration(off)" "acceleration(aitken)" ///
     "transform(cim) accel(none)" "preconditioner(diag)" "precond(none)" "prune" "poolsize(5)" ///
     "pool(0)" "compact" "fastregress" "parallel(1)" "transform(kac) acceleration(cg)" {
@@ -864,6 +865,10 @@ foreach o in "technique(map)" "technique(lsmr)" "tech(lsqr)" "transform(cim)" "t
         assert mreldif(e(b), `b') < 1e-8 & e(converged) == 1
     }
     if _rc local fails `"`fails' [`o']"'
+}
+foreach o in "technique(lsmr)" "tech(lsqr)" {
+    capture creghdfe price weight, absorb(turn foreign) `o'
+    if _rc != 198 local fails `"`fails' [`o' must reject unsupported solver]"'
 }
 foreach c in "3498|technique(cg)" "9|technique(foo)" "9|transform(foo)" "3498|transform(rand)" ///
     "9|acceleration(foo)" "9|preconditioner(foo)" {

@@ -1,5 +1,7 @@
 *! version 1.3.1 20261124 github.com/mdroste/stata-ctools
 *! Remove absorbed fixed effects from a list of variables
+*! original: hdfe 3.2.9 (February 21, 2016; SSC distribution of August 6, 2016) by Sergio Correia
+*! original: see help chdfe for details
 program define chdfe, eclass
     version 14.1
     capture syntax, Version
@@ -15,6 +17,7 @@ program define chdfe, eclass
         di as error "This is a limitation of Stata's plugin API"
         exit 920
     }
+    local __chdfe_args `"`0'"'
     * hdfe accepts verbose(#); a bare verbose also requests ctools timing.
     * verbose(#) arrives among the other options and is parsed on its own,
     * so no text of the command line is rewritten.
@@ -71,24 +74,41 @@ program define chdfe, eclass
         confirm new variable `v'
     }
     if "`sample'" != "" & "`sample'" == "`groupvar'" exit 198
+    * chdfe ends by clearing e(). Released before marksample allocates its
+    * marker, the old e(sample) storage is reused (as in creghdfe). Kept
+    * when the qualifiers, weights or options can refer to e() or to
+    * coefficients (_b[], _se[], _coef[] as a token); a failed run after
+    * this point leaves e() empty.
+    if !ustrregexm(`"`__chdfe_args'"', "(^|[^A-Za-z0-9_])(e[(]|_b\[|_se\[|_coef\[)") {
+        ereturn clear
+    }
     marksample touse, novarlist
     tempvar w used mobility
     local weightvar
     local weightkeep
     local wt = 0
     if "`weight'" != "" {
-        quietly generate double `w' `exp' if `touse'
-        quietly count if `touse' & `w'<0
-        if r(N) exit 402
-        if "`weight'"=="fweight" {
-            quietly count if `touse' & `w'<. & `w'!=floor(`w')
-            if r(N) exit 401
-        }
-        quietly replace `touse'=0 if missing(`w') | `w'==0
-        local weightvar `w'
+        * marksample has seen the weight: the sample leaves out zero and
+        * missing weights, and Stata has refused negative weights (r(402))
+        * and noninteger frequency weights (r(401)). A weight that is one
+        * numeric variable goes to the plugin as it is.
         local expression = strtrim(substr(`"`exp'"',2,.))
         capture confirm numeric variable `expression', exact
-        if !_rc local weightkeep `expression'
+        if !_rc & `: word count `expression'' == 1 {
+            local weightkeep `expression'
+            local weightvar `expression'
+        }
+        else {
+            quietly generate double `w' `exp' if `touse'
+            quietly count if `touse' & `w'<0
+            if r(N) exit 402
+            if "`weight'"=="fweight" {
+                quietly count if `touse' & `w'<. & `w'!=floor(`w')
+                if r(N) exit 401
+            }
+            quietly replace `touse'=0 if missing(`w') | `w'==0
+            local weightvar `w'
+        }
         local wt = cond("`weight'"=="fweight",2,cond("`weight'"=="pweight",3,1))
     }
     * Parse absorb() in Stata; numbering categories and all projections use C.
@@ -136,7 +156,10 @@ program define chdfe, eclass
             if "`categories'"=="" exit 198
             if `: word count `continuous''>1 & !strpos("`item'","(") exit 198
             if strpos("`item'","##") & "`continuous'"=="" exit 198
-            markout `touse' `categories' `continuous', strok
+            * Marked out lazily: before any statement that reads the marker
+            * (_ctools_group, fvrevar of an operator term), else by the
+            * plugin's screen of every variable it loads
+            local __pend_fe `__pend_fe' `categories' `continuous'
             local key : subinstr local categories " " "#", all
             local name `key'
             if "`continuous'"!="" {
@@ -145,8 +168,21 @@ program define chdfe, eclass
                 else local name `key'`op'c.(`continuous')
             }
             local original_names `original_names' `name'
-            tempvar id
-            quietly _ctools_group `categories' if `touse', gen(`id') strict
+            * A numeric variable goes to the plugin as it is, which numbers
+            * the levels of every effect on its sample. A string variable or
+            * an interaction is numbered first; so is every effect with
+            * keepids, where the plugin stores its identifiers in place.
+            local id
+            if "`keepids'" == "" & `: word count `categories'' == 1 {
+                capture confirm numeric variable `categories', exact
+                if !_rc local id `categories'
+            }
+            if "`id'" == "" {
+                if "`__pend_fe'" != "" markout `touse' `__pend_fe', strok
+                local __pend_fe
+                tempvar id
+                quietly _ctools_group `categories' if `touse', gen(`id') strict
+            }
             if `intercept' {
                 local ++g
                 local fevars `fevars' `id'
@@ -157,12 +193,19 @@ program define chdfe, eclass
             local keptid `id'
             local firstslope = 1
             foreach cv of local continuous {
-                * Plugin variables cannot repeat. Clone category and slope inputs.
-                tempvar sid sx
-                quietly clonevar `sid' = `id'
+                * With keepids the plugin stores an identifier in each
+                * effect's variable, so each slope has its own copy.
+                if "`keepids'" != "" {
+                    tempvar sid sx
+                    quietly clonevar `sid' = `id'
+                    quietly clonevar `sx' = `cv'
+                }
+                else {
+                    local sid `id'
+                    local sx `cv'
+                }
                 if !`intercept' & `firstslope' local keptid `sid'
                 local firstslope = 0
-                quietly clonevar `sx' = `cv'
                 local ++g
                 local fevars `fevars' `sid'
                 local slopevars `slopevars' `sx'
@@ -182,10 +225,19 @@ program define chdfe, eclass
         local keys : subinstr local term "#" " ", all
         local keys : subinstr local keys "i." "", all
         unab keys : `keys'
-        markout `touse' `keys', strok
+        local __pend_fe `__pend_fe' `keys'
         local clusterkeep `clusterkeep' `keys'
-        tempvar cid
-        quietly _ctools_group `keys' if `touse', gen(`cid') strict
+        local cid
+        if "`keepids'" == "" & `: word count `keys'' == 1 {
+            capture confirm numeric variable `keys'
+            if !_rc local cid `keys'
+        }
+        if "`cid'" == "" {
+            markout `touse' `__pend_fe', strok
+            local __pend_fe
+            tempvar cid
+            quietly _ctools_group `keys' if `touse', gen(`cid') strict
+        }
         local clusters `clusters' `cid'
         local ++nc
     }
@@ -197,6 +249,12 @@ program define chdfe, eclass
     local cachevars
     local k = 0
     foreach term of local varlist {
+        * an operator term's expansion depends on the marker
+        capture confirm numeric variable `term', exact
+        if _rc & "`__pend_fe'" != "" {
+            markout `touse' `__pend_fe', strok
+            local __pend_fe
+        }
         fvrevar `term' if `touse'
         local expanded `r(varlist)'
         foreach v of local expanded {
@@ -227,23 +285,43 @@ program define chdfe, eclass
             if "`clear'"=="" confirm new variable `dest'
             if "`dest'"=="`sample'" | "`dest'"=="`groupvar'" exit 198
             if `: list dest in destinations' exit 198
-            tempvar x result
-            quietly clonevar `x' = `v'
-            quietly generate double `result' = .
-            label variable `result' "Residuals: `label'"
-            char `result'[name] `label'
-            local inputs `inputs' `x'
+            * The plugin only reads its inputs, so the variable itself is
+            * passed; the outputs are created together below
+            tempvar result
+            local inputs `inputs' `v'
             local outputs `outputs' `result'
             local destinations `destinations' `dest'
             local ++k
+            local outlabel_`k' `label'
         }
     }
     if !`k' exit 102
-    markout `touse' `inputs'
-    quietly generate byte `used' = 0
+    * The rows missing in an input, or in an effect, slope or cluster
+    * variable not yet marked out, are dropped by the plugin (screen), which
+    * loads all of them; that is the sample these markouts would leave
+    local __screen
+    if "`__pend_fe'`inputs'" != "" local __screen screen
+    * The outputs are added without filling them: the plugin writes every
+    * observation (fillall), missing outside the sample
+    mata: (void) st_addvar("double", tokens(st_local("outputs")), 1)
+    forvalues j = 1/`k' {
+        local result : word `j' of `outputs'
+        label variable `result' "Residuals: `outlabel_`j''"
+        char `result'[name] `outlabel_`j''
+    }
+    * Without sample() the sample marker itself returns the rows used: the
+    * plugin sets it to 0 on the rows it drops, one store per dropped row.
+    * sample(newvar) keeps its own variable, created here so that it follows
+    * the outputs in the dataset.
+    local prefilled
+    if "`sample'" == "" {
+        local used `touse'
+        local prefilled prefilled
+    }
+    else mata: (void) st_addvar("byte", st_local("used"), 1)
     local groupoutput
     if "`groupvar'"!="" {
-        quietly generate long `mobility' = .
+        mata: (void) st_addvar("long", st_local("mobility"), 1)
         local groupoutput `mobility'
     }
     local hasgroup = "`groupvar'"!=""
@@ -257,8 +335,15 @@ program define chdfe, eclass
     if "`keepids'"!="" local storeids storeids
     capture noisily plugin call ctools_plugin `inputs' `fevars' `slopevars' `clusters' `weightvar' ///
         `outputs' `used' `groupoutput' `touse', ///
-        "chdfe `k' `g' `nc' `wt' `keeps' `maxiterations' `flags' `poolsize' `trans' `accel' `hasgroup' `slopecodes' tol=`tolerance' `threadopt' `verbose' `storeids' `rowspace'"
+        "chdfe `k' `g' `nc' `wt' `keeps' `maxiterations' `flags' `poolsize' `trans' `accel' `hasgroup' `slopecodes' tol=`tolerance' `threadopt' `verbose' `storeids' `prefilled' `rowspace' fillall `__screen'"
     local rc = _rc
+    * a plugin that did not update the marker would report dropped rows as
+    * used, and one that did not fill every row would leave the unfilled
+    * outputs undefined outside the sample
+    if !`rc' & (("`prefilled'" != "" & "`chdfe_marked'" != "1") | "`chdfe_filled'" != "1") {
+        di as error "chdfe: rebuild the ctools plugin alongside the ado files"
+        local rc = 601
+    }
     * hdfe's messages: the singletons dropped, its warning on Kaczmarz with
     * conjugate gradient (which it runs anyway), and the iterations
     if `rc' {
@@ -277,7 +362,8 @@ program define chdfe, eclass
             * __CL#__ with keepids)
             local retain `outputs' `used' `groupoutput' `keepvars' `weightkeep' `cachevars'
             if "`keepids'"!="" local retain `retain' `idvars' `clusters'
-            quietly keep if `used'
+            * every observation in the sample: nothing to drop (a pass)
+            if `chdfe_N' < _N quietly keep if `used'
             keep `retain'
             foreach dest of local destinations {
                 capture drop `dest'

@@ -58,7 +58,7 @@ void cexport_context_cleanup(cexport_context *ctx);
 
     Format: delimiter [options...]; filename is a length-checked local
     Options: noheader, quote, noquoteif, verbose, crlf, mmap,
-             noparallel, nofsync, direct, prefault
+             noparallel, direct, prefault
 
     @param ctx   Context to populate
     @param args  Space-separated argument string

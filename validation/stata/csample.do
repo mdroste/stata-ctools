@@ -472,6 +472,7 @@ else test_fail "DATA-07 by: with by() refused" "r(`=_rc')"
 * code, variable names and types, and (unless "nodata") values agree.
 capture program drop _ct_output
 program define _ct_output, rclass
+    _ct_loud _ct_output
     tempfile f
     tempname fh
     capture log close _ctout
@@ -556,7 +557,7 @@ foreach pair in `"3, count"' `"3, c"' `"2, count by(g)"' `"29"' `"29, by(g)"' `"
     `"50, count"' `"60, count"' `"5.5, count"' `"-1, count"' `"0, count by(g)"' `"abc"' ///
     `"10 20"' `"98"' `"0"' {
     local ++i
-    _ct_same_output "SAMP-01 output `i'" `"sample `pair'"' `"csample `pair'"' nodata
+    noisily _ct_same_output "SAMP-01 output `i'" `"sample `pair'"' `"csample `pair'"' nodata
 }
 * Observation counts (draws differ by design; the numbers kept do not)
 foreach pair in `"3, count"' `"2, count by(g)"' `"29"' `"29, by(g)"' `"35 if g == 1"' `"-1, count"' {
@@ -594,7 +595,7 @@ test_pass "SAMP-03 order within groups"
 * SAMP-05: one observation is singular
 clear
 set obs 2
-_ct_same_output "SAMP-05 one observation deleted" "sample 50" "csample 50" nodata
+noisily _ct_same_output "SAMP-05 one observation deleted" "sample 50" "csample 50" nodata
 * SAMP-04: under version 6 sample's old algorithm draws the same sample
 clear
 set obs 40
@@ -620,8 +621,71 @@ foreach pair in `"50"' `"25 if g < 2"' `"30 in 5/30"' `"50, by(g)"' `"50, count"
     if `same' & `got_rc' == `want_rc' test_pass "SAMP-04 version 6 draw: `pair'"
     else test_fail "SAMP-04 version 6 draw: `pair'" "rc `got_rc' vs `want_rc', same data `same'"
 }
-_ct_same_output "SAMP-04 version 6 by prefix" "version 6: by g: sample 50" "version 6: by g: csample 50" nodata
-_ct_same_output "SAMP-04 version 6 count" "version 6: sample 50, count" "version 6: csample 50, count" nodata
+noisily _ct_same_output "SAMP-04 version 6 by prefix" "version 6: by g: sample 50" "version 6: by g: csample 50" nodata
+noisily _ct_same_output "SAMP-04 version 6 count" "version 6: sample 50, count" "version 6: csample 50, count" nodata
+* Small samples of the whole dataset: the plugin moves the kept observations
+* to the top itself and the rest is dropped by range. The result must be the
+* one the flag-and-drop path gives (taken here by putting e(sample) in
+* memory, which the plugin cannot move), with every observation intact.
+capture program drop _csample_compact_case
+program define _csample_compact_case
+    syntax, cmd(string asis) testname(string) [strl nocompact]
+    clear
+    set obs 5000
+    gen long id = _n
+    gen double x = sqrt(id)
+    gen float f = id / 7
+    gen str8 s = "s" + string(mod(id, 97))
+    gen str40 t = "obs " + string(id) + " of the data"
+    gen byte g = mod(id, 7)
+    if "`strl'" != "" gen strL big = "L" + string(id)
+    sort id
+    tempfile plain
+    quietly save `plain'
+    * the flag-and-drop path
+    quietly regress x f
+    set seed 4711
+    `cmd'
+    local flagged = scalar(_csample_compacted)
+    tempfile want
+    quietly save `want'
+    * the compacting path
+    use `plain', clear
+    ereturn clear
+    set seed 4711
+    `cmd'
+    local moved = scalar(_csample_compacted)
+    local sorted : sortedby
+    capture cf _all using `want'
+    local same = !_rc
+    capture assert x == sqrt(id) & f == float(id / 7) & s == "s" + string(mod(id, 97)) & ///
+        t == "obs " + string(id) + " of the data" & g == mod(id, 7)
+    local intact = !_rc
+    local expect = cond("`strl'`compact'" != "", 0, 1)
+    if `same' & `intact' & `flagged' == 0 & `moved' == `expect' & _N > 0 {
+        test_pass "`testname'"
+    }
+    else test_fail "`testname'" "same=`same' intact=`intact' flagged=`flagged' moved=`moved' N=`=_N' sortedby=`sorted'"
+end
+_csample_compact_case, cmd(csample 5) testname("compact: 5 percent")
+_csample_compact_case, cmd(csample 25) testname("compact: 25 percent")
+_csample_compact_case, cmd(csample 40, count) testname("compact: count")
+_csample_compact_case, cmd(csample 10, by(g)) testname("compact: by()")
+_csample_compact_case, cmd(csample 60) testname("compact: not for a large sample") nocompact
+_csample_compact_case, cmd(csample 5) testname("compact: not with a strL variable") strl
+* the sort marker of the data survives the move
+clear
+set obs 2000
+gen long id = _n
+gen double x = runiform()
+sort id
+set seed 99
+csample 3
+local sorted : sortedby
+capture assert id > id[_n - 1] in 2/l
+if !_rc & "`sorted'" == "id" & scalar(_csample_compacted) == 1 test_pass "compact: order and sort marker kept"
+else test_fail "compact: order and sort marker kept" "sortedby=`sorted' compacted=`=scalar(_csample_compacted)'"
+
 do "validation/support/six_release_regressions.do" csample
 noi print_summary "csample"
 }

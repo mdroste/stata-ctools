@@ -1,4 +1,6 @@
 *! version 1.3.1 20261124 github.com/mdroste/stata-ctools
+*! original: Stata's decode (built in)
+*! original: see help cdecode for details
 
 * Hand one value label to the plugin as local __cd_map (format: see
 * src/cdecode/cdecode_impl.c). Sets __cd_ok to 0 when decode itself must do the

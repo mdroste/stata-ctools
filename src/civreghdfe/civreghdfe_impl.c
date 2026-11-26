@@ -40,6 +40,7 @@
 #include "../hdfe/hdfe_sample.h"
 #include "../creghdfe/creghdfe_hdfe.h"  /* heterogeneous slopes, shared with creghdfe */
 #include "../ctools_unroll.h"
+#include "../ctools_release.h"
 
 static HDFE_State *iv_state = NULL;
 
@@ -89,6 +90,35 @@ static void civ_drop_missing(const ST_double *v, ST_int i0, ST_int i1, ST_double
 static void civ_gather(ST_double *dst, const ST_double *src, const ST_int *rows, ST_int N)
 {
     for (ST_int j = 0; j < N; j++) dst[j] = src[rows[j]];
+}
+
+/* The rows of src (N_total) where keep is nonzero, in order, into dst: row
+   blocks in parallel, each starting where the kept rows before it end.
+   Returns 0 or 920. */
+static ST_retcode civ_gather_kept(ST_double *dst, const ST_double *src, const ST_int *keep,
+                                  ST_int N_total)
+{
+    const int B = ctools_hdfe_row_blocks(N_total);
+    ST_int *start = (ST_int *)calloc((size_t)B + 1, sizeof(ST_int));
+    if (!start) return 920;
+    int b;
+    #pragma omp parallel for schedule(static) if (B > 1)
+    for (b = 0; b < B; b++) {
+        ST_int i0, i1, n = 0;
+        ctools_hdfe_block_range(N_total, B, b, &i0, &i1);
+        for (ST_int ii = i0; ii < i1; ii++) n += keep[ii] != 0;
+        start[b + 1] = n;
+    }
+    for (b = 0; b < B; b++) start[b + 1] += start[b];
+    #pragma omp parallel for schedule(static) if (B > 1)
+    for (b = 0; b < B; b++) {
+        ST_int i0, i1, idx = start[b];
+        ctools_hdfe_block_range(N_total, B, b, &i0, &i1);
+        for (ST_int ii = i0; ii < i1; ii++)
+            if (keep[ii]) dst[idx++] = src[ii];
+    }
+    free(start);
+    return 0;
 }
 
 /* The slope description creghdfe's slope routines read: factor g is a
@@ -503,6 +533,13 @@ static ST_retcode civ_build_extra(civ_extra_buf *b, ST_int N, ST_int K_exog_in, 
     return rc;
 }
 
+/* The fit's HDFE state, released by the helper thread (ctools_release.h) */
+static void civ_release_state(void *state)
+{
+    ctools_hdfe_state_cleanup((HDFE_State *)state);
+    free(state);
+}
+
 static ST_retcode do_iv_regression(void)
 {
     /* Heap state released at iv_cleanup; every error path leaves through it */
@@ -749,6 +786,34 @@ static ST_retcode do_iv_regression(void)
         }
     }
 
+    /* Factor-variable indicators (the ado's _ctools_fvnative): with
+     * __civreghdfe_fvspec, loaded column c of [X_endog, X_exog, excluded
+     * instruments] (c = 1 ...) holds a factor variable when entry c of
+     * __civreghdfe_fvlev is a level (>= 0). Now that its missing values have
+     * been screened it becomes 1 where it equals that level, 0 elsewhere:
+     * the doubles fvrevar's indicator holds, for every later use. */
+    {
+        ST_double use_fv = 0;
+        const ST_int n_x = var_fe_start_idx - 1;
+        if (SF_scal_use("__civreghdfe_fvspec", &use_fv) == 0 && use_fv == 1 && n_x > 0) {
+            for (ST_int c = 1; c <= n_x; c++) {
+                ST_double level = -1;
+                if (SF_mat_el("__civreghdfe_fvlev", 1, c, &level) != 0 ||
+                    !(level >= -1 && level == floor(level))) {
+                    SF_error("civreghdfe: invalid factor-variable specification\n");
+                    iv_rc = 198;
+                    goto iv_cleanup;
+                }
+                if (level < 0) continue;
+                ST_double *col = filtered.data.vars[c].data.dbl;
+                ST_int r;
+                #pragma omp parallel for schedule(static) if (N_total > 100000)
+                for (r = 0; r < N_total; r++) col[r] = col[r] == level ? 1.0 : 0.0;
+            }
+            if ((iv_rc = ctools_scal_save("__civreghdfe_fvdone", 1.0))) goto iv_cleanup;
+        }
+    }
+
     if (N_valid <= K_total || N_valid < K_iv) {
         SF_error("civreghdfe: Insufficient observations\n");
         iv_rc = 2001;
@@ -774,33 +839,57 @@ static ST_retcode do_iv_regression(void)
         goto iv_cleanup;
     }
     {
-        /* Compact FE doubles to temp array, then O(N) remap to contiguous integers */
-        double *fe_compact = (double *)malloc((size_t)N_valid * sizeof(double));
-        if (!fe_compact) {
+        /* The valid rows of each FE variable (compacted in parallel row
+         * blocks when some rows are missing) to levels 1..L, remapped in
+         * parallel; hdfe_build_factors renumbers them after singleton
+         * removal. level_max[g] keeps L, a bound on the levels left then. */
+        const int all_valid = N_valid == N_total;
+        const int B = ctools_hdfe_row_blocks(N_total);
+        double *fe_compact = all_valid ? NULL : (double *)malloc((size_t)N_valid * sizeof(double));
+        ST_int *block_start = all_valid ? NULL : (ST_int *)calloc((size_t)B + 1, sizeof(ST_int));
+        level_max = (ST_int *)calloc((size_t)G + 1, sizeof(ST_int));
+        if (!level_max || (!all_valid && (!fe_compact || !block_start))) {
+            free(fe_compact);
+            free(block_start);
+            SF_error("civreghdfe: Memory allocation failed for FE compaction\n");
             iv_rc = 920;
             goto iv_cleanup;
         }
+        if (!all_valid) {
+            int b;
+            #pragma omp parallel for schedule(static) if (B > 1)
+            for (b = 0; b < B; b++) {
+                ST_int i0, i1, n = 0;
+                ctools_hdfe_block_range(N_total, B, b, &i0, &i1);
+                for (ST_int ii = i0; ii < i1; ii++) n += valid_mask[ii] != 0;
+                block_start[b + 1] = n;
+            }
+            for (b = 0; b < B; b++) block_start[b + 1] += block_start[b];
+        }
 
         for (ST_int g = 0; g < G; g++) {
-            double *fe_src = filtered.data.vars[var_fe_start_idx + g].data.dbl;
-            ST_int idx = 0;
-            for (ST_int ii = 0; ii < N_total; ii++) {
-                if (!valid_mask[ii]) continue;
-                fe_compact[idx++] = fe_src[ii];
+            const double *fe_src = filtered.data.vars[var_fe_start_idx + g].data.dbl;
+            if (!all_valid) {
+                int b;
+                #pragma omp parallel for schedule(static) if (B > 1)
+                for (b = 0; b < B; b++) {
+                    ST_int i0, i1, idx = block_start[b];
+                    ctools_hdfe_block_range(N_total, B, b, &i0, &i1);
+                    for (ST_int ii = i0; ii < i1; ii++)
+                        if (valid_mask[ii]) fe_compact[idx++] = fe_src[ii];
+                }
             }
-
-            ST_int num_levels_g = 0;
-            ST_int *counts_g = NULL;
-            if (remap_and_count(fe_compact, N_valid, fe_levels_c[g], &num_levels_g,
-                                &counts_g, NULL, NULL) != 0) {
+            if (hdfe_remap_levels(all_valid ? fe_src : fe_compact, N_valid, fe_levels_c[g],
+                                  &level_max[g]) != 0) {
                 SF_error("civreghdfe: FE level remapping failed\n");
                 free(fe_compact);
+                free(block_start);
                 iv_rc = 920;
                 goto iv_cleanup;
             }
-            free(counts_g);  /* Counts recomputed later in HDFE setup */
         }
         free(fe_compact);
+        free(block_start);
     }
 
     /* End missing value check/compact timing, start singleton timing */
@@ -816,13 +905,20 @@ static ST_retcode do_iv_regression(void)
     }
     /* ivreghdfe selects the sample with reghdfe: fweights drop only levels
      * whose total fweight is 1; aweights and pweights use the unweighted rule. */
+    /* the fweights of the valid rows: the loaded column itself when every
+       row is valid */
     ST_double *fw_c = NULL;
+    const ST_double *fw_rows = NULL;
     if (has_weights && weight_type == 2) {
-        fw_c = (ST_double *)malloc((size_t)N_valid * sizeof(ST_double));
-        if (fw_c) {
-            ST_int idx = 0;
-            for (ST_int ii = 0; ii < N_total; ii++)
-                if (valid_mask[ii]) fw_c[idx++] = filtered.data.vars[var_weight_idx].data.dbl[ii];
+        const ST_double *fw_src = filtered.data.vars[var_weight_idx].data.dbl;
+        if (N_valid == N_total) fw_rows = fw_src;
+        else {
+            fw_c = (ST_double *)malloc((size_t)N_valid * sizeof(ST_double));
+            if (fw_c && civ_gather_kept(fw_c, fw_src, valid_mask, N_total) != 0) {
+                free(fw_c);
+                fw_c = NULL;
+            }
+            fw_rows = fw_c;
         }
     }
     /* keepsingletons: reghdfe's option, which ivreghdfe passes on */
@@ -833,8 +929,8 @@ static ST_retcode do_iv_regression(void)
         for (ST_int ii = 0; ii < N_valid; ii++) singleton_mask[ii] = 1;
         num_singletons_total = 0;
     } else {
-        num_singletons_total = (has_weights && weight_type == 2 && !fw_c) ? -1 :
-            ctools_remove_singletons(fe_levels_c, G, N_valid, singleton_mask, fw_c, verbose);
+        num_singletons_total = (has_weights && weight_type == 2 && !fw_rows) ? -1 :
+            ctools_remove_singletons(fe_levels_c, G, N_valid, singleton_mask, fw_rows, verbose);
     }
     free(fw_c);
     if (num_singletons_total >= 0 &&
@@ -849,6 +945,9 @@ static ST_retcode do_iv_regression(void)
     /* Step 3: Build combined index mapping original obs → final position.
      * Combine valid_mask and singleton_mask into one compaction pass. */
     ST_int N = N_valid - num_singletons_total;
+    /* The estimation rows: with fweights __civreghdfe_N is their total
+     * weight, and the wrapper's e(N_full) counts rows */
+    if ((iv_rc = ctools_scal_save("__civreghdfe_N_rows", (ST_double)N))) goto iv_cleanup;
 
     /* Allocate final arrays */
     y_c = (ST_double *)ctools_safe_malloc2((size_t)N, sizeof(ST_double));
@@ -872,6 +971,7 @@ static ST_retcode do_iv_regression(void)
 
     /* Compaction: the retained rows (valid and not singleton) of every
      * column, read directly from filtered.data, one column per thread. */
+    ST_double sum_w_c = 0.0;  /* the total of the retained weights, in row order */
     {
         ST_int *rows = (ST_int *)ctools_safe_malloc2((size_t)(N > 0 ? N : 1), sizeof(ST_int));
         if (!rows) {
@@ -885,20 +985,48 @@ static ST_retcode do_iv_regression(void)
             if (!valid_mask[ii]) continue;
             if (singleton_mask[valid_idx++]) rows[out_idx++] = ii;
         }
+        /* A wrapper that sets __civreghdfe_sample_clear takes its estimation
+         * sample from its sample marker (the last plugin variable, 1 on every
+         * loaded row): the rows dropped here are cleared in it, one store per
+         * dropped row. __civreghdfe_marked tells the wrapper that the marker
+         * was updated. */
+        {
+            ST_double clear_value = 0;
+            if (input.touse && SF_scal_use("__civreghdfe_sample_clear", &clear_value) == 0 &&
+                clear_value == 1.0) {
+                const ST_int marker = SF_nvars();
+                ST_int next = 0;
+                for (ST_int ii = 0; ii < N_total && !iv_rc && N < N_total; ii++) {
+                    if (next < N && rows[next] == ii) { next++; continue; }
+                    iv_rc = (_stata_)->safestore(marker, (ST_int)filtered.obs_map[ii], 0.0);
+                }
+                if (!iv_rc) iv_rc = ctools_scal_save("__civreghdfe_marked", 1.0);
+                if (iv_rc) {
+                    free(rows);
+                    goto iv_cleanup;
+                }
+            }
+        }
         for (ST_int j = 0; j < N; j++) {
             filtered.obs_map[j] = filtered.obs_map[rows[j]];
-            if (has_weights) weights_c[j] = filtered.data.vars[var_weight_idx].data.dbl[rows[j]];
             if (has_cluster) cluster_ids_c[j] = cluster_ids[rows[j]];
             if (has_cluster2) cluster2_ids_c[j] = cluster2_ids[rows[j]];
         }
-        /* y, X_endog, X_exog, excluded instruments, tsset columns */
-        const ST_int n_gather = 1 + K_endog + K_exog + K_excl_in + ts_cols;
+        /* y, X_endog, X_exog, excluded instruments, tsset columns, weights
+           (whose total, in row order, the same task adds up) */
+        const ST_int n_gather = 1 + K_endog + K_exog + K_excl_in + ts_cols + (has_weights ? 1 : 0);
         ST_int c;
         #pragma omp parallel for schedule(dynamic) if ((size_t)N * (size_t)n_gather > 200000)
         for (c = 0; c < n_gather; c++) {
             const ST_double *src;
             ST_double *dst;
-            if (c == 0) {
+            if (has_weights && c == n_gather - 1) {
+                civ_gather(weights_c, filtered.data.vars[var_weight_idx].data.dbl, rows, N);
+                ST_double total = 0.0;
+                for (ST_int i = 0; i < N; i++) total += weights_c[i];
+                sum_w_c = total;
+                continue;
+            } else if (c == 0) {
                 src = filtered.data.vars[var_y_idx].data.dbl;
                 dst = y_c;
             } else if (c < 1 + K_endog) {
@@ -951,19 +1079,19 @@ static ST_retcode do_iv_regression(void)
        - fw (type=2): compute N_eff = sum(fw) for reporting/DOF */
     ST_double N_eff = (ST_double)N;
     if (has_weights && weights_c) {
+        /* sum_w_c: their total in row order, added up during the compaction */
         if (weight_type == 1 || weight_type == 3) {
             /* aweight or pweight: normalize so sum(w) = N */
-            ST_double sum_w_raw = 0.0;
-            for (ST_int i = 0; i < N; i++) sum_w_raw += weights_c[i];
+            const ST_double sum_w_raw = sum_w_c;
             if (sum_w_raw > 0.0) {
-                ST_double scale = (ST_double)N / sum_w_raw;
-                for (ST_int i = 0; i < N; i++) weights_c[i] *= scale;
+                const ST_double scale = (ST_double)N / sum_w_raw;
+                ST_int i;
+                #pragma omp parallel for schedule(static) if (N > 200000)
+                for (i = 0; i < N; i++) weights_c[i] *= scale;
             }
         } else if (weight_type == 2) {
             /* fweight: N_eff = sum(fw) */
-            ST_double sum_fw = 0.0;
-            for (ST_int i = 0; i < N; i++) sum_fw += weights_c[i];
-            N_eff = sum_fw;
+            N_eff = sum_w_c;
         }
     }
 
@@ -989,8 +1117,7 @@ static ST_retcode do_iv_regression(void)
 
     /* Initialize the HDFE state on the estimation sample */
     state = (HDFE_State *)calloc(1, sizeof(HDFE_State));
-    level_max = (ST_int *)calloc((size_t)G + 1, sizeof(ST_int));
-    if (!state || !level_max) {
+    if (!state) {
         SF_error("civreghdfe: Memory allocation failed for HDFE state\n");
         iv_rc = 920;
         goto iv_cleanup;
@@ -1006,12 +1133,8 @@ static ST_retcode do_iv_regression(void)
     state->verbose = verbose;
 
     /* Factors: the CG solver expects levels 1..num_levels, so the levels
-       left after singleton removal are renumbered and counted */
-    for (ST_int g = 0; g < G; g++) {
-        for (ST_int i = 0; i < N; i++) {
-            if (fe_levels_c[g][i] > level_max[g]) level_max[g] = fe_levels_c[g][i];
-        }
-    }
+       left after singleton removal are renumbered and counted (level_max
+       holds each factor's level count before the removal) */
     ST_retcode factor_rc = hdfe_build_factors(state, G, fe_levels_c, level_max, N, NULL, N,
                                               has_weights ? weights_c : NULL, 0);
     free(level_max);
@@ -1983,10 +2106,18 @@ static ST_retcode do_iv_regression(void)
     }
     if (K_exog > 0) ctools_matvec_add(X_exog_dem, N, K_exog, beta, fit);
     if (K_endog > 0) ctools_matvec_add(X_endog_dem, N, K_endog, beta + K_exog, fit);
+    {
+        ST_int row;
+        #pragma omp parallel for schedule(static) if (N > 200000)
+        for (row = 0; row < N; row++) fit[row] = y_dem[row] - fit[row];
+    }
+    /* The rows of the estimation sample are distinct observations: stored on
+     * all threads (ctools_store_filtered_rowpar proves that first) */
+    if (resid_idx > 0)
+        residual_rc = ctools_stata_rc(
+            ctools_store_filtered_rowpar(fit, (size_t)N, resid_idx, est_obs));
     for (ST_int i = 0; i < N; i++) {
-        ST_double resid = y_dem[i] - fit[i];
-        if (resid_idx > 0 && !residual_rc)
-            residual_rc = (_stata_)->safestore(resid_idx, (ST_int)est_obs[i], resid);
+        ST_double resid = fit[i];
         ST_double w = (weights_c && weight_type != 0) ? weights_c[i] : 1.0;
         rss += w * resid * resid;
     }
@@ -2123,26 +2254,30 @@ static ST_retcode do_iv_regression(void)
 
 iv_cleanup:
     /* Single exit: releases whatever the stage reached had allocated,
-       including after a failed result publication */
-    free(cluster_ids); free(cluster2_ids); free(valid_mask); free(singleton_mask);
+       including after a failed result publication. The memory is returned
+       by a helper thread after the plugin call (ctools_release.h): at 10M
+       rows that is over 1 GB, 50 ms or more on Windows. */
+    ctools_release_later(cluster_ids); ctools_release_later(cluster2_ids);
+    ctools_release_later(valid_mask); ctools_release_later(singleton_mask);
     if (fe_levels_c) {
-        for (ST_int g = 0; g < G; g++) free(fe_levels_c[g]);
-        free(fe_levels_c);
+        for (ST_int g = 0; g < G; g++) ctools_release_later(fe_levels_c[g]);
+        ctools_release_later(fe_levels_c);
     }
-    free(level_max); free(is_partial); free(is_collinear_x); free(test_idx); free(ts_int);
-    free(fe_redundant); free(fe_nested); free(fe_exact);
-    for (ST_int g = 0; g < 10; g++) free(slope_c[g]);
-    free(bs_partial); free(bs_collin_z); free(bs_tilde); free(bs_b);
-    free(all_data); free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
-    free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
-    free(beta); free(V); free(first_stage_F); free(abw_fe);
-    if (state) {
-        ctools_hdfe_state_cleanup(state);
-        free(state);
-    }
+    ctools_release_later(level_max); ctools_release_later(is_partial);
+    ctools_release_later(is_collinear_x); ctools_release_later(test_idx); ctools_release_later(ts_int);
+    ctools_release_later(fe_redundant); ctools_release_later(fe_nested); ctools_release_later(fe_exact);
+    for (ST_int g = 0; g < 10; g++) ctools_release_later(slope_c[g]);
+    ctools_release_later(bs_partial); ctools_release_later(bs_collin_z);
+    ctools_release_later(bs_tilde); ctools_release_later(bs_b);
+    ctools_release_later(all_data); ctools_release_later(y_c); ctools_release_later(X_endog_c);
+    ctools_release_later(X_exog_c); ctools_release_later(Z_c);
+    ctools_release_later(weights_c); ctools_release_later(cluster_ids_c); ctools_release_later(cluster2_ids_c);
+    ctools_release_later(beta); ctools_release_later(V);
+    ctools_release_later(first_stage_F); ctools_release_later(abw_fe);
+    if (state) ctools_release_later_call(civ_release_state, state);
     iv_state = NULL;
-    ctools_aligned_free(est_obs);
-    ctools_filtered_data_free(&filtered);
+    ctools_release_later_aligned(est_obs);
+    ctools_filtered_data_release(&filtered);
 
     return iv_rc;
 }

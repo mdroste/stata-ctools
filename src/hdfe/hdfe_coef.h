@@ -43,6 +43,9 @@
  * moves it, where the row-space iteration still carries those rows along.
  * The weighted fit is the same to the tolerance, but the residuals of those
  * rows are not, and cppmlhdfe needs them (cppmlhdfe_solvers.c).
+ * hdfe_coef_applies() therefore declines weights whose positive values span
+ * more than HDFE_COEF_WEIGHT_SPAN; partial_out_columns() then iterates on
+ * the rows. Weights of exactly zero take their rows out and are fine.
  */
 
 #ifndef CTOOLS_HDFE_COEF_H
@@ -82,6 +85,9 @@ typedef enum
 
 /* 1 when S can be projected here: two to HDFE_COEF_MAX_EFFECTS factors, all
  * of them intercepts (no slope). */
+/* Largest ratio of the heaviest to the lightest positive weight the module
+ * takes; beyond it hdfe_coef_applies() is 0 and the rows are iterated */
+#define HDFE_COEF_WEIGHT_SPAN 1e8
 int hdfe_coef_applies(const HDFE_State *S);
 
 /*

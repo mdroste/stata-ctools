@@ -1,4 +1,6 @@
 *! version 1.3.1 20261124 github.com/mdroste/stata-ctools
+*! original: Stata's sample (sample.ado 2.4.0, January 20, 2021)
+*! original: see help csample for details
 
 program define csample, byable(onecall)
     version 14.1
@@ -115,12 +117,18 @@ program define csample, byable(onecall)
         local use_count = 1
     }
 
-    * Mark sample
-    marksample touse, novarlist
-
-    * Count observations
-    quietly count if `touse'
-    local nobs_sample = r(N)
+    * Mark and count the sample. Without if and in it is the whole dataset:
+    * the plugin is told so (skipif) and reads no marker.
+    local whole = (`"`if'"' == "" & `"`in'"' == "")
+    if `whole' {
+        local touse
+        local nobs_sample = _N
+    }
+    else {
+        marksample touse, novarlist
+        quietly count if `touse'
+        local nobs_sample = r(N)
+    }
     if `nobs_sample' == 0 {
         foreach field in nobs kept dropped ngroups time_load time_sort time_sample time_store time_total {
             scalar _csample_`field' = 0
@@ -161,9 +169,12 @@ program define csample, byable(onecall)
         local by `__ctools_keys'
     }
 
-    * Create variable for keep flags (will be dropped at end)
+    * Create variable for keep flags (will be dropped at end). The plugin
+    * writes the flag of every observation of the sample, so for the whole
+    * dataset the variable needs no initial values.
     tempvar __keep
-    quietly gen double `__keep' = 0
+    if `whole' mata: (void) st_addvar("byte", st_local("__keep"), 1)
+    else quietly gen double `__keep' = 0
 
     * Get ALL variables and find indices (cencode pattern). The sample
     * marker goes last, in place of an if: Stata answers an if one
@@ -209,8 +220,17 @@ program define csample, byable(onecall)
     }
     local opts "`opts' seedhi=`seed_hi' seedlo=`seed_lo'"
     if "`verbose'" != "" local opts "`opts' verbose"
-    if `"`if'"' == "" & `"`in'"' == "" local opts "`opts' skipif"
+    if `whole' local opts "`opts' skipif"
     else local opts "`opts' touse"
+    * compact: the plugin moves a small sample to the top of the dataset
+    * and the rest is dropped by range, where drop if evaluates every
+    * observation and rewrites what is left. Not with e(sample) in memory,
+    * whose hidden column the plugin cannot move with the observations.
+    local esample : e(functions)
+    if `whole' & !`: list posof "sample" in esample' {
+        local opts "`opts' compact"
+        _ctools_strw `allvars'
+    }
 
     local threads_opt ""
     if `threads' > 0 {
@@ -225,13 +245,21 @@ program define csample, byable(onecall)
     if "`__ct_elapsed90'" == "" local __ct_elapsed90 = 0
     quietly _ctools_clock __ct_start90
 
+    capture scalar drop _csample_compacted
     * Call plugin with ALL variables (cencode pattern)
     * Pass keep_idx so C code knows which variable to write to
     plugin call ctools_plugin `allvars' `touse', ///
         "csample `threads_opt' `keep_idx' `nby' `by_indices' `opts'"
 
     * Drop observations where __keep == 0
-    quietly drop if `touse' & `__keep' == 0
+    local compacted = 0
+    capture local compacted = scalar(_csample_compacted)
+    if `whole' & `compacted' == 1 {
+        * the kept observations are the first ones
+        if scalar(_csample_kept) < _N quietly drop in `=scalar(_csample_kept) + 1'/l
+    }
+    else if `whole' quietly drop if `__keep' == 0
+    else quietly drop if `touse' & `__keep' == 0
 
     * Clean up the keep variable
     drop `__keep'

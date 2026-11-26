@@ -2977,6 +2977,122 @@ capture erase "temp/gap_val_c.xpt"
 capture erase "temp/formats.xpf"
 clear
 
+* SECTION: display formats and value labels written by the plugin
+* The plugin writes %t formats and value-label text itself, from the numeric
+* variable; a format or label it does not handle is formatted in Stata first.
+* Either way the file is export delimited's.
+print_section "Plugin-written dates and value labels"
+
+clear
+set obs 400
+set seed 20261125
+gen long id = _n
+gen double d = floor(-679350 + (2936549 + 679350) * runiform())
+replace d = floor(-20000 + 60000 * runiform()) if mod(_n, 2)
+replace d = d + .5 if mod(_n, 7) == 0
+replace d = -679350 in 1
+replace d = 2936549 in 2
+replace d = 0 in 3
+replace d = -1 in 4
+replace d = . in 5
+replace d = .a in 6
+local i = 0
+foreach f in %td %-td %tdCCYY-NN-DD %tdNN/DD/CCYY %tdDD_Mon_CCYY %tdMonth_dd,_CCYY ///
+    %tdDayname_Mon_dd_CCYY %tdDay_da_Da_day %tdJJJ_jjj %tdcc!xYY_yy %tdq!qh_WW_ww ///
+    %tdCC+YY+NN+DD %td_DD_month_ %tdD_m_Y %tdDD!-!aNN {
+    local ++i
+    gen double d`i' = d
+    format d`i' `f'
+}
+gen double c = floor(-58695840000000 + (253717919999999 + 58695840000000) * runiform())
+replace c = floor(1e12 * runiform()) if mod(_n, 2)
+replace c = c + .25 if mod(_n, 5) == 0
+replace c = 0 in 1
+replace c = -1 in 2
+replace c = 43200000 in 3
+replace c = 43199999 in 4
+replace c = . in 5
+replace c = .b in 6
+local i = 0
+foreach f in %tc %tcCCYY-NN-DD!THH:MM:SS %tcHh:MM_am %tchh:MM_AM %tchH!hmm!mss!s ///
+    %tca.m._A.M. %tcDayname_Month_dd,_CCYY_hh:MM %tcJJJ_WW_q_h %tcHH:MM:SS.sss {
+    local ++i
+    gen double c`i' = c
+    format c`i' `f'
+}
+foreach u in w m q h y {
+    local per = cond("`u'" == "w", 52, cond("`u'" == "m", 12, cond("`u'" == "q", 4, cond("`u'" == "h", 2, 1))))
+    gen double p`u' = floor(-200 * `per' + 400 * `per' * runiform())
+    if "`u'" == "y" replace p`u' = floor(100 + 9900 * runiform())
+    replace p`u' = p`u' + .5 if mod(_n, 9) == 0
+    replace p`u' = . in 5
+    gen double p`u'2 = p`u'
+    format p`u' %t`u'
+    format p`u'2 %t`u'CCYY!/NN
+}
+drop d c
+benchmark_export, testname("plugin dates: every format")
+benchmark_export, testname("plugin dates: quote") exportopts(quote)
+benchmark_export, testname("plugin dates: tab delimiter") exportopts(delimiter(tab)) importopts(delimiters(tab))
+benchmark_export, testname("plugin dates: if") ifcond(mod(id, 3) == 0)
+benchmark_export, testname("plugin dates: in") incond(3/350)
+benchmark_export d1 c1 pm, testname("plugin dates: variable selection")
+* values outside the years 100 to 9999 are shown as numbers: Stata formats
+gen double dbig = cond(_n == 10, 3000000, cond(_n == 11, -700000, 20000 + _n))
+format dbig %td
+benchmark_export id dbig d1, testname("plugin dates: values Stata shows as numbers")
+
+clear
+set obs 300
+gen long id = _n
+label define cx_full 1 "North" 2 "South, East" 3 `"say "hi""' 4 "semi;colon" 5 "é ü"
+gen byte lab_full = 1 + mod(_n, 5)
+label values lab_full cx_full
+label define cx_part 1 "one" 3 "three" .a "refused" -5 "minus five" 100000 "big"
+gen long lab_part = mod(_n, 6) - 1
+replace lab_part = -5 in 20
+replace lab_part = 100000 in 21
+replace lab_part = .a in 22
+replace lab_part = .b in 23
+replace lab_part = . in 24
+label values lab_part cx_part
+gen float lab_float = mod(_n, 4) + cond(mod(_n, 5) == 0, .1, 0)
+label values lab_float cx_part
+gen double lab_double = mod(_n, 4) + cond(mod(_n, 5) == 0, 1/3, 0)
+label values lab_double cx_part
+label define cx_empty 1 "" 2 "two"
+gen byte lab_empty = 1 + mod(_n, 3)
+label values lab_empty cx_empty
+gen byte lab_undef = mod(_n, 3)
+label values lab_undef cx_nosuchlabel
+gen long lab_date = 20000 + mod(_n, 5)
+format lab_date %td
+label define cx_date 20001 "day one"
+label values lab_date cx_date
+gen str5 s = "s" + string(mod(_n, 9))
+benchmark_export, testname("plugin labels: default")
+benchmark_export, testname("plugin labels: quote") exportopts(quote)
+benchmark_export, testname("plugin labels: nolabel") exportopts(nolabel)
+benchmark_export, testname("plugin labels: semicolon delimiter") exportopts(delimiter(";")) importopts(delimiters(";"))
+benchmark_export, testname("plugin labels: if") ifcond(mod(id, 2) == 0)
+benchmark_export lab_part lab_full, testname("plugin labels: variable selection")
+* the plugin writes exactly what Stata's own formatting gave before it
+tempfile cx_plugin cx_stata
+cexport delimited id lab_full lab_part using "`cx_plugin'", replace
+preserve
+foreach v in lab_full lab_part {
+    decode `v', gen(__dec)
+    replace __dec = strtrim(string(`v', "%18.0g")) if __dec == "" & `v' != .
+    order __dec, after(`v')
+    drop `v'
+    rename __dec `v'
+}
+cexport delimited id lab_full lab_part using "`cx_stata'", replace
+restore
+mata: st_local("cx_same", strofreal(_cexport_same_records(st_local("cx_stata"), st_local("cx_plugin"))))
+if `cx_same' test_pass "plugin labels: same file as decoded strings"
+else test_fail "plugin labels: same file as decoded strings" "files differ"
+
 * Cleanup and summary
 
 local files : dir "temp" files "*.csv"

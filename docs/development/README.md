@@ -86,6 +86,7 @@ shared solver receives that state as an argument.
 | `src/ctools_runtime.h/c` | Error reporting, timing and freeing command data |
 | `src/ctools_parse.h/c` | Argument parsing utilities |
 | `src/ctools_threads.h/c` | Persistent thread pool |
+| `src/ctools_release.h/c` | Returns a command's working memory on a helper thread after the plugin call |
 | `src/ctools_arena.h/c` | Arena allocators (growing + string) |
 | `src/ctools_hash.h/c` | Hash tables and label utilities |
 | `src/ctools_ols.h/c` | Cholesky, precision arithmetic, dot products, collinearity |
@@ -1139,6 +1140,22 @@ one row of the triangular matrix to each thread. `cqreg` solves its two auxiliar
 side only for small samples, because a `parallel sections` region turns the
 loops inside each solve serial.
 
+On builds without the NEON kernels and Accelerate (Windows and Linux x86-64),
+the Frisch-Newton iteration runs as six fused passes over the rows (`fuse_*` in
+`cqreg_fn.c`) instead of one loop per formula. Written loop by loop, an
+iteration reads or writes an N-vector about 150 times when K = 4, and the
+solver runs at the speed of memory; the passes do the same arithmetic in about
+70. Each pass covers everything between two whole-sample results (the normal
+equations, a step length, the centering sum) for one cache-sized block of rows
+at a time, and recomputes short-lived values (`r`, `ds`, `q*r`, `X*dy`, `1/x`,
+`1/s`) from the arrays it reads anyway. The rows are split into chunks that
+depend only on N and K. A chunk adds its terms in row order from zero and the
+chunk sums are added in chunk order, so the result is the same for any thread
+count. With one chunk (N below 8,192, or a build with `CQREG_FUSE_ONE_CHUNK`)
+every sum is formed exactly as the loops form it: compare that build bit for
+bit with the loop-by-loop code after changing a pass. The QR retry and the
+NEON builds keep the loop-by-loop iteration.
+
 ### HDFE Estimation Sample (`hdfe/hdfe_sample.h`)
 
 `creghdfe`, `civreghdfe` and `cppmlhdfe` build their `HDFE_State` factors
@@ -1300,6 +1317,23 @@ plugin. Use `skipif` only when there is no `if` condition to evaluate. Write
 every value of a new output, including missing interpolation results and absent
 split fields. Outputs restricted to a subset of observations must still be
 initialized elsewhere.
+
+`cdestring` converts in two plugin calls so that Stata never rewrites the new
+variable. `parse` reads the strings, keeps the numbers and reports, for each
+variable, the storage type `compress` would choose, the number of missing
+values and the `ignore()` characters it contained. The ado then creates each
+destination with its final type and `store` fills it. This replaces a
+`compress` (a `recast` of a 10-million-row variable takes about 0.55 seconds,
+several times the conversion), a `count if missing()` and one `count if
+strpos()` per `ignore()` character. The numbers stay in the plugin between the
+calls: the wrapper holds Break, calls `cdestring discard` if it cannot create a
+variable, and any other plugin call frees them. `order` rewrites every row, so
+the wrapper skips it when the new variables are already in place.
+
+`csort` and `cbsample` keep no `preserve` copy of the data. Above
+`c(max_preservemem)` Stata writes that copy to disk, which took 0.5 seconds per
+call on 1.4 GB of data, as long as the sort itself. They hold Break with
+`nobreak` until the data, sort marker and `e(sample)` agree.
 
 `cwinsor` can read the original variables and write separate floating-point
 outputs. This keeps double precision during computation and avoids repeated
@@ -1508,16 +1542,59 @@ count. It has two solvers behind it:
   Kaczmarz sweep, reghdfe's default. It serves slopes, more than eight
   effects, small iteration limits (reghdfe's `iterate()` counts its sweeps;
   tests pin `iterate(1)` as r(430) and the result after `iterate(2) abort(0)`),
-  every call of `partial_out_columns_options()`, and all of `cppmlhdfe`.
+  every call of `partial_out_columns_options()`, and weights whose positive
+  values span more than `HDFE_COEF_WEIGHT_SPAN` (1e8).
 
 The wrappers send `technique()`, `transform()`, `acceleration()` and
 `preconditioner()` to the row-space iteration even at their default values
 (`__creghdfe_map`, `__civreghdfe_map`, `chdfe`'s `rowspace` argument).
-`cppmlhdfe` stays on the rows because its IRLS weights fall without bound for
-zero outcomes whose mean heads to zero: an effect tied to the others only
-through such rows has a pivot below rounding, a coefficient solve cannot place
-it, and the refit of eta after the last iteration then moved those rows by
-several units (`validation/stata/cppmlhdfe.do`, low-mobility panels).
+`cppmlhdfe` projects through `partial_out_columns()` too (`ppml_partial()`).
+Its IRLS weights fall without bound for zero outcomes whose mean heads to
+zero, and an effect tied to the others only through such rows then has a pivot
+below rounding that a coefficient solve cannot place: that is what the weight
+span rule is for, and those iterations run on the rows. Three things in
+`cppmlhdfe` go with it (`validation/stata/cppmlhdfe.do`, low-mobility panels):
+
+- The refit of eta after the loop (`ppml_refit_fixed_effects()`) projects its
+  residual a second time when the weights span more than 1e4. One projection
+  is accurate relative to the whole column, which leaves a row a million
+  times lighter than the others wherever it was; an exact loop drives such
+  rows further out than the row iteration did, and the refit then threw them
+  back by several units.
+- A row `separation(mu)` flags gets weight zero for the rest of the pass, not
+  the 2^-46 marker of its mean: a positive weight that far below the others
+  makes the row iteration report a breakdown.
+- The separation checks keep the row iteration where its result depends on
+  it. Each first asks the coefficient solve whether there is anything to do,
+  on rows of positive weight where the projection is unique, and only then
+  runs the row iteration. The simplex check has a suspect only when a
+  regressor, on the rows with a positive outcome, comes near the span of the
+  effects and the regressors before it (`ppml_simplex_clear()`); the tableau
+  that follows reads residuals on the zero rows, which depend on the
+  solution the row iteration picks. The ReLU check ends at its first step
+  when every fitted value of the zero-outcome rows is inside the band that
+  counts as zero: `ppml_relu_screen()` takes that step from one solve of the
+  regressors and the indicator together and their weighted cross products,
+  and accepts it only with a margin (`PPML_RELU_SCREEN_MARGIN`); where the
+  cross products cannot tell which regressors count (collinear ones), the
+  same step is taken with the basis. Past that each step's residual comes
+  from `ppml_reference_partial()`: what the check concludes on
+  quasi-separated panels follows that iteration's inexactness on rows a
+  million times lighter (an exact solve flagged one more observation).
+  With few columns that routine runs its loops over the rows in parallel
+  instead of one column per thread, with the same sums in the same order.
+
+Before the loop, the sample is not copied when no row was dropped, each
+column's scale comes from sums over fixed blocks of rows
+(`ppml_column_scale()`), and the regressors projected for the collinearity
+check are kept for the first iteration, which has the same weights and then
+projects the working variable alone (`x_partialled_tol`).
+
+`cppmlhdfe, verbose` reports the plugin's time by step
+(`_cppmlhdfe_time_*`): load, remap, singletons, degrees of freedom, the two
+separation checks (with the ReLU check's steps), starting values, the IRLS
+loop split into working variable, projections, weighted least squares and
+update, the final solve, the covariance and the stored results.
 
 Both solvers are deterministic across thread counts: sums run over fixed
 blocks that are combined in a fixed order. The coefficient-space module keeps

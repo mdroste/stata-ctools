@@ -1,4 +1,5 @@
 #include "ctools_transport_internal.h"
+#include <math.h>
 
 stata_retcode ctools_io_store_status(int rc)
 {
@@ -750,6 +751,140 @@ stata_retcode ctools_store_filtered_rowpar(double *values, size_t n_filtered, in
         if (io_rc)
             ctools_io_record_io_error(&error, ctools_spi_status(io_rc, STATA_ERR_STATA_WRITE));
     }
+    return ctools_io_store_status(atomic_load(&error));
+}
+
+stata_retcode ctools_store_filtered_cols(const double *const *columns, const double *scale,
+                                         const double *fill, const int *var_idx, size_t ncols,
+                                         size_t n_filtered, const perm_idx_t *obs_map,
+                                         size_t fill_rows, int *unstorable)
+{
+    if (unstorable)
+        *unstorable = 0;
+    if (!ncols)
+        return STATA_OK;
+    if (!columns || !var_idx || (n_filtered && !obs_map))
+        return STATA_ERR_INVALID_INPUT;
+    for (size_t j = 0; j < ncols; j++)
+    {
+        stata_retcode rc = ctools_io_validate_variable(var_idx[j], 0);
+        if (rc)
+            return rc;
+    }
+    const size_t available = (size_t)SF_nobs();
+    if (fill_rows > available)
+        return STATA_ERR_INVALID_INPUT;
+    /* Strictly increasing destinations from 1 to the last observation (or to
+     * fill_rows) are distinct and in range: checked before any write, with
+     * an OR reduction the compiler can vectorize. */
+    if (n_filtered)
+    {
+        const size_t last = fill_rows ? fill_rows : available;
+        unsigned bad = (obs_map[0] < 1) | ((size_t)obs_map[n_filtered - 1] > last);
+        for (size_t i = 1; i < n_filtered; i++)
+            bad |= (obs_map[i] <= obs_map[i - 1]);
+        if (bad)
+            return STATA_ERR_INVALID_INPUT;
+    }
+    const size_t rows = fill_rows ? fill_rows : n_filtered;
+    if (!rows)
+        return STATA_OK;
+    const double missval = SV_missval;
+    ST_IIID store_fn = IO_VSTORE_FN;
+    int threads = 1;
+#ifdef _OPENMP
+    if (rows >= MIN_OBS_PER_THREAD * 2)
+        threads = ctools_get_max_threads();
+#endif
+    if (threads < 1)
+        threads = 1;
+    atomic_int error = 0;
+    int bad_value = 0;
+    /* Each worker owns a contiguous range of rows (filtered indices, or with
+     * fill_rows the observations themselves) and writes every column of a
+     * tile of rows before the next tile: each record is fetched once while
+     * all its outputs are written, not once per column. */
+#pragma omp parallel num_threads(threads) if (threads > 1) reduction(| : bad_value)
+    {
+        size_t team = 1, tid = 0;
+#ifdef _OPENMP
+        team = (size_t)omp_get_num_threads();
+        tid = (size_t)omp_get_thread_num();
+#endif
+        const size_t base = rows / team, extra = rows % team;
+        const size_t start = tid * base + (tid < extra ? tid : extra);
+        const size_t stop = start + base + (tid < extra);
+        size_t q = start;
+        if (fill_rows)
+        {
+            /* the first filtered row at or after observation start + 1 */
+            size_t lo = 0, hi = n_filtered;
+            while (lo < hi)
+            {
+                size_t mid = lo + (hi - lo) / 2;
+                if ((size_t)obs_map[mid] < start + 1)
+                    lo = mid + 1;
+                else
+                    hi = mid;
+            }
+            q = lo;
+        }
+        for (size_t tile = start; tile < stop && !atomic_load(&error); tile += IO_STORE_TILE_ROWS)
+        {
+            const size_t tile_end = stop - tile > IO_STORE_TILE_ROWS ? tile + IO_STORE_TILE_ROWS : stop;
+            size_t next = q;
+            for (size_t j = 0; j < ncols; j++)
+            {
+                const double *col = columns[j];
+                const double s = scale ? scale[j] : 1.0;
+                const double other = fill ? fill[j] : missval;
+                const int var = var_idx[j];
+                size_t p = q;
+                int io_rc = 0;
+                if (fill_rows)
+                {
+                    for (size_t o = tile + 1; o <= tile_end && !io_rc; o++)
+                    {
+                        double v = other;
+                        if (p < n_filtered && (size_t)obs_map[p] == o)
+                        {
+                            v = col ? col[p] * s : s;
+                            if (!(v < missval && v > -INFINITY))
+                            {
+                                bad_value = 1;
+                                v = missval;
+                            }
+                            p++;
+                        }
+                        io_rc = store_fn(var, (ST_int)o, v);
+                    }
+                }
+                else
+                {
+                    for (; p < tile_end && !io_rc; p++)
+                    {
+                        double v = col ? col[p] * s : s;
+                        if (!(v < missval && v > -INFINITY))
+                        {
+                            bad_value = 1;
+                            v = missval;
+                        }
+                        io_rc = store_fn(var, (ST_int)obs_map[p], v);
+                    }
+                }
+                if (io_rc)
+                {
+                    ctools_io_record_io_error(&error, ctools_spi_status(io_rc, STATA_ERR_STATA_WRITE));
+                    break;
+                }
+                next = p;
+            }
+            q = next;
+        }
+    }
+    ctools_memory_barrier();
+    if (unstorable)
+        *unstorable = bad_value;
     return ctools_io_store_status(atomic_load(&error));
 }
 

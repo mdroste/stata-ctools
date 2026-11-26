@@ -658,6 +658,49 @@ save `using_1'
 use `master', clear
 benchmark_merge 1:1 id using `using_1', sorted testname("sorted option")
 
+* sorted with bad input: merge's return code, whichever side is at fault.
+* cmerge finds these in the plugin's join rather than with isid.
+capture program drop _cmerge_sorted_rc
+program define _cmerge_sorted_rc
+    syntax anything, mkind(string) morder(string) ukind(string) uorder(string) testname(string)
+    tempfile m u
+    foreach side in m u {
+        clear
+        quietly set obs 60
+        gen long id = _n
+        if "``side'kind'" == "dups" quietly replace id = 5 in 6
+        gen double v`side' = _n / 7
+        if "``side'order'" == "sorted" sort id
+        else {
+            gen long back = -_n
+            sort back
+            drop back
+        }
+        quietly save ``side''
+    }
+    use `m', clear
+    capture merge `anything' id using `u', sorted
+    local native = _rc
+    use `m', clear
+    capture cmerge `anything' id using `u', sorted noreport
+    if _rc == `native' test_pass "`testname'"
+    else test_fail "`testname'" "cmerge r(`=_rc'), merge r(`native')"
+end
+foreach t in 1:1 m:1 1:m {
+    _cmerge_sorted_rc `t', mkind(dups) morder(sorted) ukind(unique) uorder(sorted) ///
+        testname("sorted `t': duplicate master keys")
+    _cmerge_sorted_rc `t', mkind(dups) morder(sorted) ukind(unique) uorder(unsorted) ///
+        testname("sorted `t': duplicate master keys, using not sorted")
+    _cmerge_sorted_rc `t', mkind(dups) morder(unsorted) ukind(unique) uorder(sorted) ///
+        testname("sorted `t': master not sorted and not unique")
+    _cmerge_sorted_rc `t', mkind(unique) morder(sorted) ukind(dups) uorder(sorted) ///
+        testname("sorted `t': duplicate using keys")
+    _cmerge_sorted_rc `t', mkind(unique) morder(sorted) ukind(dups) uorder(unsorted) ///
+        testname("sorted `t': using not sorted and not unique")
+    _cmerge_sorted_rc `t', mkind(unique) morder(unsorted) ukind(unique) uorder(sorted) ///
+        testname("sorted `t': master not sorted")
+}
+
 * SECTION 16: force option
 print_section "force Option"
 

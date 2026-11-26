@@ -359,7 +359,6 @@ program define _cio_import_load
         mata: _cio_label_stub(st_local("__label_stub"),st_local("__data_label"))
         quietly use `"`__label_stub'"', clear
     }
-    quietly set obs `=max(1,`nobs')'
     mata: __ctools_cio_sets = J(1,0,"")
     if `nvar' {
     if inlist("`kind'","xls","xlsx") {
@@ -418,6 +417,10 @@ program define _cio_import_load
         }
     }
     }
+    * The observations are added after the variables: a variable added to
+    * `nobs' observations is filled, and the dataset rewritten, once per
+    * variable; set obs fills them all in one pass.
+    quietly set obs `=max(1,`nobs')'
     if `nobs' {
     foreach hdridx of local external {
         forvalues i=1/`nobs' {

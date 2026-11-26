@@ -57,23 +57,34 @@ static void civ_cross(const ST_double *A, ST_int ka, const ST_double *B, ST_int 
 }
 
 /* Residuals of the ncol columns of A on the P columns of X by weighted least
-   squares (ivreg2's and ranktest's partialling), written to out */
-static ST_int civ_partial_cols(const ST_double *A, ST_int ncol, const ST_double *X, ST_int P,
-                               const ST_double *w, ST_int N, ST_double *out)
+   squares (ivreg2's and ranktest's partialling), written to out (which may
+   be A). XXpre (P x P) and XApre (P x ncol), when given, are X'WX and X'WA
+   already formed by the caller: the same sums civ_cross() would take, since
+   an element of ctools' cross products depends only on its two columns, the
+   weights and N (ctools_matrix.h), and the weighted ones weight the left
+   column as here. */
+static ST_int civ_partial_cols_pre(const ST_double *A, ST_int ncol, const ST_double *X, ST_int P,
+                                   const ST_double *w, ST_int N, ST_double *out,
+                                   const ST_double *XXpre, const ST_double *XApre)
 {
-    if (out != A) memcpy(out, A, (size_t)N * ncol * sizeof(ST_double));
-    if (P <= 0 || ncol <= 0) return 0;
+    if (P <= 0 || ncol <= 0) {
+        if (out != A && ncol > 0) memcpy(out, A, (size_t)N * ncol * sizeof(ST_double));
+        return 0;
+    }
     ST_double *XX = (ST_double *)calloc((size_t)P * P, sizeof(ST_double));
     ST_double *XA = (ST_double *)calloc((size_t)P * ncol, sizeof(ST_double));
     ST_int rc = (XX && XA) ? 0 : -1;
     if (!rc) {
-        civ_cross(X, P, A, ncol, w, N, XA);
-        civ_cross(X, P, X, P, w, N, XX);
+        if (XApre) memcpy(XA, XApre, (size_t)P * ncol * sizeof(ST_double));
+        else civ_cross(X, P, A, ncol, w, N, XA);
+        if (XXpre) memcpy(XX, XXpre, (size_t)P * P * sizeof(ST_double));
+        else civ_cross(X, P, X, P, w, N, XX);
         rc = civ_sym_solve(XX, P, XA, ncol, XA);
     }
     if (!rc) {
-        /* every element subtracts x[i,p] * b[p] over the regressors in order;
-           rows are independent, so blocks of rows run in parallel */
+        /* every element is a[i] less x[i,p] * b[p] over the regressors in
+           order; rows are independent, so blocks of rows run in parallel,
+           each copying its rows of A first (no separate pass for the copy) */
         const ST_int block = 2048;
         /* N + block - 1 would overflow int near INT_MAX rows */
         const ST_int num_blocks = N / block + (N % block != 0);
@@ -84,7 +95,9 @@ static ST_int civ_partial_cols(const ST_double *A, ST_int ncol, const ST_double 
             const ST_int i1 = (N - i0 < block) ? N : i0 + block;
             for (ST_int c = 0; c < ncol; c++) {
                 ST_double *o = out + (size_t)c * N;
+                const ST_double *a = A + (size_t)c * N;
                 const ST_double *b = XA + (size_t)c * P;
+                if (o != a) memcpy(o + i0, a + i0, (size_t)(i1 - i0) * sizeof(ST_double));
                 for (ST_int p = 0; p < P; p++) {
                     const ST_double *x = X + (size_t)p * N;
                     ST_double bp = b[p];
@@ -92,28 +105,100 @@ static ST_int civ_partial_cols(const ST_double *A, ST_int ncol, const ST_double 
                 }
             }
         }
+    } else if (out != A) {
+        memcpy(out, A, (size_t)N * ncol * sizeof(ST_double));
     }
     free(XX); free(XA);
     return rc;
 }
 
+static ST_int civ_partial_cols(const ST_double *A, ST_int ncol, const ST_double *X, ST_int P,
+                               const ST_double *w, ST_int N, ST_double *out)
+{
+    return civ_partial_cols_pre(A, ncol, X, P, w, N, out, NULL, NULL);
+}
+
+/* Sum of a[i] (squares: of (a[i] - c)^2) over fixed blocks of rows added in
+   block order: the same bits at any thread count; up to one block it is the
+   plain serial sum. Without memory for the block sums the same sums are
+   taken serially. */
+#define CIV_SUM_BLOCK 32768
+static ST_double civ_block_sum(const ST_double *a, ST_int N, int squares, ST_double c)
+{
+    const ST_int nb = N / CIV_SUM_BLOCK + (N % CIV_SUM_BLOCK != 0);
+    ST_double *part = nb > 1 ? (ST_double *)malloc((size_t)nb * sizeof(ST_double)) : NULL;
+    ST_double s = 0.0;
+    ST_int b;
+    #pragma omp parallel for schedule(static) if(part != NULL)
+    for (b = 0; b < (part ? nb : 0); b++) {
+        const ST_int i0 = b * CIV_SUM_BLOCK;
+        const ST_int i1 = (N - i0 < CIV_SUM_BLOCK) ? N : i0 + CIV_SUM_BLOCK;
+        ST_double t = 0.0;
+        if (squares) for (ST_int i = i0; i < i1; i++) { ST_double d = a[i] - c; t += d * d; }
+        else for (ST_int i = i0; i < i1; i++) t += a[i];
+        part[b] = t;
+    }
+    for (b = 0; b < nb; b++) {
+        ST_double t = 0.0;
+        if (part) t = part[b];
+        else {
+            const ST_int i0 = b * CIV_SUM_BLOCK;
+            const ST_int i1 = (N - i0 < CIV_SUM_BLOCK) ? N : i0 + CIV_SUM_BLOCK;
+            if (squares) for (ST_int i = i0; i < i1; i++) { ST_double d = a[i] - c; t += d * d; }
+            else for (ST_int i = i0; i < i1; i++) t += a[i];
+        }
+        s += t;
+    }
+    free(part);
+    return s;
+}
+
+/* Sum of w[i] * a[i] * b[i] (w or b NULL: 1), each term formed in that
+   order, over the same fixed blocks of rows as civ_block_sum() */
+ST_double civ_block_dot(const ST_double *a, const ST_double *b, const ST_double *w, ST_int N)
+{
+    const ST_int nb = N / CIV_SUM_BLOCK + (N % CIV_SUM_BLOCK != 0);
+    ST_double *part = nb > 1 ? (ST_double *)malloc((size_t)nb * sizeof(ST_double)) : NULL;
+    ST_double s = 0.0;
+    ST_int blk;
+    #pragma omp parallel for schedule(static) if(part != NULL)
+    for (blk = 0; blk < (part ? nb : 0); blk++) {
+        const ST_int i0 = blk * CIV_SUM_BLOCK;
+        const ST_int i1 = (N - i0 < CIV_SUM_BLOCK) ? N : i0 + CIV_SUM_BLOCK;
+        ST_double t = 0.0;
+        for (ST_int i = i0; i < i1; i++) t += (w ? w[i] : 1.0) * a[i] * (b ? b[i] : 1.0);
+        part[blk] = t;
+    }
+    for (blk = 0; blk < nb; blk++) {
+        ST_double t = 0.0;
+        if (part) t = part[blk];
+        else {
+            const ST_int i0 = blk * CIV_SUM_BLOCK;
+            const ST_int i1 = (N - i0 < CIV_SUM_BLOCK) ? N : i0 + CIV_SUM_BLOCK;
+            for (ST_int i = i0; i < i1; i++) t += (w ? w[i] : 1.0) * a[i] * (b ? b[i] : 1.0);
+        }
+        s += t;
+    }
+    free(part);
+    return s;
+}
+
 /* ranktest divides the partialled variables by their standard deviations
    (unweighted, n - 1; 1 when zero). The rank statistics do not depend on it,
    except through invsym's generalized inverse when their S is singular
-   (e.g. too few clusters), so it is replicated. */
+   (e.g. too few clusters), so it is replicated. The mean and the sum of
+   squares are fixed-block sums (civ_block_sum) over all threads. */
 static void civ_standardize_cols(ST_double *A, ST_int ncol, ST_int N)
 {
-    ST_int c;
-    #pragma omp parallel for schedule(static) if(ncol > 1 && (size_t)N * (size_t)ncol > 200000)
-    for (c = 0; c < ncol; c++) {
+    for (ST_int c = 0; c < ncol; c++) {
         ST_double *a = A + (size_t)c * N;
-        ST_double mean = 0.0, ss = 0.0;
-        for (ST_int i = 0; i < N; i++) mean += a[i];
-        mean /= (ST_double)N;
-        for (ST_int i = 0; i < N; i++) { ST_double d = a[i] - mean; ss += d * d; }
+        ST_double mean = civ_block_sum(a, N, 0, 0.0) / (ST_double)N;
+        ST_double ss = civ_block_sum(a, N, 1, mean);
         ST_double sd = (N > 1) ? sqrt(ss / (ST_double)(N - 1)) : 0.0;
         if (!(sd > 0.0)) sd = 1.0;
-        for (ST_int i = 0; i < N; i++) a[i] /= sd;
+        ST_int i;
+        #pragma omp parallel for schedule(static) if(N > 200000)
+        for (i = 0; i < N; i++) a[i] /= sd;
     }
 }
 
@@ -371,10 +456,13 @@ static ST_int civ_j_direct(const ST_double *e, const ST_double *Z, ST_int L,
     Returns 0 with the statistic in *stat, 920 when memory runs out, or -1
     when a factorization fails.
 */
+/* G, when given, is the (L + K) x (L + K) cross product of [Zx, Y] (W'd,
+   not divided by N), the same sums as the three civ_cross() below */
 static ST_int civ_kp_rk(const ST_double *Y, ST_int K, const ST_double *Zx, ST_int L,
                         const ST_double *w, ST_int N, const civ_omega *om,
-                        ST_int wald, ST_double *stat)
+                        ST_int wald, const ST_double *G, ST_double *stat)
 {
+    const size_t DG = (size_t)L + (size_t)K;
     ST_double NN = om->N_eff;
     ST_int D = K * L, m = L - K + 1, rc = 0;
     if (K <= 0 || L < K) return -1;
@@ -408,25 +496,45 @@ static ST_int civ_kp_rk(const ST_double *Y, ST_int K, const ST_double *Zx, ST_in
         !Uq || !evu || !Mv || !Vq || !evv || !u22 || !uu || !u22h || !aq || !Qm || !vlab ||
         !lab || (wald && !vhat)) rc = 920;
 
-    if (!rc) {
+    if (!rc && G) {
+        for (ST_int c = 0; c < K; c++)
+            for (ST_int r = 0; r < K; r++)
+                Qyy[(size_t)c * K + r] = G[(L + (size_t)c) * DG + L + r];
+        for (ST_int c = 0; c < L; c++)
+            for (ST_int r = 0; r < L; r++) Qzz[(size_t)c * L + r] = G[(size_t)c * DG + r];
+        for (ST_int c = 0; c < K; c++)
+            for (ST_int r = 0; r < L; r++) Pi[(size_t)c * L + r] = G[(L + (size_t)c) * DG + r];
+    } else if (!rc) {
         civ_cross(Y, K, Y, K, w, N, Qyy);
         civ_cross(Zx, L, Zx, L, w, N, Qzz);
         civ_cross(Zx, L, Y, K, w, N, Pi);
+    }
+    if (!rc) {
         for (ST_int i = 0; i < K * K; i++) Qyy[i] /= NN;
         for (ST_int i = 0; i < L * L; i++) Qzz[i] /= NN;
         for (ST_int i = 0; i < L * K; i++) Pi[i] /= NN;
         rc = civ_sym_solve(Qzz, L, Pi, K, Pi) ? 920 : 0;   /* fails only when memory runs out */
     }
     if (!rc && wald) {
-        /* reduced-form residuals */
-        memcpy(vhat, Y, (size_t)N * K * sizeof(ST_double));
-        for (ST_int k = 0; k < K; k++)
-            for (ST_int l = 0; l < L; l++) {
-                ST_double p = Pi[(size_t)k * L + l];
-                const ST_double *z = Zx + (size_t)l * N;
+        /* reduced-form residuals: each element is y less z * p over the
+           instruments in order, blocks of rows in parallel */
+        const ST_int block = 2048;
+        const ST_int num_blocks = N / block + (N % block != 0);
+        ST_int blk;
+        #pragma omp parallel for schedule(static) if((size_t)N * (size_t)K * (size_t)L > 200000)
+        for (blk = 0; blk < num_blocks; blk++) {
+            const ST_int i0 = blk * block;
+            const ST_int i1 = (N - i0 < block) ? N : i0 + block;
+            for (ST_int k = 0; k < K; k++) {
                 ST_double *v = vhat + (size_t)k * N;
-                for (ST_int i = 0; i < N; i++) v[i] -= z[i] * p;
+                memcpy(v + i0, Y + (size_t)k * N + i0, (size_t)(i1 - i0) * sizeof(ST_double));
+                for (ST_int l = 0; l < L; l++) {
+                    ST_double p = Pi[(size_t)k * L + l];
+                    const ST_double *z = Zx + (size_t)l * N;
+                    for (ST_int i = i0; i < i1; i++) v[i] -= z[i] * p;
+                }
             }
+        }
     }
     if (!rc) rc = civ_omega_build(om, wald ? vhat : Y, K, Zx, L, S);   /* 0 or 920 */
     if (!rc && K == 1) {
@@ -435,7 +543,8 @@ static ST_int civ_kp_rk(const ST_double *Y, ST_int K, const ST_double *Zx, ST_in
            (algebraically the statistic below; it differs only when shat0
            is singular, e.g. with too few clusters, where both use invsym) */
         ST_double *g = lab, *sg = lab + m;   /* m = L when K = 1 */
-        civ_cross(Zx, L, Y, 1, w, N, g);
+        if (G) for (ST_int l = 0; l < L; l++) g[l] = G[(size_t)L * DG + l];
+        else civ_cross(Zx, L, Y, 1, w, N, g);
         for (ST_int l = 0; l < L; l++) g[l] /= NN;
         for (size_t i = 0; i < (size_t)D * D; i++) S[i] /= NN;
         rc = civ_sym_solve(S, L, g, 1, sg) ? 920 : 0;
@@ -579,6 +688,8 @@ ST_retcode civreghdfe_compute_underid_test(
     const civ_omega *rk_om,
     ST_int rk_cluster,
     ST_int rk_nclust,
+    const ST_double *ZtZ_fit,
+    const ST_double *ZtX_fit,
     ST_double *underid_stat,
     ST_int *underid_df,
     ST_double *cd_f,
@@ -587,6 +698,7 @@ ST_retcode civreghdfe_compute_underid_test(
 {
     ST_int L = K_iv - K_exog;  /* Number of excluded instruments */
     const ST_double *w = (weights && weight_type != 0) ? weights : NULL;
+    const ST_int D = L + K_endog;
 
     *underid_stat = 0.0;
     *underid_df = L - K_endog + 1;
@@ -604,23 +716,61 @@ ST_retcode civreghdfe_compute_underid_test(
     const ST_double lm_scale = (N_eff - dofminus) / N_eff;
 
     /* ranktest partials the included exogenous regressors out of the
-       endogenous regressors and the excluded instruments */
-    ST_double *Y = (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)K_endog, sizeof(ST_double));
-    ST_double *Zx = (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)L, sizeof(ST_double));
-    if (!Y || !Zx ||
-        civ_partial_cols(X_endog, K_endog, Z, K_exog, w, N, Y) != 0 ||
-        civ_partial_cols(Z + (size_t)K_exog * N, L, Z, K_exog, w, N, Zx) != 0) {
+       endogenous regressors and the excluded instruments. [Zx, Y] are kept
+       in one block so that all their cross products take one pass. The
+       fit's Z'WZ and Z'WX (ZtZ_fit, K_iv x K_iv; ZtX_fit, K_iv x (K_exog +
+       K_endog), columns [X_exog, X_endog]; Z = [Z_exog, Z_excl]) hold the
+       partialling's cross products, the same sums, so they are not taken
+       again. */
+    ST_double *ZY = (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)D, sizeof(ST_double));
+    ST_double *Zx = ZY, *Y = ZY ? ZY + (size_t)L * N : NULL;
+    ST_double *XXe = NULL, *XAy = NULL, *XAz = NULL;
+    if (ZtZ_fit && ZtX_fit && K_exog > 0) {
+        XXe = (ST_double *)malloc((size_t)K_exog * K_exog * sizeof(ST_double));
+        XAy = (ST_double *)malloc((size_t)K_exog * K_endog * sizeof(ST_double));
+        XAz = (ST_double *)malloc((size_t)K_exog * L * sizeof(ST_double));
+        if (XXe && XAy && XAz) {
+            for (ST_int c = 0; c < K_exog; c++)
+                for (ST_int r = 0; r < K_exog; r++)
+                    XXe[(size_t)c * K_exog + r] = ZtZ_fit[(size_t)c * K_iv + r];
+            for (ST_int e = 0; e < K_endog; e++)
+                for (ST_int r = 0; r < K_exog; r++)
+                    XAy[(size_t)e * K_exog + r] = ZtX_fit[(size_t)(K_exog + e) * K_iv + r];
+            for (ST_int l = 0; l < L; l++)
+                for (ST_int r = 0; r < K_exog; r++)
+                    XAz[(size_t)l * K_exog + r] = ZtZ_fit[(size_t)(K_exog + l) * K_iv + r];
+        } else {
+            /* no copies: the partialling takes its own cross products */
+            free(XXe); free(XAy); free(XAz);
+            XXe = XAy = XAz = NULL;
+        }
+    }
+    if (!ZY ||
+        civ_partial_cols_pre(X_endog, K_endog, Z, K_exog, w, N, Y, XXe, XAy) != 0 ||
+        civ_partial_cols_pre(Z + (size_t)K_exog * N, L, Z, K_exog, w, N, Zx, XXe, XAz) != 0) {
         /* civ_partial_cols fails only when memory runs out; the statistics
            are missing, never 0 (p = 1) */
-        free(Y); free(Zx);
+        free(ZY); free(XXe); free(XAy); free(XAz);
         *underid_stat = SV_missval;
         *cd_f = SV_missval;
         *kp_f = SV_missval;
         return 920;
     }
+    free(XXe); free(XAy); free(XAz);
     ST_retcode trc = 0;
     civ_standardize_cols(Y, K_endog, N);
     civ_standardize_cols(Zx, L, N);
+    /* [Zx, Y]'W[Zx, Y]: Qzz, Qzy and Qyy below, and the Kleibergen-Paap
+       statistics' cross products */
+    ST_double *Gzy = (ST_double *)calloc((size_t)D * D, sizeof(ST_double));
+    if (!Gzy) {
+        free(ZY);
+        *underid_stat = SV_missval;
+        *cd_f = SV_missval;
+        *kp_f = SV_missval;
+        return 920;
+    }
+    civ_cross(ZY, D, ZY, D, w, N, Gzy);
 
     {
         /* Squared canonical correlations = eigenvalues of Qyy^-1/2 Qzy'
@@ -639,9 +789,13 @@ ST_retcode civreghdfe_compute_underid_test(
         ST_int ok = (Qyy && Qzz && Qzy && P && M && ev);
         if (!ok) trc = 920;
         if (ok) {
-            civ_cross(Y, K_endog, Y, K_endog, w, N, Qyy);
-            civ_cross(Zx, L, Zx, L, w, N, Qzz);
-            civ_cross(Zx, L, Y, K_endog, w, N, Qzy);
+            for (ST_int c = 0; c < K_endog; c++)
+                for (ST_int r = 0; r < K_endog; r++)
+                    Qyy[(size_t)c * K_endog + r] = Gzy[(size_t)(L + c) * D + L + r];
+            for (ST_int c = 0; c < L; c++)
+                for (ST_int r = 0; r < L; r++) Qzz[(size_t)c * L + r] = Gzy[(size_t)c * D + r];
+            for (ST_int c = 0; c < K_endog; c++)
+                for (ST_int r = 0; r < L; r++) Qzy[(size_t)c * L + r] = Gzy[(size_t)(L + c) * D + r];
             memcpy(P, Qzy, (size_t)L * K_endog * sizeof(ST_double));
             ok = (civ_sym_solve(Qzz, L, P, K_endog, P) == 0);
             if (!ok) trc = 920;   /* civ_sym_solve fails only when memory runs out */
@@ -694,7 +848,7 @@ ST_retcode civreghdfe_compute_underid_test(
         free(Qyy); free(Qzz); free(Qzy); free(P); free(M); free(ev);
     }
     if (trc) {
-        free(Y); free(Zx);
+        free(ZY); free(Gzy);
         *kp_f = SV_missval;
         return trc;
     }
@@ -709,10 +863,10 @@ ST_retcode civreghdfe_compute_underid_test(
            two-way, HAC/AC/Driscoll-Kraay with the Bartlett kernel): LM for
            idstat, Wald for widstat, converted as ivreghdfe does */
         ST_double lm = 0.0, wald = 0.0;
-        ST_int lm_rc = civ_kp_rk(Y, K_endog, Zx, L, w, N, rk_om, 0, &lm);
+        ST_int lm_rc = civ_kp_rk(Y, K_endog, Zx, L, w, N, rk_om, 0, Gzy, &lm);
         /* never the iid Anderson LM under the Kleibergen-Paap label */
         *underid_stat = (lm_rc == 0) ? (rk_cluster ? lm : lm * lm_scale) : SV_missval;
-        ST_int wald_rc = civ_kp_rk(Y, K_endog, Zx, L, w, N, rk_om, 1, &wald);
+        ST_int wald_rc = civ_kp_rk(Y, K_endog, Zx, L, w, N, rk_om, 1, Gzy, &wald);
         if (lm_rc == 920 || wald_rc == 920) trc = 920;
         *kp_f = SV_missval;   /* overwritten on success */
         if (wald_rc == 0) {
@@ -725,7 +879,7 @@ ST_retcode civreghdfe_compute_underid_test(
             }
         }
     }
-    free(Y); free(Zx);
+    free(ZY); free(Gzy);
     return trc;
 }
 
@@ -802,51 +956,54 @@ ST_retcode civreghdfe_compute_dwh_test(
     *endog_chi2 = SV_missval;
     *endog_f = SV_missval;
 
-    /* Compute first-stage residuals: v = X_endog - Z * pi */
-    ST_double *v_resid = (ST_double *)calloc((size_t)N * K_endog, sizeof(ST_double));
-    if (!v_resid) return 920;
-
-    for (ST_int e = 0; e < K_endog; e++) {
-        const ST_double *x_endog_col = X_endog + (size_t)e * N;
-        ST_double *v_col = v_resid + (size_t)e * N;
-        const ST_double *pi_col = temp1 + (K_exog + e) * K_iv;
-
-        /* fitted value accumulated over the instruments in order */
-        ctools_matmul_xb(Z, N, K_iv, pi_col, 1, v_col);
-        for (i = 0; i < N; i++) v_col[i] = x_endog_col[i] - v_col[i];
-    }
-
-    /* Build augmented design matrix: [X_exog, X_endog, v] */
+    /* Augmented design matrix [X_exog, X_endog, v] with the first-stage
+       residuals v = X_endog - Z * pi written in place; v_resid is the
+       N-row buffer of the fitted values below */
     ST_int K_aug = K_total + K_endog;
-    ST_double *X_aug = (ST_double *)calloc((size_t)N * K_aug, sizeof(ST_double));
+    ST_double *v_resid = (ST_double *)malloc((size_t)N * sizeof(ST_double));
+    ST_double *X_aug = (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)K_aug, sizeof(ST_double));
     ST_double *XaXa = (ST_double *)calloc(K_aug * K_aug, sizeof(ST_double));
     ST_double *Xay = (ST_double *)calloc(K_aug, sizeof(ST_double));
 
-    if (!X_aug || !XaXa || !Xay) {
+    if (!v_resid || !X_aug || !XaXa || !Xay) {
         free(v_resid);
         free(X_aug); free(XaXa); free(Xay);
         return 920;
     }
 
-    /* Copy X_exog, X_endog, v_resid */
-    if (X_exog && K_exog > 0) memcpy(X_aug, X_exog, (size_t)N * K_exog * sizeof(ST_double));
+    if (K_exog > 0) {
+        if (X_exog) memcpy(X_aug, X_exog, (size_t)N * K_exog * sizeof(ST_double));
+        else memset(X_aug, 0, (size_t)N * K_exog * sizeof(ST_double));
+    }
     if (X_endog) memcpy(X_aug + (size_t)K_exog * N, X_endog, (size_t)N * K_endog * sizeof(ST_double));
-    memcpy(X_aug + (size_t)K_total * N, v_resid, (size_t)N * K_endog * sizeof(ST_double));
+    else memset(X_aug + (size_t)K_exog * N, 0, (size_t)N * K_endog * sizeof(ST_double));
+    for (ST_int e = 0; e < K_endog; e++) {
+        const ST_double *x_endog_col = X_aug + (size_t)(K_exog + e) * N;
+        ST_double *v_col = X_aug + (size_t)(K_total + e) * N;
+        const ST_double *pi_col = temp1 + (K_exog + e) * K_iv;
+
+        /* fitted value accumulated over the instruments in order */
+        ctools_matmul_xb(Z, N, K_iv, pi_col, 1, v_col);
+        #pragma omp parallel for schedule(static) if(N > 200000)
+        for (i = 0; i < N; i++) v_col[i] = x_endog_col[i] - v_col[i];
+    }
 
     /* Compute X_aug'W X_aug */
     const ST_double *w = (weights && weight_type != 0) ? weights : NULL;
     if (w) {
-        ST_double *WX_aug = (ST_double *)malloc((size_t)N * K_aug * sizeof(ST_double));
-        if (!WX_aug) {
+        /* Element (i, j) sums X_aug[,i] * (w * X_aug[,j]): the transpose of
+         * the full weighted product, which weights its left column */
+        ST_double *T = (ST_double *)malloc((size_t)K_aug * K_aug * sizeof(ST_double));
+        if (!T) {
             free(v_resid);
             free(X_aug); free(XaXa); free(Xay);
             return 920;
         }
+        ctools_matmul_atdb_full(X_aug, X_aug, w, N, K_aug, K_aug, T);
         for (j = 0; j < K_aug; j++)
-            for (i = 0; i < N; i++)
-                WX_aug[(size_t)j * N + i] = w[i] * X_aug[(size_t)j * N + i];
-        ctools_matmul_atb(X_aug, WX_aug, N, K_aug, K_aug, XaXa);
-        free(WX_aug);
+            for (i = 0; i < K_aug; i++)
+                XaXa[(size_t)j * K_aug + i] = T[(size_t)i * K_aug + j];
+        free(T);
     }
     else ctools_matmul_ata(X_aug, N, K_aug, XaXa);
 
@@ -881,16 +1038,17 @@ ST_retcode civreghdfe_compute_dwh_test(
                 beta_aug[i] = sum;
             }
 
-            /* Compute residuals and sigma^2 */
-            /* v_resid has been copied into X_aug and is reused for the
-               fitted values, accumulated over the columns in order */
-            ST_double sse_aug = 0.0;
+            /* Compute residuals and sigma^2: the fitted values accumulated
+               over the columns in order, then the weighted squares of the
+               residuals summed over fixed blocks of rows (civ_block_sum) */
             memset(v_resid, 0, (size_t)N * sizeof(ST_double));
             ctools_matvec_add(X_aug, N, K_aug, beta_aug, v_resid);
+            #pragma omp parallel for schedule(static) if(N > 200000)
             for (i = 0; i < N; i++) {
                 ST_double r = y[i] - v_resid[i];
-                sse_aug += (w ? w[i] : 1.0) * r * r;
+                v_resid[i] = (w ? w[i] : 1.0) * r * r;
             }
+            ST_double sse_aug = civ_block_sum(v_resid, N, 0, 0.0);
 
             ST_double df_aug = N_eff - K_aug - df_a;
             if (df_aug <= 0) df_aug = 1;

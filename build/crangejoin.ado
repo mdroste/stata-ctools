@@ -1,5 +1,7 @@
 *! version 1.3.1 20261124 github.com/mdroste/stata-ctools
 *! C-accelerated interval joins (ctools)
+*! original: rangejoin 1.1.3 (April 13, 2021) by Robert Picard
+*! original: see help crangejoin for details
 program define crangejoin
     version 14.1
     syntax anything(name=interval) using/, [BY(varlist) Keepusing(string) ///
@@ -96,24 +98,30 @@ program define _crangejoin_impl
     if "`prefix'`suffix'" == "" local suffix _U
     unab mastervars : *
     local nmaster : word count `mastervars'
+    * Each bound is a variable, or a number added to the key. A missing low
+    * bound is the lowest double, a missing high bound stays missing (the
+    * highest), and an observation with a missing key gets the empty
+    * interval [1, 0]. One pass builds each bound.
     tempvar lo hi
     foreach side in low high {
-        local dest `lo'
-        if "`side'" == "high" local dest `hi'
         capture confirm numeric variable ``side''
-        if !_rc quietly gen double `dest' = cond(missing(``side''), ., ``side'')
+        if !_rc local `side'val ``side''
         else {
             capture confirm number ``side''
             if _rc & "``side''" != "." exit 198
-            if `haskey' quietly gen double `dest' = `key' + ``side''
-            else quietly gen double `dest' = ``side''
+            if `haskey' local `side'val (`key' + ``side'')
+            else local `side'val (``side'')
         }
     }
-    quietly replace `lo' = c(mindouble) if missing(`lo')
+    * (missing() may not be nested: each value is tested once)
+    local lowexp cond(missing(`lowval'), c(mindouble), `lowval')
+    local highexp cond(missing(`highval'), ., `highval')
     if `haskey' {
-        quietly replace `lo' = 1 if missing(`key')
-        quietly replace `hi' = 0 if missing(`key')
+        local lowexp cond(missing(`key'), 1, `lowexp')
+        local highexp cond(missing(`key'), 0, `highexp')
     }
+    quietly gen double `lo' = `lowexp'
+    quietly gen double `hi' = `highexp'
     quietly count if `lo' <= `hi'
     if !r(N) {
         di as error "no observation with valid interval bounds to use"
@@ -259,8 +267,10 @@ program define _crangejoin_using
     _ctools_strw `by' `uplug'
     plugin call ctools_plugin `by' `uplug', ///
         "crangejoin `threadopt' using `nby' `keypos' `timing'"
+    * Only the schema of the using data is saved: drop the observations
+    * before the variables, by range and not by expression
+    if _N quietly drop in 1/l
     keep `renamed' `: list uplug - renamed'
-    quietly keep if 0
     quietly save `"`schema'"'
     c_local renamed `renamed'
     c_local ustrl `ustrl'

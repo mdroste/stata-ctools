@@ -363,10 +363,11 @@ static stata_retcode csort_compute_order(stata_data *data, int *sort_vars, size_
 }
 
 /*
-    Sort through row-major staging: read every observation once, sort copies
-    of the key columns, then write every observation once in sorted order.
-    sort_vars holds one-based plugin variable indices and widths is indexed by
-    plugin variable index minus one.
+    Sort through row-major staging. The key columns are loaded and sorted
+    first, so data already in key order are found without staging anything
+    else. Only when rows move is every observation read once into staged rows
+    and written once in sorted order. sort_vars holds one-based plugin
+    variable indices and widths is indexed by plugin variable index minus one.
 
     *modified is set once Stata may have been written. A failure before that
     (a variable that cannot be staged, or no memory for the staged rows) leaves
@@ -377,52 +378,63 @@ static stata_retcode csort_rowstaged(const int *widths, const int *sort_vars, si
                                      size_t nvars, stata_timer *timer, int *modified)
 {
     ctools_rowstage staged;
-    stata_data keys;
+    ctools_filtered_data keys;
     stata_retcode rc = STATA_OK;
     int identity = 0;
     int *all_vars = (int *)ctools_safe_malloc2(nvars, sizeof(int));
     int *key_vars = (int *)ctools_safe_malloc2(nsort, sizeof(int));
+    int *key_idx = (int *)ctools_safe_malloc2(nsort, sizeof(int));
 
     *modified = 0;
     ctools_rowstage_init(&staged);
-    stata_data_init(&keys);
-    if (!all_vars || !key_vars) rc = STATA_ERR_MEMORY;
+    ctools_filtered_data_init(&keys);
+    if (!all_vars || !key_vars || !key_idx) rc = STATA_ERR_MEMORY;
 
     if (rc == STATA_OK) {
         for (size_t j = 0; j < nvars; j++) all_vars[j] = (int)j + 1;
-        timer->load_time = ctools_timer_seconds();
-        rc = ctools_rowstage_load(&staged, all_vars, nvars, widths, obs1, nobs);
+        for (size_t k = 0; k < nsort; k++) {
+            key_vars[k] = (int)k + 1;
+            key_idx[k] = sort_vars[k];
+        }
+        /* Settle the transport before reading anything */
+        if (!ctools_rowstage_supported(all_vars, nvars, widths, nobs)) rc = STATA_ERR_UNSUPPORTED_TYPE;
     }
 
-    /* Keys are sorted as contiguous columns, exactly as the loader lays them out. */
+    /* The keys alone, as contiguous columns */
+    timer->load_time = ctools_timer_seconds();
     if (rc == STATA_OK) {
-        keys.vars = (stata_variable *)ctools_safe_cacheline_alloc2(nsort, sizeof(stata_variable));
-        keys.sort_order = (perm_idx_t *)ctools_safe_cacheline_alloc2(nobs, sizeof(perm_idx_t));
-        if (!keys.vars || !keys.sort_order) {
+        rc = ctools_data_load(&keys, key_idx, nsort, obs1, obs1 + nobs - 1,
+                              CTOOLS_LOAD_SKIP_IF | CTOOLS_LOAD_ROW_TILES);
+        if (rc == STATA_OK && (!keys.data.vars || keys.data.nobs != nobs || !keys.data.sort_order))
             rc = STATA_ERR_MEMORY;
-        } else {
-            memset(keys.vars, 0, nsort * sizeof(stata_variable));
-            keys.nvars = nsort;
-            keys.nobs = nobs;
-            for (size_t i = 0; i < nobs; i++) keys.sort_order[i] = (perm_idx_t)i;
-            for (size_t k = 0; k < nsort && rc == STATA_OK; k++) {
-                key_vars[k] = (int)k + 1;
-                rc = ctools_rowstage_column(&staged, (size_t)sort_vars[k] - 1, &keys.vars[k]);
-            }
+        /* A str# variable holds nothing longer than its declared width; the
+         * loader may report the 2045-byte maximum, and the sort dispatcher
+         * chooses its engine by this length. The keys are only read. */
+        for (size_t k = 0; rc == STATA_OK && widths && k < nsort; k++) {
+            stata_variable *v = &keys.data.vars[k];
+            int w = widths[sort_vars[k] - 1];
+            if (v->type == STATA_TYPE_STRING && w > 0 && (size_t)w < v->str_maxlen)
+                v->str_maxlen = (size_t)w;
         }
     }
     timer->load_time = ctools_timer_seconds() - timer->load_time;
 
     if (rc == STATA_OK) {
         timer->sort_time = ctools_timer_seconds();
-        rc = csort_compute_order(&keys, key_vars, nsort, algorithm, &identity);
+        rc = csort_compute_order(&keys.data, key_vars, nsort, algorithm, &identity);
         timer->sort_time = ctools_timer_seconds() - timer->sort_time;
+    }
+
+    if (rc == STATA_OK && !identity) {
+        double t_stage = ctools_timer_seconds();
+        rc = ctools_rowstage_load(&staged, all_vars, nvars, widths, obs1, nobs);
+        timer->load_time += ctools_timer_seconds() - t_stage;
     }
 
     if (rc == STATA_OK && !identity) {
         timer->store_time = ctools_timer_seconds();
         *modified = 1;
-        rc = ctools_rowstage_store(&staged, keys.sort_order, nobs, obs1);
+        rc = ctools_rowstage_store(&staged, keys.data.sort_order, nobs, obs1);
         if (rc != STATA_OK) {
             /* The original rows are still staged. An identity store allocates
              * no gather buffers, so it can undo a partial publication even
@@ -434,8 +446,15 @@ static stata_retcode csort_rowstaged(const int *widths, const int *sort_vars, si
         timer->store_time = ctools_timer_seconds() - timer->store_time;
     }
 
-    stata_data_free(&keys);
-    ctools_rowstage_free(&staged);
+    /* After a failure the caller may still load the columns: free now */
+    if (rc == STATA_OK) {
+        ctools_filtered_data_release(&keys);
+        ctools_rowstage_release(&staged);
+    } else {
+        ctools_filtered_data_free(&keys);
+        ctools_rowstage_free(&staged);
+    }
+    free(key_idx);
     free(key_vars);
     free(all_vars);
     return rc;
@@ -706,7 +725,7 @@ ST_retcode csort_main(const char *args)
 
     /* Clean up C memory (this can be slow for large datasets!) */
     double t_cleanup = ctools_timer_seconds();
-    ctools_filtered_data_free(&filtered);
+    ctools_filtered_data_release(&filtered);
     free(sort_vars);
     t_cleanup = ctools_timer_seconds() - t_cleanup;
 

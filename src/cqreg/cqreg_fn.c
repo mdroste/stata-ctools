@@ -1071,6 +1071,367 @@ done:
  * Returns:
  *   Number of iterations on success, negative on error
  * ============================================================================ */
+/* ============================================================================
+ * Fused iteration passes (builds without the NEON kernels and Accelerate)
+ *
+ * One predictor-corrector iteration written loop by loop reads or writes an
+ * N-vector about 150 times when K = 4, and on a desktop the solver then runs
+ * at the speed of memory, not of the processor. The passes below do the same
+ * arithmetic in six sweeps over the rows: everything between two points where
+ * the iteration needs a whole-sample result (the normal equations, a step
+ * length, the centering sum) is computed for a block of rows while that block
+ * is in cache. Values that only carry one loop's result to the next (r, ds,
+ * q*r, X*dy, dx*dz, ds*dw, 1/x, 1/s, xi) are recomputed per block from the
+ * arrays the pass reads anyway, with the same operations in the same order,
+ * and are never stored.
+ *
+ * The rows are split into chunks that depend only on N and K, never on the
+ * number of threads. A chunk adds up its rows in order starting from zero and
+ * the chunk sums are then added in chunk order, so the result is the same for
+ * any thread count. With one chunk every sum is formed exactly as the loops
+ * the passes replace form it.
+ * ============================================================================ */
+
+#if !CQREG_USE_NEON
+#define CQREG_FUSED 1
+#else
+#define CQREG_FUSED 0
+#endif
+
+#if CQREG_FUSED
+
+#define FUSE_BLOCK_MAX 1024     /* rows per cache block; a multiple of 4 */
+#define FUSE_CHUNK_MIN 8192     /* fewer rows than this are one chunk */
+#define FUSE_CHUNKS_MAX 256
+
+typedef struct {
+    ST_int N, K;
+    ST_int block;               /* rows per cache block (multiple of 4) */
+    ST_int chunk;               /* rows per chunk (multiple of 4) */
+    ST_int nchunks;
+    ST_int nacc;                /* sums a chunk keeps: K(K+1)/2 + K */
+    ST_double *partial;         /* nchunks * nacc chunk sums */
+    ST_double *total;           /* nacc sums over all chunks */
+} fuse_plan;
+
+/* Returns 0, or -1 when the chunk sums cannot be allocated. */
+static int fuse_plan_init(fuse_plan *fp, ST_int N, ST_int K)
+{
+    fp->N = N;
+    fp->K = K;
+    fp->nacc = K * (K + 1) / 2 + K;
+    if (fp->nacc < 2) fp->nacc = 2;
+    /* Keep the K columns of a block within about 256 KB */
+    ST_int block = 32768 / (K > 0 ? K : 1);
+    if (block > FUSE_BLOCK_MAX) block = FUSE_BLOCK_MAX;
+    if (block < 64) block = 64;
+    fp->block = block & ~(ST_int)3;
+    ST_int chunk = (N + FUSE_CHUNKS_MAX - 1) / FUSE_CHUNKS_MAX;
+    if (chunk < FUSE_CHUNK_MIN) chunk = FUSE_CHUNK_MIN;
+#ifdef CQREG_FUSE_ONE_CHUNK
+    chunk = N > 4 ? N : 4;      /* test builds: every sum in row order */
+#endif
+    chunk = (chunk + 3) & ~(ST_int)3;
+    /* At most 64 MB of chunk sums when K is large */
+    while ((size_t)((N + chunk - 1) / chunk) * (size_t)fp->nacc > ((size_t)8 << 20) &&
+           chunk < N) {
+        chunk *= 2;
+    }
+    fp->chunk = chunk;
+    fp->nchunks = N > 0 ? (N + chunk - 1) / chunk : 1;
+    fp->partial = (ST_double *)malloc(((size_t)fp->nchunks + 1) * (size_t)fp->nacc * sizeof(ST_double));
+    fp->total = fp->partial ? fp->partial + (size_t)fp->nchunks * fp->nacc : NULL;
+    return fp->partial ? 0 : -1;
+}
+
+/* out[a] = sum over the chunks, in chunk order, of sum a */
+static void fuse_combine(const fuse_plan *fp, ST_int count, ST_double *out)
+{
+    for (ST_int a = 0; a < count; a++) {
+        ST_double sum = fp->partial[a];
+        for (ST_int c = 1; c < fp->nchunks; c++) sum += fp->partial[(size_t)c * fp->nacc + a];
+        out[a] = sum;
+    }
+}
+
+/* out = X * dy over the rows [b, b + n), added column by column as dgemv adds them */
+static inline void fuse_xdy(ST_double *CQREG_RESTRICT out, const ST_double *X, ST_int N,
+                            ST_int K, const ST_double *dy, ST_int b, ST_int n)
+{
+    for (ST_int i = 0; i < n; i++) out[i] = 0.0;
+    for (ST_int j = 0; j < K; j++) {
+        const ST_double a = dy[j];
+        const ST_double *CQREG_RESTRICT Xj = X + (size_t)j * N + b;
+        for (ST_int i = 0; i < n; i++) out[i] += a * Xj[i];
+    }
+}
+
+/* sum_j += X_j . v over the rows [b, b + n), one row at a time as dgemv does */
+static inline void fuse_xtv(ST_double *sums, const ST_double *X, ST_int N, ST_int K,
+                            const ST_double *CQREG_RESTRICT v, ST_int b, ST_int n)
+{
+    for (ST_int j = 0; j < K; j++) {
+        const ST_double *CQREG_RESTRICT Xj = X + (size_t)j * N + b;
+        ST_double sum = sums[j];
+        for (ST_int i = 0; i < n; i++) sum += Xj[i] * v[i];
+        sums[j] = sum;
+    }
+}
+
+/* Step-length bounds of rows [0, n): the largest step keeping x, s, z, w positive */
+static inline void fuse_bounds(ST_double *fp_min, ST_double *fd_min, ST_int n,
+                               const ST_double *CQREG_RESTRICT x, const ST_double *CQREG_RESTRICT s,
+                               const ST_double *CQREG_RESTRICT z, const ST_double *CQREG_RESTRICT w,
+                               const ST_double *CQREG_RESTRICT dx, const ST_double *CQREG_RESTRICT dz,
+                               const ST_double *CQREG_RESTRICT dw)
+{
+    ST_double fpm = *fp_min, fdm = *fd_min;
+    for (ST_int i = 0; i < n; i++) {
+        const ST_double dx_i = dx[i];
+        const ST_double bx = (dx_i < 0.0) ? -x[i] / dx_i : 1e20;
+        const ST_double bs = (dx_i > 0.0) ? s[i] / dx_i : 1e20;
+        const ST_double bp = (bx < bs) ? bx : bs;
+        const ST_double bz = (dz[i] < 0.0) ? -z[i] / dz[i] : 1e20;
+        const ST_double bw = (dw[i] < 0.0) ? -w[i] / dw[i] : 1e20;
+        const ST_double bd = (bz < bw) ? bz : bw;
+        if (bp < fpm) fpm = bp;
+        if (bd < fdm) fdm = bd;
+    }
+    *fp_min = fpm;
+    *fd_min = fdm;
+}
+
+/*
+ * Pass A: the scaling q = 1/(z/x + w/s), X'QX (both triangles) and
+ * X'(q.*(z - w)). q is stored; the rest is summed.
+ */
+static void fuse_normal(const fuse_plan *fp, const ST_double *X,
+                        const ST_double *z, const ST_double *x, const ST_double *w,
+                        const ST_double *s, ST_double *q,
+                        ST_double *XqX, ST_double *Xqr)
+{
+    const ST_int N = fp->N, K = fp->K, ntri = K * (K + 1) / 2;
+    ST_int c;
+    #pragma omp parallel for schedule(static) if(fp->nchunks > 1)
+    for (c = 0; c < fp->nchunks; c++) {
+        ST_double qr[FUSE_BLOCK_MAX], dxj[FUSE_BLOCK_MAX];
+        ST_double *acc = fp->partial + (size_t)c * fp->nacc;
+        const ST_int lo = c * fp->chunk;
+        const ST_int hi = (N - lo < fp->chunk) ? N : lo + fp->chunk;
+        for (ST_int a = 0; a < ntri + K; a++) acc[a] = 0.0;
+        for (ST_int b = lo; b < hi; b += fp->block) {
+            const ST_int n = (hi - b < fp->block) ? hi - b : fp->block;
+            const ST_int n4 = n & ~(ST_int)3;
+            for (ST_int i = 0; i < n; i++) {
+                const ST_double qi = 1.0 / (z[b + i] / x[b + i] + w[b + i] / s[b + i]);
+                q[b + i] = qi;
+                qr[i] = qi * (z[b + i] - w[b + i]);
+            }
+            fuse_xtv(acc + ntri, X, N, K, qr, b, n);
+            ST_int t = 0;
+            for (ST_int j = 0; j < K; j++) {
+                const ST_double *CQREG_RESTRICT Xj = X + (size_t)j * N + b;
+                for (ST_int i = 0; i < n; i++) dxj[i] = q[b + i] * Xj[i];
+                for (ST_int k = j; k < K; k++, t++) {
+                    const ST_double *CQREG_RESTRICT Xk = X + (size_t)k * N + b;
+                    ST_double sum = acc[t];
+                    ST_int i = 0;
+                    /* four rows at a time, as blas_xtdx adds them */
+                    for (; i < n4; i += 4) {
+                        sum += dxj[i] * Xk[i] + dxj[i + 1] * Xk[i + 1] +
+                               dxj[i + 2] * Xk[i + 2] + dxj[i + 3] * Xk[i + 3];
+                    }
+                    for (; i < n; i++) sum += dxj[i] * Xk[i];
+                    acc[t] = sum;
+                }
+            }
+        }
+    }
+    const ST_double *sum = fp->total;
+    fuse_combine(fp, ntri + K, fp->total);
+    ST_int t = 0;
+    for (ST_int j = 0; j < K; j++) {
+        for (ST_int k = j; k < K; k++, t++) {
+            XqX[j + k * K] = sum[t];
+            XqX[k + j * K] = sum[t];
+        }
+    }
+    for (ST_int j = 0; j < K; j++) Xqr[j] = sum[ntri + j];
+}
+
+/*
+ * Pass B: the affine directions dx = q.*(X*dy - (z - w)), dz and dw
+ * (ds = -dx is not stored) and their step lengths.
+ */
+static void fuse_affine(const fuse_plan *fp, const ST_double *X, const ST_double *dy,
+                        const ST_double *q, const ST_double *z, const ST_double *x,
+                        const ST_double *w, const ST_double *s,
+                        ST_double *dx, ST_double *dz, ST_double *dw,
+                        ST_double *fp_out, ST_double *fd_out)
+{
+    const ST_int N = fp->N, K = fp->K;
+    ST_double fp_min = 1e20, fd_min = 1e20;
+    ST_int c;
+    #pragma omp parallel for schedule(static) reduction(min:fp_min, fd_min) if(fp->nchunks > 1)
+    for (c = 0; c < fp->nchunks; c++) {
+        ST_double xdy[FUSE_BLOCK_MAX];
+        const ST_int lo = c * fp->chunk;
+        const ST_int hi = (N - lo < fp->chunk) ? N : lo + fp->chunk;
+        for (ST_int b = lo; b < hi; b += fp->block) {
+            const ST_int n = (hi - b < fp->block) ? hi - b : fp->block;
+            fuse_xdy(xdy, X, N, K, dy, b, n);
+            for (ST_int i = 0; i < n; i++) {
+                const ST_double r_i = z[b + i] - w[b + i];
+                const ST_double dx_i = q[b + i] * (xdy[i] - r_i);
+                const ST_double ds_i = -dx_i;
+                dx[b + i] = dx_i;
+                dz[b + i] = -z[b + i] * (1.0 + dx_i / x[b + i]);
+                dw[b + i] = -w[b + i] * (1.0 + ds_i / s[b + i]);
+            }
+            fuse_bounds(&fp_min, &fd_min, n, x + b, s + b, z + b, w + b, dx + b, dz + b, dw + b);
+        }
+    }
+    *fp_out = (IPM_BETA * fp_min > 1.0) ? 1.0 : IPM_BETA * fp_min;
+    *fd_out = (IPM_BETA * fd_min > 1.0) ? 1.0 : IPM_BETA * fd_min;
+}
+
+/*
+ * Pass C: the complementarity now, g0 = sum(z.*x + w.*s), and after the
+ * affine step, gfpfd.
+ */
+static void fuse_centering(const fuse_plan *fp, ST_double step_p, ST_double step_d,
+                           const ST_double *z, const ST_double *x, const ST_double *w,
+                           const ST_double *s, const ST_double *dx, const ST_double *dz,
+                           const ST_double *dw, ST_double *g0_out, ST_double *gfpfd_out)
+{
+    const ST_int N = fp->N;
+    ST_int c;
+    #pragma omp parallel for schedule(static) if(fp->nchunks > 1)
+    for (c = 0; c < fp->nchunks; c++) {
+        const ST_int lo = c * fp->chunk;
+        const ST_int hi = (N - lo < fp->chunk) ? N : lo + fp->chunk;
+        ST_double g0 = 0.0, gfpfd = 0.0;
+        for (ST_int i = lo; i < hi; i++) {
+            const ST_double ds_i = -dx[i];
+            g0 += z[i] * x[i] + w[i] * s[i];
+            gfpfd += (z[i] + step_d * dz[i]) * (x[i] + step_p * dx[i])
+                   + (w[i] + step_d * dw[i]) * (s[i] + step_p * ds_i);
+        }
+        fp->partial[(size_t)c * fp->nacc] = g0;
+        fp->partial[(size_t)c * fp->nacc + 1] = gfpfd;
+    }
+    ST_double sums[2];
+    fuse_combine(fp, 2, sums);
+    *g0_out = sums[0];
+    *gfpfd_out = sums[1];
+}
+
+/*
+ * Pass D: the corrector right-hand side X'(q.*r) with
+ * r = z - w + dx.*dz - ds.*dw - mu*(1/x - 1/s).
+ */
+static void fuse_corrector_rhs(const fuse_plan *fp, const ST_double *X, ST_double mu,
+                               const ST_double *q, const ST_double *z, const ST_double *x,
+                               const ST_double *w, const ST_double *s, const ST_double *dx,
+                               const ST_double *dz, const ST_double *dw, ST_double *Xqr)
+{
+    const ST_int N = fp->N, K = fp->K;
+    ST_int c;
+    #pragma omp parallel for schedule(static) if(fp->nchunks > 1)
+    for (c = 0; c < fp->nchunks; c++) {
+        ST_double qr[FUSE_BLOCK_MAX];
+        ST_double *acc = fp->partial + (size_t)c * fp->nacc;
+        const ST_int lo = c * fp->chunk;
+        const ST_int hi = (N - lo < fp->chunk) ? N : lo + fp->chunk;
+        for (ST_int j = 0; j < K; j++) acc[j] = 0.0;
+        for (ST_int b = lo; b < hi; b += fp->block) {
+            const ST_int n = (hi - b < fp->block) ? hi - b : fp->block;
+            for (ST_int i = 0; i < n; i++) {
+                const ST_double ds_i = -dx[b + i];
+                const ST_double dxdz = dx[b + i] * dz[b + i];
+                const ST_double dsdw = ds_i * dw[b + i];
+                const ST_double xinv = 1.0 / x[b + i];
+                const ST_double sinv = 1.0 / s[b + i];
+                const ST_double xi_i = mu * (xinv - sinv);
+                const ST_double r_i = z[b + i] - w[b + i] + dxdz - dsdw - xi_i;
+                qr[i] = q[b + i] * r_i;
+            }
+            fuse_xtv(acc, X, N, K, qr, b, n);
+        }
+    }
+    fuse_combine(fp, K, Xqr);
+}
+
+/*
+ * Pass E: the corrected directions, written over the affine ones, and their
+ * step lengths.
+ */
+static void fuse_corrector(const fuse_plan *fp, const ST_double *X, const ST_double *dy,
+                           ST_double mu, const ST_double *q, const ST_double *z,
+                           const ST_double *x, const ST_double *w, const ST_double *s,
+                           ST_double *dx, ST_double *dz, ST_double *dw,
+                           ST_double *fp_out, ST_double *fd_out)
+{
+    const ST_int N = fp->N, K = fp->K;
+    ST_double fp_min = 1e20, fd_min = 1e20;
+    ST_int c;
+    #pragma omp parallel for schedule(static) reduction(min:fp_min, fd_min) if(fp->nchunks > 1)
+    for (c = 0; c < fp->nchunks; c++) {
+        ST_double xdy[FUSE_BLOCK_MAX];
+        const ST_int lo = c * fp->chunk;
+        const ST_int hi = (N - lo < fp->chunk) ? N : lo + fp->chunk;
+        for (ST_int b = lo; b < hi; b += fp->block) {
+            const ST_int n = (hi - b < fp->block) ? hi - b : fp->block;
+            fuse_xdy(xdy, X, N, K, dy, b, n);
+            for (ST_int i = 0; i < n; i++) {
+                const ST_double z_i = z[b + i], w_i = w[b + i];
+                const ST_double dxdz = dx[b + i] * dz[b + i];
+                const ST_double dsdw = -dx[b + i] * dw[b + i];
+                const ST_double xinv = 1.0 / x[b + i];
+                const ST_double sinv = 1.0 / s[b + i];
+                const ST_double xi_i = mu * (xinv - sinv);
+                const ST_double dx_i = q[b + i] * (xdy[i] + xi_i - (z_i - w_i) - dxdz + dsdw);
+                const ST_double ds_i = -dx_i;
+                dx[b + i] = dx_i;
+                dz[b + i] = (mu - z_i * dx_i) * xinv - z_i - dxdz;
+                dw[b + i] = (mu - w_i * ds_i) * sinv - w_i - dsdw;
+            }
+            fuse_bounds(&fp_min, &fd_min, n, x + b, s + b, z + b, w + b, dx + b, dz + b, dw + b);
+        }
+    }
+    *fp_out = (IPM_BETA * fp_min > 1.0) ? 1.0 : IPM_BETA * fp_min;
+    *fd_out = (IPM_BETA * fd_min > 1.0) ? 1.0 : IPM_BETA * fd_min;
+}
+
+/* Pass F: take the step and return the new gap sum(z.*x + s.*w). */
+static ST_double fuse_update(const fuse_plan *fp, ST_double step_p, ST_double step_d,
+                             ST_double *x, ST_double *s, ST_double *z, ST_double *w,
+                             const ST_double *dx, const ST_double *dz, const ST_double *dw)
+{
+    const ST_int N = fp->N;
+    ST_int c;
+    #pragma omp parallel for schedule(static) if(fp->nchunks > 1)
+    for (c = 0; c < fp->nchunks; c++) {
+        const ST_int lo = c * fp->chunk;
+        const ST_int hi = (N - lo < fp->chunk) ? N : lo + fp->chunk;
+        ST_double gap = 0.0;
+        for (ST_int i = lo; i < hi; i++) {
+            const ST_double ds_i = -dx[i];
+            x[i] += step_p * dx[i];
+            s[i] += step_p * ds_i;
+            z[i] += step_d * dz[i];
+            w[i] += step_d * dw[i];
+            gap += z[i] * x[i] + s[i] * w[i];
+        }
+        fp->partial[(size_t)c * fp->nacc] = gap;
+    }
+    ST_double gap;
+    fuse_combine(fp, 1, &gap);
+    return gap;
+}
+
+#endif /* CQREG_FUSED */
+
 static ST_int cqreg_fn_solve_core(cqreg_ipm_state *ipm,
                        const ST_double *Y,
                        const ST_double *X,
@@ -1118,6 +1479,19 @@ static ST_int cqreg_fn_solve_core(cqreg_ipm_state *ipm,
     ST_double *Xq = ipm->fn_Xq;       /* Weighted RHS (N) */
     ST_double *XqX = ipm->XDX;        /* Reuse existing XDX (K*K) */
     ST_double *Xqr = ipm->rhs;        /* Reuse existing rhs (K) */
+
+    /* A caller that already holds a solution (preprocessing) needs only the
+     * crossover and residuals below */
+    if (ipm->config.start_is_solution && ipm->config.start_beta && !ipm->config.skip_crossover) {
+        memcpy(beta, ipm->config.start_beta, (size_t)K * sizeof(ST_double));
+        iter = 1;
+        ipm->iterations = 1;
+        ipm->converged = 1;
+        ipm->time_init = 0.0;
+        ipm->time_iterate = 0.0;
+        rt_phase_start = ctools_timer_seconds();
+        goto crossover_from_beta;
+    }
 
     /* ========================================================================
      * INITIALIZATION (following Julia code exactly)
@@ -1174,6 +1548,13 @@ static ST_int cqreg_fn_solve_core(cqreg_ipm_state *ipm,
      * Columns with sum x^2 >= 1 keep the absolute IPM_SMALL. Without the
      * workspace every column gets IPM_SMALL. */
     ST_double *ridge = (ST_double *)malloc((size_t)K * sizeof(ST_double));
+#if CQREG_FUSED
+    /* The normal-equations iteration runs as fused passes; the QR retry and
+     * a failed allocation keep the loop-by-loop form below. */
+    fuse_plan fuse;
+    fuse.partial = NULL;
+    const int fused = !use_qr && fuse_plan_init(&fuse, N, K) == 0;
+#endif
     for (j = 0; j < K; j++) {
         ST_double ridge_j = IPM_SMALL * fmin(1.0, XqX[j * K + j]);
         if (!(ridge_j > 0.0)) ridge_j = IPM_SMALL;
@@ -1190,6 +1571,11 @@ static ST_int cqreg_fn_solve_core(cqreg_ipm_state *ipm,
         for (j = 0; j < K; j++) {
             y_d[j] = -y_d[j];
         }
+    }
+
+    /* A caller that knows a nearby solution starts from it instead */
+    if (ipm->config.start_beta) {
+        for (j = 0; j < K; j++) y_d[j] = -ipm->config.start_beta[j];
     }
 
     /* Compute r = c - X * y_d = -Y - X * y_d */
@@ -1266,6 +1652,35 @@ static ST_int cqreg_fn_solve_core(cqreg_ipm_state *ipm,
             for (j = 0; j < K; j++) IPM_LOG("%.6f ", y_d[j]);
             IPM_LOG("]\n");
         }
+
+#if CQREG_FUSED
+        if (fused) {
+            /* Predictor: scaling, normal equations and affine directions */
+            fuse_normal(&fuse, X, z, x_p, w, s, q, XqX, Xqr);
+            for (j = 0; j < K; j++) XqX[j * K + j] += ridge ? ridge[j] : IPM_SMALL;
+            if (cqreg_cholesky(XqX, K) != 0) break;
+            memcpy(dy, Xqr, K * sizeof(ST_double));
+            cqreg_solve_cholesky(XqX, dy, K);
+            ST_double fp, fd;
+            fuse_affine(&fuse, X, dy, q, z, x_p, w, s, dx, dz, dw, &fp, &fd);
+
+            /* Corrector, if the full affine step is not feasible */
+            if (fp < 1.0 || fd < 1.0) {
+                ST_double g0, gfpfd;
+                fuse_centering(&fuse, fp, fd, z, x_p, w, s, dx, dz, dw, &g0, &gfpfd);
+                ST_double mu = pow(gfpfd / g0, 3.0) * g0 / (2.0 * N);
+                fuse_corrector_rhs(&fuse, X, mu, q, z, x_p, w, s, dx, dz, dw, Xqr);
+                /* q and X are unchanged: reuse the predictor's Cholesky factor. */
+                memcpy(dy, Xqr, K * sizeof(ST_double));
+                cqreg_solve_cholesky(XqX, dy, K);
+                fuse_corrector(&fuse, X, dy, mu, q, z, x_p, w, s, dx, dz, dw, &fp, &fd);
+            }
+
+            for (j = 0; j < K; j++) y_d[j] += fd * dy[j];
+            gap = fuse_update(&fuse, fp, fd, x_p, s, z, w, dx, dz, dw);
+            continue;
+        }
+#endif
 
         /* ====================================================================
          * AFFINE (PREDICTOR) STEP
@@ -1474,6 +1889,9 @@ static ST_int cqreg_fn_solve_core(cqreg_ipm_state *ipm,
 
     } /* End main loop */
     free(ridge);
+#if CQREG_FUSED
+    free(fuse.partial);
+#endif
 
     ipm->time_iterate = ctools_timer_seconds() - rt_phase_start;
     rt_phase_start = ctools_timer_seconds();
@@ -1524,6 +1942,7 @@ static ST_int cqreg_fn_solve_core(cqreg_ipm_state *ipm,
         return iter > 0 ? iter : 1;
     }
 
+crossover_from_beta:
     /* Compute residuals from IPM solution */
     blas_dgemv(0, N, K, 1.0, X, N, beta, 0.0, ipm->r_primal);
     for (i = 0; i < N; i++) {

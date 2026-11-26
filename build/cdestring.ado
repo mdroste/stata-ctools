@@ -1,4 +1,6 @@
 *! version 1.3.1 20261124 github.com/mdroste/stata-ctools
+*! original: Stata's destring (destring.ado 2.4.4, September 15, 2016), originally written by Nicholas J. Cox
+*! original: see help cdestring for details
 
 program define cdestring
     version 14.1
@@ -157,20 +159,16 @@ program define cdestring
     if _rc != 0 & _rc != 110 exit 601
     capture confirm number 0
 
-    * Both modes stage values and metadata. A plugin error or Break then
-    * removes only temporary variables, without publishing partial outputs.
+    * Both modes stage values and metadata in temporary variables. A plugin
+    * error or Break then removes only those, without publishing partial
+    * outputs. The variables are created after the plugin has parsed the
+    * values and reported the storage type each one needs.
     unab original_order : _all
     local dest_varlist ""
     local i = 0
     foreach v of local varlist {
         local ++i
         tempvar tmp`i'
-        if "`float'" != "" {
-            quietly generate float `tmp`i'' = .
-        }
-        else {
-            quietly generate double `tmp`i'' = .
-        }
         local dest_varlist "`dest_varlist' `tmp`i''"
     }
 
@@ -181,8 +179,12 @@ program define cdestring
     }
 
     * Keep user bytes out of Stata/plugin command syntax, including quotes.
-    mata: st_local("__cds_ignore", st_local("ignore")); ///
-        st_local("ignore_code", "ignorelen=" + strtrim(strofreal(strlen(st_local("ignore")), "%21.0f")))
+    * The plugin gets every character it removes: ignore() and, with percent,
+    * "%". It reports the ones a variable contained by their byte offsets in
+    * this list.
+    mata: st_local("__cds_ignore", st_local("ignore") + ///
+            (st_local("percent") != "" & !strpos(st_local("ignore"), "%") ? "%" : "")); ///
+        st_local("ignore_code", "ignorelen=" + strtrim(strofreal(strlen(st_local("__cds_ignore")), "%21.0f")))
 
     local force_code ""
     if "`force'" != "" {
@@ -223,7 +225,6 @@ program define cdestring
     local stata_vars `__ctools_strl_bad'
     * Paired by position: generate() may convert one source twice
     local plugin_vars
-    local plugin_dest
     local stata_dest
     local stata_src
     local i = 0
@@ -235,15 +236,13 @@ program define cdestring
         }
         else {
             local plugin_vars `plugin_vars' `v'
-            local plugin_dest `plugin_dest' `: word `i' of `dest_varlist''
         }
     }
     local plugin_nvars : word count `plugin_vars'
 
-    * The plugin varlist holds the sources, then the destinations (seqpairs):
-    * an index list in the argument exceeds Stata's plugin-call argument
-    * length on wide data
-    if `plugin_nvars' _ctools_strw `plugin_vars' `plugin_dest'
+    * The plugin varlist holds the sources, in order: an index list in the
+    * argument exceeds Stata's plugin-call argument length on wide data
+    if `plugin_nvars' _ctools_strw `plugin_vars'
 
     * Stata answers an if one observation at a time. Without one the plugin
     * skips the check; the if marked after syntax is passed last, as a
@@ -256,27 +255,87 @@ program define cdestring
         local select_code "touse"
     }
 
-    * The plugin sets local cdestring_failed (nonnumeric count per variable).
+    * The plugin converts in two calls. parse reads the strings, keeps the
+    * numbers and sets locals cdestring_failed (nonnumeric count),
+    * cdestring_types (the storage type compress would choose),
+    * cdestring_missing (missing values among the observations read) and
+    * cdestring_seen (the ignore() characters found), one word per variable.
+    * Each destination is then created with its final type and store fills
+    * it, so Stata does not count, scan or recast the new variable. Break
+    * waits until the plugin has released the numbers.
     local cdestring_failed ""
+    local cdestring_types ""
+    local cdestring_missing ""
+    local cdestring_seen ""
     local cdestring_ignore_read ""
-    if `plugin_nvars' {
-        capture noisily plugin call ctools_plugin `plugin_vars' `plugin_dest' `marker' `ifcond' `in', ///
-            "cdestring `threads_code' seqpairs nvars=`plugin_nvars' `force_code' `percent_code' `dpcomma_code' `float_code' `verbose_code' `select_code' `ignore_flags' `ignore_code'"
-        local plugin_rc = _rc
-        if `plugin_rc' exit `plugin_rc'
-        if "`cdestring_ignore_read'" != "1" {
-            di as error "cdestring: install the matching ctools plugin before converting data"
-            exit 198
+    local __time_create = 0
+    nobreak {
+        if `plugin_nvars' {
+            capture noisily plugin call ctools_plugin `plugin_vars' `marker' `ifcond' `in', ///
+                "cdestring parse `threads_code' nvars=`plugin_nvars' `force_code' `percent_code' `dpcomma_code' `float_code' `verbose_code' `select_code' `ignore_flags' `ignore_code'"
+            local plugin_rc = _rc
+            if `plugin_rc' exit `plugin_rc'
+            if "`cdestring_ignore_read'" != "1" {
+                capture plugin call ctools_plugin, "cdestring discard"
+                di as error "cdestring: install the matching ctools plugin before converting data"
+                exit 198
+            }
+            local n_converted = scalar(_cdestring_n_converted)
+            local n_failed = scalar(_cdestring_n_failed)
+            local nobs_read = scalar(_cdestring_nobs)
         }
-        local n_converted = scalar(_cdestring_n_converted)
-        local n_failed = scalar(_cdestring_n_failed)
-    }
-    else {
-        local n_converted = 0
-        local n_failed = 0
-        * (no plugin phase to time)
-        foreach phase in parse load convert store total {
-            scalar _cdestring_time_`phase' = 0
+        else {
+            local n_converted = 0
+            local n_failed = 0
+            * (no plugin phase to time)
+            foreach phase in parse load convert store total {
+                scalar _cdestring_time_`phase' = 0
+            }
+        }
+
+        * Create the destinations. Variables converted in Stata below start
+        * as double (float under float) and are compressed afterwards.
+        if `__do_timing' quietly _ctools_clock __ct_create0
+        local plugin_publish
+        local i = 0
+        local j = 0
+        capture noisily {
+            foreach v of local varlist {
+                local ++i
+                if `: list v in stata_vars' {
+                    local from_plugin_`i' 0
+                    if "`float'" != "" quietly generate float `tmp`i'' = .
+                    else quietly generate double `tmp`i'' = .
+                }
+                else {
+                    local ++j
+                    local from_plugin_`i' 1
+                    local ptype_`i' : word `j' of `cdestring_types'
+                    local pmiss_`i' : word `j' of `cdestring_missing'
+                    local pseen_`i' : word `j' of `cdestring_seen'
+                    local pseen_`i' : subinstr local pseen_`i' "," " ", all
+                    if "`ptype_`i''" != "." {
+                        quietly generate `ptype_`i'' `tmp`i'' = .
+                        local plugin_publish `plugin_publish' `tmp`i''
+                    }
+                }
+            }
+        }
+        local create_rc = _rc
+        if `__do_timing' {
+            quietly _ctools_clock __ct_now
+            local __time_create = `__ct_now' - `__ct_create0'
+        }
+        if `create_rc' {
+            if `plugin_nvars' capture plugin call ctools_plugin, "cdestring discard"
+            exit `create_rc'
+        }
+        if "`plugin_publish'" != "" {
+            capture noisily plugin call ctools_plugin `plugin_publish', "cdestring store `threads_code'"
+            if _rc exit _rc
+        }
+        else if `plugin_nvars' {
+            capture plugin call ctools_plugin, "cdestring discard"
         }
     }
 
@@ -372,7 +431,8 @@ program define cdestring
         if "`nbad'" == "" local nbad 0
         local nbad_`i' `nbad'
         if `nbad' > 0 & "`force'" == "" {
-            drop `dv'
+            * (only a variable converted in Stata has a destination by now)
+            if !`from_plugin_`i'' drop `dv'
             local done_`i' 0
         }
         else {
@@ -387,10 +447,20 @@ program define cdestring
                 else local t = usubstr(`"`ignore_chars'"', `m', 1)
                 if strpos(`"`seen_chars'"', `"`t'"') continue
                 local seen_chars `"`seen_chars'`t'"'
-                local find = cond(`asbytes', "strpos", "ustrpos")
-                if "`iftouse'" != "" quietly count if `find'(`v', `"`t'"') & `iftouse' `in'
-                else quietly count if `find'(`v', `"`t'"') `in'
-                if r(N) {
+                if `from_plugin_`i'' {
+                    * The plugin listed the characters this variable held by
+                    * where each first occurs in the list it was given.
+                    mata: st_local("__cds_at", ///
+                        strofreal(strpos(st_local("__cds_ignore"), st_local("t")) - 1))
+                    local found : list __cds_at in pseen_`i'
+                }
+                else {
+                    local find = cond(`asbytes', "strpos", "ustrpos")
+                    if "`iftouse'" != "" quietly count if `find'(`v', `"`t'"') & `iftouse' `in'
+                    else quietly count if `find'(`v', `"`t'"') `in'
+                    local found = r(N) > 0
+                }
+                if `found' {
                     if `"`t'"' == uchar(65533) & strpos("`ignore_flags'", "illegal") {
                         local removed `"`removed' illegal Unicode"'
                     }
@@ -418,12 +488,20 @@ program define cdestring
                     char `dv'[`ch'] `"`value'"'
                 }
             }
-            * destring reports every missing value of the new variable
-            quietly count if missing(`dv')
-            local nmiss_`i' = r(N)
-            * Compress to the optimal storage type (mimics destring)
-            quietly compress `dv'
-            local type_`i' : type `dv'
+            * destring reports every missing value of the new variable and
+            * compresses it to the smallest storage type. The plugin counted
+            * the missing values among the observations it read (the others
+            * are missing too) and the variable already has that type.
+            if `from_plugin_`i'' {
+                local nmiss_`i' = _N - `nobs_read' + `pmiss_`i''
+                local type_`i' `ptype_`i''
+            }
+            else {
+                quietly count if missing(`dv')
+                local nmiss_`i' = r(N)
+                quietly compress `dv'
+                local type_`i' : type `dv'
+            }
             local publish `publish' `dv'
             if "`replace'" != "" {
                 tempvar backup`i'
@@ -504,7 +582,10 @@ program define cdestring
                     char rename `backup' `final'
                 }
                 drop `backups'
-                order `original_order'
+                * (order rewrites the whole dataset: skip it when the new
+                * variables already stand where the old ones did)
+                unab current_order : _all
+                if "`current_order'" != "`original_order'" order `original_order'
             }
             else {
                 * destring places each generate() output right after its
@@ -529,7 +610,9 @@ program define cdestring
                         local target_order `target_order' `outputs'
                     }
                 }
-                order `target_order'
+                local target_order : list retokenize target_order
+                unab current_order : _all
+                if "`current_order'" != "`target_order'" order `target_order'
             }
         }
     }
@@ -553,7 +636,7 @@ program define cdestring
         * Calculate plugin call overhead
         capture local __plugin_time_total = scalar(_cdestring_time_total)
         if _rc != 0 local __plugin_time_total = 0
-        local __plugin_call_overhead = `__time_plugin' - `__plugin_time_total'
+        local __plugin_call_overhead = `__time_plugin' - `__plugin_time_total' - `__time_create'
 
         di as text ""
         di as text "{hline 55}"
@@ -569,10 +652,11 @@ program define cdestring
         di as text ""
         di as text "  Stata overhead:"
         di as text "    Pre-plugin setup:       " as result %8.4f `__time_preplugin' " sec"
+        di as text "    Create variables:       " as result %8.4f `__time_create' " sec"
         di as text "    Plugin call overhead:   " as result %8.4f `__plugin_call_overhead' " sec"
         di as text "    Post-plugin cleanup:    " as result %8.4f `__time_postplugin' " sec"
         di as text "  {hline 53}"
-        local __stata_overhead = `__time_preplugin' + `__plugin_call_overhead' + `__time_postplugin'
+        local __stata_overhead = `__time_preplugin' + `__time_create' + `__plugin_call_overhead' + `__time_postplugin'
         di as text "    Stata overhead total:   " as result %8.4f `__stata_overhead' " sec"
         di as text "{hline 55}"
         di as text "    Wall clock total:       " as result %8.4f `__time_total' " sec"

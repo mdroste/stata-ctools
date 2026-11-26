@@ -81,4 +81,21 @@ int cexport_format_row_stream(const cexport_context *ctx, ST_int obs,
 */
 int cexport_format_header(const cexport_context *ctx, char *buf, size_t buf_size);
 
+/* ========================================================================
+   Date and Time Display Formats
+   ======================================================================== */
+
+/*
+    Compile a %t display format (daily, clock, weekly, monthly, quarterly,
+    half-yearly or yearly). Returns NULL for a format this writer does not
+    display itself, or when memory runs out; free() the result.
+*/
+cexport_timefmt *cexport_timefmt_compile(const char *format);
+
+/* Bytes a cell in the format can take. */
+size_t cexport_timefmt_reserve(const cexport_timefmt *format);
+
+/* Bytes any numeric cell can take when written as a plain number. */
+#define CEXPORT_NUMBER_RESERVE 48
+
 #endif /* CEXPORT_FORMAT_H */

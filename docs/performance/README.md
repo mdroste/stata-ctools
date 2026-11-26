@@ -13,9 +13,31 @@ do validation/performance/readme_benchmarks.do
 ```
 
 The second command runs the README sizes: 1M, 10M and 25M observations.
-Results go to `temp/readme_benchmarks/`. Comparisons whose SSC reference
-command is not installed are skipped and listed. The top of the do-file lists
-its options (`sizes()`, `pairs()`, `processors()`, `output()`).
+Results go to `temp/readme_benchmarks/`. Comparisons whose reference command
+(a user-written package) is not installed are skipped and listed, with how to
+install it. The top of the do-file lists its options (`sizes()`, `pairs()`,
+`processors()`, `output()`).
+
+A comparison is one Stata command and the ctools command that replaces it,
+named by the Stata command. A ctools command with several Stata counterparts
+has one comparison for each, and each times the ctools command again:
+
+| ctools command | Comparisons |
+|---|---|
+| `cwinsor` | `winsor` (`gstats winsor`), `winsor2` |
+| `cbinscatter` | `binscatter`, `binscatter2`, `binsreg` |
+| `creghdfe` | `reghdfe`, `fereg` |
+| `cppmlhdfe` | `ppmlhdfe`, `feppml` |
+
+`binsreg` chooses its number of bins from the data unless told, so its
+comparison asks for the 20 quantile bins the others use (`nbins(20)`).
+`binsreg`, [`binscatter2`](https://github.com/mdroste/stata-binscatter2) and
+[`fereg`](https://github.com/johannes-schmieder/fereg) (which includes
+`feppml`) are not on SSC. `binscatter2` needs `gtools`.
+
+`qreg` and `ppmlhdfe` take minutes per run at 25M observations, so those two
+comparisons run at 1M and 10M only. The limits are in `profiles.do`,
+`readme_benchmarks.do` and `profile_LIMITS` in `validation/bench_profiles.py`.
 
 Each comparison times only the command. Making the test data, reloading it
 before each command and checking each result are not timed but still take
@@ -73,7 +95,12 @@ python3 validation/bench.py summarize-profile temp/timings-distinct --pairs dist
 ```
 
 `--pairs` limits the summary and README update to the selected comparisons.
-The summarizer requires all three sizes before updating the README.
+The summarizer requires every size a comparison runs at (all three, or 1M and
+10M for `qreg` and `ppmlhdfe`) before updating the README. In the README, the
+row of a ctools command lists its Stata commands one per line of the first
+cell and their speedups in the same order in the last cell. The update changes
+only the line of the named command and keeps a footnote marker that follows
+the speedup.
 
 ## Compare fixed-effects regressions
 
@@ -86,13 +113,105 @@ python3 validation/bench.py hdfe
 
 Check `temp/hdfe_datasets/validation.log` for failures.
 
+## Compare HDFE ado overhead
+
+Freeze the baseline and candidate ado files in separate directories, with an
+identical, protocol-compatible plugin binary in both. From the repository root:
+
+```stata
+do validation/support/hdfe_ado_sample.do "path/to/baseline" "path/to/candidate"
+do validation/support/hdfe_ado_buffers.do "path/to/baseline" "path/to/candidate"
+do validation/support/hdfe_native_screen.do "path/to/baseline" "path/to/candidate"
+do validation/support/hdfe_native_expanded.do "path/to/baseline" "path/to/candidate"
+```
+
+The sample check compares coefficients, covariance matrices, coefficient names,
+observation counts, estimation samples and error codes, including missing values,
+weights, singleton groups and expressions using previous estimates. It also
+checks PPML's rejection of negative outcomes before singleton removal.
+The buffer check covers models without absorbed effects, saved residuals and
+fixed effects, excluded rows, output storage types and formats, `by:`, temporary
+variable cleanup, and cold/warm clock calls preserving `r()`.
+The IV comparisons also check `e(N_full)`: unweighted fits obtain this count
+from native row and singleton counts when the ado skips its pre-fit count.
+
+The benchmark generates a 10-million-row balanced panel, warms each command
+including its display routines, and prints five verbose timing reports for each
+estimator. Run these in separate Stata processes with identical settings:
+
+```stata
+do validation/performance/hdfe_ado_overhead.do "path/to/baseline" baseline
+do validation/performance/hdfe_ado_overhead.do "path/to/candidate" candidate
+```
+
+Optional arguments select the number of individuals (ten rows each), repetitions
+and commands, for example `1000000 5 "creghdfe"`. Repeat the process pair in
+reverse order to check for changes in machine load.
+
+Keep the log under `temp/`. Compare medians of the tagged `ADO_BENCH_BEGIN` /
+`ADO_BENCH_END` blocks. The reported OLS/IV "Plugin call overhead" includes native
+result publication outside the plugin's internal timer; it is not entirely ado
+execution. The three estimators hand their working memory to a helper thread
+(`src/ctools_release.h`), which returns it while Stata posts the results; the
+next ctools command waits for it before it starts. Use a separate Stata process for each directory so that
+plugin and program state cannot carry over from the other build.
+
+Plain numeric, unweighted models now defer missing-value screening to the
+plugin. OLS and PPML scan the loaded numeric inputs before FE remapping; IV uses
+its existing parallel screening. OLS reports `Missing screening` separately
+from SPI loading. Large samples use the command's default thread budget,
+including when the model has fewer variables than available threads;
+`threads(1)` selects serial execution.
+
+Weighted and factor-variable models use an earlier native streaming pass so
+the marked sample is ready for factor expansion and weight-expression staging.
+Stata still evaluates and validates weights and excludes zero/missing weights;
+native code screens the model inputs. This preserves invalid-weight errors,
+weight expressions using previous estimates, and the observations used to
+choose factor levels and base categories. IV retains its original preparation
+boundaries and its explicit row count for weighted `e(N_full)`.
+
+The early pass uses bounded per-thread buffers and updates only the private
+sample marker. It does not load a second dataset copy or allocate a full row
+mask. Numeric and extended missing values are screened in parallel, including
+in base/omitted factor inputs. String/interacted/sloped absorbed effects and
+PPML offsets/exposures keep their own preparation checks after the model scan.
+The early screening cost is included in the reported Stata setup time.
+
+The OLS/PPML screen uses vectorized scans of 4,096-row blocks. An all-valid
+sample needs only one flag per block and no compaction. When rows are missing,
+the native code clears their private sample markers and compacts columns and
+the observation map in stable row order. Column compaction is parallel across
+columns: parallel in-place writes across row blocks could overwrite another
+worker's input. Numeric missing codes, extended missing values and NaNs are
+excluded before singleton/separation decisions.
+
+Time-series terms, bootstrap, individual/group models and auxiliary IV options
+that require earlier sample preparation retain the existing screening path.
+Separate plugin capabilities preserve compatibility with older plugins, including
+ones that support only the scan after loading. Rebuild the plugin and restart
+Stata to enable the extension. The native sample checks compare automatic and
+one-thread runs, missingness, metadata, weight validation, factor coefficient
+names and empty-sample errors against old ado files with the **same new plugin**.
+
+For setup profiling, separate sample marking from option parsing. `profiler
+on`/`off` and `profiler report` identify ado helper costs; temporary
+`_ctools_lap` calls around `marksample` separate its cost from other built-ins.
+
+Output initialization also matters at large N. The wrappers use `mark` for
+constant byte variables and Mata's `st_addvar()` for selected missing-valued
+outputs. The latter retains its default missing initialization: skipping that
+fill would leave excluded rows undefined. Clock laps reuse the registered clock
+plugin; normal estimator loading still checks plugin identity and protocol.
+
 ## View published results
 
 Published timings describe the builds and settings recorded with each run.
 They are not a fresh measurement of the current checkout. The README profile
 measures linear `cinterpolate` against `ipolate`, `cinterpolate, cubic`
-against SSC `cipolate`, and `chdfe` against SSC `hdfe`. The published results
-do not yet include the `cipolate` and `hdfe` comparisons.
+against SSC `cipolate`, and `chdfe` against SSC `hdfe`. A published time is
+the smallest over the passes the manifest records (`repetitions`); a
+comparison it lists under `comparisons_not_measured` has no row.
 
 - [Times and speedups](../benchmarks/readme_profile/results.md)
 - [Individual timings](../benchmarks/readme_profile/timings.csv)
@@ -108,7 +227,7 @@ table; neither creates that
 run-information file. Keep logs, driver do-files, generated data, and exploratory
 results under `reports/performance/` or `temp/`.
 
-For a single-command refresh, replace that command's six rows in the published
+For a single-command refresh, replace that command's rows in the published
 CSV and regenerate the combined table. Record its machine, settings, checks,
 and build/reference hashes in the manifest's `command_runs` entry; those values
 override the shared manifest fields for that command. Preserve the measured

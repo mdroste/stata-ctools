@@ -6,6 +6,7 @@
 */
 
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
@@ -40,13 +41,81 @@ static int singleton_drop(ST_int row, ST_int *mask, const ST_double *fweights,
 }
 
 /*
+    cx[2*l] += rows with level l, cx[2*l+1] ^= their indices, for N levels
+    in 0..maxl (both are exact in any order). A table small enough to copy
+    once per row block (singleton_private_table) is built in B parallel
+    blocks and summed; a larger one is built serially, which on this kind of
+    random update is as fast as any split of the rows that was measured
+    (atomics, private copies, partitions by level range). Returns whether
+    the table was built.
+*/
+#define CTOOLS_SINGLETON_PRIVATE_ENTRIES ((size_t)1 << 21)
+static int singleton_private_table(ST_int maxl, int B)
+{
+    return B > 1 && ((size_t)maxl + 1) * (size_t)B <= CTOOLS_SINGLETON_PRIVATE_ENTRIES;
+}
+
+static int singleton_tables_parallel(const ST_int *lev, ST_int N, ST_int maxl, ST_int *cx, int B)
+{
+    const size_t levels = (size_t)maxl + 1;
+    int b;
+    {
+        ST_int *priv = (ST_int *)calloc(2 * levels * (size_t)B, sizeof(ST_int));
+        if (priv) {
+            #pragma omp parallel for schedule(static)
+            for (b = 0; b < B; b++) {
+                ST_int *t = priv + 2 * levels * (size_t)b;
+                ST_int i0, i1;
+                ctools_hdfe_block_range(N, B, b, &i0, &i1);
+                for (ST_int r = i0; r < i1; r++) {
+                    t[2 * (size_t)lev[r]]++;
+                    t[2 * (size_t)lev[r] + 1] ^= r;
+                }
+            }
+            long long l;
+            #pragma omp parallel for schedule(static)
+            for (l = 0; l < (long long)levels; l++) {
+                ST_int n = 0, x = 0;
+                for (int t = 0; t < B; t++) {
+                    n += priv[2 * (levels * (size_t)t + (size_t)l)];
+                    x ^= priv[2 * (levels * (size_t)t + (size_t)l) + 1];
+                }
+                cx[2 * (size_t)l] = n;
+                cx[2 * (size_t)l + 1] = x;
+            }
+            free(priv);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void singleton_tables_serial(const ST_int *lev, ST_int N, ST_int *cx)
+{
+    for (ST_int r = 0; r < N; r++) {
+        ST_int *slot = &cx[2 * (size_t)lev[r]];
+        slot[0]++;
+        slot[1] ^= r;
+    }
+}
+
+/* Two large tables built at once by two threads beat one after the other
+   while they fit in cache together (measured: 2 x 8 MB faster, 2 x 16 MB
+   slower than in turn) */
+#define CTOOLS_SINGLETON_CONCURRENT_BYTES ((size_t)16 << 20)
+
+/*
     Iteratively detect and remove singletons across multiple FE factors.
 
     Peels to the fixed point, which is the sample reghdfe's cyclic loop
     reaches whatever the order of removals. Each level keeps the count of its
-    undropped rows and the XOR of their row indices, so a level left with one
-    row names that row directly, and dropping a row touches only its G
-    levels: total work is O(N*G) however long the singleton chains are.
+    undropped rows and the XOR of their row indices (side by side, one cache
+    line for both), so a level left with one row names that row directly,
+    and dropping a row touches only its G levels: total work is O(N*G)
+    however long the singleton chains are. The per-level tables are built in
+    parallel row blocks (singleton_tables); a single factor has no chains, so
+    its singletons are simply the rows alone in their level, marked in
+    parallel row blocks.
 */
 ST_int ctools_remove_singletons(
     ST_int **fe_levels,
@@ -60,41 +129,96 @@ ST_int ctools_remove_singletons(
     ST_int g, i;
     ST_int num_singletons = 0;
     ST_int result = -1;
-    ST_int **counts = NULL, **row_xor = NULL;
+    ST_int **cx = NULL;  /* cx[g][2*lev] = rows left in lev, cx[g][2*lev+1] = their XOR */
     ST_int *max_levels = NULL, *stack = NULL;
+    unsigned char *serial = NULL;  /* tables built serially */
     size_t stack_len = 0, stack_cap = 0;
+    const int B = ctools_hdfe_row_blocks(N);
+    int b, failed = 0;
 
     /* Initialize mask to all 1s (keep all) */
+    #pragma omp parallel for schedule(static) if (B > 1)
     for (i = 0; i < N; i++) mask[i] = 1;
     if (G <= 0 || N <= 0) return 0;
 
     max_levels = (ST_int *)calloc((size_t)G, sizeof(ST_int));
-    counts = (ST_int **)calloc((size_t)G, sizeof(ST_int *));
-    row_xor = (ST_int **)calloc((size_t)G, sizeof(ST_int *));
-    if (!max_levels || !counts || !row_xor) goto cleanup;
+    cx = (ST_int **)calloc((size_t)G, sizeof(ST_int *));
+    serial = (unsigned char *)calloc((size_t)G, 1);
+    if (!max_levels || !cx || !serial) goto cleanup;
 
     for (g = 0; g < G; g++) {
-        for (i = 0; i < N; i++) {
-            if (fe_levels[g][i] < 0) goto cleanup;  /* levels are 1-based */
-            if (fe_levels[g][i] > max_levels[g]) max_levels[g] = fe_levels[g][i];
+        const ST_int *lev = fe_levels[g];
+        ST_int most = 0;
+        int negative = 0;
+        #pragma omp parallel for schedule(static) reduction(max : most) reduction(| : negative) if (B > 1)
+        for (b = 0; b < B; b++) {
+            ST_int i0, i1;
+            ctools_hdfe_block_range(N, B, b, &i0, &i1);
+            for (ST_int r = i0; r < i1; r++) {
+                negative |= lev[r] < 0;
+                if (lev[r] > most) most = lev[r];
+            }
         }
-        counts[g] = (ST_int *)calloc((size_t)max_levels[g] + 1, sizeof(ST_int));
-        row_xor[g] = (ST_int *)calloc((size_t)max_levels[g] + 1, sizeof(ST_int));
-        if (!counts[g] || !row_xor[g]) goto cleanup;
-        for (i = 0; i < N; i++) {
-            counts[g][fe_levels[g][i]]++;
-            row_xor[g][fe_levels[g][i]] ^= i;
+        if (negative) goto cleanup;  /* levels are 1-based */
+        max_levels[g] = most;
+        cx[g] = (ST_int *)calloc(2 * ((size_t)most + 1), sizeof(ST_int));
+        if (!cx[g]) goto cleanup;
+    }
+
+    {
+        /* Small tables in parallel row blocks, one factor at a time; the
+           large ones serially, two or more at once while they fit in cache
+           together */
+        size_t serial_bytes = 0;
+        int serial_tables = 0;
+        for (g = 0; g < G; g++) {
+            serial[g] = !(singleton_private_table(max_levels[g], B) &&
+                          singleton_tables_parallel(fe_levels[g], N, max_levels[g], cx[g], B));
+            if (serial[g]) {
+                serial_bytes += 2 * sizeof(ST_int) * ((size_t)max_levels[g] + 1);
+                serial_tables++;
+            }
         }
+        const int together = B > 1 && serial_tables > 1 && serial_bytes <= CTOOLS_SINGLETON_CONCURRENT_BYTES;
+        #pragma omp parallel for schedule(dynamic) if (together)
+        for (g = 0; g < G; g++) {
+            if (serial[g]) singleton_tables_serial(fe_levels[g], N, cx[g]);
+        }
+        (void)together;  /* only the pragma reads it */
+    }
+
+    if (G == 1) {
+        const ST_int *lev = fe_levels[0];
+        const ST_int *c = cx[0];
+        /* A row alone in its level is a singleton (with fweights, of
+           weight 1); dropping it empties the level and nothing else */
+        #pragma omp parallel for schedule(static) reduction(+ : num_singletons) if (B > 1)
+        for (b = 0; b < B; b++) {
+            ST_int i0, i1;
+            ctools_hdfe_block_range(N, B, b, &i0, &i1);
+            for (ST_int r = i0; r < i1; r++) {
+                if (c[2 * (size_t)lev[r]] == 1 && (!fweights || fweights[r] == 1.0)) {
+                    mask[r] = 0;
+                    num_singletons++;
+                }
+            }
+        }
+        result = num_singletons;
+        goto report;
     }
 
     /* Seed with the rows that are alone in a level */
-    for (g = 0; g < G; g++) {
+    for (g = 0; g < G && !failed; g++) {
+        const ST_int *c = cx[g];
         for (ST_int lev = 0; lev <= max_levels[g]; lev++) {
-            if (counts[g][lev] == 1 &&
-                singleton_drop(row_xor[g][lev], mask, fweights, &stack, &stack_len, &stack_cap))
-                goto cleanup;
+            if (c[2 * (size_t)lev] == 1 &&
+                singleton_drop(c[2 * (size_t)lev + 1], mask, fweights, &stack, &stack_len, &stack_cap)) {
+                failed = 1;
+                break;
+            }
         }
     }
+    if (failed) goto cleanup;
 
     /* Removing a row can leave a single row in its other levels. When that
      * row is itself dropped but not yet popped, the level empties later. */
@@ -102,16 +226,17 @@ ST_int ctools_remove_singletons(
         ST_int row = stack[--stack_len];
         num_singletons++;
         for (g = 0; g < G; g++) {
-            ST_int lev = fe_levels[g][row];
-            counts[g][lev]--;
-            row_xor[g][lev] ^= row;
-            if (counts[g][lev] == 1 &&
-                singleton_drop(row_xor[g][lev], mask, fweights, &stack, &stack_len, &stack_cap))
+            ST_int *slot = &cx[g][2 * (size_t)fe_levels[g][row]];
+            slot[0]--;
+            slot[1] ^= row;
+            if (slot[0] == 1 &&
+                singleton_drop(slot[1], mask, fweights, &stack, &stack_len, &stack_cap))
                 goto cleanup;
         }
     }
     result = num_singletons;
 
+report:
     if (verbose && num_singletons > 0) {
         char buf[256];
         snprintf(buf, sizeof(buf), "ctools: Dropped %d singletons\n", (int)num_singletons);
@@ -119,13 +244,10 @@ ST_int ctools_remove_singletons(
     }
 
 cleanup:
-    for (g = 0; g < G; g++) {
-        if (counts) free(counts[g]);
-        if (row_xor) free(row_xor[g]);
-    }
-    free(counts);
-    free(row_xor);
+    for (g = 0; cx && g < G; g++) free(cx[g]);
+    free(cx);
     free(max_levels);
+    free(serial);
     free(stack);
     return result;
 }
@@ -545,6 +667,46 @@ void ctools_uf_union(ctools_UnionFind *uf, ST_int x, ST_int y)
     }
 }
 
+/*
+    Concurrent union-find for the component counts. A parent link always
+    points to a smaller node, so every tree's root is its smallest node and
+    no union can form a cycle. Roots are linked with compare-and-swap; the
+    other links only ever move to an ancestor, so the racing path-splitting
+    stores are harmless. Each edge is processed once in any order, and the
+    components do not depend on that order or on the number of threads.
+*/
+static inline ST_int cc_find(ST_int *parent, ST_int x)
+{
+    ST_int cur = CTOOLS_HDFE_LOAD(&parent[x]);
+    if (cur != x) {
+        ST_int prev = x, next;
+        while (cur > (next = CTOOLS_HDFE_LOAD(&parent[cur]))) {
+            CTOOLS_HDFE_STORE(&parent[prev], next);
+            prev = cur;
+            cur = next;
+        }
+    }
+    return cur;
+}
+
+static inline void cc_unite(ST_int *parent, ST_int a, ST_int b)
+{
+    ST_int ra = cc_find(parent, a), rb = cc_find(parent, b);
+    while (ra != rb) {
+        if (ra < rb) {
+            ST_int t = ra;
+            ra = rb;
+            rb = t;
+        }
+        /* link the larger root below the smaller one, unless another
+           thread linked it first */
+        ST_int seen = ra;
+        if (CTOOLS_HDFE_CAS(&parent[ra], &seen, rb)) return;
+        ra = cc_find(parent, seen);
+        rb = cc_find(parent, rb);
+    }
+}
+
 ST_int ctools_count_connected_components(
     const ST_int *fe1_levels,
     const ST_int *fe2_levels,
@@ -553,36 +715,35 @@ ST_int ctools_count_connected_components(
     ST_int num_levels2
 )
 {
-    ST_int total_nodes = num_levels1 + num_levels2;
-    ctools_UnionFind *uf = ctools_uf_create(total_nodes);
-    if (!uf) return -1;
+    if (num_levels1 < 0 || num_levels2 < 0) return -1;
+    const long long total_nodes = (long long)num_levels1 + num_levels2;
+    if (total_nodes > 0x7fffffffLL) return -1;
+    /* FE1 levels are nodes 0..L1-1, FE2 levels nodes L1..L1+L2-1 */
+    ST_int *parent = (ST_int *)malloc((size_t)(total_nodes > 0 ? total_nodes : 1) * sizeof(ST_int));
+    if (!parent) return -1;
 
-    ST_int i;
+    const int B = ctools_hdfe_row_blocks(N);
+    const ST_int nodes = (ST_int)total_nodes;
+    ST_int x;
+    int b;
+    #pragma omp parallel for schedule(static) if (B > 1)
+    for (x = 0; x < nodes; x++) parent[x] = x;
 
-    for (i = 0; i < N; i++) {
-        ST_int node1 = fe1_levels[i] - 1;
-        ST_int node2 = num_levels1 + fe2_levels[i] - 1;
-        ctools_uf_union(uf, node1, node2);
+    #pragma omp parallel for schedule(static) if (B > 1)
+    for (b = 0; b < B; b++) {
+        ST_int i0, i1;
+        ctools_hdfe_block_range(N, B, b, &i0, &i1);
+        for (ST_int i = i0; i < i1; i++)
+            cc_unite(parent, fe1_levels[i] - 1, num_levels1 + fe2_levels[i] - 1);
     }
 
+    /* The components holding an FE1 level, as before: each has its
+       smallest node, an FE1 level, as its root */
     ST_int num_components = 0;
-    ST_int *seen_roots = (ST_int *)calloc(total_nodes, sizeof(ST_int));
-    if (!seen_roots) {
-        ctools_uf_destroy(uf);
-        return -1;
-    }
+    #pragma omp parallel for schedule(static) reduction(+ : num_components) if (B > 1)
+    for (x = 0; x < num_levels1; x++) num_components += parent[x] == x;
 
-    for (i = 0; i < num_levels1; i++) {
-        ST_int root = ctools_uf_find(uf, i);
-        if (!seen_roots[root]) {
-            seen_roots[root] = 1;
-            num_components++;
-        }
-    }
-
-    free(seen_roots);
-    ctools_uf_destroy(uf);
-
+    free(parent);
     return num_components;
 }
 
@@ -595,21 +756,51 @@ ST_int ctools_fe_nested_in_cluster(
     const ST_int *cluster_ids,
     ST_int N)
 {
-    ST_int *fe_to_cluster = (ST_int *)malloc((size_t)num_fe_levels * sizeof(ST_int));
+    ST_int *fe_to_cluster = (ST_int *)malloc((size_t)(num_fe_levels > 0 ? num_fe_levels : 1) * sizeof(ST_int));
     if (!fe_to_cluster) return -1;
 
-    for (ST_int i = 0; i < num_fe_levels; i++)
-        fe_to_cluster[i] = -1;
-
+    const int B = ctools_hdfe_row_blocks(N);
     ST_int is_nested = 1;
-    for (ST_int i = 0; i < N && is_nested; i++) {
-        ST_int fe_level = fe_levels[i] - 1;  /* Convert 1-based to 0-based */
-        ST_int clust_id = cluster_ids[i];
-        if (fe_to_cluster[fe_level] == -1) {
-            fe_to_cluster[fe_level] = clust_id;
-        } else if (fe_to_cluster[fe_level] != clust_id) {
-            is_nested = 0;
+    if (B == 1) {
+        for (ST_int i = 0; i < num_fe_levels; i++)
+            fe_to_cluster[i] = -1;
+
+        for (ST_int i = 0; i < N && is_nested; i++) {
+            ST_int fe_level = fe_levels[i] - 1;  /* Convert 1-based to 0-based */
+            ST_int clust_id = cluster_ids[i];
+            if (fe_to_cluster[fe_level] == -1) {
+                fe_to_cluster[fe_level] = clust_id;
+            } else if (fe_to_cluster[fe_level] != clust_id) {
+                is_nested = 0;
+            }
         }
+    } else {
+        /* Each level takes the cluster of whichever of its rows claims it
+           first; any other cluster among its rows ends the check (blocks
+           look at the flag every 4096 rows) */
+        ST_int i;
+        int b;
+        #pragma omp parallel for schedule(static)
+        for (i = 0; i < num_fe_levels; i++) fe_to_cluster[i] = -1;
+        int differs = 0;
+        #pragma omp parallel for schedule(static)
+        for (b = 0; b < B; b++) {
+            ST_int i0, i1;
+            ctools_hdfe_block_range(N, B, b, &i0, &i1);
+            for (ST_int r = i0; r < i1; r++) {
+                if (((r - i0) & 4095) == 0 && CTOOLS_HDFE_LOAD(&differs)) break;
+                ST_int *slot = &fe_to_cluster[fe_levels[r] - 1];
+                ST_int clust_id = cluster_ids[r];
+                ST_int cur = CTOOLS_HDFE_LOAD(slot);
+                if (cur == clust_id) continue;
+                if (cur == -1 && CTOOLS_HDFE_CAS(slot, &cur, clust_id)) continue;
+                if (cur != clust_id) {
+                    CTOOLS_HDFE_STORE(&differs, 1);
+                    break;
+                }
+            }
+        }
+        is_nested = !differs;
     }
 
     free(fe_to_cluster);

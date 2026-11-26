@@ -22,6 +22,9 @@ void cqreg_ipm_config_init(cqreg_ipm_config *config)
     config->tol_gap = CQREG_DEFAULT_TOL;
     config->verbose = 0;
     config->skip_crossover = 0;
+    config->start_beta = NULL;
+    config->start_is_solution = 0;
+    config->no_preprocess = 0;
 }
 
 /* ============================================================================

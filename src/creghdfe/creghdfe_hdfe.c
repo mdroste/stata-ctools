@@ -10,6 +10,7 @@
 #include "../ctools_hdfe_utils.h"
 #include "../ctools_config.h"
 #include "../ctools_spi.h"  /* Error-checking SPI wrappers */
+#include "../ctools_release.h"
 
 /* Define the global state pointer */
 HDFE_State *g_state = NULL;
@@ -33,6 +34,27 @@ void cleanup_state(void)
 
     free(g_state);
     g_state = NULL;
+}
+
+static void release_state(void *state)
+{
+    HDFE_State *S = (HDFE_State *)state;
+    free(S->weights);
+    S->weights = NULL;
+    ctools_hdfe_state_cleanup(S);
+    free(S);
+}
+
+/*
+ * As cleanup_state, at the end of a fit: g_state is detached at once and
+ * returned by the helper thread after the plugin call (ctools_release.h)
+ */
+void cleanup_state_later(void)
+{
+    if (g_state == NULL) return;
+    HDFE_State *S = g_state;
+    g_state = NULL;
+    ctools_release_later_call(release_state, S);
 }
 
 /* ============================================================================

@@ -31,10 +31,20 @@ typedef struct {
     ctools_dta_span **ku_spans;
     char **ku_arena;
     int has_strl;
+    /* The keys are held in key order; the keepusing columns (and ku_spans)
+     * keep the using data's own order. perm[r] is the using row of sorted
+     * row r, NULL when the using data were already in key order. */
+    perm_idx_t *perm;
 } cmerge_using_cache_t;
 
 /* External reference to global cache (defined in cmerge_impl.c) */
 extern cmerge_using_cache_t g_using_cache;
+
+/* The keepusing row of sorted using row r (r >= 0) */
+static inline int32_t cmerge_using_row(int32_t r)
+{
+    return g_using_cache.perm ? (int32_t)g_using_cache.perm[r] : r;
+}
 
 /* Thread arguments for keepusing variable write */
 typedef struct {

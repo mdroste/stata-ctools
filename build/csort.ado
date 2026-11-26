@@ -1,28 +1,8 @@
 *! version 1.3.1 20261124 github.com/mdroste/stata-ctools
+*! original: Stata's sort (built in)
+*! original: see help csort for details
 
 program define csort, rclass
-    version 14.1
-    local command `"`0'"'
-    syntax varlist [in], [STReam(integer 0) NOSTReam *]
-    * Publication and the subsequent sort-marker/e(sample) updates form one
-    * transaction, including ordinary and nostream sorts. preserve may spill
-    * the recovery copy to disk above c(max_preservemem).
-    local recover 1
-    if "`: sortedby'" == "`varlist'" & "`in'" == "" local recover 0
-    nobreak {
-        if `recover' preserve
-        capture noisily break _csort_impl `command'
-        local rc = _rc
-        if !`rc' return add
-        if `recover' {
-            if `rc' restore
-            else restore, not
-        }
-        if `rc' exit `rc'
-    }
-end
-
-program define _csort_impl, rclass
     version 14.1
 
     * Check observation limit (Stata plugin API limitation)
@@ -262,39 +242,38 @@ program define _csort_impl, rclass
         quietly _ctools_clock __ct_start92
     }
 
-    * Call the C plugin with ALL variables (so it can sort the entire dataset)
-    if `__esample' {
+    * Call the C plugin with ALL variables (so it can sort the entire dataset).
+    * No copy of the data is kept. The plugin puts the original rows back when
+    * its own store fails; Break waits until the sort marker and e(sample)
+    * agree with the new order.
+    nobreak {
         capture noisily plugin call ctools_plugin `allvars' `if' `in', "csort `threads_code' `var_indices' `alg_code' `stream_code' `nostream_code' `strw_code'"
         local __rc = _rc
         if `__rc' {
-            _estimates unhold `__eshold'
+            if `__esample' _estimates unhold `__eshold'
             exit `__rc'
         }
-    }
-    else plugin call ctools_plugin `allvars' `if' `in', "csort `threads_code' `var_indices' `alg_code' `stream_code' `nostream_code' `strw_code'"
 
-    * Regression hook: exercise restoration after every column was moved.
-    if "$CTOOLS_csort_fault" == "post" error 1
+        * End plugin timer, start post-plugin timer
+        if `__do_timing' {
+            quietly _ctools_clock __ct_now
+            local __ct_elapsed92 = `__ct_elapsed92' + (`__ct_now' - `__ct_start92')
+            if "`__ct_elapsed93'" == "" local __ct_elapsed93 = 0
+            quietly _ctools_clock __ct_start93
+        }
 
-    * End plugin timer, start post-plugin timer
-    if `__do_timing' {
-        quietly _ctools_clock __ct_now
-        local __ct_elapsed92 = `__ct_elapsed92' + (`__ct_now' - `__ct_start92')
-        if "`__ct_elapsed93'" == "" local __ct_elapsed93 = 0
-        quietly _ctools_clock __ct_start93
+        * Set sort order in Stata (use stable to match csort's stable radix sort)
+        * Skip if nosortedby option is specified
+        if "`nosortedby'" == "" {
+            sort `varlist', stable
+        }
+        else {
+            * The plugin reordered the rows, but Stata still holds the previous
+            * sort marker, which by, merge and csort's own early exit trust.
+            _csort_clear_sortedby
+        }
+        if `__esample' _estimates unhold `__eshold'
     }
-
-    * Set sort order in Stata (use stable to match csort's stable radix sort)
-    * Skip if nosortedby option is specified
-    if "`nosortedby'" == "" {
-        sort `varlist', stable
-    }
-    else {
-        * The plugin reordered the rows, but Stata still holds the previous
-        * sort marker, which by, merge and csort's own early exit trust.
-        _csort_clear_sortedby
-    }
-    if `__esample' _estimates unhold `__eshold'
 
     * End post-plugin timer (wall-clock timer 90 stays running)
     if `__do_timing' {

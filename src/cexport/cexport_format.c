@@ -340,6 +340,324 @@ static int cexport_write_quoted_string(const char *str, char *buf, size_t buf_si
 }
 
 /* ========================================================================
+   Date and Time Display Formats
+
+   export delimited writes a variable with a %t format as
+   strtrim(string(value, format)). The formats compiled here are the daily,
+   clock, weekly, monthly, quarterly, half-yearly and yearly ones built from
+   the documented display codes below. Any other format is refused and stays
+   with Stata, as do values outside the years 100-9999 (which Stata shows as
+   numbers): the ado checks the variable's range before it sends a format.
+   ======================================================================== */
+
+#define CEXPORT_TIMEFMT_MAX 64
+
+enum {
+    TF_LITERAL, TF_CC, TF_cc, TF_YY, TF_yy, TF_JJJ, TF_jjj,
+    TF_Mon, TF_Month, TF_mon, TF_month, TF_NN, TF_nn, TF_DD, TF_dd,
+    TF_Dayname, TF_Day, TF_Da, TF_day, TF_da, TF_h, TF_q, TF_WW, TF_ww,
+    TF_HH, TF_Hh, TF_hH, TF_hh, TF_MM, TF_mm, TF_SS, TF_ss,
+    TF_am, TF_a_m, TF_AM, TF_A_M
+};
+
+struct cexport_timefmt {
+    char unit;                                /* d c w m q h y */
+    int count;
+    unsigned char code[CEXPORT_TIMEFMT_MAX];
+    char literal[CEXPORT_TIMEFMT_MAX];        /* for TF_LITERAL */
+};
+
+/* Display codes, a longer code before any code it begins with. clock codes
+ * belong to %tc only. */
+static const struct {
+    const char *text;
+    unsigned char code;
+    bool clock;
+} tf_codes[] = {
+    {"Dayname", TF_Dayname, false}, {"Month", TF_Month, false}, {"month", TF_month, false},
+    {"A.M.", TF_A_M, true}, {"a.m.", TF_a_m, true},
+    {"JJJ", TF_JJJ, false}, {"jjj", TF_jjj, false},
+    {"Mon", TF_Mon, false}, {"mon", TF_mon, false},
+    {"Day", TF_Day, false}, {"day", TF_day, false},
+    {"CC", TF_CC, false}, {"cc", TF_cc, false}, {"YY", TF_YY, false}, {"yy", TF_yy, false},
+    {"NN", TF_NN, false}, {"nn", TF_nn, false}, {"DD", TF_DD, false}, {"dd", TF_dd, false},
+    {"Da", TF_Da, false}, {"da", TF_da, false}, {"WW", TF_WW, false}, {"ww", TF_ww, false},
+    {"HH", TF_HH, true}, {"Hh", TF_Hh, true}, {"hH", TF_hH, true}, {"hh", TF_hh, true},
+    {"MM", TF_MM, true}, {"mm", TF_mm, true}, {"SS", TF_SS, true}, {"ss", TF_ss, true},
+    {"AM", TF_AM, true}, {"am", TF_am, true},
+    {"h", TF_h, false}, {"q", TF_q, false}
+};
+
+cexport_timefmt *cexport_timefmt_compile(const char *format)
+{
+    const char *p = format;
+    if (!p || *p++ != '%') return NULL;
+    if (*p == '-') p++;
+    if (*p++ != 't') return NULL;
+    const char unit = *p;
+    if (!unit || !strchr("dcwmqhy", unit)) return NULL;
+    p++;
+    /* Stata's default for each unit */
+    const char *detail = *p ? p
+        : unit == 'd' ? "DDmonCCYY" : unit == 'c' ? "DDmonCCYY_HH:MM:SS"
+        : unit == 'w' ? "CCYY!www" : unit == 'm' ? "CCYY!mnn"
+        : unit == 'q' ? "CCYY!qq" : unit == 'h' ? "CCYY!hh" : "CCYY";
+
+    cexport_timefmt *f = (cexport_timefmt *)calloc(1, sizeof(*f));
+    if (!f) return NULL;
+    f->unit = unit;
+    for (p = detail; *p;) {
+        if (*p == '+') { /* separates codes, displays nothing */
+            p++;
+            continue;
+        }
+        if (f->count >= CEXPORT_TIMEFMT_MAX) goto unsupported;
+        char literal = 0;
+        if (*p == '!') {
+            /* !c displays the character c; a multibyte c stays with Stata */
+            if (!p[1] || (unsigned char)p[1] >= 128) goto unsupported;
+            literal = p[1];
+            p += 2;
+        } else if (*p == '_') {
+            literal = ' ';
+            p++;
+        } else if (*p == '.' && p[1] == 's') {
+            goto unsupported; /* fractions of a second */
+        } else if (strchr(".,:-/\\", *p)) {
+            literal = *p++;
+        }
+        if (literal) {
+            f->code[f->count] = TF_LITERAL;
+            f->literal[f->count++] = literal;
+            continue;
+        }
+        size_t k, n = sizeof(tf_codes) / sizeof(tf_codes[0]);
+        for (k = 0; k < n; k++)
+            if (!strncmp(p, tf_codes[k].text, strlen(tf_codes[k].text))) break;
+        if (k == n || (tf_codes[k].clock && unit != 'c')) goto unsupported;
+        f->code[f->count++] = tf_codes[k].code;
+        p += strlen(tf_codes[k].text);
+    }
+    return f;
+
+unsupported:
+    free(f);
+    return NULL;
+}
+
+/* Bytes a cell in this format can take: no code displays more than 9. */
+size_t cexport_timefmt_reserve(const cexport_timefmt *f)
+{
+    return 9 * (size_t)f->count + 2;
+}
+
+static inline long long tf_floor_div(long long a, long long b)
+{
+    long long q = a / b;
+    return (a % b != 0 && ((a < 0) != (b < 0))) ? q - 1 : q;
+}
+
+/* Days from 01jan1960 to a civil date and back (proleptic Gregorian). */
+static long long tf_days(long long y, int m, int d)
+{
+    y -= m <= 2;
+    const long long era = tf_floor_div(y, 400);
+    const long long yoe = y - era * 400;
+    const long long doy = (153 * (m > 2 ? m - 3 : m + 9) + 2) / 5 + d - 1;
+    const long long doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + doe - 715815;
+}
+
+static void tf_civil(long long days, long long *y, int *m, int *d)
+{
+    const long long z = days + 715815;
+    const long long era = tf_floor_div(z, 146097);
+    const long long doe = z - era * 146097;
+    const long long yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    const long long doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    const long long mp = (5 * doy + 2) / 153;
+    *d = (int)(doy - (153 * mp + 2) / 5 + 1);
+    *m = (int)(mp < 10 ? mp + 3 : mp - 9);
+    *y = yoe + era * 400 + (*m <= 2);
+}
+
+static inline char *tf_put_text(char *p, const char *text, size_t n, bool lower)
+{
+    for (size_t i = 0; i < n; i++) {
+        char c = text[i];
+        *p++ = (lower && c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
+    }
+    return p;
+}
+
+static inline char *tf_put_number(char *p, long long v, int width)
+{
+    char digits[24];
+    int n = 0;
+    if (v < 0) {
+        *p++ = '-';
+        v = -v;
+    }
+    do {
+        digits[n++] = (char)('0' + v % 10);
+        v /= 10;
+    } while (v);
+    for (int i = n; i < width; i++) *p++ = '0';
+    while (n) *p++ = digits[--n];
+    return p;
+}
+
+/* The display text of value, without leading and trailing blanks. Returns
+ * its length, or -1 when the value is not one this code displays (the
+ * caller then writes the number). out holds cexport_timefmt_reserve(). */
+static int cexport_timefmt_render(const cexport_timefmt *f, double value, char *out)
+{
+    static const char *const months[12] = {"January", "February", "March", "April", "May", "June", "July",
+                                           "August", "September", "October", "November", "December"};
+    static const char *const days[7] = {"Sunday", "Monday", "Tuesday", "Wednesday",
+                                        "Thursday", "Friday", "Saturday"};
+    if (!(value > -1e15 && value < 1e15)) return -1;
+    const long long whole = (long long)floor(value);
+    long long day = 0, year;
+    int month, mday, hour = 0, minute = 0, second = 0;
+    switch (f->unit) {
+    case 'd':
+        day = whole;
+        break;
+    case 'c': {
+        day = tf_floor_div(whole, 86400000LL);
+        const long long rest = whole - day * 86400000LL;
+        hour = (int)(rest / 3600000);
+        minute = (int)(rest / 60000 % 60);
+        second = (int)(rest / 1000 % 60);
+        break;
+    }
+    case 'w': {
+        const long long yr = tf_floor_div(whole, 52);
+        day = tf_days(1960 + yr, 1, 1) + 7 * (whole - yr * 52);
+        break;
+    }
+    case 'm': {
+        const long long yr = tf_floor_div(whole, 12);
+        day = tf_days(1960 + yr, (int)(whole - yr * 12) + 1, 1);
+        break;
+    }
+    case 'q': {
+        const long long yr = tf_floor_div(whole, 4);
+        day = tf_days(1960 + yr, 3 * (int)(whole - yr * 4) + 1, 1);
+        break;
+    }
+    case 'h': {
+        const long long yr = tf_floor_div(whole, 2);
+        day = tf_days(1960 + yr, 6 * (int)(whole - yr * 2) + 1, 1);
+        break;
+    }
+    default: /* 'y' */
+        day = tf_days(whole, 1, 1);
+        break;
+    }
+    tf_civil(day, &year, &month, &mday);
+    if (year < 100 || year > 9999) return -1;
+    const int doy = (int)(day - tf_days(year, 1, 1)) + 1;
+    const int dow = (int)(day - tf_floor_div(day + 5, 7) * 7 + 5); /* 01jan1960 was a Friday */
+    const int week = (doy - 1) / 7 + 1 > 52 ? 52 : (doy - 1) / 7 + 1;
+    const int hour12 = hour % 12 ? hour % 12 : 12;
+
+    char *p = out;
+    for (int i = 0; i < f->count; i++) {
+        switch (f->code[i]) {
+        case TF_LITERAL: *p++ = f->literal[i]; break;
+        case TF_CC: p = tf_put_number(p, year / 100, 2); break;
+        case TF_cc: p = tf_put_number(p, year / 100, 0); break;
+        case TF_YY: p = tf_put_number(p, year % 100, 2); break;
+        case TF_yy: p = tf_put_number(p, year % 100, 0); break;
+        case TF_JJJ: p = tf_put_number(p, doy, 3); break;
+        case TF_jjj: p = tf_put_number(p, doy, 0); break;
+        case TF_Mon: p = tf_put_text(p, months[month - 1], 3, false); break;
+        case TF_mon: p = tf_put_text(p, months[month - 1], 3, true); break;
+        case TF_Month: p = tf_put_text(p, months[month - 1], strlen(months[month - 1]), false); break;
+        case TF_month: p = tf_put_text(p, months[month - 1], strlen(months[month - 1]), true); break;
+        case TF_NN: p = tf_put_number(p, month, 2); break;
+        case TF_nn: p = tf_put_number(p, month, 0); break;
+        case TF_DD: p = tf_put_number(p, mday, 2); break;
+        case TF_dd: p = tf_put_number(p, mday, 0); break;
+        case TF_Dayname: p = tf_put_text(p, days[dow], strlen(days[dow]), false); break;
+        case TF_Day: p = tf_put_text(p, days[dow], 3, false); break;
+        case TF_Da: p = tf_put_text(p, days[dow], 2, false); break;
+        case TF_day: p = tf_put_text(p, days[dow], 3, true); break;
+        case TF_da: p = tf_put_text(p, days[dow], 2, true); break;
+        case TF_h: p = tf_put_number(p, (month - 1) / 6 + 1, 0); break;
+        case TF_q: p = tf_put_number(p, (month - 1) / 3 + 1, 0); break;
+        case TF_WW: p = tf_put_number(p, week, 2); break;
+        case TF_ww: p = tf_put_number(p, week, 0); break;
+        case TF_HH: p = tf_put_number(p, hour, 2); break;
+        case TF_hH: p = tf_put_number(p, hour, 0); break;
+        case TF_Hh: p = tf_put_number(p, hour12, 2); break;
+        case TF_hh: p = tf_put_number(p, hour12, 0); break;
+        case TF_MM: p = tf_put_number(p, minute, 2); break;
+        case TF_mm: p = tf_put_number(p, minute, 0); break;
+        case TF_SS: p = tf_put_number(p, second, 2); break;
+        case TF_ss: p = tf_put_number(p, second, 0); break;
+        case TF_am: p = tf_put_text(p, hour < 12 ? "am" : "pm", 2, false); break;
+        case TF_AM: p = tf_put_text(p, hour < 12 ? "AM" : "PM", 2, false); break;
+        case TF_a_m: p = tf_put_text(p, hour < 12 ? "a.m." : "p.m.", 4, false); break;
+        default: p = tf_put_text(p, hour < 12 ? "A.M." : "P.M.", 4, false); break;
+        }
+    }
+    /* strtrim() */
+    char *start = out;
+    while (start < p && *start == ' ') start++;
+    while (p > start && p[-1] == ' ') p--;
+    const size_t len = (size_t)(p - start);
+    if (start != out) memmove(out, start, len);
+    out[len] = '\0';
+    return (int)len;
+}
+
+/* The cell of a numeric variable written in its %t display format or as its
+ * value label's text. buf holds at least ctx->cell_reserve[j] bytes. Returns
+ * the length, or a negative row-formatter code. */
+static int cexport_write_cell(const cexport_context *ctx, size_t j, double val, char *buf, size_t cap)
+{
+    const vartype_t vtype = ctx->vartypes[j];
+    if (ctx->cell_kind[j] == CEXPORT_CELL_TIME) {
+        /* A missing value is written as in a plain column: nothing for .,
+         * the code for .a-.z. A display-formatted cell is never quoted. */
+        if (!is_stata_missing(val)) {
+            int len = cexport_timefmt_render(ctx->timefmt[j], val, buf);
+            if (len >= 0) return len;
+        }
+        return cexport_double_to_str(val, buf, CEXPORT_DBL_BUFFER_SIZE, false, vtype);
+    }
+
+    /* Label text is a string cell, also when the text is empty (export
+     * delimited then writes an empty cell, not the number). */
+    const char *text = ctx->label_text(ctx->labelmap[j], val);
+    if (text) {
+        if (ctx->quote_strings ||
+            (ctx->quote_if_needed && cexport_string_needs_quoting(text, ctx->delimiter)))
+            return cexport_write_quoted_string(text, buf, cap);
+        const size_t len = strlen(text);
+        if (len + 1 > cap) return -1;
+        memcpy(buf, text, len + 1);
+        return (int)len;
+    }
+    /* A value without a label is the number of an unlabeled column. Under
+     * quote it is written bare, as export delimited writes it; otherwise it
+     * shares the label text's cell rules and is quoted when it holds the
+     * delimiter. */
+    char number[CEXPORT_DBL_BUFFER_SIZE];
+    const int len = cexport_double_to_str(val, number, CEXPORT_DBL_BUFFER_SIZE, false, vtype);
+    if (len < 0) return -1;
+    if (!ctx->quote_strings && ctx->quote_if_needed &&
+        cexport_string_needs_quoting(number, ctx->delimiter))
+        return cexport_write_quoted_string(number, buf, cap);
+    if ((size_t)len + 1 > cap) return -1;
+    memcpy(buf, number, (size_t)len + 1);
+    return len;
+}
+
+/* ========================================================================
    Row Formatting
    ======================================================================== */
 
@@ -355,14 +673,22 @@ int cexport_format_row_numeric(const cexport_context *ctx, size_t row_idx,
     for (size_t j = 0; j < nvars; j++) {
         double val = ctx->filtered.data.vars[j].data.dbl[row_idx];
         vartype_t vtype = ctx->vartypes[j];
+        int field_len;
 
-        /* Check buffer space for number + delimiter/newline */
-        if (pos + CEXPORT_DBL_BUFFER_SIZE + 2 + (size_t)line_end_len > buf_size) {
-            return -1;
+        if (ctx->cell_kind && ctx->cell_kind[j]) {
+            const size_t reserve = ctx->cell_reserve[j];
+            if (pos + reserve + 2 + (size_t)line_end_len > buf_size) return -1;
+            field_len = cexport_write_cell(ctx, j, val, buf + pos, reserve);
+            if (field_len < 0) return field_len;
+        } else {
+            /* Check buffer space for number + delimiter/newline */
+            if (pos + CEXPORT_DBL_BUFFER_SIZE + 2 + (size_t)line_end_len > buf_size) {
+                return -1;
+            }
+
+            /* Write directly to output buffer */
+            field_len = cexport_double_to_str(val, buf + pos, CEXPORT_DBL_BUFFER_SIZE, false, vtype);
         }
-
-        /* Write directly to output buffer */
-        int field_len = cexport_double_to_str(val, buf + pos, CEXPORT_DBL_BUFFER_SIZE, false, vtype);
         pos += field_len;
 
         /* Add delimiter or line ending */
@@ -396,13 +722,20 @@ int cexport_format_row(const cexport_context *ctx, size_t row_idx,
             double val = var->data.dbl[row_idx];
             vartype_t vtype = ctx->vartypes[j];
 
-            /* Check buffer space (assume max 32 chars for number + line ending) */
-            if (pos + CEXPORT_DBL_BUFFER_SIZE + 2 + (size_t)line_end_len > buf_size) {
-                return -1;
-            }
+            if (ctx->cell_kind && ctx->cell_kind[j]) {
+                const size_t reserve = ctx->cell_reserve[j];
+                if (pos + reserve + 2 + (size_t)line_end_len > buf_size) return -1;
+                field_len = cexport_write_cell(ctx, j, val, buf + pos, reserve);
+                if (field_len < 0) return field_len;
+            } else {
+                /* Check buffer space (assume max 32 chars for number + line ending) */
+                if (pos + CEXPORT_DBL_BUFFER_SIZE + 2 + (size_t)line_end_len > buf_size) {
+                    return -1;
+                }
 
-            /* Write directly to output buffer */
-            field_len = cexport_double_to_str(val, buf + pos, CEXPORT_DBL_BUFFER_SIZE, false, vtype);
+                /* Write directly to output buffer */
+                field_len = cexport_double_to_str(val, buf + pos, CEXPORT_DBL_BUFFER_SIZE, false, vtype);
+            }
             pos += field_len;
         } else {
             /* String variable */
@@ -460,9 +793,16 @@ int cexport_format_row_stream(const cexport_context *ctx, ST_int obs,
 
         if (!ctx->is_string[j]) {
             double val;
-            if (pos + CEXPORT_DBL_BUFFER_SIZE + 2 + (size_t)line_end_len > buf_size) return -1;
+            const bool special = ctx->cell_kind && ctx->cell_kind[j];
+            const size_t reserve = special ? ctx->cell_reserve[j] : CEXPORT_DBL_BUFFER_SIZE;
+            if (pos + reserve + 2 + (size_t)line_end_len > buf_size) return -1;
             if (read_number(var, obs, &val)) return -2;
-            field_len = cexport_double_to_str(val, buf + pos, CEXPORT_DBL_BUFFER_SIZE, false, ctx->vartypes[j]);
+            if (special) {
+                field_len = cexport_write_cell(ctx, j, val, buf + pos, reserve);
+                if (field_len < 0) return field_len;
+            } else {
+                field_len = cexport_double_to_str(val, buf + pos, CEXPORT_DBL_BUFFER_SIZE, false, ctx->vartypes[j]);
+            }
         } else {
             /* Read directly into the output; quote in place only when needed. */
             if (pos + CEXPORT_STR_READ_SIZE + 2 + (size_t)line_end_len > buf_size) return -1;

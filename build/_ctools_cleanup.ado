@@ -7,13 +7,9 @@ program define _ctools_cleanup
     foreach command of local 0 {
         foreach pattern in __`command'_* _`command'_* {
             local found : all scalars "`pattern'"
-            foreach name of local found {
-                capture scalar drop `name'
-            }
+            if "`found'" != "" capture scalar drop `found'
             local found : all matrices "`pattern'"
-            foreach name of local found {
-                capture matrix drop `name'
-            }
+            if "`found'" != "" capture matrix drop `found'
         }
     }
 end

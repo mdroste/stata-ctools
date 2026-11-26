@@ -34,6 +34,9 @@ typedef struct
 
 void ctools_rowstage_init(ctools_rowstage *rs);
 void ctools_rowstage_free(ctools_rowstage *rs);
+/* ctools_rowstage_free for a command's final cleanup: the staged rows are
+   returned on the release helper after the plugin call (ctools_release.h). */
+void ctools_rowstage_release(ctools_rowstage *rs);
 
 /*
     1 when nobs observations of every listed variable can be staged: numeric,

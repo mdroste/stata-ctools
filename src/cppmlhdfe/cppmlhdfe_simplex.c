@@ -137,6 +137,79 @@ done:
     return rc;
 }
 
+/* A column within this factor of a threshold of ppml_simplex() is left to its
+ * exact sequence */
+#define PPML_SIMPLEX_SCREEN_MARGIN 1e4
+
+/* Whether ppml_simplex() would certainly find no suspect regressor, so that
+ * it has nothing to do. A regressor is a suspect when, on the rows with a
+ * positive outcome, it lies in the span of the fixed effects and of the
+ * regressors before it. That is decided by residual norms on rows of
+ * positive weight, where the projection is unique whichever method computes
+ * it, so the solve for the coefficients (every thread on the rows) can
+ * answer it. Returns 1 only when every regressor's norm, at its turn in the
+ * orthogonalization of ppml_simplex(), clears the suspect threshold by
+ * PPML_SIMPLEX_SCREEN_MARGIN. Otherwise, and whenever that solve does not
+ * apply or fails, 0: the caller then runs the row iteration, whose
+ * residuals on the zero rows (the tableau) depend on the solution it picks.
+ *
+ * The full-sample projection of ppml_simplex() is not needed for this. It
+ * only takes regressors the effects absorb out of the orthogonalization, so
+ * the later ones are orthogonalized against fewer columns there than here:
+ * their norms there are at least the norms found here, and a norm that is
+ * clear here is clear there.
+ *
+ * data is the caller's N x K scratch; S->weights and S->tolerance are left
+ * for the caller to set again. */
+static int ppml_simplex_clear(const PPML_Options *options, HDFE_State *S, const double *y,
+                              const double *X, const double *w_user, int weight_type,
+                              const double *w_pos, int N, int K, double *data)
+{
+    if (S->G < 2 || S->maxiter < HDFE_COEF_MIN_MAXITER || K < 1)
+        return 0;
+
+    int i, col;
+#pragma omp parallel for schedule(static) if (N > 100000)
+    for (i = 0; i < N; i++)
+        S->weights[i] = y[i] > 0 ? (w_pos ? w_pos[i] : (weight_type == 2 && w_user ? w_user[i] : 1))
+                                 : 0;
+    ppml_update_fe_weights(S, S->weights, N);
+    if (!hdfe_coef_applies(S))
+        return 0;
+    S->tolerance = fmin(1e-12, options->simplex_tol * .1);
+#pragma omp parallel for schedule(static) if ((size_t)N * (size_t)K > 200000)
+    for (col = 0; col < K; col++)
+        memcpy(data + (size_t)col * N, X + (size_t)col * N, (size_t)N * sizeof(double));
+    if (hdfe_coef_partial_out(S, data, N, K, HDFE_COEF_AUTO).status)
+        return 0;
+    double largest = 0;
+    for (int j = 0; j < K; j++)
+        largest = fmax(largest,
+                       ppml_quad_dot(data + (size_t)j * N, data + (size_t)j * N, S->weights, N));
+    for (int j = 0; j < K; j++)
+    {
+        double norm = ppml_quad_dot(data + (size_t)j * N, data + (size_t)j * N, S->weights, N);
+        if (!(norm > fmax(DBL_MIN, largest * 1e-10) * PPML_SIMPLEX_SCREEN_MARGIN))
+            return 0;
+        if (j + 1 == K)
+            break; /* nothing left to orthogonalize against it */
+        norm = sqrt(norm);
+#pragma omp parallel for schedule(static) if (N > 100000)
+        for (i = 0; i < N; i++)
+            data[(size_t)j * N + i] /= norm;
+        for (col = j + 1; col < K; col++)
+            for (int pass = 0; pass < 2; pass++)
+            {
+                const double dot =
+                    ppml_quad_dot(data + (size_t)j * N, data + (size_t)col * N, S->weights, N);
+#pragma omp parallel for schedule(static) if (N > 100000)
+                for (i = 0; i < N; i++)
+                    data[(size_t)col * N + i] -= dot * data[(size_t)j * N + i];
+            }
+    }
+    return 1;
+}
+
 int ppml_simplex(const PPML_Options *options, HDFE_State *S, const double *y, const double *X,
                  const double *w_user, int weight_type, const double *w_pos, int N, int K,
                  int *separated)
@@ -163,6 +236,16 @@ int ppml_simplex(const PPML_Options *options, HDFE_State *S, const double *y, co
     }
     if (!nz)
         goto done;
+    /* Nothing to do when no regressor comes near being a suspect */
+    if (ppml_simplex_clear(options, S, y, X, w_user, weight_type, w_pos, N, K, data))
+        goto done;
+    if (ctools_cancel_requested())
+    {
+        rc = -1;
+        goto done;
+    }
+    for (int i = 0; i < N; i++)
+        S->weights[i] = w_user ? w_user[i] : 1;
     S->tolerance = 1e-9;
     ppml_update_fe_weights(S, S->weights, N);
     memcpy(full, X, (size_t)N * K * sizeof(double));
@@ -180,7 +263,9 @@ int ppml_simplex(const PPML_Options *options, HDFE_State *S, const double *y, co
     /* The positive-sample null space must be resolved more accurately than
      * the sign threshold; otherwise projection noise can flag extra zeros. */
     S->tolerance = fmin(1e-12, options->simplex_tol * .1);
-    /* on the rows, as every projection of this command (see ppml_partial) */
+    /* On the rows: the tableau below reads the residuals of the zero rows,
+     * which have no weight here, so they depend on the solution the
+     * iteration picks (see ppml_simplex_clear) */
     pr = partial_out_columns_options(S, data, N, K, 0, 1);
     if (pr.status)
     {

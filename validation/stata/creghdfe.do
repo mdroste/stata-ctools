@@ -3899,6 +3899,9 @@ else {
     assert_var_equal fe_ct fe_ref $DEFAULT_SIGFIGS "savefe, low-mobility worker-firm panel"
 }
 
+* Analytical numerical regressions (not agreement with another estimator).
+noi do "validation/support/creghdfe_numerics.do"
+
 * End of creghdfe validation
 noi print_summary "creghdfe"
 }

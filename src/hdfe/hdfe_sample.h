@@ -16,17 +16,19 @@
 typedef struct
 {
     ST_int *levels;    /* Level of each loaded row (1-based) */
-    ST_int *counts;    /* Rows per level */
+    ST_int *counts;    /* Unused, NULL (hdfe_build_factors counts the kept rows) */
     ST_int num_levels; /* Number of distinct levels */
     ST_int num_obs;    /* Number of loaded rows */
 } HDFE_LoadedFactor;
 
 /*
- * Remap G raw fixed-effect columns to 1-based levels with counts
- * (remap_and_count), one factor per thread. values[g] holds the N loaded
- * values of factor g, without missing values. factors must be zero-filled on
- * entry; its levels and counts are allocated here and stay owned by the
- * caller, also after a failure.
+ * Remap G raw fixed-effect columns to 1-based levels (hdfe_remap_levels),
+ * each in parallel over its rows (one factor per thread when the rows are
+ * few). The numbering is arbitrary but depends on the values alone; the
+ * consumers (singleton removal, hdfe_build_factors) do not depend on it.
+ * values[g] holds the N loaded values of factor g, without missing values.
+ * factors must be zero-filled on entry; its levels are allocated here and
+ * stay owned by the caller, also after a failure.
  *
  * Returns 0, or 920 when an allocation fails or a factor has no levels.
  */
@@ -53,6 +55,10 @@ ST_retcode hdfe_load_factors(HDFE_LoadedFactor *factors, ST_int G, const ST_doub
  * level; weighted_counts accumulates weights in row order. Every factor has
  * has_intercept = 1 and max_level = num_levels; inv_counts and the solver
  * buffers are left to ctools_hdfe_alloc_buffers().
+ *
+ * Outside parallel regions large samples are processed in parallel row
+ * blocks with the same result (weighted counts are still summed in row
+ * order, one factor per thread).
  *
  * Sets S->G, S->N and S->factors, which must be unset on entry. Returns 0, 198
  * for an invalid argument or level code, or 920 on allocation failure; after

@@ -32,7 +32,7 @@ creghdfe depvar indepvars [if] [in] [weight] [, absorb(varlist) options]
 | `tolerance(#)` | Projection tolerance; default `1e-8` |
 | `iterate(#)` | Maximum solver iterations; default 16,000. A limit below 1,000 is a limit on reghdfe's iteration and runs it (a direct solve has no iterations to limit) |
 | `transform(str)`, `acceleration(str)` | reghdfe's MAP variants with its names and abbreviations: `symmetric_kaczmarz` (default), `kaczmarz`, `cimmino`; `cg` (default), `sd`, `aitken`, `none`. `kaczmarz` with `cg` runs with reghdfe's warning; `rand_kaczmarz` is r(3498), as there. Either option runs MAP, also when it names the default |
-| `technique(map\|lsmr\|lsqr)`, `preconditioner()` | Checked as reghdfe checks them (`technique(cg)` r(3498)); each runs MAP, reghdfe's default iteration, to the same tolerance. `technique(map)` asks for it by name |
+| `technique(map\|lsmr\|lsqr)`, `preconditioner()` | `technique(map)` runs MAP, reghdfe's default iteration, in place of the default direct solve, to the same tolerance; a typed `preconditioner()` does too. With `individual()`, LSMR is the default and only supported technique. LSMR without `individual()` and all LSQR requests give r(198), without substituting MAP. `technique(cg)` gives r(3498). Individual LSMR uses diagonal preconditioning. |
 | `prune`, `poolsize(#)`, `compact`, `fastregress`, `parallel(#)` | Accepted as reghdfe accepts them; no effect (data are held in C; threads replace worker processes) |
 | `abort(0)` | reghdfe's undocumented solver property: keep the projection after `iterate()` iterations without convergence, `e(converged)` = 0. `miniter()`, `min_ok()`, `accel_start()`, `accel_freq()` are accepted with no effect; other `key(value)` options are r(198) |
 | `version(#)` | Not supported: `version(3)` and `version(5)` (historical reghdfe) are r(198), other numbers r(9) as in reghdfe |
@@ -257,6 +257,8 @@ The CG solver minimizes:
 ||y - Xβ - Σ αᵢ||²
 ```
 where αᵢ represents the fixed effects for each absorbed variable.
+
+The solver returns r(498) for numerical breakdown, with no new estimates; `abort(0)` cannot override this diagnostic. In particular, a tiny CG denominator does not count as convergence when extreme weights can hide unresolved fixed effects. Standardization uses a power-of-two scale for the response to preserve small identifying components beside a large fitted component; regressor standardization is unchanged.
 
 ## Stored Results
 

@@ -62,6 +62,68 @@ class performance_ProfileEvidence(unittest.TestCase):
                 readme.read_text(), other + "| `distinct` | `cdistinct` | Count | 10× |\n"
             )
 
+    def test_limited_pair_runs_at_fewer_sizes(self):
+        sizes = list(bench_profiles.profile_SIZES)
+        limit = bench_profiles.profile_LIMITS["qreg"]
+        self.assertGreater(max(sizes), limit)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "timings.csv"
+            header = "command,observations,method,seconds,rc,check_rc\n"
+            rows = "".join(f"qreg,{n},ref,3,0,0\nqreg,{n},c,1,0,0\n" for n in sizes if n <= limit)
+            path.write_text(header + rows)
+            details, ranges = bench_profiles.profile_summarize(path, sizes, ["qreg"])
+            self.assertEqual(ranges, {"qreg": "3×"})
+            self.assertNotIn(f"{max(sizes):,}", details)
+            # A timing above the limit is as wrong as a missing one below it.
+            above = f"qreg,{max(sizes)},ref,3,0,0\nqreg,{max(sizes)},c,1,0,0\n"
+            for wrong in (rows + above, rows.replace(f"qreg,{limit},c,1,0,0\n", "")):
+                path.write_text(header + wrong)
+                with self.assertRaises(ValueError):
+                    bench_profiles.profile_summarize(path, sizes, ["qreg"])
+
+    def test_readme_update_of_stacked_rows(self):
+        two, three = "\u00b2", "\u00b3"  # footnote markers that follow a speedup
+        readme = (
+            "| Stata command | Replaced with | Description | Approx. speedup\u00b9 |\r\n"
+            f"| `sort` | `csort` | Sort | 1\u20134\u00d7{two} |\r\n"
+            "| `reghdfe`<br>`fereg` | `creghdfe` | OLS | 9\u201320\u00d7<br>\u2014 |\r\n"
+            f"| `qreg` | `cqreg` | Quantile | 3\u20134\u00d7{three} |\r\n"
+        )
+        updated = bench_profiles.profile_update_readme(
+            readme, {"fereg": "0.5\u20130.7\u00d7", "sort": "2\u00d7", "qreg": "5\u20139\u00d7"}
+        )
+        # Only the named command's line of the cell changes; footnote markers stay.
+        expected = readme.replace("<br>\u2014 |", "<br>0.5\u20130.7\u00d7 |")
+        expected = expected.replace(f"1\u20134\u00d7{two}", f"2\u00d7{two}")
+        expected = expected.replace(f"3\u20134\u00d7{three}", f"5\u20139\u00d7{three}")
+        self.assertEqual(updated, expected)
+        for text, ranges in [
+            (readme, {"hdfe": "2×"}),  # no row
+            (readme + "| `sort` | `csort` | Sort | 1× |\r\n", {"sort": "2×"}),  # two rows
+            ("| `a`<br>`b` | `c` | d | 1× |\n", {"a": "2×"}),  # one speedup, two commands
+        ]:
+            with self.assertRaises(ValueError):
+                bench_profiles.profile_update_readme(text, ranges)
+
+    def test_pairs_and_limits_match_the_stata_workload(self):
+        folder = bench_profiles.ROOT / "validation/performance"
+        for name in ("profiles.do", "readme_benchmarks.do"):
+            text = (folder / name).read_text(encoding="utf-8")
+            pairs = re.search(r'local allpairs "([^"]+)"', text)[1].split()
+            self.assertEqual(sorted(pairs), sorted(bench_profiles.profile_COMMANDS), name)
+            limits = {m[1]: int(m[2]) for m in re.finditer(r"local limit_(\w+) (\d+)", text)}
+            self.assertEqual(limits, bench_profiles.profile_LIMITS, name)
+        # Each pair times the ctools command the summary names for it.
+        workload = (folder / "profiles.do").read_text(encoding="utf-8")
+        timed = dict(re.findall(r'local c_(\w+) `?"(.+?)"\'?\s*$', workload, re.M))
+        for pair in bench_profiles.profile_COMMANDS:
+            command = timed[pair]
+            shared = re.fullmatch(r"`c_(\w+)'", command)
+            if shared:
+                command = timed[shared[1]]
+            ctools = bench_profiles.profile_CTOOLS.get(pair, "c" + pair).split(",")[0]
+            self.assertEqual(command.split()[0], ctools, pair)
+
 
 class performance_AuditEvidence(unittest.TestCase):
     def fixture(self, directory, label="b1", *, seconds="0.2", signature="sig"):

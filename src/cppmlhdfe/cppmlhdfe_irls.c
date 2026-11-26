@@ -34,12 +34,14 @@
 #include "hdfe/hdfe_remap.h"
 #include "hdfe/hdfe_solver.h"
 #include "hdfe/hdfe_sample.h"
+#include "hdfe/hdfe_missing.h"
 #include "../ctools_matrix.h"
 #include "../ctools_hdfe_utils.h"
 #include "../ctools_config.h"
 #include "../ctools_types.h"
 #include "../ctools_spi.h"
 #include "../ctools_ols.h"
+#include "../ctools_release.h"
 
 /* Forward declarations for helpers defined at bottom of file */
 
@@ -212,6 +214,96 @@ static ST_retcode ppml_normal_equations(const ST_double *data, ST_int N, const S
     return failed ? 920 : 0;
 }
 
+/* Rows per block of ppml_column_scale */
+#define PPML_SCALE_BLOCK 32768
+
+/* The mean of a column (the sum of x[i] / N) and its sample standard
+ * deviation, as the standardization needs them: centred before squaring, the
+ * deviations scaled by the largest one, sums in double-double. The sums run
+ * over fixed blocks of PPML_SCALE_BLOCK rows, each in row order, and the
+ * blocks are added in order, so the result is the same at every thread count
+ * (and the sequential double-double sum to its accuracy; up to one block it
+ * is that sum). A constant column has no variation: the rounded sum of
+ * x[i] / N need not reproduce the constant exactly, and a roundoff-level
+ * largest deviation would otherwise give an outcome scale of order 1e-16
+ * (amplifying every later rounding error), so its mean is the constant and
+ * its standard deviation zero. Returns 0, or 920. */
+static ST_retcode ppml_column_scale(const ST_double *x, ST_int N, ST_double *mean_out,
+                                    ST_double *sd_out)
+{
+    const ST_int nblocks = N / PPML_SCALE_BLOCK + (N % PPML_SCALE_BLOCK != 0);
+    dd_real *part = (dd_real *)malloc((size_t)(nblocks > 0 ? nblocks : 1) * sizeof(dd_real));
+    if (!part) return 920;
+    ST_int b, i;
+
+    #pragma omp parallel for schedule(static) if (nblocks > 8)
+    for (b = 0; b < nblocks; b++) {
+        const ST_int lo = b * PPML_SCALE_BLOCK;
+        const ST_int hi = (N - lo < PPML_SCALE_BLOCK) ? N : lo + PPML_SCALE_BLOCK;
+        dd_real acc = {0.0, 0.0};
+        for (ST_int row = lo; row < hi; row++) acc = dd_add_d(acc, x[row] / N);
+        part[b] = acc;
+    }
+    dd_real total = {0.0, 0.0};
+    if (nblocks == 1) total = part[0];
+    else for (b = 0; b < nblocks; b++) total = dd_add_d(dd_add_d(total, part[b].hi), part[b].lo);
+    ST_double mean = total.hi + total.lo;
+
+    /* a maximum and an "any row differs" flag are exact in any order */
+    ST_double max_delta = 0.0;
+    int varies = 0;
+    #pragma omp parallel for schedule(static) reduction(max : max_delta) reduction(| : varies) if (N > 100000)
+    for (i = 0; i < N; i++) {
+        const ST_double delta = fabs(x[i] - mean);
+        if (delta > max_delta) max_delta = delta;
+        varies |= x[i] != x[0];
+    }
+    if (N > 0 && !varies) { mean = x[0]; max_delta = 0.0; }
+
+    dd_real squares = {0.0, 0.0};
+    if (max_delta > 0.0) {
+        #pragma omp parallel for schedule(static) if (nblocks > 8)
+        for (b = 0; b < nblocks; b++) {
+            const ST_int lo = b * PPML_SCALE_BLOCK;
+            const ST_int hi = (N - lo < PPML_SCALE_BLOCK) ? N : lo + PPML_SCALE_BLOCK;
+            dd_real acc = {0.0, 0.0};
+            for (ST_int row = lo; row < hi; row++) {
+                const ST_double delta = (x[row] - mean) / max_delta;
+                acc = dd_add_d(acc, delta * delta);
+            }
+            part[b] = acc;
+        }
+        if (nblocks == 1) squares = part[0];
+        else for (b = 0; b < nblocks; b++) squares = dd_add_d(dd_add_d(squares, part[b].hi), part[b].lo);
+    }
+    free(part);
+    *mean_out = mean;
+    *sd_out = max_delta * sqrt((squares.hi + squares.lo) / (N - 1));
+    return 0;
+}
+
+/* Heaviest over lightest positive weight above which the refit of the fixed
+ * effects projects its residual a second time */
+#define PPML_REFIT_SPAN 1e4
+
+/* Whether the positive weights of S span more than ratio (a minimum and a
+ * maximum: the same at every thread count) */
+static int ppml_weights_span_exceeds(const HDFE_State *S, ST_int N, double ratio)
+{
+    if (!S->weights) return 0;
+    ST_double lightest = INFINITY, heaviest = 0.0;
+    ST_int i;
+    #pragma omp parallel for schedule(static) reduction(min : lightest) reduction(max : heaviest) if (N > 100000)
+    for (i = 0; i < N; i++) {
+        const ST_double w = S->weights[i];
+        if (w > 0.0) {
+            if (w < lightest) lightest = w;
+            if (w > heaviest) heaviest = w;
+        }
+    }
+    return heaviest > 0.0 && !(lightest * ratio >= heaviest);
+}
+
 /* Replace eta (N, without the offset) by Xb + P f, where f = eta - Xb is
    its fixed-effect part and P the fixed-effect projection with the current
    weights. f is moderate even where the working variable is huge, so this
@@ -227,6 +319,32 @@ static ST_retcode ppml_refit_fixed_effects(const PPML_Options *options, HDFE_Sta
     ctools_matvec_add(X, N, K, beta, xb);
     for (ST_int i = 0; i < N; i++) fe[i] = eta[i] - xb[i];
     HDFE_SolveResult projection = ppml_partial(options, S, fe, N, 1, threads);
+    /* fe now holds f - P f to the projection's tolerance, which is relative
+     * to f. A row far lighter than the others (a zero outcome whose mean
+     * heads to zero) weighs so little in that norm that all of its
+     * fixed-effect part can be left in the residual, and subtracting it
+     * below would throw its eta back by several units. Projected once more,
+     * the tolerance is relative to that remainder, in which such a row
+     * dominates (the warm start of the loop, applied here). Only weights of
+     * wide range need it. The second pass works on a copy (xb is free by
+     * now): a remainder already at rounding level can keep the iteration on
+     * the rows from meeting its tolerance, so that pass is capped, and its
+     * last iterate, no further from the projection than the first pass in
+     * the weighted norm, is taken as it is; any other failure leaves the
+     * first pass. */
+    if (!projection.status && ppml_weights_span_exceeds(S, N, PPML_REFIT_SPAN)) {
+        const ST_int saved_maxiter = S->maxiter;
+        if (!(S->maxiter >= HDFE_COEF_MIN_MAXITER && hdfe_coef_applies(S))) {
+            ST_int cap = 4 * projection.iterations;
+            if (cap < 200) cap = 200;
+            if (cap < S->maxiter) S->maxiter = cap;
+        }
+        memcpy(xb, fe, (size_t)N * sizeof(ST_double));
+        const HDFE_SolveResult again = ppml_partial(options, S, xb, N, 1, threads);
+        S->maxiter = saved_maxiter;
+        if (again.status == 0 || again.status == 430) memcpy(fe, xb, (size_t)N * sizeof(ST_double));
+        else if (again.status == 1 || again.status == 920) projection = again;
+    }
     if (projection.status) {
         if (report && projection.status != 1) SF_error("cppmlhdfe: fixed-effect projection did not converge\n");
         return projection.status;
@@ -248,6 +366,25 @@ static void cleanup_ppml_state(void)
         free(g_ppml_state);
         g_ppml_state = NULL;
     }
+}
+
+static void release_ppml_state(void *state)
+{
+    HDFE_State *S = (HDFE_State *)state;
+    free(S->weights);
+    S->weights = NULL;
+    ctools_hdfe_state_cleanup(S);
+    free(S);
+}
+
+/* As cleanup_ppml_state, at the end of the fit: the state is detached at
+ * once and released by the helper thread (ctools_release.h) */
+static void cleanup_ppml_state_later(void)
+{
+    if (!g_ppml_state) return;
+    HDFE_State *S = g_ppml_state;
+    g_ppml_state = NULL;
+    ctools_release_later_call(release_ppml_state, S);
 }
 
 /* vce(bootstrap): set by the dispatcher (full_regression retain) */
@@ -328,6 +465,17 @@ ST_retcode ppml_irls_loop(ppml_irls_io *io)
     ST_double ref_inner_tol = fmax(start_inner_tol, irls_tol);
     ST_double ref_alt_tol = DBL_MAX;
 
+    /* Seconds by step (verbose timing table): each lap is charged to the
+     * step that just ended */
+    io->time_working = io->time_partial = io->time_solve = io->time_update = 0.0;
+    double lap_start = get_time_sec();
+#define PPML_LAP(field)                                                                            \
+    do {                                                                                           \
+        const double lap_now_ = get_time_sec();                                                    \
+        io->field += lap_now_ - lap_start;                                                         \
+        lap_start = lap_now_;                                                                      \
+    } while (0)
+
     for (irls_iter = 0; irls_iter < irls_maxiter; irls_iter++) {
         if (ctools_cancel_requested()) { output_rc = 1; goto ppml_cleanup; }
         deviance_old = deviance;
@@ -363,13 +511,39 @@ ST_retcode ppml_irls_loop(ppml_irls_io *io)
             previous_working[i]=z;
         }
 
+        /* The first iteration has the weights of the collinearity pre-pass,
+         * which left the regressors partialled in aug_copy: when that was
+         * done to at least this iteration's tolerance only the working
+         * variable is projected. */
+        const int x_ready = !irls_iter && io->x_partialled_tol > 0 &&
+                            io->x_partialled_tol <= g_ppml_state->tolerance;
         /* Reuse the previous residuals when inexact partialling is requested. */
-        if (options->exact_partial || !irls_iter) for (k = 0; k < K_x; k++) {
-            memcpy(&aug_copy[(size_t)(k + 1) * N], &X[(size_t)k * N], N * sizeof(ST_double));
+        if (!x_ready && (options->exact_partial || !irls_iter)) {
+            #pragma omp parallel for schedule(static) if ((size_t)N * (size_t)K_x > 200000)
+            for (k = 0; k < K_x; k++)
+                memcpy(&aug_copy[(size_t)(k + 1) * N], &X[(size_t)k * N], N * sizeof(ST_double));
         }
 
         /* (d) Partial out via CG solver using current IRLS weights */
-        HDFE_SolveResult projection = ppml_partial(options, g_ppml_state, aug_copy, N, K_aug, num_threads);
+        PPML_LAP(time_working);
+        HDFE_SolveResult projection = ppml_partial(options, g_ppml_state, aug_copy, N, x_ready ? 1 : K_aug, num_threads);
+        if (projection.status == 498 && warm_start) {
+            /* The warm-started column is z less the effects fitted before.
+             * After an exact solve those are fitted to rounding, so near
+             * convergence that column can already be at the arithmetic floor,
+             * where the iteration on the rows (which takes over once the
+             * weights span too wide a range for the solve) can certify
+             * nothing and reports a breakdown when a weight is negligible
+             * (a row flagged by separation(mu), say). Projected from z
+             * itself it has a residual to work on, as it had when every
+             * iteration ran on the rows. */
+            #pragma omp parallel for schedule(static) if (N > 100000)
+            for (i = 0; i < N; i++) aug_copy[i] = z_orig[i];
+            if (options->exact_partial) for (k = 0; k < K_x; k++)
+                memcpy(&aug_copy[(size_t)(k + 1) * N], &X[(size_t)k * N], N * sizeof(ST_double));
+            projection = ppml_partial(options, g_ppml_state, aug_copy, N, K_aug, num_threads);
+        }
+        PPML_LAP(time_partial);
         if (projection.status) {
             if (report && projection.status != 1) SF_error("cppmlhdfe: fixed-effect projection did not converge\n");
             output_rc = projection.status;
@@ -451,6 +625,7 @@ ST_retcode ppml_irls_loop(ppml_irls_io *io)
          * z_pred[i] = X_tilde * beta + FE_component
          * where FE_component = z_orig - z_partialled (original z minus CG result)
          */
+        PPML_LAP(time_solve);
         ST_double max_eta_change = 0.0;
         /* X~ * beta, each row accumulated over the regressors in order */
         memset(xb_work, 0, (size_t)N * sizeof(ST_double));
@@ -553,7 +728,8 @@ ST_retcode ppml_irls_loop(ppml_irls_io *io)
         const ST_double *eta_eval = eta;
         {
             int floored_now = 0;
-            for (i = 0; i < N && !floored_now; i++) floored_now = y[i] > 0 && mu[i] <= PPML_MU_FLOOR;
+            #pragma omp parallel for schedule(static) reduction(| : floored_now) if (N > 100000)
+            for (i = 0; i < N; i++) floored_now |= y[i] > 0 && mu[i] <= PPML_MU_FLOOR;
             if (floored_now) {
                 if (!eta_refit) eta_refit = (ST_double *)malloc((size_t)N * sizeof(ST_double));
                 if (!eta_refit_prev) eta_refit_prev = (ST_double *)malloc((size_t)N * sizeof(ST_double));
@@ -628,6 +804,9 @@ ST_retcode ppml_irls_loop(ppml_irls_io *io)
 
             if(options->step_halving && deviance>deviance_old && halving_count<options->max_halving) {
                 for(i=0;i<N;i++) {
+                    /* a row separation(mu) flagged has no weight to recover
+                     * its previous eta from; its mean stays at the marker */
+                    if(options->check_mu && sep_m[i])continue;
                     double wu=w_user_compact?w_user_compact[i]:1;
                     double old=log(irls_w[i]*user_weight_scale/wu)-(offset_compact?offset_compact[i]:0);
                     eta[i]=options->halving_memory*old+(1-options->halving_memory)*eta[i];
@@ -684,11 +863,21 @@ ST_retcode ppml_irls_loop(ppml_irls_io *io)
             ST_double w_u = (w_user_compact != NULL) ? w_user_compact[i] : 1.0;
             irls_w[i] = mu[i] * (w_u / user_weight_scale);
             if (irls_w[i] < DBL_MIN) irls_w[i] = DBL_MIN;
+            /* A row separation(mu) has flagged leaves the fit: its mean is
+             * held at a marker of 2^-46 and the fit is redone without it
+             * once this pass ends. Its weight here is exactly zero rather
+             * than that marker's: a positive weight sixteen orders below the
+             * others is what a projection can neither use nor certify (the
+             * iteration on the rows reports a breakdown), while a zero one
+             * simply takes the row out. */
+            if (options->check_mu && sep_m[i]) irls_w[i] = 0.0;
         }
         ppml_update_fe_weights(g_ppml_state, irls_w, N);
-
-
+        PPML_LAP(time_update);
     }
+    /* the iteration that converged (or failed) left through a break */
+    PPML_LAP(time_update);
+#undef PPML_LAP
 
     if (!irls_converged && !output_rc) {
         if (report) SF_error("cppmlhdfe: IRLS did not converge\n");
@@ -963,6 +1152,7 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
     ST_int K, G, N_orig, N, in1, in2;
     ST_retcode output_rc = 0;
     ST_int sample_var_idx = 0;
+    int sample_prefilled = 0;  /* the sample output is the marker (see STEP 5) */
     ST_int k, g, i, j, idx;
     ST_double val;
     ST_int verbose;
@@ -971,6 +1161,8 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
     PPMLFactorData *factors = NULL;
     char scalar_name[64];
     double t_start, t_load, t_remap, t_singleton, t_dof, t_irls, t_vce;
+    double t_prep = 0.0, t_final = 0.0; /* IRLS begins; the final solve ends */
+    double t_setup = 0.0, t_simplex = 0.0, t_relu = 0.0; /* before, between and after the separation checks */
     ST_int mobility_groups = 1;
     ST_int df_a = 0;
     ST_int num_threads;
@@ -1097,6 +1289,14 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
         return ctools_stata_rc(load_rc);
     }
 
+    ST_double screen_requested = 0;
+    if (input.touse && SF_scal_use("__cppmlhdfe_screen", &screen_requested) == 0 && screen_requested == 1) {
+        double start = get_time_sec();
+        output_rc = hdfe_screen_missing(&filtered, SF_nvars());
+        if (!output_rc) output_rc = ctools_scal_save("_cppmlhdfe_time_screen", get_time_sec() - start);
+        if (output_rc) goto ppml_cleanup;
+    }
+
     N_orig = (ST_int)filtered.data.nobs;
     obs_map = filtered.obs_map;
     filtered.obs_map = NULL;  /* obs_map is now owned by this command */
@@ -1130,11 +1330,43 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
 
     for (i = 0; i < N_orig; i++) mask[i] = 1;
 
-    /* Copy numeric data to column-major */
-    for (k = 0; k < K; k++) {
-        double *src = filtered.data.vars[k].data.dbl;
-        double *dst = &data[(size_t)k * N_orig];
-        memcpy(dst, src, N_orig * sizeof(double));
+    /* Copy numeric data to column-major. With __cppmlhdfe_fvspec, regressor
+     * k (column k) holds a factor variable when entry k of __cppmlhdfe_fvlev
+     * is a level (>= 0): it becomes 1 where the variable equals it, 0
+     * elsewhere, the doubles fvrevar's indicator holds (the ado's
+     * _ctools_fvnative builds the i.f terms this way) */
+    {
+        ST_double use_fv = 0;
+        ST_double *fv_level = NULL;
+        if (SF_scal_use("__cppmlhdfe_fvspec", &use_fv) == 0 && use_fv == 1 && K > 1) {
+            fv_level = (ST_double *)malloc((size_t)K * sizeof(ST_double));
+            if (!fv_level) { output_rc = 920; goto ppml_cleanup; }
+            fv_level[0] = -1;
+            for (k = 1; k < K; k++) {
+                if (SF_mat_el("__cppmlhdfe_fvlev", 1, k, &fv_level[k]) != 0 ||
+                    !(fv_level[k] >= -1 && fv_level[k] == floor(fv_level[k]))) {
+                    free(fv_level);
+                    SF_error("cppmlhdfe: invalid factor-variable specification\n");
+                    output_rc = 198; goto ppml_cleanup;
+                }
+            }
+            if ((output_rc = ctools_scal_save("__cppmlhdfe_fvdone", 1.0))) {
+                free(fv_level);
+                goto ppml_cleanup;
+            }
+        }
+        for (k = 0; k < K; k++) {
+            double *src = filtered.data.vars[k].data.dbl;
+            double *dst = &data[(size_t)k * N_orig];
+            const double level = fv_level ? fv_level[k] : -1.0;
+            if (level >= 0) {
+                ST_int r;
+                #pragma omp parallel for schedule(static) if (N_orig > 100000)
+                for (r = 0; r < N_orig; r++) dst[r] = src[r] == level ? 1.0 : 0.0;
+            }
+            else memcpy(dst, src, N_orig * sizeof(double));
+        }
+        free(fv_level);
     }
 
     /* Copy weights */
@@ -1287,47 +1519,75 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
     /* ================================================================
      * STEP 5: Compact data (remove singleton rows)
      * ================================================================ */
-    data_compact = (ST_double *)malloc((size_t)N * K * sizeof(ST_double));
+    if (N == N_orig) {
+        /* No row was dropped: the loaded arrays are the sample as they are. */
+        w_user_compact = weights;
+        offset_compact = offset_arr;
+    } else {
+        data_compact = (ST_double *)malloc((size_t)N * K * sizeof(ST_double));
 
-    if (has_weights) w_user_compact = (ST_double *)malloc(N * sizeof(ST_double));
-    if (has_offset) offset_compact = (ST_double *)malloc(N * sizeof(ST_double));
+        if (has_weights) w_user_compact = (ST_double *)malloc(N * sizeof(ST_double));
+        if (has_offset) offset_compact = (ST_double *)malloc(N * sizeof(ST_double));
 
-    if (!data_compact || (has_weights && !w_user_compact) || (has_offset && !offset_compact)) {
-        output_rc = 920;
-        goto ppml_cleanup;
-    }
-
-    /* Compact data columns */
-    hdfe_compact_columns(data, N_orig, K, mask, data_compact, N);
-
-    /* Compact weights */
-    if (has_weights) {
-        idx = 0;
-        for (i = 0; i < N_orig; i++) {
-            if (mask[i]) w_user_compact[idx++] = weights[i];
+        if (!data_compact || (has_weights && !w_user_compact) || (has_offset && !offset_compact)) {
+            output_rc = 920;
+            goto ppml_cleanup;
         }
-    }
 
-    /* Compact offset */
-    if (has_offset) {
-        idx = 0;
-        for (i = 0; i < N_orig; i++) {
-            if (mask[i]) offset_compact[idx++] = offset_arr[i];
+        /* Compact data columns: each column is its own pass over the rows */
+        #pragma omp parallel for schedule(dynamic, 1) if (K > 1 && (size_t)N_orig * (size_t)K > 200000)
+        for (k = 0; k < K; k++)
+            hdfe_compact_columns(data + (size_t)k * N_orig, N_orig, 1, mask,
+                                 data_compact + (size_t)k * N, N);
+
+        /* Compact weights */
+        if (has_weights) {
+            idx = 0;
+            for (i = 0; i < N_orig; i++) {
+                if (mask[i]) w_user_compact[idx++] = weights[i];
+            }
         }
-    }
 
-    free(data);
-    data = data_compact;
-    data_compact = NULL;
-    if (weights) free(weights);
+        /* Compact offset */
+        if (has_offset) {
+            idx = 0;
+            for (i = 0; i < N_orig; i++) {
+                if (mask[i]) offset_compact[idx++] = offset_arr[i];
+            }
+        }
+
+        free(data);
+        data = data_compact;
+        data_compact = NULL;
+        if (weights) free(weights);
+        if (offset_arr) free(offset_arr);
+    }
     weights = NULL;
-    if (offset_arr) free(offset_arr);
     offset_arr = NULL;
+
+    /* A wrapper that passes its sample marker as the sample output (1 on
+     * every loaded row) sets __cppmlhdfe_sample_prefilled: the rows dropped
+     * here and the separated rows of a refit are then cleared in it, one
+     * store per dropped row, where a separate sample variable takes one
+     * store per kept row and a fill in Stata. __cppmlhdfe_marked tells the
+     * wrapper that the marker was updated. */
+    if (SF_scal_use("__cppmlhdfe_sample_idx", &val) == 0) sample_var_idx = (ST_int)val;
+    {
+        ST_double prefilled = 0;
+        sample_prefilled = input.touse && sample_var_idx == SF_nvars() &&
+            SF_scal_use("__cppmlhdfe_sample_prefilled", &prefilled) == 0 && prefilled == 1.0;
+    }
+    if (sample_prefilled) {
+        for (i = 0; i < N_orig && !output_rc && N < N_orig; i++)
+            if (!mask[i]) output_rc = SF_vstore(sample_var_idx, (ST_int)obs_map[i], 0.0);
+        if (!output_rc) output_rc = ctools_scal_save("__cppmlhdfe_marked", 1.0);
+        if (output_rc) goto ppml_cleanup;
+    }
 
     /* Compact all row identities with exactly the same original-row mask.
      * After this point every array, including clusters and obs_map, has N rows. */
     idx = 0;
-    for (i = 0; i < N_orig; i++) {
+    for (i = 0; i < N_orig && N < N_orig; i++) {
         if (mask[i]) {
             obs_map[idx] = obs_map[i];
             if (cluster_raw_values) {
@@ -1422,27 +1682,28 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
     {
         /* Center before squaring: E[x^2]-E[x]^2 loses all precision when
          * the mean is large relative to the within-sample variation. */
+        /* Every column's mean and standard deviation come from sums over
+         * fixed blocks of its rows (ppml_column_scale), with every thread on
+         * the rows whatever the number of columns; what is stored or
+         * reported for a column follows below, in column order. */
+        ST_double *column_mean = (ST_double *)malloc(((size_t)K_x + 1) * sizeof(ST_double));
+        ST_double *column_sd = (ST_double *)malloc(((size_t)K_x + 1) * sizeof(ST_double));
+        if (!column_mean || !column_sd) {
+            free(column_mean); free(column_sd);
+            output_rc = 920; goto ppml_cleanup;
+        }
+        for (ST_int column_index = 0; column_index <= K_x && !output_rc; column_index++) {
+            const ST_double *column = column_index == 0 ? y : X + (size_t)(column_index - 1) * N;
+            output_rc = ppml_column_scale(column, N, &column_mean[column_index], &column_sd[column_index]);
+        }
+        if (output_rc) {
+            free(column_mean); free(column_sd);
+            goto ppml_cleanup;
+        }
         for (k = -1; k < K_x; k++) {
             ST_double *column = k < 0 ? y : X + (size_t)k * N;
-            dd_real total = {0.0, 0.0};
-            for (i = 0; i < N; i++) total = dd_add_d(total, column[i] / N);
-            ST_double mean = total.hi + total.lo;
-            ST_double max_delta = 0.0;
-            for (i = 0; i < N; i++) max_delta = fmax(max_delta, fabs(column[i] - mean));
-            /* A constant column has no variation. The rounded sum of
-             * column[i]/N need not reproduce the constant exactly, and a
-             * roundoff-level max_delta would otherwise give an outcome scale
-             * of order 1e-16 (amplifying every later rounding error). */
-            for (i = 1; i < N && column[i] == column[0]; i++) {}
-            if (N > 0 && i == N) { mean = column[0]; max_delta = 0.0; }
-            dd_real squares = {0.0, 0.0};
-            if (max_delta > 0.0) {
-                for (i = 0; i < N; i++) {
-                    ST_double delta = (column[i] - mean) / max_delta;
-                    squares = dd_add_d(squares, delta * delta);
-                }
-            }
-            ST_double sd = max_delta * sqrt((squares.hi + squares.lo) / (N - 1));
+            const ST_double mean = column_mean[k + 1];
+            ST_double sd = column_sd[k + 1];
             /* The response scale must not change the fit or trigger spurious
              * separation for small positive outcomes. */
             if (k < 0) {
@@ -1452,6 +1713,7 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
                 SF_scal_use("__cppmlhdfe_scale_fixed", &first_fit_scales);
                 if (options->standardize && first_fit_scales == 0 && verbose > -1) {
                     ST_double min_positive = DBL_MAX;
+                    #pragma omp parallel for schedule(static) reduction(min : min_positive) if (N > 100000)
                     for (i = 0; i < N; i++)
                         if (column[i] > 0 && column[i] < min_positive) min_positive = column[i];
                     ST_double scaled = min_positive / fmax(sd, 1e-3);
@@ -1479,15 +1741,20 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
             if (fixed_scales) {
                 SF_mat_el("__cppmlhdfe_input_scales", 1, k+2, &sd);
                 if (k < 0) stdev_y = sd; else stdev_x[k] = sd;
-            } else if ((output_rc = ctools_mat_store("__cppmlhdfe_input_scales", 1, k+2, sd)))
+            } else if ((output_rc = ctools_mat_store("__cppmlhdfe_input_scales", 1, k+2, sd))) {
+                free(column_mean); free(column_sd);
                 goto ppml_cleanup;
+            }
+            #pragma omp parallel for schedule(static) if (N > 100000)
             for (i = 0; i < N; i++) column[i] /= sd;
         }
+        free(column_mean); free(column_sd);
     }
 
     separation_certificate=calloc((size_t)N,sizeof(double));
     previous_working=calloc((size_t)N,sizeof(double));
     if(!separation_certificate || !previous_working) {output_rc=920;goto ppml_cleanup;}
+    t_setup = get_time_sec();
     if(options->check_simplex) {
         int nsep=ppml_simplex(options, g_ppml_state,y,X,w_user_compact,weight_type,NULL,N,K_x,sep_m);
         if(nsep<0){output_rc=-nsep;goto ppml_cleanup;}
@@ -1499,15 +1766,20 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
                 SF_display(msg);
             }
             sample_var_idx=(int)ppml_option("sample_idx",0);
-            for(i=0;i<N && !output_rc;i++)if(!sep_m[i])output_rc=SF_vstore(sample_var_idx,(int)obs_map[i],1);
+            for(i=0;i<N && !output_rc;i++) {
+                if(sample_prefilled){if(sep_m[i])output_rc=SF_vstore(sample_var_idx,(int)obs_map[i],0);}
+                else if(!sep_m[i])output_rc=SF_vstore(sample_var_idx,(int)obs_map[i],1);
+            }
             if(!output_rc)output_rc=ctools_scal_save("__cppmlhdfe_refit",1);
             if(!output_rc)output_rc=ctools_scal_save("__cppmlhdfe_num_singletons",num_singletons);
             if(!output_rc)output_rc=ctools_scal_save("__cppmlhdfe_num_separated",num_separated+nsep);
             goto ppml_cleanup;
         }
     }
+    t_simplex = get_time_sec();
     ST_int relu_iterations = 0;
     ST_int relu_separated = check_relu ? ppml_relu_ex2(options, g_ppml_state, y, X, N, K_x, sep_m, num_threads,separation_certificate, &relu_iterations) : 0;
+    t_relu = get_time_sec();
     if (relu_separated < 0) { output_rc = -relu_separated; goto ppml_cleanup; }
     if (relu_separated > 0 && verbose > -1) {
         char msg[160];
@@ -1517,7 +1789,7 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
     }
     /* ReLU diagnostics refer to its input sample, excluding rows already
      * removed by FE screening, singleton removal, or simplex. */
-    if(check_relu) for(i=0;i<N && !output_rc;i++) {
+    if(check_relu && (options->tag_idx || options->certificate_idx)) for(i=0;i<N && !output_rc;i++) {
         if(options->tag_idx)output_rc=SF_vstore(options->tag_idx,(int)obs_map[i],sep_m[i]);
         if(!output_rc && options->certificate_idx)output_rc=SF_vstore(options->certificate_idx,(int)obs_map[i],separation_certificate[i]);
     }
@@ -1529,8 +1801,12 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
             SF_display(message);
         }
         if (SF_scal_use("__cppmlhdfe_sample_idx", &val) == 0) sample_var_idx = (ST_int)val;
-        for (i = 0; i < N && !output_rc; i++)
-            if (!sep_m[i]) output_rc = SF_vstore(sample_var_idx, (ST_int)obs_map[i], 1.0);
+        for (i = 0; i < N && !output_rc; i++) {
+            if (sample_prefilled) {
+                if (sep_m[i]) output_rc = SF_vstore(sample_var_idx, (ST_int)obs_map[i], 0.0);
+            }
+            else if (!sep_m[i]) output_rc = SF_vstore(sample_var_idx, (ST_int)obs_map[i], 1.0);
+        }
         if (!output_rc) output_rc = ctools_scal_save("__cppmlhdfe_refit", 2);
         if (!output_rc) output_rc = ctools_scal_save("__cppmlhdfe_num_singletons", num_singletons);
         if (!output_rc) output_rc = ctools_scal_save("__cppmlhdfe_num_separated", num_separated + relu_separated);
@@ -1569,7 +1845,12 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
                 for(i=0;i<N;i++)mu[i]/=sd;
             }
         }
-        else for(i=0;i<N;i++)mu[i]=.5*(y[i]+ym);
+        else {
+            #pragma omp parallel for schedule(static) if (N > 100000)
+            for(i=0;i<N;i++)mu[i]=.5*(y[i]+ym);
+        }
+        /* (each row from that row alone: in parallel, same values) */
+        #pragma omp parallel for schedule(static) if (N > 100000)
         for(i=0;i<N;i++) {
             mu[i]=fmax(mu[i],fmax(.05*y[i],1e-3));
             eta[i]=log(mu[i])-(offset_compact?offset_compact[i]:0);
@@ -1583,6 +1864,7 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
     }
 
     /* A common scale cancels from weighted projections and the sandwich. */
+    #pragma omp parallel for schedule(static) if (N > 100000)
     for (i = 0; i < N; i++) {
         ST_double w_u = (w_user_compact != NULL) ? w_user_compact[i] : 1.0;
         irls_w[i] = mu[i] * (w_u / user_weight_scale);
@@ -1599,14 +1881,19 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
      * ================================================================ */
 
     ST_int K_irls = K_x;  /* number of non-collinear X vars for IRLS */
-    if(options->remove_collinear) {
-        /* Set up [z_dummy, X] for partialling - z doesn't matter, just X */
-        for (i = 0; i < N; i++)
-            aug_copy[i] = 0.0;  /* dummy z */
+    /* The tolerance of the regressors the pre-pass leaves partialled in
+     * aug_copy at these weights (0: none); the loop's first iteration, which
+     * has the same weights, takes them when it asks for no more accuracy */
+    ST_double x_partialled_tol = 0.0;
+    if(options->remove_collinear && K_x > 0) {
+        /* The regressors only: the working variable's column is not needed
+         * here and is written by the loop */
+        #pragma omp parallel for schedule(static) if ((size_t)N * (size_t)K_x > 200000)
         for (k = 0; k < K_x; k++)
             memcpy(&aug_copy[(size_t)(k + 1) * N], &X[(size_t)k * N], N * sizeof(ST_double));
 
-        HDFE_SolveResult projection = ppml_partial(options, g_ppml_state, aug_copy, N, K_aug, num_threads);
+        HDFE_SolveResult projection = ppml_partial(options, g_ppml_state, aug_copy + N, N, K_x, num_threads);
+        if (!projection.status) x_partialled_tol = g_ppml_state->tolerance;
         if (projection.status) {
             if (projection.status != 1) SF_error("cppmlhdfe: fixed-effect projection did not converge\n");
             output_rc = projection.status;
@@ -1704,6 +1991,8 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
     io.sep_m = sep_m;
     io.has_weights = has_weights;
     io.weight_type = weight_type;
+    io.x_partialled_tol = x_partialled_tol;
+    t_prep = get_time_sec();
     output_rc = ppml_irls_loop(&io);
     beta_prev = io.beta_prev;
     eta_refit = io.eta_refit;
@@ -1725,7 +2014,8 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
             }
             sample_var_idx=(int)ppml_option("sample_idx",0);
             for(i=0;i<N && !output_rc;i++) {
-                if(!sep_m[i])output_rc=SF_vstore(sample_var_idx,(int)obs_map[i],1);
+                if(sample_prefilled){if(sep_m[i])output_rc=SF_vstore(sample_var_idx,(int)obs_map[i],0);}
+                else if(!sep_m[i])output_rc=SF_vstore(sample_var_idx,(int)obs_map[i],1);
             }
             if(!output_rc)output_rc=ctools_scal_save("__cppmlhdfe_refit",3);
             if(!output_rc)output_rc=ctools_scal_save("__cppmlhdfe_num_singletons",num_singletons);
@@ -1768,6 +2058,7 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
     }
 
     output_rc = ppml_final_solve(&io);
+    t_final = get_time_sec();
     keep_idx = io.keep_idx;
     beta_final = io.beta_final;
     w_reg = io.w_reg;
@@ -1795,17 +2086,29 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
     means_x = (ST_double *)calloc(K_keep, sizeof(ST_double));
     if (!means_x && K_keep > 0) { output_rc = 920; goto ppml_cleanup; }
     if (means_x && K_keep > 0) {
-        dd_real sum_w_eff = {0, 0};
-        for (i = 0; i < N; i++) sum_w_eff = dd_add_d(sum_w_eff, irls_w[i]);
-        for (k = 0; k < K_keep; k++) {
-            dd_real wmean = {0, 0};
-            const ST_double *xk = &X[(size_t)keep_idx[k] * N];
-            for (i = 0; i < N; i++) {
-                dd_real product = two_prod(irls_w[i], xk[i]);
-                wmean = dd_add_d(dd_add_d(wmean, product.hi), product.lo);
+        /* The weight total and each column's weighted sum are independent
+         * double-double sums in row order: one task each, in parallel, the
+         * same sums as one after the other */
+        dd_real *sums = (dd_real *)calloc((size_t)K_keep + 1, sizeof(dd_real));
+        if (!sums) { output_rc = 920; goto ppml_cleanup; }
+        ST_int task;
+        #pragma omp parallel for schedule(dynamic, 1) if (N > 100000 && K_keep > 0)
+        for (task = 0; task <= K_keep; task++) {
+            dd_real s = {0, 0};
+            if (task == 0) {
+                for (ST_int r = 0; r < N; r++) s = dd_add_d(s, irls_w[r]);
+            } else {
+                const ST_double *xk = &X[(size_t)keep_idx[task - 1] * N];
+                for (ST_int r = 0; r < N; r++) {
+                    dd_real product = two_prod(irls_w[r], xk[r]);
+                    s = dd_add_d(dd_add_d(s, product.hi), product.lo);
+                }
             }
-            means_x[k] = (wmean.hi + wmean.lo) / (sum_w_eff.hi + sum_w_eff.lo);
+            sums[task] = s;
         }
+        for (k = 0; k < K_keep; k++)
+            means_x[k] = (sums[k + 1].hi + sums[k + 1].lo) / (sums[0].hi + sums[0].lo);
+        free(sums);
     }
 
     /* Extend inv_xx_final to (K_keep+1)x(K_keep+1) using block partition formula.
@@ -1818,43 +2121,51 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
     if (K_keep == 0 || (inv_xx_final && means_x))
         ctools_inverse_add_constant(inv_xx_final, K_keep, means_x, N_ref, inv_xx_ext);
 
-    /* Build X_eff with means added back + constant column (K_with_cons columns) */
-
-    {
+    /* Build X_eff with means added back + constant column (K_with_cons columns).
+     * Only the sandwich reads it: none for the unadjusted VCE, and with at
+     * most one cluster dimension the sandwich takes the centered columns
+     * (the partialled regressors themselves, see below), so they are copied
+     * once instead of written with the means and copied over again. Rows in
+     * parallel: every element is formed as before. */
+    const int x_eff_centered = cluster_terms <= 1;
+    if (vcetype != 0) {
         X_eff = (ST_double *)malloc((size_t)N * K_with_cons * sizeof(ST_double));
         if (!X_eff) { output_rc = 920; goto ppml_cleanup; }
-        if (X_eff) {
-            for (k = 0; k < K_keep; k++) {
-                const ST_double *xp = &aug_copy[(size_t)(keep_idx[k] + 1) * N];
-                ST_double mk = means_x ? means_x[k] : 0.0;
-                for (i = 0; i < N; i++) {
-                    X_eff[(size_t)k * N + i] = xp[i] + mk;
-                }
-            }
-            /* Constant column */
-            for (i = 0; i < N; i++) {
-                X_eff[(size_t)K_keep * N + i] = 1.0;
+        for (k = 0; k < K_keep; k++) {
+            const ST_double *xp = &aug_copy[(size_t)(keep_idx[k] + 1) * N];
+            ST_double *xe = X_eff + (size_t)k * N;
+            if (x_eff_centered) {
+                memcpy(xe, xp, (size_t)N * sizeof(ST_double));
+            } else {
+                const ST_double mk = means_x ? means_x[k] : 0.0;
+                #pragma omp parallel for schedule(static) if (N > 100000)
+                for (i = 0; i < N; i++) xe[i] = xp[i] + mk;
             }
         }
+        /* Constant column */
+        ST_double *xc = X_eff + (size_t)K_keep * N;
+        #pragma omp parallel for schedule(static) if (N > 100000)
+        for (i = 0; i < N; i++) xc[i] = 1.0;
     }
 
-    /* Compute final OLS residual from partialled data. */
+    /* Compute final OLS residual from partialled data (each row's
+     * double-double sum on its own: rows in parallel) */
     vce_resid = (ST_double *)malloc(N * sizeof(ST_double));
     if (!vce_resid) { output_rc = 920; goto ppml_cleanup; }
     if (vce_resid) {
         if (beta_final && K_keep > 0) {
+            #pragma omp parallel for schedule(static) if (N > 100000)
             for (i = 0; i < N; i++) {
                 dd_real residual = {aug_copy[i], 0};
-                for (k = 0; k < K_keep; k++) {
-                    dd_real product = two_prod(aug_copy[(size_t)(keep_idx[k] + 1) * N + i], beta_final[k]);
+                for (ST_int kk = 0; kk < K_keep; kk++) {
+                    dd_real product = two_prod(aug_copy[(size_t)(keep_idx[kk] + 1) * N + i], beta_final[kk]);
                     residual = dd_add_d(dd_add_d(residual, -product.hi), -product.lo);
                 }
                 vce_resid[i] = residual.hi + residual.lo;
             }
         }
         else {
-            for (i = 0; i < N; i++)
-                vce_resid[i] = aug_copy[i];
+            memcpy(vce_resid, aug_copy, (size_t)N * sizeof(ST_double));
         }
     }
 
@@ -1960,7 +2271,7 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
      * For fweight: D = extended H^{-1} (raw), resid = (y-mu), weights = fw
      * For others: D extended & normalized, resid = OLS_resid, weights = irls_w as aweight */
   /* (K_with_cons)x(K_with_cons) full VCE */
-    if (vce_resid && X_eff && inv_xx_ext) {
+    if (vce_resid && (X_eff || vcetype == 0) && inv_xx_ext) {
         V_ext = (ST_double *)calloc(K_with_cons * K_with_cons, sizeof(ST_double));
         if (!V_ext) { output_rc = 920; goto ppml_cleanup; }
 
@@ -1977,12 +2288,8 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
              * and avoids cancellation from large regressor means. Multiway
              * PSD correction needs the full system including the constant. */
             ST_int vce_K = K_with_cons;
-            if (cluster_terms <= 1) {
-                for (k = 0; k < K_keep; k++)
-                    memcpy(X_eff + (size_t)k * N,
-                           aug_copy + (size_t)(keep_idx[k] + 1) * N,
-                           N * sizeof(ST_double));
-            }
+            /* with cluster_terms <= 1, X_eff already holds the centered
+             * columns (x_eff_centered above) */
             if (cluster_terms <= 1) {
                 for (i = 0; i < K_keep; i++) {
                     inv_xx_ext[i*K_with_cons+K_keep] = 0;
@@ -2027,7 +2334,10 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
                 for (ST_int subset = 1; subset <= cluster_terms && !output_rc; subset++) {
                     ST_int ncl, bits = 0;
                     for (ST_int bit = subset; bit; bit >>= 1) bits += bit & 1;
-                    if (ctools_numeric_to_cluster_ids(
+                    /* one dimension: the ids built for the nesting check
+                     * above, which nothing has changed since */
+                    if (cluster_terms == 1) ncl = num_clusters;
+                    else if (ctools_numeric_to_cluster_ids(
                             cluster_raw_values + (size_t)(subset - 1) * N_orig,
                             N, cluster_ids, &ncl)) {
                         output_rc = 920; break;
@@ -2128,9 +2438,12 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
         }
     }
 
-    for(i=0;i<N;i++) {
-        separation_certificate[i]=z_orig[i]-vce_resid[i]-mean_d;
-        for(k=0;k<K_keep;k++)separation_certificate[i]-=X[(size_t)keep_idx[k]*N+i]*beta_final[k];
+    /* each row on its own, so the rows may be split among threads */
+    #pragma omp parallel for schedule(static) if (N > 65536)
+    for (ST_int ii = 0; ii < N; ii++) {
+        separation_certificate[ii] = z_orig[ii] - vce_resid[ii] - mean_d;
+        for (ST_int kk = 0; kk < K_keep; kk++)
+            separation_certificate[ii] -= X[(size_t)keep_idx[kk] * N + ii] * beta_final[kk];
     }
     /* A failed d() store above must not be replaced by this call's status */
     if(!output_rc)output_rc=ppml_save_effects(g_ppml_state,separation_certificate,obs_map);
@@ -2173,9 +2486,10 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
 
     /* Un-standardize y and mu for log-likelihood computation.
      * y_actual = y_std * stdev_y, mu_actual = mu_std * stdev_y */
-    for (i = 0; i < N; i++) {
-        y[i] *= stdev_y;
-        mu[i] *= stdev_y;
+    #pragma omp parallel for schedule(static) if (N > 65536)
+    for (ST_int ii = 0; ii < N; ii++) {
+        y[ii] *= stdev_y;
+        mu[ii] *= stdev_y;
     }
 
     /* Un-standardize beta: beta_actual = beta_std / stdev_x */
@@ -2191,9 +2505,7 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
                 V_keep[i * K_keep + j] /= stdev_x[keep_idx[i]] * stdev_x[keep_idx[j]];
     }
 
-    ST_double ll = ppml_compute_loglik(y, eta, offset_compact, log(stdev_y), w_user_compact, N);
-
-    /* Compute log-likelihood of null model (intercept only): ll_0 */
+    /* The null model (intercept only) has eta = log of the mean of y */
     ST_double y_mean = 0.0, w_sum = 0.0;
     for (i = 0; i < N; i++) {
         ST_double w_u = (w_user_compact != NULL) ? w_user_compact[i] : 1.0;
@@ -2202,13 +2514,16 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
     }
     y_mean /= w_sum;
     if (y_mean < 1e-18) y_mean = 1e-18;
-    /* the same evaluation as ll, so that 1 - ll/ll_0 cancels consistently */
-    for (i = 0; i < N; i++) fe_work[i] = log(y_mean);
-    ST_double ll_0 = ppml_compute_loglik(y, fe_work, NULL, 0.0, w_user_compact, N);
+    /* ll and ll_0 in one pass, with the same evaluation, so that
+     * 1 - ll/ll_0 cancels consistently */
+    ST_double ll, ll_0;
+    ppml_compute_loglik_pair(y, eta, offset_compact, log(stdev_y), w_user_compact, log(y_mean), N,
+                             &ll, &ll_0);
 
     if (SF_scal_use("__cppmlhdfe_sample_idx", &val) == 0)
         sample_var_idx = (ST_int)val;
-    if (sample_var_idx > 0) {
+    /* a prefilled marker already holds this sample (STEP 5) */
+    if (sample_var_idx > 0 && !sample_prefilled) {
         for (i = 0; i < N && !output_rc; i++)
             output_rc = SF_vstore(sample_var_idx, (ST_int)obs_map[i], 1.0);
     }
@@ -2246,61 +2561,91 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
     if ((output_rc = ctools_scal_save("_cppmlhdfe_time_remap", t_remap - t_load))) goto ppml_cleanup;
     if ((output_rc = ctools_scal_save("_cppmlhdfe_time_singleton", t_singleton - t_remap))) goto ppml_cleanup;
     if ((output_rc = ctools_scal_save("_cppmlhdfe_time_dof", t_dof - t_singleton))) goto ppml_cleanup;
-    if ((output_rc = ctools_scal_save("_cppmlhdfe_time_irls", t_irls - t_dof))) goto ppml_cleanup;
-    if ((output_rc = ctools_scal_save("_cppmlhdfe_time_vce", t_vce - t_irls))) goto ppml_cleanup;
-    if ((output_rc = ctools_scal_save("_cppmlhdfe_time_total", t_vce - t_start))) goto ppml_cleanup;
+    /* Between the degrees of freedom and the loop: compaction and
+     * standardization, the two separation checks, then the starting values
+     * and the collinearity pre-pass. Then the loop by step (the seconds
+     * ppml_irls_loop measured), the final projection and solve, the
+     * covariance, and what follows it (results and stored variables). */
+    {
+        const double t_post = get_time_sec();
+        const struct { const char *name; double seconds; } parts[] = {
+            {"_cppmlhdfe_time_setup", t_setup - t_dof},
+            {"_cppmlhdfe_time_simplex", t_simplex - t_setup},
+            {"_cppmlhdfe_time_relu", t_relu - t_simplex},
+            {"_cppmlhdfe_time_start", t_prep - t_relu},
+            {"_cppmlhdfe_time_irls", t_irls - t_prep},
+            {"_cppmlhdfe_time_irls_working", io.time_working},
+            {"_cppmlhdfe_time_irls_partial", io.time_partial},
+            {"_cppmlhdfe_time_irls_solve", io.time_solve},
+            {"_cppmlhdfe_time_irls_update", io.time_update},
+            {"_cppmlhdfe_time_final", t_final - t_irls},
+            {"_cppmlhdfe_time_vce", t_vce - t_final},
+            {"_cppmlhdfe_time_post", t_post - t_vce},
+            {"_cppmlhdfe_time_total", t_post - t_start},
+            {"_cppmlhdfe_irls_iterations", (double)io.iterations},
+            {"_cppmlhdfe_irls_subiterations", io.subiterations},
+            {"_cppmlhdfe_irls_relusteps", (double)relu_iterations},
+        };
+        for (size_t part = 0; part < sizeof(parts) / sizeof(parts[0]); part++)
+            if ((output_rc = ctools_scal_save(parts[part].name, parts[part].seconds))) goto ppml_cleanup;
+    }
     CTOOLS_SAVE_THREAD_INFO("_cppmlhdfe");
 
     /* ================================================================
      * Cleanup
      * ================================================================ */
 ppml_cleanup:
-    free(V_ext);
-    free(separation_certificate);
-    free(previous_working);
-    free(eta_refit); free(eta_refit_prev); free(beta_prev);
-    free(cluster_raw_values);
-    free(mu); free(eta);
-    free(z_orig); free(aug_copy);
-    free(xtx); free(xty); free(irls_beta); free(inv_xx); free(sep_m); free(xb_work); free(fe_work);
-    free(xty_dd);
-    if (irls_keep_idx) free(irls_keep_idx);
-    if (xtx_k) free(xtx_k);
-    if (xty_k) free(xty_k);
-    if (beta_k) free(beta_k);
-    if (inv_xx_k) free(inv_xx_k);
-    if (vce_resid) free(vce_resid);
-    if (beta_final) free(beta_final);
-    if (inv_xx_final) free(inv_xx_final);
-    if (V_keep) free(V_keep);
-    if (xtx_keep) free(xtx_keep);
-    if (xty_keep) free(xty_keep);
-    if (w_reg) free(w_reg);
-    if (is_collinear) free(is_collinear);
-    if (keep_idx) free(keep_idx);
-    if (X_eff) free(X_eff);
-    if (means_x) free(means_x);
-    if (inv_xx_ext) free(inv_xx_ext);
-    if (cluster_ids) free(cluster_ids);
-    if (stdev_x) free(stdev_x);
-    if (w_user_compact) free(w_user_compact);
-    if (offset_compact) free(offset_compact);
+    /* The memory is returned by a helper thread after the plugin call
+     * (ctools_release.h): at 10M rows that is over 1 GB, 70 ms or more on
+     * Windows */
+    ctools_release_later(V_ext);
+    ctools_release_later(separation_certificate);
+    ctools_release_later(previous_working);
+    ctools_release_later(eta_refit); ctools_release_later(eta_refit_prev); ctools_release_later(beta_prev);
+    ctools_release_later(cluster_raw_values);
+    ctools_release_later(mu); ctools_release_later(eta);
+    ctools_release_later(z_orig); ctools_release_later(aug_copy);
+    ctools_release_later(xtx); ctools_release_later(xty); ctools_release_later(irls_beta);
+    ctools_release_later(inv_xx); ctools_release_later(sep_m); ctools_release_later(xb_work);
+    ctools_release_later(fe_work);
+    ctools_release_later(xty_dd);
+    ctools_release_later(irls_keep_idx);
+    ctools_release_later(xtx_k);
+    ctools_release_later(xty_k);
+    ctools_release_later(beta_k);
+    ctools_release_later(inv_xx_k);
+    ctools_release_later(vce_resid);
+    ctools_release_later(beta_final);
+    ctools_release_later(inv_xx_final);
+    ctools_release_later(V_keep);
+    ctools_release_later(xtx_keep);
+    ctools_release_later(xty_keep);
+    ctools_release_later(w_reg);
+    ctools_release_later(is_collinear);
+    ctools_release_later(keep_idx);
+    ctools_release_later(X_eff);
+    ctools_release_later(means_x);
+    ctools_release_later(inv_xx_ext);
+    ctools_release_later(cluster_ids);
+    ctools_release_later(stdev_x);
+    ctools_release_later(w_user_compact);
+    ctools_release_later(offset_compact);
 
     if (factors) {
         for (g = 0; g < G; g++) {
-            free(factors[g].levels);
-            free(factors[g].counts);
+            ctools_release_later(factors[g].levels);
+            ctools_release_later(factors[g].counts);
         }
-        free(factors);
+        ctools_release_later(factors);
     }
-    free(mask);
-    free(data); free(data_compact);
-    free(weights); free(offset_arr);
-    ctools_aligned_free(obs_map);
-    ctools_filtered_data_free(&filtered);
+    ctools_release_later(mask);
+    ctools_release_later(data); ctools_release_later(data_compact);
+    ctools_release_later(weights); ctools_release_later(offset_arr);
+    ctools_release_later_aligned(obs_map);
+    ctools_filtered_data_release(&filtered);
 
     /* State owns irls_w; cleanup releases it together with the FE buffers. */
-    cleanup_ppml_state();
+    cleanup_ppml_state_later();
 
     return output_rc;
 }

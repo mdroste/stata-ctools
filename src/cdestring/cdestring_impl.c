@@ -11,6 +11,14 @@
  *    strings to doubles in pure C memory with no SPI calls.
  * 3. Bulk store (parallel across variables): Write numeric results back to
  *    Stata via ctools_store_filtered, one variable at a time.
+ *
+ * The ado runs this as two calls. "parse" does steps 1 and 2, keeps the
+ * numbers, and reports for each variable its nonnumeric count, missing count,
+ * the storage type compress would give it and the ignore() characters it
+ * contained. The ado then creates each destination with its final type and
+ * "store" does step 3, so Stata never counts, scans or recasts the result.
+ * A call without either word converts and stores at once into destinations
+ * that already exist.
  */
 
 #include <stdio.h>
@@ -65,15 +73,27 @@ typedef struct {
  * Uses a lookup table for O(1) checking.
  */
 static unsigned char ignore_table[256];
+/* Where each ignore_table byte first occurs in the ignore() list (-1: not
+ * listed), and where U+FFFD first occurs when the list holds characters.
+ * convert_value() reports the characters a value contained by these offsets. */
+static int ignore_first[256];
+static int ignore_fffd;
 
 static void build_ignore_table(const char *ignore_chars, int len, int asbytes)
 {
     memset(ignore_table, 0, sizeof(ignore_table));
+    for (int c = 0; c < 256; c++) ignore_first[c] = -1;
+    ignore_fffd = -1;
     for (int i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)ignore_chars[i];
         /* As characters, a byte of 128 or more is part of a multibyte
          * sequence, matched whole in convert_value(). */
-        if (asbytes || (unsigned char)ignore_chars[i] < 128)
-            ignore_table[(unsigned char)ignore_chars[i]] = 1;
+        if (asbytes || c < 128) {
+            ignore_table[c] = 1;
+            if (ignore_first[c] < 0) ignore_first[c] = i;
+        }
+        if (!asbytes && ignore_fffd < 0 && i + 3 <= len &&
+            !memcmp(ignore_chars + i, "\xef\xbf\xbd", 3)) ignore_fffd = i;
     }
 }
 
@@ -202,9 +222,14 @@ static int parse_stata_hex(const char *s, int len, double *out)
  * dpcomma, then parse like real(). Returns 0 for a nonnumeric value, which is
  * stored as missing; without force the ado then leaves the variable untouched.
  * Returns -1 for allocation failure, which must never be treated as bad text.
+ *
+ * seen, when not NULL, has one byte per byte of the ignore() list: the byte at
+ * the offset where a character first occurs in the list is set when the value
+ * contains that character. The byte of U+FFFD is also set for a byte outside
+ * well-formed UTF-8, which Stata's Unicode functions read as U+FFFD.
  */
 static int convert_value(const char *src, const cdestring_options *opts,
-                         double missval, double *out)
+                         double missval, double *out, unsigned char *seen)
 {
     char buf[CDESTRING_STR_BUF_SIZE + 1];
     const char *s = src;
@@ -214,7 +239,10 @@ static int convert_value(const char *src, const cdestring_options *opts,
         int n = 0;
         for (int i = 0; i < len && n < CDESTRING_STR_BUF_SIZE; i++) {
             unsigned char c = (unsigned char)src[i];
-            if (ignore_table[c]) continue;
+            if (ignore_table[c]) {
+                if (seen && ignore_first[c] >= 0) seen[ignore_first[c]] = 1;
+                continue;
+            }
             if (opts->asbytes) {
                 buf[n++] = src[i];
                 continue;
@@ -222,6 +250,7 @@ static int convert_value(const char *src, const cdestring_options *opts,
             /* Match complete UTF-8 codepoints, never a union of their bytes. */
             int width = utf8_sequence_len((const unsigned char *)src + i, len - i);
             if (!width) {
+                if (seen && ignore_fffd >= 0) seen[ignore_fffd] = 1;
                 if (!opts->illegal) buf[n++] = src[i];
                 continue;
             }
@@ -230,6 +259,7 @@ static int convert_value(const char *src, const cdestring_options *opts,
                 for (int j = 0; j + width <= opts->ignore_len; j++) {
                     if (!memcmp(src + i, opts->ignore_chars + j, (size_t)width)) {
                         ignored = 1;
+                        if (seen) seen[j] = 1;
                         break;
                     }
                 }
@@ -369,7 +399,7 @@ static int parse_ignore_option(const char *args, char *ignore_chars, int max_len
  * Parse all options from args string.
  * Returns 0 on success, -1 on syntax error, -2 on memory failure.
  */
-static int parse_options(const char *args, cdestring_options *opts)
+static int parse_options(const char *args, cdestring_options *opts, int staged)
 {
     memset(opts, 0, sizeof(cdestring_options));
 
@@ -394,7 +424,14 @@ static int parse_options(const char *args, cdestring_options *opts)
         return -2;
     }
 
-    if (ctools_parse_bool_option(args, "seqpairs")) {
+    if (staged) {
+        /* "parse": the plugin varlist holds the sources only. The
+         * destinations do not exist until the ado knows their types. */
+        for (int i = 0; i < opts->nvars; i++) {
+            opts->src_indices[i] = i + 1;
+            opts->dst_indices[i] = 0;
+        }
+    } else if (ctools_parse_bool_option(args, "seqpairs")) {
         /* The plugin varlist holds the sources, then the destinations: no
          * index list, which on wide data exceeds Stata's plugin argument
          * length. */
@@ -497,7 +534,312 @@ static uint64_t cdestring_total(const int *counts, int nvars)
     return total;
 }
 
+/* ============================================================================
+ * Staged conversion: "parse" keeps the numbers until "store" writes them
+ * ============================================================================ */
+
+typedef struct {
+    int active;
+    double *block;           /* nvars columns of nobs converted values */
+    perm_idx_t *obs_map;     /* Stata observation of each loaded row (a copy) */
+    unsigned char *publish;  /* 1: the ado creates a destination, store fills it */
+    size_t nobs;
+    int nvars;
+    int n_publish;
+    ST_int data_nobs;        /* SF_nobs() at parse; store requires the same */
+    double elapsed;          /* seconds parse took */
+} cdestring_stage;
+
+static cdestring_stage g_stage;
+
+void cdestring_cleanup_state(void)
+{
+    free(g_stage.block);
+    free(g_stage.obs_map);
+    free(g_stage.publish);
+    memset(&g_stage, 0, sizeof(g_stage));
+}
+
+typedef struct {
+    double min, max;         /* over the nonmissing values */
+    uint64_t missing;
+    int fraction;            /* some nonmissing value is not an integer */
+} cdestring_stat;
+
+static void cdestring_stat_init(cdestring_stat *st, int nvars)
+{
+    for (int v = 0; v < nvars; v++) {
+        st[v].min = HUGE_VAL;
+        st[v].max = -HUGE_VAL;
+        st[v].missing = 0;
+        st[v].fraction = 0;
+    }
+}
+
+/*
+ * The values each published variable will hold. Under float they are rounded
+ * to float here, as storing into a float variable would round them, so that
+ * the type chosen from them is exact. Returns -1 on allocation failure.
+ */
+static int cdestring_describe(double **results, size_t nobs, int nvars,
+                              const unsigned char *publish, int float_out,
+                              double missval, cdestring_stat *stats)
+{
+    int alloc_failed = 0;
+    cdestring_stat_init(stats, nvars);
+    #pragma omp parallel
+    {
+        cdestring_stat *tl = (cdestring_stat *)malloc((size_t)nvars * sizeof(cdestring_stat));
+        if (tl) {
+            cdestring_stat_init(tl, nvars);
+        } else {
+            #pragma omp atomic write
+            alloc_failed = 1;
+        }
+
+        #pragma omp for schedule(static)
+        for (size_t i = 0; i < nobs; i++) {
+            if (!tl) continue;
+            for (int v = 0; v < nvars; v++) {
+                if (!publish[v]) continue;
+                double x = results[v][i];
+                if (!(x < missval)) {
+                    tl[v].missing++;
+                    continue;
+                }
+                if (float_out) {
+                    x = (double)(float)x;
+                    results[v][i] = x;
+                }
+                /* Every double of magnitude 2^52 or more is an integer */
+                if (fabs(x) < 4503599627370496.0 && x != (double)(int64_t)x)
+                    tl[v].fraction = 1;
+                if (x < tl[v].min) tl[v].min = x;
+                if (x > tl[v].max) tl[v].max = x;
+            }
+        }
+
+        if (tl) {
+            #pragma omp critical
+            {
+                for (int v = 0; v < nvars; v++) {
+                    stats[v].missing += tl[v].missing;
+                    stats[v].fraction |= tl[v].fraction;
+                    if (tl[v].min < stats[v].min) stats[v].min = tl[v].min;
+                    if (tl[v].max > stats[v].max) stats[v].max = tl[v].max;
+                }
+            }
+        }
+        free(tl);
+    }
+    return alloc_failed ? -1 : 0;
+}
+
+/*
+ * The storage type compress gives a double (under float: a float) with these
+ * values: byte, int or long when every value is an integer the type holds
+ * (a float goes no further than int), byte when every value is missing.
+ */
+static const char *cdestring_storage_type(const cdestring_stat *st, size_t nobs, int float_out)
+{
+    if (st->missing == (uint64_t)nobs) return "byte";
+    if (!st->fraction) {
+        if (st->min >= -127.0 && st->max <= 100.0) return "byte";
+        if (st->min >= -32767.0 && st->max <= 32740.0) return "int";
+        if (!float_out && st->min >= -2147483647.0 && st->max <= 2147483620.0) return "long";
+    }
+    return float_out ? "float" : "double";
+}
+
+/*
+ * Save what the ado needs to create and describe each destination: locals
+ * cdestring_types and cdestring_missing (one word per variable; "." for a
+ * variable left untouched) and cdestring_seen (per variable, the offsets in
+ * the ignore() list of the characters its values contained, joined by
+ * commas, or "." for none).
+ */
+static ST_retcode cdestring_report(const cdestring_stat *stats, const unsigned char *publish,
+                                   const unsigned char *seen, size_t seen_width,
+                                   int nvars, size_t nobs, int float_out)
+{
+    size_t seen_marks = 0;
+    for (size_t k = 0; seen && k < (size_t)nvars * seen_width; k++) seen_marks += seen[k];
+    size_t types_cap = (size_t)nvars * 8 + 1;
+    size_t missing_cap = (size_t)nvars * 22 + 1;
+    size_t seen_cap = seen_marks * 12 + (size_t)nvars * 2 + 1;
+    char *types = (char *)malloc(types_cap);
+    char *missing = (char *)malloc(missing_cap);
+    char *marks = (char *)malloc(seen_cap);
+    ST_retcode rc = 920;
+    if (types && missing && marks) {
+        size_t tu = 0, mu = 0, su = 0;
+        types[0] = missing[0] = marks[0] = '\0';
+        for (int v = 0; v < nvars; v++) {
+            const char *sep = v ? " " : "";
+            if (publish[v]) {
+                tu += (size_t)snprintf(types + tu, types_cap - tu, "%s%s", sep,
+                                       cdestring_storage_type(&stats[v], nobs, float_out));
+                mu += (size_t)snprintf(missing + mu, missing_cap - mu, "%s%llu", sep,
+                                       (unsigned long long)stats[v].missing);
+            } else {
+                tu += (size_t)snprintf(types + tu, types_cap - tu, "%s.", sep);
+                mu += (size_t)snprintf(missing + mu, missing_cap - mu, "%s.", sep);
+            }
+            su += (size_t)snprintf(marks + su, seen_cap - su, "%s", sep);
+            int any = 0;
+            for (size_t k = 0; seen && k < seen_width; k++) {
+                if (!seen[(size_t)v * seen_width + k]) continue;
+                su += (size_t)snprintf(marks + su, seen_cap - su, "%s%zu", any ? "," : "", k);
+                any = 1;
+            }
+            if (!any) su += (size_t)snprintf(marks + su, seen_cap - su, ".");
+        }
+        rc = SF_macro_save("_cdestring_types", types);
+        if (!rc) rc = SF_macro_save("_cdestring_missing", missing);
+        if (!rc) rc = SF_macro_save("_cdestring_seen", marks);
+    }
+    free(types);
+    free(missing);
+    free(marks);
+    return rc;
+}
+
+/*
+ * "store": write the staged numbers into the destinations the ado created,
+ * one plugin variable per published variable in their order.
+ */
+static ST_retcode cdestring_store_staged(void)
+{
+    double t_start = ctools_timer_seconds();
+    if (!g_stage.active || SF_nvars() != g_stage.n_publish) {
+        SF_error("cdestring: store does not match the parsed variables\n");
+        cdestring_cleanup_state();
+        return 198;
+    }
+    if (SF_nobs() != g_stage.data_nobs) {
+        SF_error("cdestring: the data changed between parse and store\n");
+        cdestring_cleanup_state();
+        return 459;
+    }
+
+    size_t nobs = g_stage.nobs;
+    int nvars = g_stage.nvars;
+    int store_rc = STATA_OK;
+    int *dst = (int *)malloc((size_t)(nvars ? nvars : 1) * sizeof(int));
+    if (!dst) {
+        cdestring_cleanup_state();
+        SF_error("cdestring: memory allocation failed\n");
+        return 920;
+    }
+    int next = 0;
+    for (int v = 0; v < nvars; v++) dst[v] = g_stage.publish[v] ? ++next : 0;
+
+    if (!nobs) {
+        /* nothing was selected: the destinations stay missing */
+    } else if (g_stage.n_publish == 1) {
+        for (int v = 0; v < nvars; v++) {
+            if (dst[v])
+                store_rc = ctools_store_filtered_rowpar(g_stage.block + (size_t)v * nobs,
+                                                        nobs, dst[v], g_stage.obs_map);
+        }
+    } else {
+        #pragma omp parallel for schedule(static) reduction(max:store_rc)
+        for (int v = 0; v < nvars; v++) {
+            if (!dst[v]) continue;
+            int rc = ctools_store_filtered(g_stage.block + (size_t)v * nobs, nobs,
+                                           dst[v], g_stage.obs_map);
+            if (rc > store_rc) store_rc = rc;
+        }
+    }
+    free(dst);
+
+    double t_store = ctools_timer_seconds() - t_start;
+    double t_total = g_stage.elapsed + t_store;
+    cdestring_cleanup_state();
+    if (store_rc) return ctools_stata_rc(store_rc);
+
+    ST_retcode rc;
+    if ((rc = SF_scal_save("_cdestring_time_store", t_store))) return rc;
+    if ((rc = SF_scal_save("_cdestring_time_total", t_total))) return rc;
+    if ((rc = SF_scal_save("_cdestring_threads_max", (double)ctools_get_max_threads()))) return rc;
+    return SF_scal_save("_cdestring_openmp_enabled", (double)CTOOLS_OPENMP_ENABLED);
+}
+
+/*
+ * Finish "parse": describe the converted values, report them to the ado and
+ * keep them for "store". block passes to the stage, which also frees it when
+ * anything here fails; the observation map is copied, so the caller still
+ * frees loaded.
+ */
+static ST_retcode cdestring_stage_finish(double *block, double **results,
+                                         const ctools_filtered_data *loaded, size_t nobs,
+                                         const cdestring_options *opts, const int *var_failed,
+                                         const unsigned char *seen, size_t seen_width,
+                                         double missval, uint64_t total_converted,
+                                         uint64_t total_failed, double t_start,
+                                         double t_parse, double t_load)
+{
+    int nvars = opts->nvars;
+    cdestring_cleanup_state();
+    g_stage.block = block;
+    if (nobs) {
+        g_stage.obs_map = (perm_idx_t *)malloc(nobs * sizeof(perm_idx_t));
+        if (g_stage.obs_map) memcpy(g_stage.obs_map, loaded->obs_map, nobs * sizeof(perm_idx_t));
+    }
+    g_stage.publish = (unsigned char *)malloc((size_t)nvars);
+    cdestring_stat *stats = (cdestring_stat *)malloc((size_t)nvars * sizeof(cdestring_stat));
+    ST_retcode rc = 920;
+    if (g_stage.publish && stats && (!nobs || g_stage.obs_map)) {
+        g_stage.n_publish = 0;
+        for (int v = 0; v < nvars; v++) {
+            g_stage.publish[v] = (unsigned char)(opts->force || var_failed[v] == 0);
+            g_stage.n_publish += g_stage.publish[v];
+        }
+        if (cdestring_describe(results, nobs, nvars, g_stage.publish, opts->float_out,
+                               missval, stats) == 0)
+            rc = cdestring_report(stats, g_stage.publish, seen, seen_width, nvars, nobs,
+                                  opts->float_out);
+    }
+    free(stats);
+    if (rc == 920) SF_error("cdestring: memory allocation failed\n");
+
+    double t_done = ctools_timer_seconds();
+    if (!rc) rc = SF_scal_save("_cdestring_n_converted", (double)total_converted);
+    if (!rc) rc = SF_scal_save("_cdestring_n_failed", (double)total_failed);
+    if (!rc) rc = SF_scal_save("_cdestring_nobs", (double)nobs);
+    if (!rc) rc = SF_scal_save("_cdestring_time_parse", t_parse - t_start);
+    if (!rc) rc = SF_scal_save("_cdestring_time_load", t_load - t_parse);
+    if (!rc) rc = SF_scal_save("_cdestring_time_convert", t_done - t_load);
+    /* store replaces these two; they stand when no variable is stored */
+    if (!rc) rc = SF_scal_save("_cdestring_time_store", 0.0);
+    if (!rc) rc = SF_scal_save("_cdestring_time_total", t_done - t_start);
+    if (!rc) rc = SF_scal_save("_cdestring_threads_max", (double)ctools_get_max_threads());
+    if (!rc) rc = SF_scal_save("_cdestring_openmp_enabled", (double)CTOOLS_OPENMP_ENABLED);
+    if (rc) {
+        cdestring_cleanup_state();
+        return rc;
+    }
+    g_stage.nobs = nobs;
+    g_stage.nvars = nvars;
+    g_stage.data_nobs = SF_nobs();
+    g_stage.elapsed = t_done - t_start;
+    g_stage.active = 1;
+    return 0;
+}
+
+static ST_retcode cdestring_convert(const char *args, int staged);
+
 ST_retcode cdestring_main(const char *args)
+{
+    char op[16] = {0};
+    if (args) sscanf(args, "%15s", op);
+    if (!strcmp(op, "store")) return cdestring_store_staged();
+    cdestring_cleanup_state();
+    if (!strcmp(op, "discard")) return 0;
+    return cdestring_convert(args, !strcmp(op, "parse"));
+}
+
+static ST_retcode cdestring_convert(const char *args, int staged)
 {
     double t_start, t_parse, t_load, t_convert, t_store, t_total;
     cdestring_options opts;
@@ -505,7 +847,7 @@ ST_retcode cdestring_main(const char *args)
     t_start = ctools_timer_seconds();
 
     /* Parse arguments */
-    int parse_rc = parse_options(args, &opts);
+    int parse_rc = parse_options(args, &opts, staged);
     if (parse_rc != 0) {
         if (parse_rc == -2) {
             SF_error("cdestring: memory allocation failed\n");
@@ -555,6 +897,18 @@ ST_retcode cdestring_main(const char *args)
     size_t nobs = filtered.data.nobs;
     perm_idx_t *obs_map = filtered.obs_map;
 
+    if (nobs == 0 && staged) {
+        /* Nothing was selected: every destination is all missing. */
+        ST_retcode empty_rc = save_failed_counts(var_failed, nvars);
+        if (!empty_rc)
+            empty_rc = cdestring_stage_finish(NULL, NULL, &filtered, 0, &opts, var_failed, NULL, 0,
+                                              missval, 0, 0, t_start, t_parse,
+                                              ctools_timer_seconds());
+        ctools_filtered_data_free(&filtered);
+        free_options(&opts);
+        free(var_counts);
+        return empty_rc;
+    }
     if (nobs == 0) {
         ctools_filtered_data_free(&filtered);
         free_options(&opts);
@@ -592,6 +946,19 @@ ST_retcode cdestring_main(const char *args)
         results[v] = results_block + (size_t)v * nobs;
     }
 
+    /* "parse" also notes which ignore() characters each variable contained */
+    size_t seen_width = staged ? (size_t)opts.ignore_len : 0;
+    unsigned char *var_seen = NULL;
+    if (seen_width && !(var_seen = (unsigned char *)calloc((size_t)nvars, seen_width))) {
+        free(results_block);
+        free(results);
+        ctools_filtered_data_free(&filtered);
+        free_options(&opts);
+        free(var_counts);
+        SF_error("cdestring: memory allocation failed\n");
+        return 920;
+    }
+
     /* Transposed loop: single OMP region with outer loop over observations,
      * inner loop over variables. This gives one fork/join barrier instead of
      * nvars barriers, and keeps per-observation data cache-hot across variables. */
@@ -600,6 +967,11 @@ ST_retcode cdestring_main(const char *args)
     {
         /* Thread-local per-variable counters */
         int *tl_counts = (int *)calloc((size_t)nvars * 3, sizeof(int));
+        unsigned char *tl_seen = seen_width ? (unsigned char *)calloc((size_t)nvars, seen_width) : NULL;
+        if (seen_width && !tl_seen) {
+            free(tl_counts);
+            tl_counts = NULL;
+        }
         int tl_ok = tl_counts != NULL;
         int *tl_converted = tl_counts;
         int *tl_failed = tl_ok ? tl_counts + nvars : NULL;
@@ -617,7 +989,8 @@ ST_retcode cdestring_main(const char *args)
                 if (src == NULL) src = "";
 
                 if (opts.percent && strchr(src, '%')) tl_percent[v]++;
-                int converted = convert_value(src, &opts, missval, &results[v][i]);
+                int converted = convert_value(src, &opts, missval, &results[v][i],
+                                              tl_seen ? tl_seen + (size_t)v * seen_width : NULL);
                 if (converted < 0) {
                     #pragma omp atomic write
                     tl_alloc_failed = 1;
@@ -638,14 +1011,18 @@ ST_retcode cdestring_main(const char *args)
                     var_failed[v] += tl_failed[v];
                     var_percent[v] += tl_percent[v];
                 }
+                for (size_t k = 0; tl_seen && k < (size_t)nvars * seen_width; k++)
+                    var_seen[k] |= tl_seen[k];
             }
         }
         free(tl_counts);
+        free(tl_seen);
     }
     if (tl_alloc_failed) {
         ctools_filtered_data_free(&filtered);
         free(results_block);
         free(results);
+        free(var_seen);
         free(var_counts);
         free_options(&opts);
         SF_error("cdestring: memory allocation failed\n");
@@ -676,9 +1053,24 @@ ST_retcode cdestring_main(const char *args)
         ctools_filtered_data_free(&filtered);
         free(results_block);
         free(results);
+        free(var_seen);
         free(var_counts);
         free_options(&opts);
         return mac_rc;
+    }
+
+    if (staged) {
+        /* The strings are no longer needed; the numbers stay for "store". */
+        ST_retcode stage_rc = cdestring_stage_finish(
+            results_block, results, &filtered, nobs, &opts, var_failed, var_seen, seen_width,
+            missval, cdestring_total(var_converted, nvars), cdestring_total(var_failed, nvars),
+            t_start, t_parse, t_load);
+        ctools_filtered_data_free(&filtered);
+        free(results);
+        free(var_seen);
+        free(var_counts);
+        free_options(&opts);
+        return stage_rc;
     }
 
     /* ====================================================================

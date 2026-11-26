@@ -27,8 +27,8 @@ Each ctools command's `syntax` statement, help file, and C implementation (`buil
 | `cimport`, `cexport` | `import *`, `export *` (StataNow 19.5) | `ado/base/i/`, `ado/base/e/` |
 | `cmerge`, `csort`, `cencode`, `cdecode`, `cdestring`, `csplit`, `csample`, `cbsample`, `cinterpolate` | `merge`, `sort`, `encode`, `decode`, `destring`, `split`, `sample`, `bsample`, `ipolate` | `ado/base/` |
 | `cbinscatter` | `binscatter` 7.02; `binsreg` (not installed; checked from its documentation) | `~/ado/plus/b/` |
-| `cpsmatch` | `psmatch2` 4.0.12 | `~/ado/plus/p/` |
-| `cdistinct`, `crangejoin`, `crangestat` | `distinct` 1.2.1, `rangejoin` 1.1.3, `rangestat` 1.1.1 | `~/ado/plus/` |
+| `cpsmatch` | `psmatch2` 4.1.0 (on SSC since 16 November 2026; the audit below was against 4.0.12) | `~/ado/plus/p/` |
+| `cdistinct`, `crangejoin`, `crangestat` | `distinct` 1.4.3 (*Stata Journal* package dm0042_5; SSC has 1.2.1), `rangejoin` 1.1.3, `rangestat` 1.1.1 | `~/ado/plus/` |
 | `cwinsor` | `winsor2`, `gstats winsor` (gtools) | `~/ado/plus/` |
 
 The `cppmlhdfe` and `cqreg` findings were mostly confirmed by running StataNow 19.5 in batch mode. All
@@ -344,7 +344,7 @@ and `ppmlhdfe` output, and Stata's `import excel`.
 | BIN-15 | S3 | binsreg: positional controls (`binsreg y x w1 w2`) | Needs `controls()` | **Documented** (help "Differences from binsreg"); not until binsreg is installed | — |
 | BIN-16 | S4 | binsreg `e()` results | Missing | **Documented** (help "Differences from binsreg"); not until binsreg is installed | — |
 
-### cpsmatch → psmatch2 4.0.12
+### cpsmatch → psmatch2 4.1.0
 
 | ID | Sev | Gap | ctools behavior | Status | Evidence |
 |---|---|---|---|---|---|
@@ -353,7 +353,7 @@ and `ppmlhdfe` output, and Stata's `import excel`.
 | PSM-03 | S2 | `mahalanobis()` and `w()` (covariate-metric matching) | r198 | **Fixed** | — |
 | PSM-04 | S2 | `llr` (local linear regression matching) | r198 | **Fixed** | — |
 | PSM-05 | S2 | `spline` / `nknots()` | r198 | **Partly fixed**: calls the `spline` package as psmatch2 does; unverified here (package not installed) | — |
-| PSM-06 | S2 | `ai()`, `population`, `altvariance` (Abadie-Imbens variance) | r198 (documented) | **Fixed** | — |
+| PSM-06 | S2 | `ai()`, `population` (`samplevar` since 4.1.0, see PSM-17), `altvariance` (Abadie-Imbens variance) | r198 (documented) | **Fixed** | — |
 | PSM-07 | S2 | `trim()` (density-based common support) | r198 | **Fixed** | — |
 | PSM-08 | S3 | `odds`, `index` (match on log odds or linear index) | r198 | **Fixed** | — |
 | PSM-09 | S3 | `quietly` (hide the score model output) | r198 | **Fixed** | `cpsmatch.ado:183-186` |
@@ -364,12 +364,15 @@ and `ppmlhdfe` output, and Stata's `import excel`.
 | PSM-14 | S4 | Value labels on `_treated`/`_support`, variable labels, `char _weight[Type]`; `_nn = 0` for on-support controls | Missing / missing value | **Fixed** (labels read `cpsmatch:`) | `cpsmatch.ado:202-206` |
 | PSM-15 | S4 | `r(depvar)`, `r(exog)` | `r(outcome)`/`r(treatvar)` instead | **Fixed** | `cpsmatch.ado:453-457` |
 | PSM-16 | S3 | `radius` without `caliper()` matches every control in psmatch2 | Uses 0.25 (documented) | **Fixed** (9 Nov): every control, with psmatch2's missing-bandwidth weights and SE | s2_psm.do "PSM-16" |
+| PSM-17 | S2 | `cpsmatch` followed `psmatch2` 4.0.12; SSC has distributed 4.1.0 since 16 November 2026. 4.1.0 takes the control variance of the default ATT standard error over every control on support, adds ATU and ATE standard errors without `ai()`, makes the population variance the `ai()` default (`samplevar` for the other; `population` is gone), corrects `ai()` for an estimated score (Abadie and Imbens 2016; `debug` returns the parts), and returns `r(ai)`, `r(ai_vartype)`, `r(ai_pscorr)`, `r(ai_pscorr_method)` and `r(table)`. Matching and point estimates are unchanged | Behaved as 4.0.12 | **Fixed** (25 Nov): follows 4.1.0 | s2_psm.do "PSM-17" |
 
-### cdistinct → distinct 1.2.1
+### cdistinct → distinct 1.4.3
 
 | ID | Sev | Gap | ctools behavior | Status | Evidence |
 |---|---|---|---|---|---|
 | DIST-01 | S2 | strL values over 2,045 bytes or binary | Error (documented) | **Fixed** | `src/ctools_transport.c:37-45` |
+| DIST-02 | S2 | `cdistinct` followed `distinct` 1.2.1, the SSC copy: no `sort()` or `width()`, `abbrev()` defaulting to the longest name, `minimum()` defaulting to 0, the old table, results unaffected by `minimum()`/`maximum()`, zeros instead of r(2000) for `joint` with no observations | Behaved as 1.2.1 | **Fixed** (25 Nov): follows 1.4.3 | cdistinct.do "sort() orders rows, and its errors, as distinct does" |
+| DIST-03 | S4 | `distinctgen`, the companion command in the package of `distinct` 1.4.3 | Not reimplemented (documented) | Deferred: out of scope when `cdistinct` moved to 1.4.3; `distinctgen` itself can be used | — |
 
 ### crangejoin → rangejoin 1.1.3
 

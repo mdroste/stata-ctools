@@ -24,7 +24,10 @@
  *   caliper() (strict); a target left without one is off support;
  * - without replacement the matched donors are used up and the scan resumes
  *   at the next unused donor; once it runs off the donors the remaining
- *   targets are off support.
+ *   targets are off support. Only the nearest donor and its ties are taken
+ *   that way: in the ai(#) pass the other # - 1 matches are the positions
+ *   around the nearest, used or not, as in psmatch2 (the scalar
+ *   _cpsmatch_ai_pass tells the ado file that the plugin does this).
  * With replacement and without ties the scan finds what a binary search
  * finds (the closer neighbor, the lower on equal distance, the first of a run
  * of equal scores), so those passes run in parallel.
@@ -228,9 +231,9 @@ static int psm_scan(const double *ps, ssize_t n_pos, ssize_t i0, ssize_t i1, ssi
             used[jm] = 1;
             if (psm_lists_push(out, jm)) return -1;
             n++;
-            /* Without replacement only neighbor(1) is supported. Preserve
-             * its sequential availability policy; no second neighbor pass
-             * can duplicate these donors. */
+            /* Without replacement, ties are the unused donors that follow in
+             * the scan direction at no greater distance (psmatch2's
+             * match_ties); they are used up too. */
             if (ties && noreplace) {
                 for (ssize_t k = psm_step(jm, forward, me, noreplace, used, n_pos);
                      k >= j0 && k <= j1 && fabs(ps[i] - ps[k]) <= nearest;
@@ -244,14 +247,16 @@ static int psm_scan(const double *ps, ssize_t n_pos, ssize_t i0, ssize_t i1, ssi
             if (p0 == me) p0--;
             if (p1 == me) p1++;
             double e0 = 0.0, e1 = 0.0;
-            /* Walk outward once: include each donor through the kth-distance
-             * boundary exactly once, even when the nearest run already has k. */
+            /* The other neighbors, walking outward from the nearest.
+             * With replacement: each donor through the kth-distance boundary
+             * exactly once, even when the nearest run already has k.
+             * Without replacement (psmatch2's match2; neighbors is above 1
+             * only in the ai() pass): the next neighbors - 1 positions, used
+             * or not, and none of them is marked as used. After ties a donor
+             * can so be listed twice, as in psmatch2. */
             double boundary = nearest;
-            for (; !noreplace || n < (uint32_t)neighbors;) {
-                if (noreplace) {
-                    while (p0 >= j0 && (p0 == me || used[p0])) p0--;
-                    while (p1 <= j1 && (p1 == me || used[p1])) p1++;
-                }
+            uint32_t around = 0;
+            for (; !noreplace || around + 1 < (uint32_t)neighbors;) {
                 if (p0 >= j0) e0 = fabs(ps[i] - ps[p0]);
                 if (p1 <= j1) e1 = fabs(ps[i] - ps[p1]);
                 ssize_t pick;
@@ -266,11 +271,12 @@ static int psm_scan(const double *ps, ssize_t n_pos, ssize_t i0, ssize_t i1, ssi
                 }
                 double distance = fabs(ps[i] - ps[pick]);
                 if (!(distance < cal)) break;
-                if (n >= (uint32_t)neighbors && (!ties || distance > boundary)) break;
+                if (!noreplace && n >= (uint32_t)neighbors && (!ties || distance > boundary))
+                    break;
                 if (psm_lists_push(out, pick)) return -1;
                 n++;
+                around++;
                 boundary = distance;
-                if (noreplace) used[pick] = 1;
             }
         }
         out->count[t] = n;
@@ -902,6 +908,10 @@ ST_retcode cpsmatch_main(const char *args)
     if ((rc = SF_scal_save("_cpsmatch_common_max", cmax))) goto cleanup;
     if ((rc = SF_scal_save("_cpsmatch_threads_max", (double)ctools_get_max_threads()))) goto cleanup;
     if ((rc = SF_scal_save("_cpsmatch_openmp_enabled", (double)CTOOLS_OPENMP_ENABLED))) goto cleanup;
+    /* Revision of the ai() same-arm pass: 2 since noreplacement takes only
+     * the first match without replacement. The ado file refuses the results
+     * of ai(#) above 1 with noreplacement from a plugin without it. */
+    if ((rc = SF_scal_save("_cpsmatch_ai_pass", 2.0))) goto cleanup;
 
 cleanup:
     if (rc == 920) SF_error("cpsmatch: memory allocation failed\n");

@@ -1,4 +1,6 @@
 *! version 1.3.1 20261124 github.com/mdroste/stata-ctools
+*! original: Stata's encode (built in)
+*! original: see help cencode for details
 
 program define cencode, rclass
     version 14.1

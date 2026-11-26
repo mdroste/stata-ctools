@@ -27,6 +27,7 @@
 */
 
 #include <stdlib.h>
+#include <stddef.h>
 #include <string.h>
 #include <math.h>
 
@@ -135,8 +136,11 @@ static void civ_fstat(const civ_ffirst_dof *dof, ST_double wald, ST_int df1,
 ST_retcode civ_ffirst(const ST_double *y, const ST_double *X1, ST_int K1,
                       const ST_double *Z, ST_int L, ST_int K2,
                       const ST_double *w, ST_int N, const civ_omega *om,
-                      const civ_ffirst_dof *dof)
+                      const civ_ffirst_dof *dof, const ST_double *ZtZ_fit,
+                      const ST_double *Zty_fit, const ST_double *ZtX_fit)
 {
+    /* the fit's cross products serve when all three are given */
+    const int pre = ZtZ_fit && Zty_fit && ZtX_fit;
     ST_int L1 = L - K2, Q = K1 + 1, D = Q * L, K = K1 + K2;
     ST_double Ne = dof->N, Nd = dof->N - dof->dofminus;
     /* S carries 1/(N-d) without clusters (m_omega's dofminus) */
@@ -174,13 +178,27 @@ ST_retcode civ_ffirst(const ST_double *y, const ST_double *X1, ST_int K1,
     memcpy(Yall, y, (size_t)N * sizeof(ST_double));
     memcpy(Yall + N, X1, (size_t)N * K1 * sizeof(ST_double));
 
-    ctools_matmul_atdb(Z, Z, w, N, L, L, ZZ);
+    if (pre) {
+        /* Z'WZ, and Z'W[y X1] from Z'Wy and the X1 columns of Z'WX (each an
+           element of the products below, Z weighted on the left) */
+        memcpy(ZZ, ZtZ_fit, (size_t)L * L * sizeof(ST_double));
+        memcpy(ZY, Zty_fit, (size_t)L * sizeof(ST_double));
+        for (ST_int e = 0; e < K1; e++)
+            memcpy(ZY + (size_t)(1 + e) * L, ZtX_fit + (size_t)(K2 + e) * L, (size_t)L * sizeof(ST_double));
+    } else {
+        ctools_matmul_atdb(Z, Z, w, N, L, L, ZZ);
+        ctools_matmul_atdb(Z, Yall, w, N, L, Q, ZY);
+    }
     if (civ_sym_inverse(ZZ, L, Zi) != 0) { rc = 920; goto done; }
-    ctools_matmul_atdb(Z, Yall, w, N, L, Q, ZY);
     ctools_matmul_ab(Zi, ZY, L, L, Q, B);
     /* E = [y X1] - Z B */
     ctools_matmul_xb(Z, N, L, B, Q, E);
-    for (size_t j = 0; j < (size_t)N * Q; j++) E[j] = Yall[j] - E[j];
+    {
+        const ptrdiff_t NQ = (ptrdiff_t)N * Q;
+        ptrdiff_t j;
+        #pragma omp parallel for schedule(static) if(NQ > 200000)
+        for (j = 0; j < NQ; j++) E[j] = Yall[j] - E[j];
+    }
     ctools_matmul_atdb(E, E, w, N, Q, Q, ee);
 
     /* VCE of the system: Vr = f (I (x) Zi) S (I (x) Zi) */
@@ -233,8 +251,16 @@ ST_retcode civ_ffirst(const ST_double *y, const ST_double *X1, ST_int K1,
             ST_double *Xi = (ST_double *)calloc((size_t)K2 * K2, sizeof(ST_double));
             ST_double *Xy = (ST_double *)calloc((size_t)K2, sizeof(ST_double));
             if (!XtX || !Xi || !Xy) { free(XtX); free(Xi); free(Xy); rc = 920; goto done; }
-            ctools_matmul_atdb(Z, Z, w, N, K2, K2, XtX);
-            ctools_matmul_atdb(Z, y, w, N, K2, 1, Xy);
+            if (pre) {
+                /* X2'WX2 and X2'Wy: the leading blocks of Z'WZ and Z'Wy */
+                for (ST_int c = 0; c < K2; c++)
+                    for (ST_int r = 0; r < K2; r++)
+                        XtX[(size_t)c * K2 + r] = ZtZ_fit[(size_t)c * L + r];
+                memcpy(Xy, Zty_fit, (size_t)K2 * sizeof(ST_double));
+            } else {
+                ctools_matmul_atdb(Z, Z, w, N, K2, K2, XtX);
+                ctools_matmul_atdb(Z, y, w, N, K2, 1, Xy);
+            }
             ST_int irc = civ_sym_inverse(XtX, K2, Xi);
             memcpy(e1, y, (size_t)N * sizeof(ST_double));
             if (!irc) {
@@ -242,7 +268,9 @@ ST_retcode civ_ffirst(const ST_double *y, const ST_double *X1, ST_int K1,
                     ST_double c = 0.0;
                     for (ST_int k = 0; k < K2; k++) c += Xi[(size_t)k * K2 + j] * Xy[k];
                     const ST_double *zj = Z + (size_t)j * N;
-                    for (ST_int i = 0; i < N; i++) e1[i] -= zj[i] * c;
+                    ST_int i;
+                    #pragma omp parallel for schedule(static) if(N > 200000)
+                    for (i = 0; i < N; i++) e1[i] -= zj[i] * c;
                 }
             }
             free(XtX); free(Xi); free(Xy);
@@ -276,7 +304,16 @@ ST_retcode civ_ffirst(const ST_double *y, const ST_double *X1, ST_int K1,
     ctools_matmul_xb(Z, N, L, B + L, K1, Xhat);
     if (K2 > 0) memcpy(Xhat + (size_t)N * K1, Z, (size_t)N * K2 * sizeof(ST_double));
     ctools_matmul_atdb(Xact, Xact, w, N, K, K, XX);
-    ctools_matmul_atdb(Z, Xact, w, N, L, K, ZX);
+    if (pre && !w) {
+        /* Z'[X1 X2]: the X1 columns of Z'X, then the leading columns of
+           Z'Z (unweighted products do not depend on the order of the pair) */
+        for (ST_int e = 0; e < K1; e++)
+            memcpy(ZX + (size_t)e * L, ZtX_fit + (size_t)(K2 + e) * L, (size_t)L * sizeof(ST_double));
+        for (ST_int c = 0; c < K2; c++)
+            memcpy(ZX + (size_t)(K1 + c) * L, ZtZ_fit + (size_t)c * L, (size_t)L * sizeof(ST_double));
+    } else {
+        ctools_matmul_atdb(Z, Xact, w, N, L, K, ZX);
+    }
     {
         ST_double *t = (ST_double *)calloc((size_t)L * K, sizeof(ST_double));
         if (!t) { rc = 920; goto done; }

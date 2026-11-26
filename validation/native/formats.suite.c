@@ -1090,12 +1090,12 @@ int main(void)
     close(fd);
     cexport_io_file file;
     reserve_error = ENOSPC;
-    assert(!cexport_io_open(&file, path, CEXPORT_IO_MMAP, CEXPORT_IO_FLAG_NOFSYNC));
+    assert(!cexport_io_open(&file, path, CEXPORT_IO_MMAP, CEXPORT_IO_FLAG_NONE));
     assert(cexport_io_presize(&file, 1 << 20) == CEXPORT_IO_UNRESERVED);
     assert(file.mapped_data == NULL && strstr(file.error_message, "cannot reserve"));
     assert(!cexport_io_close(&file, 0));
     reserve_error = 0;
-    assert(!cexport_io_open(&file, path, CEXPORT_IO_MMAP, CEXPORT_IO_FLAG_NOFSYNC));
+    assert(!cexport_io_open(&file, path, CEXPORT_IO_MMAP, CEXPORT_IO_FLAG_NONE));
     assert(!cexport_io_presize(&file, 4096) && file.mapped_data != NULL);
     assert(cexport_io_write_at(&file, "mapped", 6, 0) == 6);
     assert(cexport_io_write_at(&file, "x", 1, 4096) == -1);
@@ -1109,7 +1109,7 @@ int main(void)
         entries[i].len = 100;
         entries[i].offset = 100 * (size_t)i;
     }
-    assert(!cexport_io_open(&file, path, CEXPORT_IO_PWRITE, CEXPORT_IO_FLAG_NOFSYNC));
+    assert(!cexport_io_open(&file, path, CEXPORT_IO_PWRITE, CEXPORT_IO_FLAG_NONE));
     assert(!cexport_io_presize(&file, 1024));
     assert(cexport_io_write_batch(&file, entries, 65) == 6500);
     assert(cexport_io_write_at(&file, "!", 1, 6500) == 1);

@@ -15,6 +15,8 @@ extern HDFE_State *g_state;
 
 /* Clean up global state */
 void cleanup_state(void);
+/* The same at the end of a fit, through the release helper (ctools_release.h) */
+void cleanup_state_later(void);
 
 /* vce(bootstrap) hooks, installed by creghdfe_boot_install() when the plugin
  * dispatches creghdfe, so that the fit and its cleanup do not link the

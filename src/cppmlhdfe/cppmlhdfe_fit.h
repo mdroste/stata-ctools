@@ -29,6 +29,11 @@ typedef struct
     ST_int N, K_x, K_aug, G, irls_maxiter, num_threads, verbose;
     ST_int has_weights, weight_type;
     ST_int K_irls;            /* regressors in IRLS after the collinearity pre-pass */
+    /* When positive: aug_copy's regressor columns hold X less the fixed
+     * effects at the starting weights, projected to this tolerance (the
+     * pre-pass's); the first iteration then projects the working variable
+     * only. 0 (a zeroed io): the loop partials everything itself. */
+    ST_double x_partialled_tol;
     ST_int *irls_keep_idx;    /* their columns, or NULL for all */
     /* Workspace (caller's) */
     ST_double *mu, *eta, *irls_w, *z_orig, *aug_copy, *previous_working;
@@ -39,6 +44,10 @@ typedef struct
     ST_double *beta_prev, *eta_refit, *eta_refit_prev;
     ST_int iterations, converged;
     ST_double deviance, subiterations, target_inner_tol;
+    /* seconds of the loop by step, for the verbose timing table: the working
+     * variable, the fixed-effect projections, the weighted least squares
+     * solve, and the update of eta, mu, deviance and weights */
+    double time_working, time_partial, time_solve, time_update;
     /* ppml_final_collinear */
     ST_int *is_collinear;
     ST_int num_collinear, K_keep;

@@ -10,11 +10,15 @@
 
 #include "hdfe_types.h"
 #include "../ctools_cancel.h"
+#include <limits.h>
 
 /* ========================================================================
  * Conjugate Gradient Solver
  * ======================================================================== */
 
+/* Positive iteration count on convergence, negative count on exhaustion,
+ * or this distinct sentinel on numerical breakdown (not overridable by abort(0)). */
+#define HDFE_CG_BREAKDOWN INT_MIN
 ST_int cg_solve_column_threaded(HDFE_State *S, ST_double *y, ST_int thread_id);
 
 /* ========================================================================
@@ -31,7 +35,7 @@ ST_int cg_solve_column_threaded(HDFE_State *S, ST_double *y, ST_int thread_id);
  *   num_threads: Number of threads to use
  *
  * Returns: status (0, 1 for cancellation, 198 for invalid configuration,
- * 920 for allocation failure, or 430 for nonconvergence),
+ * 920 for allocation failure, 498 for numerical breakdown, or 430 for nonconvergence),
  * convergence flag, and maximum iterations used across columns.
  *
  * Two or more categorical effects (no slopes) are solved for their
