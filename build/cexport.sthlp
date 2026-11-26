@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.3.1 20261124}{...}
+{* *! version 1.3.2 20261124}{...}
 {viewerjumpto "Syntax" "cexport##syntax"}{...}
 {viewerjumpto "Description" "cexport##description"}{...}
 {viewerjumpto "Options" "cexport##options"}{...}

@@ -1,4 +1,4 @@
-*! version 1.3.1 20261124 github.com/mdroste/stata-ctools
+*! version 1.3.2 20261124 github.com/mdroste/stata-ctools
 *! original: ivreghdfe 1.1.4 (November 29, 2025) by Sergio Correia
 *! original: ivreg2 4.1.12 (August 14, 2024) by Christopher F Baum, Mark E Schaffer, and Steven Stillman
 *! original: see help civreghdfe for details

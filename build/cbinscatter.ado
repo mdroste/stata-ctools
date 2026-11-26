@@ -1,4 +1,4 @@
-*! version 1.3.1 20261124 github.com/mdroste/stata-ctools
+*! version 1.3.2 20261124 github.com/mdroste/stata-ctools
 *! original: binscatter 7.02 (November 24, 2013) by Michael Stepner
 *! original: binsreg 2.2 (August 20, 2026) by Matias D. Cattaneo, Richard K. Crump, Max H. Farrell, and Yingjie Feng
 *! original: see help cbinscatter for details

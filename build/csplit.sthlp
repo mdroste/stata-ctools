@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.3.1 20261124}{...}
+{* *! version 1.3.2 20261124}{...}
 {viewerjumpto "Syntax" "csplit##syntax"}{...}
 {viewerjumpto "Description" "csplit##description"}{...}
 {viewerjumpto "Options" "csplit##options"}{...}

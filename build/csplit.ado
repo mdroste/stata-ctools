@@ -1,4 +1,4 @@
-*! version 1.3.1 20261124 github.com/mdroste/stata-ctools
+*! version 1.3.2 20261124 github.com/mdroste/stata-ctools
 *! C-accelerated string splitting (ctools)
 *! original: Stata's split (split.ado 2.1.0, November 2, 2021), written by Nicholas J. Cox
 *! original: see help csplit for details

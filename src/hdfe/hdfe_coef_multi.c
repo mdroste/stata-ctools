@@ -79,10 +79,15 @@ static void hcm_system_free(hcm_system *M)
     }
 }
 
-/* T = A with rows and columns exchanged */
-static ST_retcode hcm_transpose(const hdfe_crosstab *A, hdfe_crosstab *T)
+/* T = A with rows and columns exchanged: where the cells go. weighted: the
+ * cells carry weights, which hcm_transpose_values() moves. *dest_out (the
+ * caller's to free) is the place in T of each cell of A, NULL when the cells
+ * arrive in T's order. */
+static ST_retcode hcm_transpose(const hdfe_crosstab *A, int weighted, hdfe_crosstab *T,
+                                ST_int **dest_out)
 {
     memset(T, 0, sizeof(*T));
+    *dest_out = NULL;
     T->nrow = A->ncol;
     T->ncol = A->nrow;
     T->nnz = A->nnz;
@@ -93,33 +98,42 @@ static ST_retcode hcm_transpose(const hdfe_crosstab *A, hdfe_crosstab *T)
     if (rc)
         return rc;
     T->col_own = (ST_int *)malloc((size_t)A->nnz * sizeof(ST_int));
-    T->val_own = A->val ? (ST_double *)malloc((size_t)A->nnz * sizeof(ST_double)) : NULL;
-    if (!T->col_own || (A->val && !T->val_own))
+    T->val_own = weighted ? (ST_double *)malloc((size_t)A->nnz * sizeof(ST_double)) : NULL;
+    if (!T->col_own || (weighted && !T->val_own))
     {
         free(dest);
         hdfe_crosstab_free(T);
         return 920;
     }
     ST_int *tcol = T->col_own;
-    ST_double *tval = T->val_own;
 #pragma omp parallel for schedule(dynamic, 1024) if (A->nnz > HDFE_COEF_PARALLEL_MIN)
     for (ST_int r = 0; r < A->nrow; r++)
     {
         for (ST_int e = A->rowptr[r]; e < A->rowptr[r + 1]; e++)
-        {
-            const ST_int at = dest ? dest[e] : e;
-            tcol[at] = r + 1;
-            if (tval)
-                tval[at] = A->val[e];
-        }
+            tcol[dest ? dest[e] : e] = r + 1;
     }
-    free(dest);
     T->col = T->col_own;
     T->val = T->val_own;
+    *dest_out = dest;
     return 0;
 }
 
-static ST_retcode hcm_system_build(hcm_system *M, const HDFE_State *S, int need_crosstabs)
+/* The weights of A's cells in T's order */
+static void hcm_transpose_values(const hdfe_crosstab *A, hdfe_crosstab *T, const ST_int *dest)
+{
+    ST_double *RESTRICT tval = T->val_own;
+    const ST_double *RESTRICT aval = A->val;
+    const ST_int nnz = A->nnz;
+    if (!tval)
+        return;
+#pragma omp parallel for schedule(static) if (nnz > HDFE_COEF_PARALLEL_MIN)
+    for (ST_int e = 0; e < nnz; e++)
+        tval[dest ? dest[e] : e] = aval[e];
+}
+
+/* The effect that is eliminated (the one with the most levels) and the
+ * layout of the others' coefficients */
+static ST_retcode hcm_system_open(hcm_system *M, const HDFE_State *S)
 {
     memset(M, 0, sizeof(*M));
     const ST_int N = S->N;
@@ -154,13 +168,23 @@ static ST_retcode hcm_system_build(hcm_system *M, const HDFE_State *S, int need_
     D->m = m;
     M->nk = nk;
     M->m = m;
-    const ST_int nB = D->nB;
-    const ST_double *w = D->w;
-    const int par = N > HDFE_COEF_PARALLEL_MIN;
+    return 0;
+}
 
+/* The rows grouped by B (M->rowptr, D->sorted) after a check of the kept
+ * levels. *dest_out (the caller's to free) is each row's grouped position,
+ * NULL when the rows arrive grouped. */
+static ST_retcode hcm_system_group(hcm_system *M, ST_int **dest_out)
+{
+    hdfe_coef_rows *D = &M->D;
+    const ST_int N = D->N;
+    const int nk = M->nk;
+    const int par = N > HDFE_COEF_PARALLEL_MIN;
     ST_int *dest = NULL;
     int sorted = 0;
-    ST_retcode rc = hdfe_coef_group_rows(N, D->lvB, nB, NULL, 0, &M->rowptr, &dest, &sorted, NULL);
+    *dest_out = NULL;
+    ST_retcode rc =
+        hdfe_coef_group_rows(N, D->lvB, D->nB, NULL, 0, &M->rowptr, &dest, &sorted, NULL);
     if (rc)
         return rc;
     D->sorted = sorted;
@@ -180,6 +204,106 @@ static ST_retcode hcm_system_build(hcm_system *M, const HDFE_State *S, int need_
         free(dest);
         return 198;
     }
+    *dest_out = dest;
+    return 0;
+}
+
+/* The storage of the level counts */
+static ST_retcode hcm_system_alloc(hcm_system *M)
+{
+    M->invB = (ST_double *)malloc((size_t)M->D.nB * sizeof(ST_double));
+    M->invk = (ST_double *)calloc((size_t)M->m, sizeof(ST_double));
+    M->act = (ST_int *)malloc((size_t)M->D.nB * sizeof(ST_int));
+    if (!M->invB || !M->invk || !M->act)
+        return 920;
+    M->D.invB = M->invB;
+    return 0;
+}
+
+/* The inverse weighted counts of every level, from the weights in grouped
+ * order (M->gw) and in row order (D->w) */
+static void hcm_system_counts(hcm_system *M)
+{
+    const hdfe_coef_rows *D = &M->D;
+    const ST_int N = D->N, nB = D->nB;
+    const int nk = M->nk;
+    const ST_double *w = D->w;
+    const int par = N > HDFE_COEF_PARALLEL_MIN;
+    const ST_int *rowptr = M->rowptr;
+    const ST_double *gw = M->gw;
+    ST_double *invB = M->invB, *invk = M->invk;
+#pragma omp parallel for schedule(static) if (par)
+    for (ST_int f = 0; f < nB; f++)
+    {
+        ST_double total = 0.0;
+        if (gw)
+        {
+            for (ST_int e = rowptr[f]; e < rowptr[f + 1]; e++)
+                total += gw[e];
+        }
+        else
+            total = (ST_double)(rowptr[f + 1] - rowptr[f]);
+        invB[f] = total > 0.0 ? 1.0 / total : 0.0;
+    }
+    /* weighted counts of the kept levels: one effect per thread, in row order */
+#pragma omp parallel for schedule(dynamic, 1) if (par)
+    for (int h = 0; h < nk; h++)
+    {
+        ST_double *count = invk + D->off[h];
+        const ST_int *lv = D->lvk[h];
+        memset(count, 0, (size_t)M->nlev[h] * sizeof(ST_double));
+        for (ST_int i = 0; i < N; i++)
+            count[lv[i] - 1] += w ? w[i] : 1.0;
+        for (ST_int j = 0; j < M->nlev[h]; j++)
+            count[j] = count[j] > 0.0 ? 1.0 / count[j] : 0.0;
+    }
+}
+
+/* The levels of B that link rows, and the chunks of the sweep */
+static ST_retcode hcm_system_sweeps(hcm_system *M)
+{
+    const ST_int nB = M->D.nB, m = M->m;
+    const int nk = M->nk;
+    const ST_int *rowptr = M->rowptr;
+    ST_int nact = 0, nnz_act = 0;
+    for (ST_int f = 0; f < nB; f++)
+    {
+        const ST_int rows = rowptr[f + 1] - rowptr[f];
+        if (rows >= 2)
+        {
+            M->act[nact++] = f;
+            nnz_act += rows;
+        }
+    }
+    M->nact = nact;
+    M->nnz_act = nnz_act;
+    int nch = nnz_act / HDFE_COEF_MULTI_CHUNK_ROWS;
+    if (nch > HDFE_COEF_MULTI_CHUNKS)
+        nch = HDFE_COEF_MULTI_CHUNKS;
+    if (nch < 1)
+        nch = 1;
+    while (nch > 1 && (long long)m * nch * 2 > (long long)nnz_act * nk)
+        nch /= 2;
+    M->nch = nch;
+    M->ch_act = hdfe_coef_chunks(rowptr, M->act, nact, nch);
+    return M->ch_act ? 0 : 920;
+}
+
+/* The system for one projection: nothing is kept */
+static ST_retcode hcm_system_build(hcm_system *M, const HDFE_State *S, int need_crosstabs)
+{
+    ST_retcode rc = hcm_system_open(M, S);
+    if (rc)
+        return rc;
+    hdfe_coef_rows *D = &M->D;
+    const ST_int N = D->N;
+    const int nk = M->nk;
+    const ST_double *w = D->w;
+    const int par = N > HDFE_COEF_PARALLEL_MIN;
+    ST_int *dest = NULL;
+    if ((rc = hcm_system_group(M, &dest)))
+        return rc;
+    const int sorted = D->sorted;
 
     /* the rows in the order of B */
     if (sorted)
@@ -223,62 +347,11 @@ static ST_retcode hcm_system_build(hcm_system *M, const HDFE_State *S, int need_
         dest = NULL;
     }
 
-    M->invB = (ST_double *)malloc((size_t)nB * sizeof(ST_double));
-    M->invk = (ST_double *)calloc((size_t)m, sizeof(ST_double));
-    M->act = (ST_int *)malloc((size_t)nB * sizeof(ST_int));
-    if (!M->invB || !M->invk || !M->act)
-        return 920;
-    D->invB = M->invB;
-    const ST_int *rowptr = M->rowptr;
-    const ST_double *gw = M->gw;
-    ST_double *invB = M->invB, *invk = M->invk;
-#pragma omp parallel for schedule(static) if (par)
-    for (ST_int f = 0; f < nB; f++)
-    {
-        ST_double total = 0.0;
-        if (gw)
-        {
-            for (ST_int e = rowptr[f]; e < rowptr[f + 1]; e++)
-                total += gw[e];
-        }
-        else
-            total = (ST_double)(rowptr[f + 1] - rowptr[f]);
-        invB[f] = total > 0.0 ? 1.0 / total : 0.0;
-    }
-    /* weighted counts of the kept levels: one effect per thread, in row order */
-#pragma omp parallel for schedule(dynamic, 1) if (par)
-    for (int h = 0; h < nk; h++)
-    {
-        ST_double *count = invk + D->off[h];
-        const ST_int *lv = D->lvk[h];
-        for (ST_int i = 0; i < N; i++)
-            count[lv[i] - 1] += w ? w[i] : 1.0;
-        for (ST_int j = 0; j < M->nlev[h]; j++)
-            count[j] = count[j] > 0.0 ? 1.0 / count[j] : 0.0;
-    }
-    ST_int nact = 0, nnz_act = 0;
-    for (ST_int f = 0; f < nB; f++)
-    {
-        const ST_int rows = rowptr[f + 1] - rowptr[f];
-        if (rows >= 2)
-        {
-            M->act[nact++] = f;
-            nnz_act += rows;
-        }
-    }
-    M->nact = nact;
-    M->nnz_act = nnz_act;
-    int nch = nnz_act / HDFE_COEF_MULTI_CHUNK_ROWS;
-    if (nch > HDFE_COEF_MULTI_CHUNKS)
-        nch = HDFE_COEF_MULTI_CHUNKS;
-    if (nch < 1)
-        nch = 1;
-    while (nch > 1 && (long long)m * nch * 2 > (long long)nnz_act * nk)
-        nch /= 2;
-    M->nch = nch;
-    M->ch_act = hdfe_coef_chunks(rowptr, M->act, nact, nch);
-    if (!M->ch_act)
-        return 920;
+    if ((rc = hcm_system_alloc(M)))
+        return rc;
+    hcm_system_counts(M);
+    if ((rc = hcm_system_sweeps(M)))
+        return rc;
 
     if (need_crosstabs)
     {
@@ -286,16 +359,180 @@ static ST_retcode hcm_system_build(hcm_system *M, const HDFE_State *S, int need_
         {
             for (int c = a + 1; c < nk; c++)
             {
+                ST_int *tdest = NULL;
                 rc = hdfe_crosstab_build(&M->X[a][c], N, D->lvk[a], M->nlev[a], D->lvk[c],
                                          M->nlev[c], w);
                 if (!rc)
-                    rc = hcm_transpose(&M->X[a][c], &M->X[c][a]);
+                    rc = hcm_transpose(&M->X[a][c], M->X[a][c].val != NULL, &M->X[c][a], &tdest);
+                if (!rc)
+                    hcm_transpose_values(&M->X[a][c], &M->X[c][a], tdest);
+                free(tdest);
                 if (rc)
                     return rc;
             }
         }
     }
     return 0;
+}
+
+/* ========================================================================
+ * The system kept between projections (hdfe_coef_plan)
+ * ======================================================================== */
+
+enum
+{
+    HCM_BUF_A0,
+    HCM_BUF_G,
+    HCM_BUF_BETA,
+    HCM_BUF_DENSE,
+    HCM_BUF_DEAD,
+    HCM_BUF_PIN,
+    HCM_BUF_SWEEP,
+    HCM_BUF_PCG,
+    HCM_BUFS
+};
+
+typedef struct
+{
+    hcm_system M;       /* M.X[a][c], a < c, are views of P[a][c].C */
+    ST_int *order;      /* N: the row at each position grouped by B; NULL: grouped */
+    int need_crosstabs; /* as the structure was built */
+    hdfe_crossplan P[HDFE_COEF_MAX_EFFECTS][HDFE_COEF_MAX_EFFECTS];
+    ST_int *tdest[HDFE_COEF_MAX_EFFECTS][HDFE_COEF_MAX_EFFECTS]; /* [c][a]: hcm_transpose()'s */
+    hdfe_coef_rowplan R;
+    hdfe_coef_buf buf[HCM_BUFS];
+} hcm_kept;
+
+static void hcm_kept_free(void *kept)
+{
+    hcm_kept *T = (hcm_kept *)kept;
+    if (!T)
+        return;
+    for (int a = 0; a < HDFE_COEF_MAX_EFFECTS; a++)
+    {
+        for (int c = a + 1; c < HDFE_COEF_MAX_EFFECTS; c++)
+        {
+            memset(&T->M.X[a][c], 0, sizeof(T->M.X[a][c])); /* P's arrays */
+            hdfe_crossplan_free(&T->P[a][c]);
+            free(T->tdest[c][a]);
+        }
+    }
+    hcm_system_free(&T->M);
+    free(T->order);
+    hdfe_coef_rowplan_free(&T->R);
+    for (int i = 0; i < HCM_BUFS; i++)
+        hdfe_coef_buf_free(&T->buf[i]);
+    free(T);
+}
+
+/* The levels' part, once. NULL with *rc set on failure. */
+static hcm_kept *hcm_kept_build(const HDFE_State *S, int need_crosstabs, ST_retcode *rc)
+{
+    hcm_kept *T = (hcm_kept *)calloc(1, sizeof(*T));
+    if (!T)
+    {
+        *rc = 920;
+        return NULL;
+    }
+    hcm_system *M = &T->M;
+    hdfe_coef_rows *D = &M->D;
+    ST_int *dest = NULL;
+    T->need_crosstabs = need_crosstabs;
+    if ((*rc = hcm_system_open(M, S)) || (*rc = hcm_system_group(M, &dest)))
+        goto fail;
+    const ST_int N = D->N;
+    const int nk = M->nk;
+    if (D->sorted)
+    {
+        for (int h = 0; h < nk; h++)
+            M->gk[h] = D->lvk[h];
+    }
+    else
+    {
+        int failed = 0;
+        for (int h = 0; h < nk; h++)
+        {
+            M->gk_own[h] = (ST_int *)malloc((size_t)N * sizeof(ST_int));
+            if (!M->gk_own[h])
+                failed = 1;
+            M->gk[h] = M->gk_own[h];
+        }
+        M->gw_own = (ST_double *)malloc((size_t)N * sizeof(ST_double));
+        T->order = (ST_int *)malloc((size_t)N * sizeof(ST_int));
+        if (failed || !M->gw_own || !T->order)
+        {
+            *rc = 920;
+            goto fail;
+        }
+        ST_int *order = T->order;
+#pragma omp parallel for schedule(static) if (N > HDFE_COEF_PARALLEL_MIN)
+        for (ST_int i = 0; i < N; i++)
+        {
+            const ST_int at = dest[i];
+            for (int h = 0; h < nk; h++)
+                M->gk_own[h][at] = D->lvk[h][i];
+            order[at] = i;
+        }
+        free(dest);
+        dest = NULL;
+    }
+    if ((*rc = hcm_system_alloc(M)) || (*rc = hcm_system_sweeps(M)))
+        goto fail;
+    if (need_crosstabs)
+    {
+        for (int a = 0; a < nk; a++)
+        {
+            for (int c = a + 1; c < nk; c++)
+            {
+                *rc = hdfe_crossplan_build(&T->P[a][c], N, D->lvk[a], M->nlev[a], D->lvk[c],
+                                           M->nlev[c]);
+                if (*rc)
+                    goto fail;
+                M->X[a][c] = T->P[a][c].C;
+                *rc = hcm_transpose(&M->X[a][c], 1, &M->X[c][a], &T->tdest[c][a]);
+                if (*rc)
+                    goto fail;
+            }
+        }
+    }
+    return T;
+
+fail:
+    free(dest);
+    hcm_kept_free(T);
+    return NULL;
+}
+
+/* The weights' part, every call */
+static void hcm_kept_values(hcm_kept *T, const HDFE_State *S)
+{
+    hcm_system *M = &T->M;
+    const ST_double *RESTRICT w = S->weights;
+    const ST_int N = M->D.N;
+    M->D.w = w;
+    if (T->order)
+    {
+        const ST_int *RESTRICT order = T->order;
+        ST_double *RESTRICT gw = M->gw_own;
+#pragma omp parallel for schedule(static) if (N > HDFE_COEF_PARALLEL_MIN)
+        for (ST_int e = 0; e < N; e++)
+            gw[e] = w[order[e]];
+        M->gw = gw;
+    }
+    else
+        M->gw = w;
+    hcm_system_counts(M);
+    if (!T->need_crosstabs)
+        return;
+    for (int a = 0; a < M->nk; a++)
+    {
+        for (int c = a + 1; c < M->nk; c++)
+        {
+            hdfe_crossplan_values(&T->P[a][c], w);
+            M->X[a][c].val = T->P[a][c].C.val;
+            hcm_transpose_values(&M->X[a][c], &M->X[c][a], T->tdest[c][a]);
+        }
+    }
 }
 
 /* ========================================================================
@@ -652,21 +889,50 @@ static hdfe_coef_method hcm_choose(const hcm_system *M, ST_int K, hdfe_coef_meth
                : HDFE_COEF_PCG;
 }
 
-HDFE_SolveResult hdfe_coef_multi_partial_out(const HDFE_State *S, ST_double *data, ST_int N,
-                                             ST_int K, hdfe_coef_method method)
+HDFE_SolveResult hdfe_coef_multi_partial_out(const HDFE_State *S, hdfe_coef_plan *plan,
+                                             ST_double *data, ST_int N, ST_int K,
+                                             hdfe_coef_method method)
 {
     HDFE_SolveResult result = {0, 1, 0};
     hcm_system M;
-    hdfe_coef_rowplan R;
+    hcm_kept *T = NULL;
+    hdfe_coef_rowplan R_once, *R = &R_once;
+    hdfe_coef_buf buf_once[HCM_BUFS], *buf = buf_once;
     hcm_sweep W = {&M, 0, NULL};
     ST_double *a0 = NULL, *g = NULL, *beta = NULL, *pcg = NULL, *Sd = NULL;
     ST_double weakest = 1.0;
     unsigned char *dead = NULL, *pin = NULL;
-    memset(&R, 0, sizeof(R));
+    memset(&R_once, 0, sizeof(R_once));
+    memset(buf_once, 0, sizeof(buf_once));
+    memset(&M, 0, sizeof(M));
 
     /* the cross-tabulations serve the iteration only; the choice needs the
      * system, so they are built for every method but the forced dense one */
-    ST_retcode rc = hcm_system_build(&M, S, method != HDFE_COEF_DENSE);
+    const int need_crosstabs = method != HDFE_COEF_DENSE;
+    ST_retcode rc = 0;
+    if (plan)
+    {
+        T = (hcm_kept *)plan->kept;
+        if (T && T->need_crosstabs != need_crosstabs)
+        {
+            hdfe_coef_plan_bind(plan, S, NULL, NULL);
+            T = NULL;
+        }
+        if (!T)
+        {
+            T = hcm_kept_build(S, need_crosstabs, &rc);
+            if (!T)
+                return (HDFE_SolveResult){rc, 0, 0};
+            hdfe_coef_plan_bind(plan, S, T, hcm_kept_free);
+        }
+        hcm_kept_values(T, S);
+        /* a copy that shares the kept arrays: nothing of it is freed here */
+        M = T->M;
+        R = &T->R;
+        buf = T->buf;
+    }
+    else
+        rc = hcm_system_build(&M, S, need_crosstabs);
     if (rc)
         goto done;
     const ST_int nB = M.D.nB, m = M.m;
@@ -683,10 +949,12 @@ HDFE_SolveResult hdfe_coef_multi_partial_out(const HDFE_State *S, ST_double *dat
     }
 
     const int KB = K < HDFE_COEF_KMAX ? (int)K : HDFE_COEF_KMAX;
-    a0 = (ST_double *)malloc((size_t)nB * (size_t)KB * sizeof(ST_double));
-    g = (ST_double *)malloc((size_t)m * (size_t)KB * sizeof(ST_double));
-    beta = (ST_double *)malloc((size_t)m * (size_t)KB * sizeof(ST_double));
-    if (!a0 || !g || !beta || (rc = hdfe_coef_rowplan_init(&R, &M.D, KB)))
+    a0 = (ST_double *)hdfe_coef_buf_get(&buf[HCM_BUF_A0],
+                                        (size_t)nB * (size_t)KB * sizeof(ST_double));
+    g = (ST_double *)hdfe_coef_buf_get(&buf[HCM_BUF_G], (size_t)m * (size_t)KB * sizeof(ST_double));
+    beta = (ST_double *)hdfe_coef_buf_get(&buf[HCM_BUF_BETA],
+                                          (size_t)m * (size_t)KB * sizeof(ST_double));
+    if (!a0 || !g || !beta || (rc = hdfe_coef_rowplan_init(R, &M.D, KB)))
     {
         if (!rc)
             rc = 920;
@@ -694,14 +962,16 @@ HDFE_SolveResult hdfe_coef_multi_partial_out(const HDFE_State *S, ST_double *dat
     }
     if (chosen == HDFE_COEF_DENSE)
     {
-        Sd = (ST_double *)malloc((size_t)m * (size_t)m * sizeof(ST_double));
-        dead = (unsigned char *)malloc((size_t)m);
-        pin = (unsigned char *)calloc((size_t)m, 1);
+        Sd = (ST_double *)hdfe_coef_buf_get(&buf[HCM_BUF_DENSE],
+                                            (size_t)m * (size_t)m * sizeof(ST_double));
+        dead = (unsigned char *)hdfe_coef_buf_get(&buf[HCM_BUF_DEAD], (size_t)m);
+        pin = (unsigned char *)hdfe_coef_buf_get(&buf[HCM_BUF_PIN], (size_t)m);
         if (!Sd || !dead || !pin)
         {
             rc = 920;
             goto done;
         }
+        memset(pin, 0, (size_t)m);
         if ((rc = hcm_dense(&M, Sd)))
             goto done;
         /* A constant added to every level of one kept effect is absorbed by
@@ -726,8 +996,10 @@ HDFE_SolveResult hdfe_coef_multi_partial_out(const HDFE_State *S, ST_double *dat
     }
     else
     {
-        W.buf = (ST_double *)malloc((size_t)M.nch * (size_t)m * (size_t)KB * sizeof(ST_double));
-        pcg = (ST_double *)malloc(HDFE_COEF_PCG_WORK(m, KB) * sizeof(ST_double));
+        W.buf = (ST_double *)hdfe_coef_buf_get(
+            &buf[HCM_BUF_SWEEP], (size_t)M.nch * (size_t)m * (size_t)KB * sizeof(ST_double));
+        pcg = (ST_double *)hdfe_coef_buf_get(&buf[HCM_BUF_PCG],
+                                             HDFE_COEF_PCG_WORK(m, KB) * sizeof(ST_double));
         if (!W.buf || !pcg)
         {
             rc = 920;
@@ -753,7 +1025,7 @@ HDFE_SolveResult hdfe_coef_multi_partial_out(const HDFE_State *S, ST_double *dat
             unsigned char state[HDFE_COEF_KMAX] = {0};
             ST_int iterations = 1;
             W.K = kb;
-            hdfe_coef_rows_rhs(&M.D, &R, X, kb, a0, g, f0, scale);
+            hdfe_coef_rows_rhs(&M.D, R, X, kb, a0, g, f0, scale);
             if (ctools_cancel_requested())
             {
                 rc = 1;
@@ -797,16 +1069,14 @@ HDFE_SolveResult hdfe_coef_multi_partial_out(const HDFE_State *S, ST_double *dat
     }
 
 done:
-    hdfe_coef_rowplan_free(&R);
-    free(W.buf);
-    free(a0);
-    free(g);
-    free(beta);
-    free(pcg);
-    free(Sd);
-    free(dead);
-    free(pin);
-    hcm_system_free(&M);
+    if (!T)
+    {
+        /* the plan keeps its system, row plan and scratch */
+        hdfe_coef_rowplan_free(&R_once);
+        for (int i = 0; i < HCM_BUFS; i++)
+            hdfe_coef_buf_free(&buf_once[i]);
+        hcm_system_free(&M);
+    }
     if (rc)
     {
         result.status = rc;

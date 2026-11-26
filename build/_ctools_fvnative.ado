@@ -1,4 +1,4 @@
-*! version 1.3.1 20261124 github.com/mdroste/stata-ctools
+*! version 1.3.2 20261124 github.com/mdroste/stata-ctools
 *! ctools: i.f indicators built by the plugin instead of fvrevar and fvexpand
 * _ctools_fvnative <terms>, touse(varname) plugin(string) [threads(#)]
 *

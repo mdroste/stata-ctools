@@ -76,4 +76,27 @@ int remap_and_count(const double *values, ST_int N, ST_int *levels_out, ST_int *
  */
 int hdfe_remap_levels(const double *values, ST_int N, ST_int *levels_out, ST_int *num_levels);
 
+/* What hdfe_remap_levels_ordered() records besides the levels (owned by the
+ * caller, freed with free()) */
+typedef struct
+{
+    ST_int *first_row;   /* First row of every level, or NULL when not recorded */
+    ST_int *single_rows; /* The rows alone in their level, ascending, or NULL */
+    ST_int num_single;   /* Their number; -1 when not recorded */
+    ST_int local;        /* Nearly every level is in one row block only (rows
+                          * sorted by the values, or close to it) */
+} HDFE_RemapOrder;
+
+/*
+ * The levels of remap_and_count(), numbered in order of first appearance,
+ * also in parallel: in row blocks through per-block bitsets, which gives the
+ * first row of every level and the rows alone in their level on the way.
+ * Returns 0 with the levels in order of first appearance (order filled in
+ * when the parallel route ran, otherwise num_single = -1), 1 with the levels
+ * of hdfe_remap_levels() when the bitsets would be too large, or -1 on
+ * failure with num_levels zero.
+ */
+int hdfe_remap_levels_ordered(const double *values, ST_int N, ST_int *levels_out,
+                              ST_int *num_levels, HDFE_RemapOrder *order);
+
 #endif /* CTOOLS_HDFE_REMAP_H */

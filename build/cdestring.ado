@@ -1,4 +1,4 @@
-*! version 1.3.1 20261124 github.com/mdroste/stata-ctools
+*! version 1.3.2 20261124 github.com/mdroste/stata-ctools
 *! original: Stata's destring (destring.ado 2.4.4, September 15, 2016), originally written by Nicholas J. Cox
 *! original: see help cdestring for details
 

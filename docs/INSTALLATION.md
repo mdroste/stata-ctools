@@ -17,6 +17,13 @@ net install ctools, from("https://raw.githubusercontent.com/mdroste/stata-ctools
 
 ### Updating an installation
 
+`ctools, update` asks GitHub for the latest release and installs it from that
+release's tag when it is newer than the installed version; `ctools, update force`
+reinstalls the latest release even when ctools is up to date. Stata's `ado dir`
+lists a package once for each address it was installed from, so after
+installing a release the command removes the entries left by earlier installs
+from GitHub, keeping the files the new release also contains.
+
 Restart Stata after replacing a loaded plugin. The interpolation command is
 `cinterpolate`; `cinterpolate, cubic` implements SSC `cipolate`-style interpolation.
 When upgrading from a ctools installation that supplied `cipolate.ado` and

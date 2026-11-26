@@ -1,4 +1,4 @@
-*! version 1.3.1 20261124 github.com/mdroste/stata-ctools
+*! version 1.3.2 20261124 github.com/mdroste/stata-ctools
 *! _ctools_strlkey — numeric stand-ins for strL keys the plugin cannot read
 *!
 *! Usage:  _ctools_strlkey varlist, generate(namelist) [missing]

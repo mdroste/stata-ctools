@@ -22,12 +22,16 @@ d   crangestat      - Range statistics
 d   cinterpolate    - Linear and cubic interpolation
 d   csplit          - String splitting
 d   crangejoin      - Interval joins
+d   cjoinby         - All pairwise combinations within groups
+d   creshape        - Reshape between wide and long form
 d   cdistinct       - Distinct value counts
+d   cegen           - Extensions to generate (egen functions)
+d   ccollapse       - Summary statistics by group
 d   cpsmatch        - Propensity score matching (ATT)
 d   cppmlhdfe       - PPML with high-dimensional fixed effects
 d   chdfe           - Partial out high-dimensional fixed effects
 d
-d Version: 1.3.1
+d Version: 1.3.2
 d
 d Requires: Stata 14.1 or later
 d
@@ -90,6 +94,10 @@ f csplit.ado
 f csplit.sthlp
 f crangejoin.ado
 f crangejoin.sthlp
+f cjoinby.ado
+f cjoinby.sthlp
+f creshape.ado
+f creshape.sthlp
 f ctools_mac_arm.plugin
 f ctools_mac_x86.plugin
 f ctools_windows.plugin
@@ -130,5 +138,9 @@ f _cppmlhdfe_estat.ado
 f _cppmlhdfe_footnote.ado
 f cdistinct.ado
 f cdistinct.sthlp
+f cegen.ado
+f cegen.sthlp
+f ccollapse.ado
+f ccollapse.sthlp
 f chdfe.ado
 f chdfe.sthlp

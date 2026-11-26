@@ -19,6 +19,8 @@
     - cdestring: C-accelerated string to numeric conversion (replaces destring)
     - cdecode: C-accelerated numeric to string decoding (replaces decode)
     - crangestat: C-accelerated range statistics (replaces rangestat)
+    - cegen: C-accelerated extensions to generate (replaces egen)
+    - creshape: C-accelerated reshape between wide and long form (replaces reshape)
 
     Usage from Stata:
         plugin call ctools_plugin ..., "csort <args>"
@@ -271,7 +273,11 @@ static ST_retcode thread_settings_call(const char *args)
 #include "cinterpolate/cinterpolate_impl.h"
 #include "csplit/csplit_impl.h"
 #include "crangejoin/crangejoin_impl.h"
+#include "cjoinby/cjoinby_impl.h"
 #include "cgroup/cgroup_impl.h"
+#include "ccollapse/ccollapse_impl.h"
+#include "cegen/cegen_impl.h"
+#include "creshape/creshape_impl.h"
 #include "formats/ctools_dta.h"
 #include "hdfe/hdfe_missing.h"
 

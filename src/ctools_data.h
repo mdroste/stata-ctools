@@ -109,7 +109,15 @@ typedef struct
     void *_arena;      /* Internal: string arena for fast bulk free (NULL if not used) */
     ctools_buffer_storage buffer_storage;
     ctools_string_storage string_storage;
+    /* Numeric columns from ctools_data_load(): whether the load met a
+     * missing value (it compares every value it reads). Zero, not known,
+     * for a column filled any other way. */
+    int missing_state;
 } stata_variable;
+
+#define CTOOLS_MISSING_UNKNOWN 0
+#define CTOOLS_MISSING_NONE 1 /* every loaded value is below the missing values */
+#define CTOOLS_MISSING_SOME 2
 
 /*
     Complete dataset in C memory.

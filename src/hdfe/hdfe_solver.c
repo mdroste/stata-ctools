@@ -500,6 +500,163 @@ static void demean_column_single_fe(HDFE_State *S, ST_double *y, ST_int thread_i
 }
 
 /* ========================================================================
+ * One effect whose rows arrive grouped
+ *
+ * When the levels never decrease along the rows, the rows of a level are
+ * consecutive (a panel sorted by its unit, say): the level's sum is complete
+ * where its run ends, while those rows are still in the cache. Each run is
+ * summed and its mean subtracted at once, so a column comes from memory once
+ * where project_and_subtract_fe() reads it twice (the scatter into the level
+ * sums, then the gather), and no add waits for the store of the row before
+ * it, which is what holds the scatter back when equal levels follow one
+ * another. A level's sum adds the same values in the same order as the
+ * scatter does: the residuals are the same to the last bit.
+ *
+ * The rows are worked in blocks that hold whole runs, any number at a time:
+ * nothing is shared between runs, so neither the blocks nor the thread count
+ * can change a result.
+ * ======================================================================== */
+
+/* Rows per block, and columns walked together through one */
+#define HDFE_GROUPED_BLOCK 32768
+#define HDFE_GROUPED_COLUMNS 8
+
+/* 1 when levels[] never decreases */
+static int fe_levels_grouped(const ST_int *RESTRICT levels, ST_int N)
+{
+    /* rows in no particular order fail within the first few */
+    const ST_int probe = N < 4096 ? N : 4096;
+    for (ST_int i = 1; i < probe; i++)
+    {
+        if (levels[i] < levels[i - 1]) return 0;
+    }
+    int decreases = 0;
+#pragma omp parallel for schedule(static) reduction(| : decreases)                                 \
+    if (N > 200000 && omp_get_level() == 0)
+    for (ST_int i = probe; i < N; i++)
+    {
+        decreases |= levels[i] < levels[i - 1];
+    }
+    return !decreases;
+}
+
+/* The rows i0 .. i1-1, which hold whole runs, of the K columns x, x + N, ...:
+ * every run less its (weighted) level mean, as project_and_subtract_fe() */
+static void demean_grouped_rows(ST_double *x, size_t N, ST_int K, const FE_Factor *RESTRICT f,
+                                const ST_double *RESTRICT weights, ST_int i0, ST_int i1)
+{
+    const ST_int *RESTRICT levels = f->levels;
+    const ST_double *RESTRICT inv_counts = (weights != NULL && f->inv_weighted_counts != NULL)
+                                               ? f->inv_weighted_counts
+                                               : f->inv_counts;
+    const ST_double *RESTRICT counts =
+        (weights != NULL && f->weighted_counts != NULL) ? f->weighted_counts : f->counts;
+    ST_int i = i0;
+    while (i < i1)
+    {
+        const ST_int level = levels[i] - 1;
+        ST_int j = i + 1;
+        while (j < i1 && levels[j] - 1 == level) j++;
+        const ST_int n = j - i;
+        for (ST_int k = 0; k < K; k++)
+        {
+            ST_double *RESTRICT col = x + (size_t)k * N + i;
+            ST_double mean = 0.0;
+            if (weights == NULL)
+            {
+                for (ST_int r = 0; r < n; r++)
+                {
+                    mean += col[r];
+                }
+            }
+            else
+            {
+                const ST_double *RESTRICT w = weights + i;
+                for (ST_int r = 0; r < n; r++)
+                {
+                    mean += col[r] * w[r];
+                }
+            }
+            if (inv_counts != NULL)
+            {
+                mean *= inv_counts[level];
+            }
+            else if (counts[level] > 0)
+            {
+                mean /= counts[level];
+            }
+            for (ST_int r = 0; r < n; r++)
+            {
+                col[r] -= mean;
+            }
+        }
+        i = j;
+    }
+}
+
+/* The projection on one effect whose rows are grouped, for K columns.
+ * Returns 0 when it does not apply (a slope, or levels that decrease
+ * somewhere), and the caller projects the general way. */
+static int demean_columns_grouped(const HDFE_State *S, ST_double *data, ST_int K)
+{
+    const ST_int N = S->N;
+    const FE_Factor *f = &S->factors[0];
+    if (f->slope || N < 2 || !fe_levels_grouped(f->levels, N)) return 0;
+
+    /* Block b takes the rows start[b] .. start[b+1]-1: a run that crosses a
+     * nominal boundary stays with the block it began in. A run that runs on
+     * for more than a block past one (few levels, many rows each) would
+     * leave whole blocks to a single thread: then, as without the memory for
+     * the boundaries, each column is one task instead. */
+    const ST_int *levels = f->levels;
+    const ST_int nblk = (N + HDFE_GROUPED_BLOCK - 1) / HDFE_GROUPED_BLOCK;
+    ST_int *start = (ST_int *)malloc(((size_t)nblk + 1) * sizeof(ST_int));
+    int by_block = start != NULL && nblk > 1;
+    if (by_block)
+    {
+        start[0] = 0;
+        for (ST_int b = 1; b < nblk; b++)
+        {
+            ST_int i = b * HDFE_GROUPED_BLOCK;
+            const ST_int limit = N - i > HDFE_GROUPED_BLOCK ? i + HDFE_GROUPED_BLOCK : N;
+            while (i < limit && levels[i] == levels[i - 1]) i++;
+            if (i == limit && i < N && levels[i] == levels[i - 1])
+            {
+                by_block = 0;
+                break;
+            }
+            start[b] = i;
+        }
+        start[nblk] = N;
+    }
+    if (by_block)
+    {
+#pragma omp parallel for schedule(dynamic, 1)                                                      \
+    if ((size_t)N * (size_t)K > 200000 && omp_get_level() == 0)
+        for (ST_int b = 0; b < nblk; b++)
+        {
+            for (ST_int k0 = 0; k0 < K; k0 += HDFE_GROUPED_COLUMNS)
+            {
+                const ST_int kn = K - k0 < HDFE_GROUPED_COLUMNS ? K - k0 : HDFE_GROUPED_COLUMNS;
+                demean_grouped_rows(data + (size_t)k0 * N, (size_t)N, kn, f, S->weights, start[b],
+                                    start[b + 1]);
+            }
+        }
+    }
+    else
+    {
+#pragma omp parallel for schedule(dynamic, 1)                                                      \
+    if (K > 1 && (size_t)N * (size_t)K > 200000 && omp_get_level() == 0)
+        for (ST_int k = 0; k < K; k++)
+        {
+            demean_grouped_rows(data + (size_t)k * N, (size_t)N, 1, f, S->weights, 0, N);
+        }
+    }
+    free(start);
+    return 1;
+}
+
+/* ========================================================================
  * Rounding floor of the CG solver
  *
  * The first sweep and the first step of a solve are rounded at the size of
@@ -728,9 +885,13 @@ ST_int cg_solve_column_threaded(HDFE_State *S, ST_double *y, ST_int thread_id)
  * ======================================================================== */
 
 /* coefficients != 0: categorical effects go to the coefficient-space solver
- * (hdfe_coef.h); otherwise every G >= 2 runs the CG iteration below. */
+ * (hdfe_coef.h), which keeps its structure in plan when there is one;
+ * otherwise every G >= 2 runs the CG iteration below. before_rows, when not
+ * NULL, is called before any path that works on the rows (see
+ * partial_out_columns_plan). */
 static HDFE_SolveResult partial_out_columns_impl(HDFE_State *S, ST_double *data, ST_int N, ST_int K,
-                                                 int coefficients)
+                                                 int coefficients, hdfe_coef_plan *plan,
+                                                 void (*before_rows)(void *), void *before_ctx)
 {
     ST_int k;
     ST_int max_iters = 0;
@@ -754,6 +915,14 @@ static HDFE_SolveResult partial_out_columns_impl(HDFE_State *S, ST_double *data,
     /* G=1 short-circuit: direct demean, no CG iteration */
     if (S->G == 1)
     {
+        if (before_rows)
+            before_rows(before_ctx);
+        /* rows grouped by the effect: one pass, the same residuals */
+        if (demean_columns_grouped(S, data, K))
+        {
+            if (ctools_cancel_requested()) return (HDFE_SolveResult){1, 0, 1};
+            return (HDFE_SolveResult){0, 1, 1};
+        }
 #pragma omp parallel num_threads(S->num_threads)
         {
 #pragma omp for schedule(dynamic) nowait
@@ -772,8 +941,21 @@ static HDFE_SolveResult partial_out_columns_impl(HDFE_State *S, ST_double *data,
         return (HDFE_SolveResult){0, 1, 1};
     }
 
-    if (coefficients && S->maxiter >= HDFE_COEF_MIN_MAXITER && hdfe_coef_applies(S))
-        return hdfe_coef_partial_out(S, data, N, K, HDFE_COEF_AUTO);
+    if (coefficients && S->maxiter >= HDFE_COEF_MIN_MAXITER)
+    {
+        if (plan)
+        {
+            int declined = 0;
+            const HDFE_SolveResult solved =
+                hdfe_coef_partial_out_plan(S, plan, data, N, K, HDFE_COEF_AUTO, &declined);
+            if (!declined)
+                return solved;
+        }
+        else if (hdfe_coef_applies(S))
+            return hdfe_coef_partial_out(S, data, N, K, HDFE_COEF_AUTO);
+    }
+    if (before_rows)
+        before_rows(before_ctx);
 
 /* General CG solve for G >= 2 */
 #pragma omp parallel num_threads(S->num_threads) reduction(max : max_iters)  \
@@ -816,7 +998,15 @@ HDFE_SolveResult partial_out_columns(HDFE_State *S, ST_double *data, ST_int N, S
                                      ST_int num_threads)
 {
     (void)num_threads; /* Use S->num_threads or OpenMP default */
-    return partial_out_columns_impl(S, data, N, K, 1);
+    return partial_out_columns_impl(S, data, N, K, 1, NULL, NULL, NULL);
+}
+
+HDFE_SolveResult partial_out_columns_plan(HDFE_State *S, ST_double *data, ST_int N, ST_int K,
+                                          ST_int num_threads, hdfe_coef_plan *plan,
+                                          void (*before_rows)(void *ctx), void *ctx)
+{
+    (void)num_threads;
+    return partial_out_columns_impl(S, data, N, K, 1, plan, before_rows, ctx);
 }
 
 /* hdfe's experimental random Kaczmarz: a symmetric sweep (forward, then
@@ -917,7 +1107,7 @@ HDFE_SolveResult partial_out_columns_options(HDFE_State *S, double *data, int N,
         return (HDFE_SolveResult){0, 1, 0};
     /* reghdfe's default iteration, asked for by name */
     if (transform == 0 && acceleration == 1)
-        return partial_out_columns_impl(S, data, N, K, 0);
+        return partial_out_columns_impl(S, data, N, K, 0, NULL, NULL, NULL);
     int failed = 0, max_iterations = 0;
     const double tol_sq = S->tolerance * S->tolerance;
     ctools_cancel_team team = {0};

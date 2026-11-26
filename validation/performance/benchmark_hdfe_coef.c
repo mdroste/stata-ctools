@@ -10,12 +10,13 @@
  *   benchmark_hdfe_coef <design> <N> <K> <threads> <tolerance> <repeats>
  *                       <weights> <methods> [maxiter]
  *
- * design   two effects: readme fy panel wy rr sparse akmchain akmrand akmreg
- *          akmhard akmsmall school; three: wfy rry fgy trade
+ * design   one effect: one onefirm onefew (rows grouped by it) onecyc onernd;
+ *          two: readme fy panel wy rr sparse akmchain akmrand akmreg akmhard
+ *          akmsmall school; three: wfy rry fgy trade
  * weights  0 none, 1 uniform(0.5, 1.5), 2 lognormal, 3 one or 2^26, 4 a
  *          third of the rows weigh nothing
  * methods  comma-separated: map (the rows), default (partial_out_columns),
- *          auto dense pcg lap (hdfe_coef_method)
+ *          auto dense pcg lap (hdfe_coef_method; two or more effects)
  *
  * Every third column has level means a thousand times its noise. Each line
  * reports the status, the fastest and the median time, the iterations, the
@@ -331,6 +332,26 @@ static int design_make(design *P, const char *name, int N)
         }
         P->G = 3;
     }
+    else if (!strncmp(name, "one", 3))
+    {
+        /* one effect: units of ten rows (one) or 200 (onefirm) in sorted
+         * order, twenty sorted levels (onefew), firms in turn (onecyc) or
+         * at random (onernd) */
+        const int few = N / 20 + 1;
+        for (int i = 0; i < N; i++)
+        {
+            a[i] = !strcmp(name, "one")       ? i / 10
+                   : !strcmp(name, "onefirm") ? i / 200
+                   : !strcmp(name, "onefew")  ? i / few
+                   : !strcmp(name, "onecyc")  ? i % firms
+                                              : below(firms);
+            b[i] = 0;
+        }
+        if (strcmp(name, "one") && strcmp(name, "onefirm") && strcmp(name, "onefew") &&
+            strcmp(name, "onecyc") && strcmp(name, "onernd"))
+            return -1;
+        P->G = 1;
+    }
     else if (!strcmp(name, "trade"))
     {
         /* exporter-year, importer-year and pair effects of 160 countries */
@@ -469,6 +490,11 @@ static double distance(const double *X, const double *R, size_t len, const doubl
     return den > 0 ? sqrt(num / den) : 0.0;
 }
 
+static int no_break(void)
+{
+    return 0;
+}
+
 static int by_value(const void *a, const void *b)
 {
     const double x = *(const double *)a, y = *(const double *)b;
@@ -500,6 +526,9 @@ int main(int argc, char **argv)
     omp_set_dynamic(0);
     omp_set_num_threads(threads);
 #endif
+    /* as in the plugin: this thread polls the host for Break while a team
+     * of the row-space paths works */
+    ctools_cancel_begin(no_break);
     design P;
     if (design_make(&P, name, N))
     {
@@ -544,6 +573,33 @@ int main(int argc, char **argv)
            P.nlev[0], P.nlev[1], P.G > 2 ? P.nlev[2] : 0, threads, tolerance, weights);
 
     HDFE_State S;
+    if (P.G == 1)
+    {
+        /* reference: the level means in extended precision */
+        long double *sum = (long double *)malloc((size_t)P.nlev[0] * sizeof(long double));
+        long double *den = (long double *)malloc((size_t)P.nlev[0] * sizeof(long double));
+        for (int k = 0; k < K; k++)
+        {
+            for (int l = 0; l < P.nlev[0]; l++)
+                sum[l] = den[l] = 0.0L;
+            for (int i = 0; i < N; i++)
+            {
+                const long double wi = w ? (long double)w[i] : 1.0L;
+                sum[P.id[0][i]] += wi * (long double)X0[(size_t)k * N + i];
+                den[P.id[0][i]] += wi;
+            }
+            for (int i = 0; i < N; i++)
+            {
+                const int l = P.id[0][i];
+                R[(size_t)k * N + i] = (double)((long double)X0[(size_t)k * N + i] -
+                                                (den[l] > 0 ? sum[l] / den[l] : 0.0L));
+            }
+        }
+        free(sum);
+        free(den);
+        printf("# reference: level means, orth=%.2e\n", orthogonality(&P, R, K, w));
+    }
+    else
     {
         /* reference: the strongest coefficient-space method at a tight tolerance */
         state_open(&S, &P, w, K, 1e-13, 200000, threads);

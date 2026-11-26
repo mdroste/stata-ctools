@@ -49,6 +49,8 @@ static void release(void *p) { if (p) live--; free(p); }
 #undef calloc
 #undef free
 
+static int noted; /* the columns carry the load's note of missing values */
+
 static void run(size_t n, int pattern, int failure)
 {
     ctools_filtered_data fd = {0};
@@ -68,14 +70,19 @@ static void run(size_t n, int pattern, int failure)
     }
     for (size_t j = 0; j < k; j++) {
         stata_variable *v = fd.data.vars + j;
+        int has_missing = 0;
         v->nobs = n; v->type = STATA_TYPE_DOUBLE;
         v->data.dbl = malloc((n + 1) * sizeof(double));
         for (size_t i = 0; i < n; i++) {
             v->data.dbl[i] = (double)(i*k + j);
-            if (!expected[i] && i%k == j)
+            if (!expected[i] && i%k == j) {
                 v->data.dbl[i] = i%3 == 0 ? NAN : i%3 == 1 ? mock.missval : nextafter(mock.missval, INFINITY);
+                has_missing = 1;
+            }
         }
         v->data.dbl[n] = -12345;
+        /* as ctools_data_load() notes it, or not at all */
+        if (noted) v->missing_state = has_missing ? CTOOLS_MISSING_SOME : CTOOLS_MISSING_NONE;
     }
     allocations = 0; allocated_bytes = 0; fail_at = failure;
     atomic_store(&writers, 0);
@@ -90,6 +97,8 @@ static void run(size_t n, int pattern, int failure)
         assert(rc == 0 && fd.data.nobs == kept);
         assert(fd.was_filtered == (kept < n));
         if (kept == n) assert(allocated_bytes <= (n ? 1+(n-1)/HDFE_SCREEN_BLOCK : 0));
+        /* columns the load found without a missing value are not screened */
+        if (kept == n && noted) assert(allocations == 0);
         size_t out = 0;
         for (size_t i = 0; i < n; i++) {
             assert(marker_values[2*i] == 0 && marker_values[2*i+1] == expected[i]);
@@ -196,10 +205,16 @@ int main(void)
     const size_t sizes[] = {0,1,4095,4096,4097,32767,32768,65539,262151};
     for (int t = 1; t <= 4; t *= 4) {
         thread_limit = t;
-        for (size_t n = 0; n < sizeof(sizes)/sizeof(*sizes); n++)
-            for (int pattern = 0; pattern < 4; pattern++) run(sizes[n], pattern, 0);
+        for (noted = 0; noted <= 1; noted++)
+            for (size_t n = 0; n < sizeof(sizes)/sizeof(*sizes); n++)
+                for (int pattern = 0; pattern < 4; pattern++) run(sizes[n], pattern, 0);
+        noted = 0;
         run(65539, 1, 1);
         run(65539, 1, 2);
+        noted = 1;
+        run(65539, 1, 1);
+        run(65539, 1, 2);
+        noted = 0;
         for (int error = 1; error <= 2; error++) {
             store_error = error == 1 ? 1 : 459;
             run(65539, 2, 0);

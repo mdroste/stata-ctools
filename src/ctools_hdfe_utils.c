@@ -1048,31 +1048,47 @@ ST_int ctools_numeric_to_cluster_ids(const ST_double *values, ST_int N,
 
     /* Integer codes in a compact range (the usual cluster variable) are
      * ranked by counting: same dense IDs in ascending value order as the
-     * sort below, in O(N + range). */
+     * sort below, in O(N + range). The three passes over the rows (whether
+     * every value is such a code and their range, which codes occur, each
+     * row's ID) are exact in any order and run in parallel. */
     {
-        ST_double lo = 0.0, hi = 0.0;
+        ST_double lo = INFINITY, hi = -INFINITY;
         int compact = 1, any = 0;
-        for (ST_int i = 0; i < N && compact; i++) {
-            ST_double v = values[i];
+        ST_int i;
+        #pragma omp parallel for schedule(static) reduction(min : lo) reduction(max : hi)          \
+            reduction(& : compact) reduction(| : any) if (N > 100000)
+        for (i = 0; i < N; i++) {
+            const ST_double v = values[i];
             if (SF_is_missing(v) || !isfinite(v)) continue;
-            if (v != floor(v) || fabs(v) > 4.0e15) compact = 0;
-            else if (!any) { lo = hi = v; any = 1; }
-            else { if (v < lo) lo = v; if (v > hi) hi = v; }
+            /* a whole number: within 4e15 the conversion and back is exact */
+            if (fabs(v) > 4.0e15 || v != (ST_double)(long long)v) compact = 0;
+            else {
+                any = 1;
+                if (v < lo) lo = v;
+                if (v > hi) hi = v;
+            }
         }
         if (compact && any && hi - lo < 4.0 * (ST_double)N + 1024.0) {
             size_t range = (size_t)(hi - lo) + 1;
             ST_int *rank = (ST_int *)calloc(range, sizeof(ST_int));
             if (rank) {
-                for (ST_int i = 0; i < N; i++) {
-                    ST_double v = values[i];
-                    if (!SF_is_missing(v) && isfinite(v)) rank[(size_t)(v - lo)] = 1;
+                #pragma omp parallel for schedule(static) if (N > 100000)
+                for (i = 0; i < N; i++) {
+                    const ST_double v = values[i];
+                    if (!SF_is_missing(v) && isfinite(v)) {
+                        /* every writer stores the same 1; a code already
+                         * marked is only read */
+                        ST_int *slot = &rank[(size_t)(v - lo)];
+                        if (!CTOOLS_HDFE_LOAD(slot)) CTOOLS_HDFE_STORE(slot, 1);
+                    }
                 }
                 ST_int groups = 0;
                 for (size_t r = 0; r < range; r++) {
                     if (rank[r]) rank[r] = ++groups;
                 }
-                for (ST_int i = 0; i < N; i++) {
-                    ST_double v = values[i];
+                #pragma omp parallel for schedule(static) if (N > 100000)
+                for (i = 0; i < N; i++) {
+                    const ST_double v = values[i];
                     ids[i] = (!SF_is_missing(v) && isfinite(v)) ? rank[(size_t)(v - lo)] - 1 : -1;
                 }
                 free(rank);

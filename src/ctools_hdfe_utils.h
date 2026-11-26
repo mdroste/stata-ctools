@@ -357,7 +357,9 @@ void ctools_hdfe_state_cleanup(HDFE_State *state);
     Callers share the blocks out with work-sharing loops, so a runtime that
     supplies fewer threads still covers every block.
 */
+#ifndef CTOOLS_HDFE_BLOCK_ROWS /* tests set a small one */
 #define CTOOLS_HDFE_BLOCK_ROWS 65536
+#endif
 static inline int ctools_hdfe_row_blocks(ST_int N)
 {
 #ifdef _OPENMP

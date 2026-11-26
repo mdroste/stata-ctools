@@ -18,7 +18,8 @@ foreach args in "1 0 count=18446744073709551616" "1 0 percent=nan" "2147483648 0
     else test_fail "malformed sampling arguments" "expected 198, got `rc'"
     assert result == 17
 }
-foreach cmd in "csplit write" "crangejoin prepare 1" "crangejoin write" "cmerge execute" "cio column 1" {
+foreach cmd in "csplit write" "crangejoin prepare 1" "crangejoin write" "cmerge execute" "cio column 1" ///
+    "cjoinby plan 1 0 0" "cjoinby write 1 0" "creshape schema" "creshape store" {
     capture plugin call p1_contracts_plugin result, "`cmd'"
     local rc = _rc
     if `rc' == 198 test_pass "rejected stale command phase"
@@ -26,7 +27,8 @@ foreach cmd in "csplit write" "crangejoin prepare 1" "crangejoin write" "cmerge 
     assert result == 17
 }
 * Failure recovery and repeated cleanup remain safe in the real dispatcher.
-foreach cmd in "cimport clear" "cio clear" "cmerge clear" "csplit clear" "crangejoin clear" {
+foreach cmd in "cimport clear" "cio clear" "cmerge clear" "csplit clear" "crangejoin clear" ///
+    "cjoinby clear" "cjoinby rollback" "creshape clear" {
     plugin call p1_contracts_plugin, "`cmd'"
     plugin call p1_contracts_plugin, "`cmd'"
     test_pass "repeated cleanup"
@@ -883,10 +885,11 @@ csort x
 if x[1] == 1 & x[5] == 5 test_pass "commands run after the mocks are removed"
 else test_fail "commands after mocks" "csort did not sort"
 
-* ctools, update from a host that cannot be reached fails with net's code.
+* ctools, update fails with copy's code when GitHub's release API cannot be
+* reached.
 capture mkdir "`root'/update"
 findfile ctools.ado
-filefilter `"`r(fn)'"' "`root'/update/ctools.ado", from("raw.githubusercontent.com/mdroste/stata-ctools/main/build") to("ctools-update.invalid/build")
+filefilter `"`r(fn)'"' "`root'/update/ctools.ado", from("api.github.com/repos/mdroste/stata-ctools/releases/latest") to("ctools-update.invalid/releases/latest")
 local mocked = r(occurrences) == 1
 adopath ++ "`root'/update"
 capture program drop ctools
@@ -906,7 +909,110 @@ adopath - "`root'/update"
 capture program drop ctools
 if `mocked' & `rc_update' != 0 test_pass "ctools, update reports an unreachable host (r(`rc_update'))"
 else test_fail "ctools, update offline" "mocked=`mocked' rc=`rc_update'"
-foreach file in mismatch/_ctools_load.ado none/_ctools_load.ado damaged/`plugin' update/ctools.ado in.csv in.xpt out.csv {
+
+* Package records after an update. net records a package once per source, so
+* the update removes the records of earlier installs from GitHub (a tag, main)
+* once its own record exists; ado uninstall keeps files the new record lists.
+* A ctools from elsewhere stays. When net finds every file up to date it
+* records nothing, and the only record must then stay. A copy of ctools reads
+* a local release reply and installs from a local folder whose path names the
+* repository; PLUS points at scratch folders.
+local fwd = subinstr("`root'", "\", "/", .)
+local site "`fwd'/site/mdroste/stata-ctools"
+foreach sub in site site/mdroste site/mdroste/stata-ctools elsewhere_src records plus plus2 {
+    capture mkdir "`fwd'/`sub'"
+}
+capture program drop update_fixture
+program define update_fixture
+    args dir label files
+    capture mkdir "`dir'"
+    tempname fh
+    file open `fh' using "`dir'/stata.toc", write text replace
+    file write `fh' "v 3" _n
+    file close `fh'
+    file open `fh' using "`dir'/ctools.pkg", write text replace
+    file write `fh' "v 3" _n "d ctools test record with quotes " _char(34) _char(39) _char(96) _char(34) _n
+    foreach f of local files {
+        file write `fh' "f `f'.ado" _n
+    }
+    file close `fh'
+    foreach f of local files {
+        file open `fh' using "`dir'/`f'.ado", write text replace
+        file write `fh' "* `f' `label'" _n
+        file close `fh'
+    }
+end
+foreach tag in v1.0.0 branch_main v9.9.9 same_files {
+    capture mkdir "`site'/`tag'"
+}
+update_fixture "`site'/v1.0.0/build" old "zupd_old zupd_shared"
+update_fixture "`site'/branch_main/build" main "zupd_shared"
+update_fixture "`site'/v9.9.9/build" new "zupd_shared zupd_new"
+update_fixture "`site'/same_files/build" new "zupd_shared zupd_new"
+update_fixture "`fwd'/elsewhere_src" other "zupd_elsewhere"
+tempname fh
+file open `fh' using "`fwd'/release.json", write text replace
+file write `fh' `"{"url":"x","tag_name":"v9.9.9"}"' _n
+file close `fh'
+findfile ctools.ado
+filefilter `"`r(fn)'"' "`fwd'/step.ado", from("https://api.github.com/repos/mdroste/stata-ctools/releases/latest") to("`fwd'/release.json") replace
+local mocked = r(occurrences) == 1
+filefilter "`fwd'/step.ado" "`fwd'/records/ctools.ado", from("https://raw.githubusercontent.com/mdroste/stata-ctools") to("`site'") replace
+local mocked = `mocked' & r(occurrences) == 1
+local plus_saved "`c(sysdir_plus)'"
+local counts
+local rc_records = 0
+local rc_same = 0
+if `mocked' {
+    sysdir set PLUS "`fwd'/plus"
+    quietly net install ctools, from("`site'/v1.0.0/build")
+    quietly net install ctools, from("`fwd'/elsewhere_src") replace
+    quietly net install ctools, from("`site'/branch_main/build") replace
+    adopath ++ "`fwd'/records"
+    capture program drop ctools
+    capture noisily ctools, update
+    local rc_records = _rc
+    foreach key in v1.0.0 branch_main elsewhere_src v9.9.9 {
+        filefilter "`fwd'/plus/stata.trk" "`fwd'/trk.txt", from("`key'") to("`key'") replace
+        local counts `counts' `r(occurrences)'
+    }
+    filefilter "`fwd'/plus/z/zupd_shared.ado" "`fwd'/trk.txt", from("new") to("new") replace
+    local counts `counts' `r(occurrences)'
+    foreach file in z/zupd_new z/zupd_elsewhere z/zupd_old {
+        capture confirm file "`fwd'/plus/`file'.ado"
+        local counts `counts' `=_rc == 0'
+    }
+
+    sysdir set PLUS "`fwd'/plus2"
+    quietly net install ctools, from("`site'/same_files/build")
+    capture noisily ctools, update
+    local rc_same = _rc
+    foreach key in same_files v9.9.9 {
+        filefilter "`fwd'/plus2/stata.trk" "`fwd'/trk.txt", from("`key'") to("`key'") replace
+        local counts `counts' `r(occurrences)'
+    }
+    foreach file in z/zupd_shared z/zupd_new {
+        capture confirm file "`fwd'/plus2/`file'.ado"
+        local counts `counts' `=_rc == 0'
+    }
+    sysdir set PLUS "`plus_saved'"
+    adopath - "`fwd'/records"
+    capture program drop ctools
+}
+* Records: old, main, elsewhere, new; shared file from the new release; new,
+* elsewhere and the dropped old file present. Then: the only record kept,
+* none added, its files present.
+if `mocked' & !`rc_records' & "`: word 1 of `counts''`: word 2 of `counts''`: word 3 of `counts''`: word 4 of `counts''`: word 5 of `counts''`: word 6 of `counts''`: word 7 of `counts''`: word 8 of `counts''" == "00111110" {
+    test_pass "ctools update removes records of earlier GitHub installs"
+}
+else test_fail "ctools update records" "mocked=`mocked' rc=`rc_records' counts=`counts'"
+if `mocked' & !`rc_same' & "`: word 9 of `counts''`: word 10 of `counts''`: word 11 of `counts''`: word 12 of `counts''" == "1011" {
+    test_pass "ctools update keeps the only record when net records nothing"
+}
+else test_fail "ctools update without a new record" "mocked=`mocked' rc=`rc_same' counts=`counts'"
+capture program drop update_fixture
+
+foreach file in mismatch/_ctools_load.ado none/_ctools_load.ado damaged/`plugin' update/ctools.ado records/ctools.ado step.ado trk.txt release.json in.csv in.xpt out.csv {
     capture erase "`root'/`file'"
 }
 print_summary "loader"

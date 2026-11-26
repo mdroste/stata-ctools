@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.3.1 20261124}{...}
+{* *! version 1.3.2 20261124}{...}
 {viewerjumpto "Syntax" "cbinscatter##syntax"}{...}
 {viewerjumpto "Description" "cbinscatter##description"}{...}
 {viewerjumpto "Options" "cbinscatter##options"}{...}

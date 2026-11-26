@@ -481,6 +481,21 @@ for method in ["logit", "probit"]:
         "matching",
     )
 
+for qualifier in ["", "if id<451", "in 20/480"]:
+    for opt in ["", "by(group)", "by(group) cw", "by(group) fast", "by(group) clabel", "by(group) frame(elsewhere)", "cw"]:
+        # sorted by the by() variable, where collapse too sums in the order of the
+        # observations; cw admits no string source (collapse marks every observation out)
+        clist = "(mean) y x (median) med_x=x (sum) total=z (count) n=y (max) hi"
+        if "cw" not in opt:
+            clist += " (first) s"
+        case(
+            "ccollapse",
+            f"collapse {qualifier} {opt}",
+            "by cw fast clabel frame threads verbose",
+            f"collapse {clist} {qualifier}, {opt}",
+            f"ccollapse {clist} {qualifier}, {opt} threads(2) verbose",
+            setup="sort group id",
+        )
 # Sampling uses different RNGs; compare stratified counts here, with a separate
 # repeated-seed distribution test for randomness, inclusion, and replacement.
 for selection in ["", "if id<451", "in 20/480"]:
@@ -562,6 +577,49 @@ for by in ["", "by(g)", "by(s)", "by(g s)"]:
             f'rangejoin time lo hi using "`usingdata\'", {by} {opt}',
             f'crangejoin time lo hi using "`usingdata\'", {by} {opt} threads(2) verbose',
             setup=join_setup,
+        )
+
+# Duplicated keys on both sides, keys only one side has, and two variables
+# both datasets hold (y with missing values and conflicts, group with a value
+# label) make unmatched(), update, replace and nolabel observable. joinby's
+# order within ties depends on the sort seed: coverage_joinby orders both
+# results by the master and using observation numbers.
+joinby_setup = """tempfile usingdata
+preserve
+keep id g s y group x
+rename id uid
+rename x using_x
+keep in 1/150
+replace y=y+1 if mod(uid,3)==0
+replace y=. if mod(uid,4)==0
+replace g=g+20 if mod(uid,9)==0
+label define using_groups 0 "from using" 1 "using one" 2 "using two"
+label values uid using_groups
+notes y: using variable note
+save `usingdata'
+restore
+keep in 120/420
+replace y=. if mod(id,5)==0
+replace g=g+40 if mod(id,11)==0"""
+for keys in ["g", "g s"]:
+    for unmatched in ["", "unmatched(none)", "unmatched(both)", "unmatched(master)", "unmatched(using)"]:
+        for how in ["", "update", "update replace"]:
+            case(
+                "cjoinby",
+                f"joinby {keys} {unmatched} {how}",
+                "unmatched update replace threads verbose",
+                f'coverage_joinby joinby {keys} using "`usingdata\'", {unmatched} {how}',
+                f'coverage_joinby cjoinby {keys} using "`usingdata\'", {unmatched} {how} threads(2) verbose',
+                setup=joinby_setup,
+            )
+    for opt in ["_merge(source)", "nolabel unmatched(both)", "nolabel update _merge(source)"]:
+        case(
+            "cjoinby",
+            f"joinby {keys} {opt}",
+            "_merge nolabel",
+            f'coverage_joinby joinby {keys} using "`usingdata\'", {opt}',
+            f'coverage_joinby cjoinby {keys} using "`usingdata\'", {opt}',
+            setup=joinby_setup,
         )
 
 for opt in [
@@ -847,6 +905,56 @@ for opt in ["", "missing", "joint", "joint missing"]:
         f"cdistinct g s if id<451, {opt} abbrev(8) min(0) max(999) verbose threads(2)",
         "count",
     )
+# egen's functions: the new variable, its type, format and labels are compared.
+for covered, spec in [
+    ("by", "double out = mean(y), by(g)"),
+    ("by", "double out = sd(y) if id>40, by(g h)"),
+    ("missing by", "double out = total(y) if x>0, missing by(g)"),
+    ("missing", "double out = max(y), missing"),
+    ("missing", "out = rowtotal(x z y), missing"),
+    ("missing", "out = mode(g), missing"),
+    ("missing", "out = tag(s g), missing"),
+    ("p by", "double out = pctile(y), p(25) by(g)"),
+    ("p", "double out = rowpctile(x z z2 y), p(75)"),
+    ("autotype", "out = median(g), autotype by(h)"),
+    ("autotype", "out = group(g h), autotype"),
+    ("mean sd", "double out = std(y), mean(3) sd(2)"),
+    ("std", "double out = std(y), std(2)"),
+    ("prop by", "double out = pc(w), prop by(g)"),
+    ("field by", "out = rank(y), field by(g)"),
+    ("track", "out = rank(g), track"),
+    ("unique", "out = rank(y), unique"),
+    ("minmode by", "out = mode(g), minmode by(h)"),
+    ("maxmode", "out = mode(fw), maxmode"),
+    ("nummode", "out = mode(g), nummode(2)"),
+    ("from to block by", "out = seq(), from(3) to(9) block(2) by(g)"),
+    ("strok", "out = rownonmiss(x s tokens), strok"),
+    ("values", "out = anycount(g h group), values(1 2 3)"),
+    ("values", "out = anymatch(g h), values(0 5)"),
+    ("values", "out = anyvalue(g), values(2/6)"),
+    ("label", "out = group(g s), label"),
+    ("label replace truncate", "out = group(s group), label(out, replace truncate(3))"),
+    ("lname", "out = group(group), lname(grouplabel)"),
+    ("at icodes", "out = cut(y), at(-10 -1 0 1 10) icodes"),
+    ("at label", "out = cut(y), at(-10 -1 0 1 10) label"),
+    ("group", "out = cut(y), group(5)"),
+    ("t nomiss", "double out = ma(time), t(5) nomiss"),
+    ("punct", 'out = concat(s tokens), punct("|")'),
+    ("decode maxlength", "out = concat(g group), decode maxlength(4)"),
+    ("format", "out = concat(y g), format(%9.3f)"),
+    ("punct head", 'out = ends(tokens), punct(",") head'),
+    ("punct last", 'out = ends(tokens), punct(",") last'),
+    ("punct tail trim", 'out = ends(tokens), punct(",") tail trim'),
+]:
+    separator = " " if "," in spec else ", "
+    case(
+        "cegen",
+        "egen " + spec,
+        covered + " threads verbose",
+        "egen " + spec,
+        "cegen " + spec + separator + "threads(2) verbose",
+    )
+
 for effects in ["g h", "g##c.time h"]:
     case(
         "chdfe", "within transformation " + effects,

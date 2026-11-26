@@ -412,6 +412,275 @@ ST_int *hdfe_coef_chunks(const ST_int *rowptr, const ST_int *rows, ST_int n, int
 }
 
 /* ========================================================================
+ * A cross-tabulation kept while the weights change
+ * ======================================================================== */
+
+/* Chunks of levels of the row effect that the weights are summed in */
+#define HDFE_COEF_VALUE_CHUNKS 256
+#define HDFE_COEF_VALUE_CHUNK_ROWS 8192
+
+void hdfe_crossplan_free(hdfe_crossplan *P)
+{
+    if (!P)
+        return;
+    free(P->grouprow);
+    free(P->cellptr);
+    free(P->order);
+    free(P->cell);
+    free(P->col);
+    free(P->val);
+    free(P->chunk);
+    memset(P, 0, sizeof(*P));
+}
+
+/* As hdfe_crosstab_build(), cell for cell, without the weights: the cells of
+ * a level in the order their first rows appear. */
+ST_retcode hdfe_crossplan_build(hdfe_crossplan *P, ST_int N, const ST_int *row_levels,
+                                ST_int nrow, const ST_int *col_levels, ST_int ncol)
+{
+    memset(P, 0, sizeof(*P));
+    hdfe_crosstab *C = &P->C;
+    C->nrow = nrow;
+    C->ncol = ncol;
+    P->N = N;
+    if (!col_levels || ncol < 1)
+        return 198;
+
+    ST_int *dest = NULL, *len = NULL;
+    int sorted = 0, increasing = 0;
+    ST_retcode rc = hdfe_coef_group_rows(N, row_levels, nrow, col_levels, ncol, &P->grouprow,
+                                         &dest, &sorted, &increasing);
+    if (rc)
+        return rc;
+    C->sorted = sorted;
+    const int par = N > HDFE_COEF_PARALLEL_MIN;
+
+    /* the rows in the order of the row effect, and where each came from */
+    const ST_int *src_col = col_levels;
+    if (!sorted)
+    {
+        P->order = (ST_int *)malloc((size_t)N * sizeof(ST_int));
+        P->col = (ST_int *)malloc((size_t)N * sizeof(ST_int));
+        if (!P->order || !P->col)
+        {
+            rc = 920;
+            goto fail;
+        }
+        ST_int *order = P->order, *col_own = P->col;
+#pragma omp parallel for schedule(static) if (par)
+        for (ST_int i = 0; i < N; i++)
+        {
+            order[dest[i]] = i;
+            col_own[dest[i]] = col_levels[i];
+        }
+        free(dest);
+        dest = NULL;
+        src_col = P->col;
+    }
+    C->rowptr = P->grouprow;
+    C->col = src_col;
+    C->nnz = N;
+
+    {
+        int nchunk = N / HDFE_COEF_VALUE_CHUNK_ROWS;
+        if (nchunk > HDFE_COEF_VALUE_CHUNKS)
+            nchunk = HDFE_COEF_VALUE_CHUNKS;
+        if (nchunk < 1)
+            nchunk = 1;
+        P->chunk = hdfe_coef_chunks(P->grouprow, NULL, nrow, nchunk);
+        P->nchunk = nchunk;
+        if (!P->chunk)
+        {
+            rc = 920;
+            goto fail;
+        }
+    }
+
+    const ST_int *rowptr = P->grouprow;
+    long long total = N;
+    int failed = 0;
+    if (!(sorted && increasing))
+    {
+        /* Distinct cells of every row */
+        len = (ST_int *)malloc((size_t)nrow * sizeof(ST_int));
+        if (!len)
+        {
+            rc = 920;
+            goto fail;
+        }
+        total = 0;
+        const int tuse = hcc_stamp_threads(ncol, 1);
+#pragma omp parallel num_threads(tuse) reduction(+ : total) reduction(| : failed) if (par)
+        {
+            ST_int *stamp = (ST_int *)malloc((size_t)ncol * sizeof(ST_int));
+            if (!stamp)
+                failed |= 1;
+            else
+                memset(stamp, 0xFF, (size_t)ncol * sizeof(ST_int));
+#pragma omp for schedule(dynamic, 1024)
+            for (ST_int r = 0; r < nrow; r++)
+            {
+                if (!stamp)
+                    continue;
+                ST_int distinct = 0;
+                for (ST_int e = rowptr[r]; e < rowptr[r + 1]; e++)
+                {
+                    const ST_int j = src_col[e] - 1;
+                    if (stamp[j] != r)
+                    {
+                        stamp[j] = r;
+                        distinct++;
+                    }
+                }
+                len[r] = distinct;
+                total += distinct;
+            }
+            free(stamp);
+        }
+        if (failed)
+        {
+            rc = 920;
+            goto fail;
+        }
+    }
+    if (total == (long long)N)
+    {
+        /* one row per cell: the weights in grouped order, or as they are */
+        free(len);
+        len = NULL;
+        if (!sorted)
+        {
+            P->val = (ST_double *)malloc((size_t)N * sizeof(ST_double));
+            if (!P->val)
+            {
+                rc = 920;
+                goto fail;
+            }
+        }
+        return 0;
+    }
+
+    /* The cell of every row, cells in order of first appearance */
+    {
+        ST_int *newptr = (ST_int *)malloc(((size_t)nrow + 1) * sizeof(ST_int));
+        ST_int *mcol = (ST_int *)malloc((size_t)total * sizeof(ST_int));
+        P->cell = (ST_int *)malloc((size_t)N * sizeof(ST_int));
+        P->val = (ST_double *)malloc((size_t)total * sizeof(ST_double));
+        if (!newptr || !mcol || !P->cell || !P->val)
+        {
+            free(newptr);
+            free(mcol);
+            rc = 920;
+            goto fail;
+        }
+        newptr[0] = 0;
+        for (ST_int r = 0; r < nrow; r++)
+            newptr[r + 1] = newptr[r] + len[r];
+        ST_int *cell = P->cell;
+        const int tuse = hcc_stamp_threads(ncol, 2);
+#pragma omp parallel num_threads(tuse) reduction(| : failed) if (par)
+        {
+            ST_int *stamp = (ST_int *)malloc((size_t)ncol * sizeof(ST_int));
+            ST_int *slot = (ST_int *)malloc((size_t)ncol * sizeof(ST_int));
+            if (!stamp || !slot)
+                failed |= 1;
+            else
+                memset(stamp, 0xFF, (size_t)ncol * sizeof(ST_int));
+#pragma omp for schedule(dynamic, 1024)
+            for (ST_int r = 0; r < nrow; r++)
+            {
+                if (!stamp || !slot)
+                    continue;
+                ST_int out = newptr[r];
+                for (ST_int e = rowptr[r]; e < rowptr[r + 1]; e++)
+                {
+                    const ST_int j = src_col[e] - 1;
+                    if (stamp[j] == r)
+                        cell[e] = slot[j];
+                    else
+                    {
+                        stamp[j] = r;
+                        slot[j] = out;
+                        mcol[out] = j + 1;
+                        cell[e] = out;
+                        out++;
+                    }
+                }
+            }
+            free(stamp);
+            free(slot);
+        }
+        if (failed)
+        {
+            free(newptr);
+            free(mcol);
+            rc = 920;
+            goto fail;
+        }
+        free(len);
+        free(P->col);
+        P->col = mcol;
+        P->cellptr = newptr;
+        C->rowptr = newptr;
+        C->col = mcol;
+        C->nnz = (ST_int)total;
+    }
+    return 0;
+
+fail:
+    free(dest);
+    free(len);
+    hdfe_crossplan_free(P);
+    return rc;
+}
+
+void hdfe_crossplan_values(hdfe_crossplan *P, const ST_double *w)
+{
+    hdfe_crosstab *C = &P->C;
+    if (!P->val)
+    {
+        C->val = w;
+        return;
+    }
+    const ST_int N = P->N;
+    const ST_int *RESTRICT order = P->order, *RESTRICT cell = P->cell;
+    ST_double *RESTRICT val = P->val;
+    const int par = N > HDFE_COEF_PARALLEL_MIN;
+    if (!cell)
+    {
+#pragma omp parallel for schedule(static) if (par)
+        for (ST_int e = 0; e < N; e++)
+            val[e] = w[order[e]];
+    }
+    else
+    {
+        /* A level's cells belong to that level alone, and its rows come in
+         * their original order: every cell's weights are added in the order
+         * hdfe_crosstab_build() adds them, whichever thread has the level. */
+        const ST_int *RESTRICT grouprow = P->grouprow, *RESTRICT cellptr = P->cellptr;
+        const ST_int *chunk = P->chunk;
+#pragma omp parallel for schedule(dynamic, 1) if (par && P->nchunk > 1)
+        for (int c = 0; c < P->nchunk; c++)
+        {
+            const ST_int r0 = chunk[c], r1 = chunk[c + 1];
+            for (ST_int x = cellptr[r0]; x < cellptr[r1]; x++)
+                val[x] = 0.0;
+            if (order)
+            {
+                for (ST_int e = grouprow[r0]; e < grouprow[r1]; e++)
+                    val[cell[e]] += w[order[e]];
+            }
+            else
+            {
+                for (ST_int e = grouprow[r0]; e < grouprow[r1]; e++)
+                    val[cell[e]] += w[e];
+            }
+        }
+    }
+    C->val = val;
+}
+
+/* ========================================================================
  * Preconditioned conjugate gradients for several right-hand sides
  * ======================================================================== */
 
@@ -860,6 +1129,55 @@ HDFE_COEF_KERNEL void hcc_rows_rhs(const hdfe_coef_rows *D, const ST_double *RES
     }
 }
 
+/* Values of the K columns in one stretch of rows of the fused pass below: a
+ * stretch stays in the second-level cache between its two readings. */
+#define HDFE_COEF_FUSED_VALUES 16384
+
+/*
+ * Rows grouped by B: hcc_rows_sum(), the division by the level counts and
+ * hcc_rows_rhs() over the rows i0..i1-1 (i0 and i1 are level boundaries),
+ * a stretch of whole levels at a time. A level's sum is complete when its
+ * rows end, so the pass that subtracts the level means can follow at once
+ * and finds the rows in the cache: the columns come from memory once
+ * instead of twice. Every sum adds the same values in the same order as the
+ * two separate passes.
+ *
+ * a0 is set here for every level from the one after row i0-1's through row
+ * i1-1's (through the last one when i1 is N); levels without rows get zero.
+ */
+HDFE_COEF_KERNEL void hcc_rows_rhs_grouped(const hdfe_coef_rows *D, const ST_double *RESTRICT X,
+                                           ST_int i0, ST_int i1, ST_double *RESTRICT a0,
+                                           ST_double *RESTRICT g, ST_double *RESTRICT ss,
+                                           const int nk, const int K)
+{
+    const ST_int *RESTRICT lvB = D->lvB;
+    const ST_double *RESTRICT invB = D->invB;
+    const ST_int step = HDFE_COEF_FUSED_VALUES / K > 256 ? HDFE_COEF_FUSED_VALUES / K : 256;
+    /* levels below lo are done (0-based) */
+    ST_int lo = i0 > 0 ? lvB[i0 - 1] : 0;
+    ST_int s = i0;
+    while (s < i1)
+    {
+        ST_int e = i1 - s > step ? s + step : i1;
+        while (e < i1 && lvB[e] == lvB[e - 1])
+            e++;
+        const ST_int hi = lvB[e - 1];
+        memset(a0 + (size_t)lo * K, 0, (size_t)(hi - lo) * K * sizeof(ST_double));
+        hcc_rows_sum(D, X, s, e, a0, K);
+        for (ST_int f = lo; f < hi; f++)
+        {
+            const ST_double ib = invB[f];
+            for (int k = 0; k < K; k++)
+                a0[(size_t)f * K + k] *= ib;
+        }
+        hcc_rows_rhs(D, X, s, e, a0, g, ss, nk, K);
+        lo = hi;
+        s = e;
+    }
+    if (i1 == D->N && lo < D->nB)
+        memset(a0 + (size_t)lo * K, 0, (size_t)(D->nB - lo) * K * sizeof(ST_double));
+}
+
 /* x -= a[level of B] + the coefficients of the row's kept levels */
 HDFE_COEF_KERNEL void hcc_rows_residual(const hdfe_coef_rows *D, ST_double *RESTRICT X, ST_int i0,
                                         ST_int i1, const ST_double *RESTRICT a,
@@ -892,9 +1210,19 @@ void hdfe_coef_rowplan_free(hdfe_coef_rowplan *R)
     memset(R, 0, sizeof(*R));
 }
 
+/* buf holds at least bytes: kept when it already does (contents are scratch) */
+static int hcc_grow(ST_double **buf, size_t *have, size_t bytes)
+{
+    if (*buf && *have >= bytes)
+        return 1;
+    free(*buf);
+    *buf = (ST_double *)malloc(bytes ? bytes : 1);
+    *have = *buf ? bytes : 0;
+    return *buf != NULL;
+}
+
 ST_retcode hdfe_coef_rowplan_init(hdfe_coef_rowplan *R, const hdfe_coef_rows *D, int K)
 {
-    memset(R, 0, sizeof(*R));
     const ST_int N = D->N;
     const size_t per_k = (size_t)D->m * (size_t)K * sizeof(ST_double);
     const size_t per_b = (size_t)D->nB * (size_t)K * sizeof(ST_double);
@@ -911,9 +1239,14 @@ ST_retcode hdfe_coef_rowplan_init(hdfe_coef_rowplan *R, const hdfe_coef_rows *D,
         /* The buffers leave too few chunks to be worth it: one column per
          * thread, in column-major scratch. */
         R->nrc = 0;
-        R->gbuf =
-            (ST_double *)malloc(((size_t)D->nB + (size_t)D->m) * (size_t)K * sizeof(ST_double));
-        return R->gbuf ? 0 : 920;
+        R->private_b = 0;
+        if (!hcc_grow(&R->gbuf, &R->gbytes,
+                      ((size_t)D->nB + (size_t)D->m) * (size_t)K * sizeof(ST_double)))
+        {
+            hdfe_coef_rowplan_free(R);
+            return 920;
+        }
+        return 0;
     }
     R->nrc = nrc;
     R->private_b = !D->sorted && nrc > 1;
@@ -932,11 +1265,11 @@ ST_retcode hdfe_coef_rowplan_init(hdfe_coef_rowplan *R, const hdfe_coef_rows *D,
         R->bound[c] = i;
     }
     R->bound[nrc] = N;
-    R->gbuf = (ST_double *)malloc((size_t)nrc * per_k);
-    R->ssbuf = (ST_double *)malloc((size_t)nrc * 2 * (size_t)K * sizeof(ST_double));
+    int ok = hcc_grow(&R->gbuf, &R->gbytes, (size_t)nrc * per_k);
+    ok &= hcc_grow(&R->ssbuf, &R->ssbytes, (size_t)nrc * 2 * (size_t)K * sizeof(ST_double));
     if (R->private_b)
-        R->tbuf = (ST_double *)malloc((size_t)nrc * per_b);
-    if (!R->gbuf || !R->ssbuf || (R->private_b && !R->tbuf))
+        ok &= hcc_grow(&R->tbuf, &R->tbytes, (size_t)nrc * per_b);
+    if (!ok)
     {
         hdfe_coef_rowplan_free(R);
         return 920;
@@ -961,12 +1294,17 @@ void hdfe_coef_rows_rhs(const hdfe_coef_rows *D, const hdfe_coef_rowplan *R, con
             const ST_double *x = X + (size_t)k * (size_t)N;
             ST_double *ak = ca + (size_t)k * nB, *gk = cg + (size_t)k * m;
             ST_double ss[2] = {0.0, 0.0};
-            memset(ak, 0, (size_t)nB * sizeof(ST_double));
             memset(gk, 0, (size_t)m * sizeof(ST_double));
-            hcc_rows_sum(D, x, 0, N, ak, 1);
-            for (ST_int f = 0; f < nB; f++)
-                ak[f] *= invB[f];
-            hcc_rows_rhs(D, x, 0, N, ak, gk, ss, nk, 1);
+            if (D->sorted)
+                hcc_rows_rhs_grouped(D, x, 0, N, ak, gk, ss, nk, 1);
+            else
+            {
+                memset(ak, 0, (size_t)nB * sizeof(ST_double));
+                hcc_rows_sum(D, x, 0, N, ak, 1);
+                for (ST_int f = 0; f < nB; f++)
+                    ak[f] *= invB[f];
+                hcc_rows_rhs(D, x, 0, N, ak, gk, ss, nk, 1);
+            }
             f0[k] = ss[0];
             scale[k] = ss[1];
         }
@@ -1009,9 +1347,9 @@ void hdfe_coef_rows_rhs(const hdfe_coef_rows *D, const hdfe_coef_rowplan *R, con
             }
         }
     }
-    else
+    else if (!D->sorted)
     {
-        /* a level of B lies within one chunk (or there is one chunk) */
+        /* one chunk */
         memset(a0, 0, stride_b * sizeof(ST_double));
 #pragma omp parallel for schedule(dynamic, 1) if (par && nrc > 1)
         for (int c = 0; c < nrc; c++)
@@ -1025,7 +1363,10 @@ void hdfe_coef_rows_rhs(const hdfe_coef_rows *D, const hdfe_coef_rowplan *R, con
                 a0[(size_t)f * K + k] *= invB[f];
         }
     }
-    /* level sums of the kept effects of the B-demeaned columns */
+    /* Level sums of the kept effects of the B-demeaned columns. Rows grouped
+     * by B (a level of B then lies within one chunk) take the level means of
+     * B in the same pass. */
+    const int fused = D->sorted && !R->private_b;
 #pragma omp parallel for schedule(dynamic, 1) if (par && nrc > 1)
     for (int c = 0; c < nrc; c++)
     {
@@ -1033,7 +1374,17 @@ void hdfe_coef_rows_rhs(const hdfe_coef_rows *D, const hdfe_coef_rowplan *R, con
         memset(gc, 0, stride_k * sizeof(ST_double));
         for (int k = 0; k < 2 * K; k++)
             ssc[k] = 0.0;
-        if (nk == 1)
+        if (fused && nk == 1)
+        {
+            HDFE_COEF_K_DISPATCH(
+                K, hcc_rows_rhs_grouped(D, X, R->bound[c], R->bound[c + 1], a0, gc, ssc, 1, KK))
+        }
+        else if (fused)
+        {
+            HDFE_COEF_K_DISPATCH(
+                K, hcc_rows_rhs_grouped(D, X, R->bound[c], R->bound[c + 1], a0, gc, ssc, nk, KK))
+        }
+        else if (nk == 1)
         {
             HDFE_COEF_K_DISPATCH(
                 K, hcc_rows_rhs(D, X, R->bound[c], R->bound[c + 1], a0, gc, ssc, 1, KK))

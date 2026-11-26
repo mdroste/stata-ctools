@@ -85,6 +85,14 @@ ST_retcode hdfe_screen_missing(ctools_filtered_data *fd, ST_int marker)
         if (fd->data.vars[j].type != STATA_TYPE_DOUBLE ||
             fd->data.vars[j].nobs != n || !fd->data.vars[j].data.dbl) return 198;
 
+    /* The load compared every value it read with the missing values: a
+     * column it found without one is not read again, and when that is every
+     * column there is nothing to do. Columns it did not note are read. */
+    size_t n_check = 0;
+    for (size_t j = 0; j < k; j++)
+        n_check += fd->data.vars[j].missing_state != CTOOLS_MISSING_NONE;
+    if (!n_check) return 0;
+
     const size_t blocks = 1 + (n - 1) / HDFE_SCREEN_BLOCK;
     unsigned char *bad = calloc(blocks, 1);
     if (!bad) return 920;
@@ -106,6 +114,7 @@ ST_retcode hdfe_screen_missing(ctools_filtered_data *fd, ST_int marker)
         const size_t last = n - first < HDFE_SCREEN_BLOCK ? n : first + HDFE_SCREEN_BLOCK;
         int any = 0;
         for (size_t j = 0; j < k && !any; j++) {
+            if (fd->data.vars[j].missing_state == CTOOLS_MISSING_NONE) continue;
             const double *v = fd->data.vars[j].data.dbl;
 #pragma omp simd reduction(|:any)
             for (size_t i = first; i < last; i++) any |= !(v[i] < missing);
@@ -132,6 +141,7 @@ ST_retcode hdfe_screen_missing(ctools_filtered_data *fd, ST_int marker)
         const size_t last = n - first < HDFE_SCREEN_BLOCK ? n : first + HDFE_SCREEN_BLOCK;
         memset(keep + first, 1, last - first);
         for (size_t j = 0; j < k; j++) {
+            if (fd->data.vars[j].missing_state == CTOOLS_MISSING_NONE) continue;
             const double *v = fd->data.vars[j].data.dbl;
 #pragma omp simd
             for (size_t i = first; i < last; i++) keep[i] &= (v[i] < missing);

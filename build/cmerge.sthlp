@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.3.1 20261124}{...}
+{* *! version 1.3.2 20261124}{...}
 {viewerjumpto "Syntax" "cmerge##syntax"}{...}
 {viewerjumpto "Description" "cmerge##description"}{...}
 {viewerjumpto "Options" "cmerge##options"}{...}
@@ -90,7 +90,7 @@ For an observation-by-observation merge, use {cmd:cmerge 1:1 _n using}
 {it:filename}. For a keyed merge, missing key values participate in matching.
 {cmd:m:m} pairs observations sequentially within each key group and repeats
 the last observation of the shorter group; it does not form every pair. Use
-{help joinby} for all combinations.
+{help cjoinby} for all combinations.
 
 {pstd}
 Before the merge, {cmd:cmerge} notes, as {cmd:merge} does, each master variable
@@ -333,5 +333,5 @@ StataCorp does not support {cmd:cmerge}. Undocumented differences between
 Manual: {bf:[D] merge}
 
 {psee}
-Online: {help merge}, {help joinby}, {help ctools}, {help csort}
+Online: {help merge}, {help joinby}, {help cjoinby}, {help ctools}, {help csort}
 {p_end}

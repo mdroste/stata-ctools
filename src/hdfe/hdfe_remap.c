@@ -150,12 +150,17 @@ static int remap_counting_impl(const double *values, ST_int N, ST_int *levels_ou
  * 2^32); the presence table is marked, ranked, and read through that copy.
  * Returns 1 (levels_out unspecified) when the codes are not such integers.
  */
-static int remap_dense_parallel(const double *values, ST_int N, ST_int *levels_out,
-                                ST_int *num_levels, int B)
+static int remap_dense_table(ST_int *levels_out, ST_int N, int64_t vmin, int64_t range,
+                             ST_int *num_levels, int B);
+
+/* The first pass of remap_dense_parallel: the low 32 bits of every code in
+ * code[], the smallest code and the size of the range. Returns 1 when the
+ * values are not integers in a manageable range. */
+static int remap_dense_codes(const double *values, ST_int N, uint32_t *code, int B,
+                             int64_t *vmin_out, int64_t *range_out)
 {
     int all_integer = 1, b;
     int64_t vmin = INT64_MAX, vmax = INT64_MIN;
-    uint32_t *code = (uint32_t *)levels_out;
 #pragma omp parallel for schedule(static) reduction(&& : all_integer) reduction(min : vmin) \
     reduction(max : vmax)
     for (b = 0; b < B; b++)
@@ -192,6 +197,26 @@ static int remap_dense_parallel(const double *values, ST_int N, ST_int *levels_o
         threshold = 16 * 1024 * 1024;
     if (range > threshold || range >= ((int64_t)1 << 32))
         return 1;
+    *vmin_out = vmin;
+    *range_out = range;
+    return 0;
+}
+
+static int remap_dense_parallel(const double *values, ST_int N, ST_int *levels_out,
+                                ST_int *num_levels, int B)
+{
+    int64_t vmin = 0, range = 0;
+    if (remap_dense_codes(values, N, (uint32_t *)levels_out, B, &vmin, &range))
+        return 1;
+    return remap_dense_table(levels_out, N, vmin, range, num_levels, B);
+}
+
+/* The rest of remap_dense_parallel: levels_out holds the codes' low 32 bits */
+static int remap_dense_table(ST_int *levels_out, ST_int N, int64_t vmin, int64_t range,
+                             ST_int *num_levels, int B)
+{
+    int b;
+    uint32_t *code = (uint32_t *)levels_out;
     const uint32_t lo = (uint32_t)vmin;
 
     ST_int *table = (ST_int *)calloc((size_t)range, sizeof(ST_int));
@@ -581,6 +606,401 @@ static int remap_levels_impl(const double *values, ST_int N, ST_int *levels_out,
     /* Sparse or non-integer codes: hash them. A table that cannot be
      * allocated is an error; there is no other path */
     return remap_hash_impl(values, N, levels_out, num_levels);
+}
+
+/* ========================================================================
+ * Levels in order of first appearance, in parallel
+ * ======================================================================== */
+
+/* Per-block bitsets of remap_first_order may take this much, or two bytes a
+ * row when that is more */
+#define REMAP_ORDER_MIN_BUDGET ((size_t)64 << 20)
+/* Codes from which unordered rows hand their numbers over in ranges */
+#ifndef REMAP_SCATTER_CODES /* tests set a small one */
+#define REMAP_SCATTER_CODES 65536
+#endif
+
+/* A code and the level it takes (sign bit: the code is in one row) */
+typedef struct
+{
+    uint32_t code;
+    ST_int id;
+} remap_code_id;
+
+/* a when take is 1, b when it is 0, without a branch */
+static inline void *remap_pick(void *a, void *b, uintptr_t take)
+{
+    return (void *)((uintptr_t)b ^ (((uintptr_t)a ^ (uintptr_t)b) & ((uintptr_t)0 - take)));
+}
+
+static int remap_order_fits(size_t range, ST_int N, int B)
+{
+    size_t budget = 2 * (size_t)N;
+    if (budget < REMAP_ORDER_MIN_BUDGET)
+        budget = REMAP_ORDER_MIN_BUDGET;
+    return (range + 63) / 64 <= budget / 16 / (size_t)B;
+}
+
+/*
+ * levels_out holds a code in lo..lo+range-1 for every row (modulo 2^32).
+ * Renumber the codes present 1..L in order of first appearance, in B row
+ * blocks and without atomic operations:
+ *   1. each block marks its codes in a bitset of its own, marks in a second
+ *      one those it meets again, and flags the rows where it meets a code
+ *      for the first time
+ *   2. word by word, a code stays marked only in the first block that has
+ *      it; a code is in one row only when one block has it and that block
+ *      met it once. Counting each block's marks gives the number its first
+ *      new level takes
+ *   3. each block numbers its marked codes down its flagged rows, which is
+ *      the order of their first rows
+ *   4. every row reads its level
+ * Also returned: the first row of every level, and the rows alone in their
+ * level (ascending). Returns 0, or -1 when an allocation fails; levels_out
+ * then still holds the codes.
+ */
+static int remap_first_order(ST_int *levels_out, ST_int N, uint32_t lo, size_t range, int B,
+                             ST_int *num_levels, HDFE_RemapOrder *order)
+{
+    const uint32_t *code = (const uint32_t *)levels_out;
+    const size_t words = (range + 63) / 64;
+    /* A block's marks: marks[b * stride + 2 * word] = its codes, the next
+     * word those it met more than once (after step 2, block 0's second
+     * words hold the codes in one row only). At least two cache lines a
+     * block, so that the blocks of a small range never write the same one */
+    const size_t stride = words * 2 < 16 ? 16 : words * 2;
+    /* The code words in B ranges: range p holds the words w with
+     * (w * part_mult) >> 32 == p */
+    const uint64_t part_mult = (((uint64_t)B) << 32) / (uint64_t)words;
+    const size_t place_stride = (size_t)B + 32;
+    int rc = -1, b;
+    long long w;
+    ST_int *first_row = NULL, *single_rows = NULL, *bucket = NULL, *places = NULL;
+    remap_code_id *pairs = NULL;
+    uint64_t *marks = (uint64_t *)calloc((size_t)B * stride, sizeof(uint64_t));
+    /* fresh: a bit per row, set where its block meets a code for the first
+     * time; block b's rows start at word (first row / 64) + b */
+    uint64_t *fresh = (uint64_t *)malloc(((size_t)N / 64 + (size_t)B + 1) * sizeof(uint64_t));
+    ST_int *id = (ST_int *)malloc(range * sizeof(ST_int));
+    ST_int *base = (ST_int *)calloc((size_t)B + 1, sizeof(ST_int));
+    ST_int *sbase = (ST_int *)calloc((size_t)B + 1, sizeof(ST_int));
+    if (!marks || !fresh || !id || !base || !sbase)
+        goto done;
+
+    /* 1. Codes of each block, and the rows where it first meets one */
+#pragma omp parallel for schedule(static)
+    for (b = 0; b < B; b++)
+    {
+        uint64_t *m = marks + (size_t)b * stride;
+        ST_int i0, i1;
+        ctools_hdfe_block_range(N, B, b, &i0, &i1);
+        uint64_t *fr = fresh + ((size_t)i0 >> 6) + (size_t)b;
+        const ST_int rows = i1 - i0;
+        uint64_t acc = 0;
+        if (words == 1)
+        {
+            /* one word: kept in registers */
+            uint64_t mine = 0, again = 0;
+            for (ST_int r = 0; r < rows; r++)
+            {
+                const uint64_t bit = (uint64_t)1 << ((code[i0 + r] - lo) & 63), had = mine & bit;
+                again |= had;
+                mine |= bit;
+                acc |= (uint64_t)!had << (r & 63);
+                if ((r & 63) == 63)
+                {
+                    fr[r >> 6] = acc;
+                    acc = 0;
+                }
+            }
+            m[0] = mine;
+            m[1] = again;
+        }
+        else
+        {
+            for (ST_int r = 0; r < rows; r++)
+            {
+                const uint32_t c = code[i0 + r] - lo;
+                uint64_t *slot = &m[2 * (size_t)(c >> 6)];
+                const uint64_t bit = (uint64_t)1 << (c & 63), had = slot[0] & bit;
+                slot[1] |= had;
+                slot[0] |= bit;
+                acc |= (uint64_t)!had << (r & 63);
+                if ((r & 63) == 63)
+                {
+                    fr[r >> 6] = acc;
+                    acc = 0;
+                }
+            }
+        }
+        if (rows & 63)
+            fr[rows >> 6] = acc;
+    }
+
+    /* 2. First block of every code, and the codes in one row */
+    long long shared_codes = 0; /* codes that more than one block has */
+#pragma omp parallel for schedule(static) reduction(+ : shared_codes)
+    for (w = 0; w < (long long)words; w++)
+    {
+        uint64_t seen = 0, several = 0, shared = 0;
+        for (int t = 0; t < B; t++)
+        {
+            uint64_t *slot = &marks[(size_t)t * stride + (size_t)w * 2];
+            shared |= seen & slot[0];
+            several |= (seen & slot[0]) | slot[1];
+            const uint64_t mine = slot[0] & ~seen;
+            seen |= slot[0];
+            slot[0] = mine;
+        }
+        shared_codes += __builtin_popcountll(shared);
+        /* each block's second word: its new codes that are in one row */
+        const uint64_t once = seen & ~several;
+        for (int t = 0; t < B; t++)
+        {
+            uint64_t *slot = &marks[(size_t)t * stride + (size_t)w * 2];
+            slot[1] = slot[0] & once;
+        }
+    }
+    /* New codes of each block in each range of code words, and its codes in
+     * one row */
+    bucket = (ST_int *)calloc((size_t)B * (size_t)B + 1, sizeof(ST_int));
+    if (!bucket)
+        goto done;
+#pragma omp parallel for schedule(static)
+    for (b = 0; b < B; b++)
+    {
+        const uint64_t *m = marks + (size_t)b * stride;
+        ST_int *count = bucket + (size_t)b * (size_t)B;
+        ST_int s = 0;
+        for (size_t k = 0; k < words; k++)
+        {
+            count[(k * part_mult) >> 32] += __builtin_popcountll(m[2 * k]);
+            s += __builtin_popcountll(m[2 * k + 1]);
+        }
+        sbase[b + 1] = s;
+    }
+    /* Codes that are not new to the block with the most new codes of their
+     * range: when they are many (rows in no order of the codes), threads
+     * numbering their blocks would keep writing the same parts of id[] */
+    ST_int mixed = 0;
+    for (int p = 0; p < B; p++)
+    {
+        ST_int all = 0, most = 0;
+        for (b = 0; b < B; b++)
+        {
+            const ST_int n = bucket[(size_t)b * (size_t)B + (size_t)p];
+            all += n;
+            if (n > most)
+                most = n;
+        }
+        mixed += all - most;
+    }
+    {
+        /* bucket[b * B + p] becomes the place of the first such code */
+        ST_int total = 0;
+        for (b = 0; b < B; b++)
+        {
+            base[b] = total;
+            for (int p = 0; p < B; p++)
+            {
+                const ST_int n = bucket[(size_t)b * (size_t)B + (size_t)p];
+                bucket[(size_t)b * (size_t)B + (size_t)p] = total;
+                total += n;
+            }
+            sbase[b + 1] += sbase[b];
+        }
+        base[B] = total;
+        bucket[(size_t)B * (size_t)B] = total;
+    }
+    const ST_int L = base[B], singles = sbase[B];
+    /* Then a block hands the numbers of its codes to the thread of their
+     * range, and steps down its rows without branches (most of the rows
+     * where it first meets a code are not that code's first) */
+    const int scatter = L >= REMAP_SCATTER_CODES && mixed > L / 8;
+    first_row = (ST_int *)malloc((size_t)(L > 0 ? L : 1) * sizeof(ST_int));
+    single_rows = (ST_int *)malloc((size_t)(singles > 0 ? singles : 1) * sizeof(ST_int));
+    if (scatter)
+    {
+        pairs = (remap_code_id *)malloc((size_t)L * sizeof(remap_code_id));
+        /* each block's places apart from the next block's: they are
+         * written at every row */
+        places = (ST_int *)malloc((size_t)B * place_stride * sizeof(ST_int));
+        for (b = 0; places && b < B; b++)
+            memcpy(places + (size_t)b * place_stride, bucket + (size_t)b * (size_t)B,
+                   (size_t)B * sizeof(ST_int));
+    }
+    if (!first_row || !single_rows || (scatter && (!pairs || !places)))
+        goto done;
+
+    /* 3. Number each block's new codes in the order of their first rows;
+     * the sign bit flags a code in one row */
+#pragma omp parallel for schedule(static)
+    for (b = 0; b < B; b++)
+    {
+        const uint64_t *m = marks + (size_t)b * stride;
+        ST_int i0, i1, next = base[b];
+        ctools_hdfe_block_range(N, B, b, &i0, &i1);
+        const uint64_t *fr = fresh + ((size_t)i0 >> 6) + (size_t)b;
+        const size_t fresh_words = ((size_t)(i1 - i0) + 63) / 64;
+        if (scatter)
+        {
+            /* a row whose code another block met first writes to the spare
+             * entries instead */
+            ST_int *place = places + (size_t)b * place_stride, spare_row = 0;
+            remap_code_id spare_pair;
+            for (size_t k = 0; k < fresh_words; k++)
+            {
+                uint64_t rows = fr[k];
+                while (rows)
+                {
+                    const ST_int i = i0 + (ST_int)(k * 64) + __builtin_ctzll(rows);
+                    rows &= rows - 1;
+                    const uint32_t c = code[i] - lo;
+                    const uint64_t *slot = &m[2 * (size_t)(c >> 6)];
+                    const uintptr_t first = (uintptr_t)((slot[0] >> (c & 63)) & 1);
+                    const uint32_t once = (uint32_t)((slot[1] >> (c & 63)) & 1);
+                    ST_int *at = &place[((uint64_t)(c >> 6) * part_mult) >> 32];
+                    ST_int *row_to = (ST_int *)remap_pick(&first_row[next], &spare_row, first);
+                    remap_code_id *pair = (remap_code_id *)remap_pick(&pairs[*at], &spare_pair, first);
+                    *row_to = i;
+                    next += (ST_int)first;
+                    *at += (ST_int)first;
+                    pair->code = c;
+                    pair->id = (ST_int)((uint32_t)next | (once << 31));
+                }
+            }
+            (void)spare_row;
+            (void)spare_pair;
+            continue;
+        }
+        for (size_t k = 0; k < fresh_words; k++)
+        {
+            uint64_t rows = fr[k];
+            while (rows)
+            {
+                const ST_int i = i0 + (ST_int)(k * 64) + __builtin_ctzll(rows);
+                rows &= rows - 1;
+                const uint32_t c = code[i] - lo;
+                const uint64_t *slot = &m[2 * (size_t)(c >> 6)];
+                const uint64_t bit = (uint64_t)1 << (c & 63);
+                if (!(slot[0] & bit))
+                    continue;
+                first_row[next] = i;
+                ++next;
+                id[c] = (slot[1] & bit) ? (ST_int)((uint32_t)next | 0x80000000u) : next;
+            }
+        }
+    }
+    if (scatter)
+    {
+        int p;
+#pragma omp parallel for schedule(static)
+        for (p = 0; p < B; p++)
+        {
+            for (int t = 0; t < B; t++)
+            {
+                const size_t at = (size_t)t * (size_t)B + (size_t)p;
+                /* the next bucket starts where this one ends */
+                const ST_int stop = bucket[at + 1];
+                for (ST_int k = bucket[at]; k < stop; k++)
+                    id[pairs[k].code] = pairs[k].id;
+            }
+        }
+    }
+
+    /* 4. Levels of the rows; a row alone in its level is in the block that
+     * numbered the level */
+#pragma omp parallel for schedule(static)
+    for (b = 0; b < B; b++)
+    {
+        ST_int i0, i1, s = sbase[b];
+        ctools_hdfe_block_range(N, B, b, &i0, &i1);
+        for (ST_int i = i0; i < i1; i++)
+        {
+            const ST_int v = id[(uint32_t)levels_out[i] - lo];
+            levels_out[i] = v & 0x7fffffff;
+            if (v < 0)
+                single_rows[s++] = i;
+        }
+    }
+    *num_levels = L;
+    order->first_row = first_row;
+    order->single_rows = single_rows;
+    order->num_single = singles;
+    order->local = shared_codes <= L / 16;
+    first_row = single_rows = NULL;
+    rc = 0;
+
+done:
+    free(first_row);
+    free(single_rows);
+    free(bucket);
+    free(places);
+    free(pairs);
+    free(marks);
+    free(fresh);
+    free(id);
+    free(base);
+    free(sbase);
+    return rc;
+}
+
+int hdfe_remap_levels_ordered(const double *values, ST_int N, ST_int *levels_out,
+                              ST_int *num_levels, HDFE_RemapOrder *order)
+{
+    if (num_levels)
+        *num_levels = 0;
+    if (order)
+    {
+        order->first_row = NULL;
+        order->single_rows = NULL;
+        order->num_single = -1;
+        order->local = 0;
+    }
+    if (N <= 0 || !values || !levels_out || !num_levels || !order)
+        return -1;
+
+    const int B = ctools_hdfe_row_blocks(N);
+    ST_int L = 0;
+    if (B == 1)
+    {
+        /* Serially the table and the hash both number in row order */
+        if (remap_levels_impl(values, N, levels_out, &L, 0) != 0)
+            return -1;
+        *num_levels = L;
+        return 0;
+    }
+
+    int64_t vmin = 0, range = 0;
+    if (remap_dense_codes(values, N, (uint32_t *)levels_out, B, &vmin, &range) == 0)
+    {
+        if (remap_order_fits((size_t)range, N, B) &&
+            remap_first_order(levels_out, N, (uint32_t)vmin, (size_t)range, B, &L, order) == 0)
+        {
+            *num_levels = L;
+            return 0;
+        }
+        /* A range too wide for the bitsets: ascending levels first */
+        if (remap_dense_table(levels_out, N, vmin, range, &L, B) != 0)
+            return -1;
+    }
+    else
+    {
+        int rc = remap_sparse_parallel(values, N, levels_out, &L, B);
+        if (rc != 0)
+        {
+            if (remap_hash_impl(values, N, levels_out, &L) != 0)
+                return -1;
+            *num_levels = L;
+            return 0;
+        }
+    }
+    /* Levels 1..L in another order: renumber them */
+    *num_levels = L;
+    if (L > 0 && remap_order_fits((size_t)L, N, B) &&
+        remap_first_order(levels_out, N, 1, (size_t)L, B, &L, order) == 0)
+        return 0;
+    return 1;
 }
 
 int hdfe_remap_levels(const double *values, ST_int N, ST_int *levels_out, ST_int *num_levels)

@@ -201,6 +201,13 @@ int ctools_command_begin(const ctools_command_descriptor *cmd, const char *args)
         else if (!strcmp(op, "write")) { required = 2; next_phase = 3; }
         else if (!strcmp(op, "rollback")) preserve = 1;
         break;
+    case CTOOLS_CMD_CJOINBY:
+        if (!strcmp(op, "using")) next_phase = 1;
+        else if (!strcmp(op, "plan")) { required = 1; next_phase = 2; }
+        /* write keeps the master copy until rollback or clear ends the join */
+        else if (!strcmp(op, "write")) { required = 2; next_phase = 3; }
+        else if (!strcmp(op, "rollback")) preserve = 1;
+        break;
     case CTOOLS_CMD_CWINSOR:
         /* an in-place call keeps its undo copy until rollback or commit */
         if (!strcmp(op, "rollback") || !strcmp(op, "commit")) preserve = 1;
@@ -259,6 +266,24 @@ int ctools_command_begin(const ctools_command_descriptor *cmd, const char *args)
             required = 1;
             if (args && strstr(args, " keep")) next_phase = 1;
         }
+        break;
+    case CTOOLS_CMD_CEGEN:
+        /* compute keeps the result for store; any other call frees it */
+        if (!strcmp(op, "compute")) next_phase = 1;
+        else if (!strcmp(op, "store")) required = 1;
+        break;
+    case CTOOLS_CMD_CCOLLAPSE:
+        /* compute keeps the collapsed dataset for store; any other call frees it */
+        if (!strcmp(op, "compute")) next_phase = 1;
+        else if (!strcmp(op, "store")) required = 1;
+        break;
+    case CTOOLS_CMD_CRESHAPE:
+        /* plan stages the observations; they stay until the store succeeds
+         * or restore puts them back */
+        if (!strcmp(op, "plan")) next_phase = 1;
+        else if (!strcmp(op, "schema")) { required = 1; next_phase = 2; }
+        else if (!strcmp(op, "store")) { required = 2; next_phase = 3; }
+        else if (!strcmp(op, "restore")) preserve = 1;
         break;
     case CTOOLS_CMD_CPARQUET:
         /* scan keeps the decoded columns for load and blobfile */

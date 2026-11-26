@@ -753,11 +753,105 @@
   "basic_check_failures": 0,
   "result_files": {
     "timings.csv": {
-      "sha256": "c82fced70c1325a6f386973cbbb9bfe84927e0fdeb59ec6ad28bc513c47b012e"
+      "sha256": "d0bd2489fc54290b395e84f0f72ab3a02549b24d06b9051c591c1d12c8d06f40"
     },
     "results.md": {
-      "sha256": "f94f017d355b06196e6f8a743c3673cfc8464a08457dacd56932245fd65fefc4"
+      "sha256": "6d2d7cc1142d0af48c0372bc9fdb434f2a87343b7f6feb07200b9cf1ab0822cc"
     }
   },
-  "ctools_threads_note": "ctools commands ran without threads(); the thread policy resolved to 16 (automatic: usable CPUs, at most 16). Stata references used set processors 4, the license limit; fereg and feppml used their own default thread count."
+  "ctools_threads_note": "ctools commands ran without threads(); the thread policy resolved to 16 (automatic: usable CPUs, at most 16). Stata references used set processors 4, the license limit; fereg and feppml used their own default thread count.",
+  "command_runs": {
+    "joinby": {
+      "note": "joinby was added to the profile after the shared run and measured on its own (see docs/performance/README.md, single-command refresh); these values override the shared fields for this comparison.",
+      "date": "2026-11-26",
+      "cpu": "AMD Ryzen 9 9950X 16-Core Processor",
+      "os": "Windows 11 Pro 10.0.26200",
+      "stata": "StataNow/MP 19.5 for Windows (64-bit x86-64), revision 14 Oct 2026",
+      "stata_processors": 4,
+      "ctools_threads": 16,
+      "observations": [
+        1000000,
+        10000000,
+        25000000
+      ],
+      "variables": 20,
+      "workload": "joinby firm against a using file with two observations for each of the first half of the firms: every observation of those firms is paired with both, the other firms are left out, and the result has as many observations as the master.",
+      "repetitions": 2,
+      "repetition_note": "2 passes over the sizes, each a separate set of sessions that ran only this comparison; a published time is the smallest of the passes",
+      "git_head_context": "50acef6db1e7c9d08ee2d03670cc40d0de19b9b2",
+      "source_identity": "git archive of 50acef6db1e7c9d08ee2d03670cc40d0de19b9b2 plus the uncommitted cjoinby sources (src/cjoinby and its registration lines) and build/cjoinby.ado; the measured plugin and wrapper are identified by the hashes below",
+      "build_note": "Windows x86-64 OpenMP plugin built locally from that tree with MSYS2 MINGW64 gcc using the `make windows` flags; Stata loaded it through CTOOLS_TEST_PLUGIN_DIR, ahead of the repository's build/.",
+      "execution_note": "Each size ran in one batch Stata session: the test data was made once, then joinby and cjoinby ran in turn, each on a fresh copy of the data. The run did not wait for an idle machine: other processes (Stata sessions and compilations) used 529% of one logical processor on average (per session below, sampled every 5 s; percentages are of one logical processor).",
+      "checks": "after each command: the observation count, 23 variables, and every observation paired with an event of its firm",
+      "sessions": {
+        "jb1_1000000": {
+          "wall": 7.1,
+          "samples": 1,
+          "max_other_cpu_percent": 1466,
+          "mean_other_cpu_percent": 1466
+        },
+        "jb1_10000000": {
+          "wall": 59.9,
+          "samples": 11,
+          "max_other_cpu_percent": 1278,
+          "mean_other_cpu_percent": 759
+        },
+        "jb1_25000000": {
+          "wall": 151.3,
+          "samples": 30,
+          "max_other_cpu_percent": 1210,
+          "mean_other_cpu_percent": 409
+        },
+        "jb2_1000000": {
+          "wall": 4.5,
+          "samples": 0,
+          "max_other_cpu_percent": 0,
+          "mean_other_cpu_percent": 0
+        },
+        "jb2_10000000": {
+          "wall": 59.7,
+          "samples": 11,
+          "max_other_cpu_percent": 518,
+          "mean_other_cpu_percent": 358
+        },
+        "jb2_25000000": {
+          "wall": 168.8,
+          "samples": 33,
+          "max_other_cpu_percent": 1481,
+          "mean_other_cpu_percent": 589
+        }
+      },
+      "files": {
+        "measured-build/ctools_windows.plugin": {
+          "sha256": "1442b175b0d7fcbc91c61eccdd1f1bfb9844f4128c684542dd988853642e516d"
+        },
+        "measured-build/cjoinby.ado": {
+          "sha256": "35336bbddd79c259e5d6da2a7bf1e3126e0672cb473cfd4f11d9d21bf04f26e1",
+          "version_comments": [
+            "*! version 1.3.1 20261124 github.com/mdroste/stata-ctools",
+            "*! C-accelerated joinby: all pairwise combinations within groups (ctools)",
+            "*! original: Stata's joinby (joinby.ado 2.1.0, December 22, 2022)",
+            "*! original: see help cjoinby for details"
+          ]
+        },
+        "validation/performance/profiles.do": {
+          "sha256": "bd9027f37c758bd11b280ef2c0bcd5d50187047479c0302d659bba1f42ca95fd"
+        },
+        "generated-workload": {
+          "sha256": "da4a0ad8cc004ed1bb143ec4f79694173c3825e26d09294fd179effa1f72b8a1"
+        }
+      },
+      "reference_files": {
+        "C:/Program Files/StataNow19/ado/base/j/joinby.ado": {
+          "sha256": "0391746fa3f7af5af09806513dc2b44adcaed880cc79c83fa6092effde45433f",
+          "version_comments": [
+            "*! version 2.1.0  22dec2022"
+          ]
+        }
+      },
+      "completed_calls": 12,
+      "command_failures": 0,
+      "basic_check_failures": 0
+    }
+  }
 }

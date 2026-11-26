@@ -86,9 +86,14 @@ static void civ_drop_missing(const ST_double *v, ST_int i0, ST_int i1, ST_double
     }
 }
 
-/* dst[j] = src[rows[j]], j < N: the retained rows of one column, in order */
+/* dst[j] = src[rows[j]], j < N: the retained rows of one column, in order;
+   rows NULL: the first N rows as they are */
 static void civ_gather(ST_double *dst, const ST_double *src, const ST_int *rows, ST_int N)
 {
+    if (!rows) {
+        memcpy(dst, src, (size_t)N * sizeof(ST_double));
+        return;
+    }
     for (ST_int j = 0; j < N; j++) dst[j] = src[rows[j]];
 }
 
@@ -546,6 +551,12 @@ static ST_retcode do_iv_regression(void)
     ST_retcode iv_rc = 0;
     ST_int *cluster_ids = NULL, *cluster2_ids = NULL, *valid_mask = NULL, *singleton_mask = NULL;
     ST_int **fe_levels_c = NULL;
+    /* What the FE remap and singleton removal learn about the factors, for
+     * the steps after them (hdfe_sample.h) */
+    HDFE_FactorOrder fe_order[10];
+    HDFE_Singletons fe_sing;
+    memset(fe_order, 0, sizeof(fe_order));
+    memset(&fe_sing, 0, sizeof(fe_sing));
     ST_int *level_max = NULL, *is_partial = NULL, *is_collinear_x = NULL, *test_idx = NULL, *ts_int = NULL;
     ST_int *fe_redundant = NULL, *fe_nested = NULL, *fe_exact = NULL;
     ST_double *y_c = NULL, *X_endog_c = NULL, *X_exog_c = NULL, *Z_c = NULL, *weights_c = NULL;
@@ -840,9 +851,10 @@ static ST_retcode do_iv_regression(void)
     }
     {
         /* The valid rows of each FE variable (compacted in parallel row
-         * blocks when some rows are missing) to levels 1..L, remapped in
-         * parallel; hdfe_build_factors renumbers them after singleton
-         * removal. level_max[g] keeps L, a bound on the levels left then. */
+         * blocks when some rows are missing) to levels 1..L in order of
+         * first appearance, remapped in parallel, with the rows alone in a
+         * level noted for singleton removal. level_max[g] keeps L, a bound
+         * on the levels left then. */
         const int all_valid = N_valid == N_total;
         const int B = ctools_hdfe_row_blocks(N_total);
         double *fe_compact = all_valid ? NULL : (double *)malloc((size_t)N_valid * sizeof(double));
@@ -879,14 +891,17 @@ static ST_retcode do_iv_regression(void)
                         if (valid_mask[ii]) fe_compact[idx++] = fe_src[ii];
                 }
             }
-            if (hdfe_remap_levels(all_valid ? fe_src : fe_compact, N_valid, fe_levels_c[g],
-                                  &level_max[g]) != 0) {
+            const int remap_rc = hdfe_remap_levels_ordered(all_valid ? fe_src : fe_compact, N_valid,
+                                                           fe_levels_c[g], &level_max[g],
+                                                           &fe_order[g].rows);
+            if (remap_rc < 0) {
                 SF_error("civreghdfe: FE level remapping failed\n");
                 free(fe_compact);
                 free(block_start);
                 iv_rc = 920;
                 goto iv_cleanup;
             }
+            fe_order[g].ordered = remap_rc == 0;
         }
         free(fe_compact);
         free(block_start);
@@ -896,13 +911,9 @@ static ST_retcode do_iv_regression(void)
     double t_missing = ctools_timer_seconds() - t_missing_start;
     double t_singleton_start = ctools_timer_seconds();
 
-    /* Step 2: Singleton detection on compacted FE levels */
-    singleton_mask = (ST_int *)malloc((size_t)N_valid * sizeof(ST_int));
-    if (!singleton_mask) {
-        SF_error("civreghdfe: Memory allocation failed for singleton mask\n");
-        iv_rc = 920;
-        goto iv_cleanup;
-    }
+    /* Step 2: Singleton detection on compacted FE levels, from the rows the
+     * remap found alone in a level. fe_sing.keep holds the flags of the
+     * valid rows (NULL when none is dropped) until the factors are built */
     /* ivreghdfe selects the sample with reghdfe: fweights drop only levels
      * whose total fweight is 1; aweights and pweights use the unweighted rule. */
     /* the fweights of the valid rows: the loaded column itself when every
@@ -926,11 +937,13 @@ static ST_retcode do_iv_regression(void)
     SF_scal_use("__civreghdfe_keepsingletons", &keep_singletons);
     ST_int num_singletons_total;
     if (keep_singletons == 1) {
-        for (ST_int ii = 0; ii < N_valid; ii++) singleton_mask[ii] = 1;
         num_singletons_total = 0;
+    } else if ((has_weights && weight_type == 2 && !fw_rows) ||
+               hdfe_drop_singletons(&fe_sing, fe_levels_c, level_max, fe_order, G, N_valid, fw_rows,
+                                    verbose)) {
+        num_singletons_total = -1;
     } else {
-        num_singletons_total = (has_weights && weight_type == 2 && !fw_rows) ? -1 :
-            ctools_remove_singletons(fe_levels_c, G, N_valid, singleton_mask, fw_rows, verbose);
+        num_singletons_total = fe_sing.num_dropped;
     }
     free(fw_c);
     if (num_singletons_total >= 0 &&
@@ -973,17 +986,24 @@ static ST_retcode do_iv_regression(void)
      * column, read directly from filtered.data, one column per thread. */
     ST_double sum_w_c = 0.0;  /* the total of the retained weights, in row order */
     {
-        ST_int *rows = (ST_int *)ctools_safe_malloc2((size_t)(N > 0 ? N : 1), sizeof(ST_int));
-        if (!rows) {
+        /* rows: the loaded rows retained, or NULL when that is every one of
+         * them (no row missing, none a singleton): the columns are then
+         * copied as they are */
+        const int all_rows = N == N_total;
+        ST_int *rows = all_rows ? NULL
+                                : (ST_int *)ctools_safe_malloc2((size_t)(N > 0 ? N : 1), sizeof(ST_int));
+        if (!all_rows && !rows) {
             SF_error("civreghdfe: Memory allocation failed for compacted arrays\n");
             iv_rc = 920;
             goto iv_cleanup;
         }
-        ST_int valid_idx = 0;  /* Index into singleton_mask (N_valid-sized) */
+        const ST_int *kept_valid = fe_sing.keep;  /* N_valid flags, NULL = all kept */
+        ST_int valid_idx = 0;  /* Index into kept_valid */
         ST_int out_idx = 0;    /* Index into final arrays (N-sized) */
-        for (ST_int ii = 0; ii < N_total; ii++) {
+        for (ST_int ii = 0; ii < N_total && rows; ii++) {
             if (!valid_mask[ii]) continue;
-            if (singleton_mask[valid_idx++]) rows[out_idx++] = ii;
+            if (!kept_valid || kept_valid[valid_idx]) rows[out_idx++] = ii;
+            valid_idx++;
         }
         /* A wrapper that sets __civreghdfe_sample_clear takes its estimation
          * sample from its sample marker (the last plugin variable, 1 on every
@@ -1007,10 +1027,15 @@ static ST_retcode do_iv_regression(void)
                 }
             }
         }
-        for (ST_int j = 0; j < N; j++) {
-            filtered.obs_map[j] = filtered.obs_map[rows[j]];
-            if (has_cluster) cluster_ids_c[j] = cluster_ids[rows[j]];
-            if (has_cluster2) cluster2_ids_c[j] = cluster2_ids[rows[j]];
+        if (rows) {
+            for (ST_int j = 0; j < N; j++) {
+                filtered.obs_map[j] = filtered.obs_map[rows[j]];
+                if (has_cluster) cluster_ids_c[j] = cluster_ids[rows[j]];
+                if (has_cluster2) cluster2_ids_c[j] = cluster2_ids[rows[j]];
+            }
+        } else {
+            if (has_cluster) memcpy(cluster_ids_c, cluster_ids, (size_t)N * sizeof(ST_int));
+            if (has_cluster2) memcpy(cluster2_ids_c, cluster2_ids, (size_t)N * sizeof(ST_int));
         }
         /* y, X_endog, X_exog, excluded instruments, tsset columns, weights
            (whose total, in row order, the same task adds up) */
@@ -1063,16 +1088,8 @@ static ST_retcode do_iv_regression(void)
         if (K_exog > 0) memcpy(Z_c, X_exog_c, (size_t)N * K_exog * sizeof(ST_double));
     }
 
-    /* Compact FE levels in place using singleton_mask. The write index never
-     * exceeds the read index, so this cannot fail after the data were compacted. */
-    if (num_singletons_total > 0) {
-        for (ST_int g = 0; g < G; g++) {
-            ctools_compact_array_int(fe_levels_c[g], fe_levels_c[g], singleton_mask, N_valid, N);
-        }
-    }
-
-    free(singleton_mask);
-    singleton_mask = NULL;
+    /* The FE levels keep their valid rows until the factors are built, which
+     * shifts them over the rows dropped here */
 
     /* Weight normalization:
        - aw (type=1) and pw (type=3): normalize weights so sum(w) = N
@@ -1135,13 +1152,37 @@ static ST_retcode do_iv_regression(void)
     /* Factors: the CG solver expects levels 1..num_levels, so the levels
        left after singleton removal are renumbered and counted (level_max
        holds each factor's level count before the removal) */
-    ST_retcode factor_rc = hdfe_build_factors(state, G, fe_levels_c, level_max, N, NULL, N,
-                                              has_weights ? weights_c : NULL, 0);
+    /* The levels are in order of first appearance among the valid rows: with
+       no singleton they are the factors' as they are, with a few they are
+       shifted in place. The rows per level are counted here, and the
+       weights of the estimation rows (already normalized) summed per level
+       in row order */
+    HDFE_LoadedFactor fe_loaded[10];
+    memset(fe_loaded, 0, sizeof(fe_loaded));
+    for (ST_int g = 0; g < G; g++) {
+        fe_loaded[g].levels = fe_levels_c[g];
+        fe_loaded[g].num_levels = level_max[g];
+        fe_loaded[g].num_obs = N_valid;
+    }
+    ST_int counts_pending = 0;
+    ST_retcode factor_rc = hdfe_build_factors_ordered(state, G, fe_loaded, fe_order, &fe_sing, N_valid,
+                                                      NULL, has_weights, &counts_pending);
+    /* a level array that became a factor's is no longer this function's */
+    for (ST_int g = 0; g < G; g++) fe_levels_c[g] = fe_loaded[g].levels;
+    if (!factor_rc) {
+        if (counts_pending) {
+            hdfe_count_factors(state, fe_order, N, NULL, has_weights ? weights_c : NULL);
+        } else if (has_weights) {
+            for (ST_int g = 0; g < G; g++) hdfe_count_weights(state, g, N, NULL, weights_c);
+        }
+    }
     free(level_max);
     level_max = NULL;
     for (ST_int g = 0; g < G; g++) free(fe_levels_c[g]);
     free(fe_levels_c);
     fe_levels_c = NULL;
+    hdfe_factor_order_free(fe_order, 10);
+    hdfe_singletons_free(&fe_sing);
     if (factor_rc) {
         SF_error("civreghdfe: Memory allocation failed for FE factors\n");
         iv_rc = factor_rc;
@@ -2263,6 +2304,16 @@ iv_cleanup:
         for (ST_int g = 0; g < G; g++) ctools_release_later(fe_levels_c[g]);
         ctools_release_later(fe_levels_c);
     }
+    for (ST_int g = 0; g < 10; g++) {
+        ctools_release_later(fe_order[g].rows.first_row);
+        ctools_release_later(fe_order[g].rows.single_rows);
+    }
+    ctools_release_later(fe_sing.keep); ctools_release_later(fe_sing.dropped);
+    for (ST_int g = 0; fe_sing.affected && g < fe_sing.G; g++) {
+        ctools_release_later(fe_sing.affected[g].level);
+        ctools_release_later(fe_sing.affected[g].left);
+    }
+    ctools_release_later(fe_sing.affected);
     ctools_release_later(level_max); ctools_release_later(is_partial);
     ctools_release_later(is_collinear_x); ctools_release_later(test_idx); ctools_release_later(ts_int);
     ctools_release_later(fe_redundant); ctools_release_later(fe_nested); ctools_release_later(fe_exact);

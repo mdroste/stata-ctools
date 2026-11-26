@@ -7,6 +7,7 @@
  */
 
 #include "cppmlhdfe_separation.h"
+#include <stdint.h>
 #include <string.h>
 
 ST_int ppml_select_fe_sample(const ST_double *y, ST_int *const *levels,
@@ -15,6 +16,88 @@ ST_int ppml_select_fe_sample(const ST_double *y, ST_int *const *levels,
 {
     return ppml_select_fe_sample_ex(y, levels, num_levels, G, N, mask,
         num_singletons, num_separated, NULL, 0, 1);
+}
+
+/* Most bytes of per-block marks ppml_fe_sample_is_whole() may take */
+#define PPML_WHOLE_MARK_BYTES ((size_t)64 << 20)
+
+/*
+ * One pass instead of the selection's counts when it finds nothing to do:
+ * each row block marks, in bit sets of its own, the levels in which it has a
+ * positive outcome; a level that no block marked has none.
+ */
+int ppml_fe_sample_is_whole(const ST_double *y, ST_int *const *levels,
+    const ST_int *num_levels, const ST_int *num_single, ST_int G, ST_int N,
+    const ST_int *slope_only, ST_int keep_singletons, ST_int check_separation)
+{
+    ST_int g;
+    if (G <= 0 || N <= 0) return 0;
+    if (!keep_singletons) {
+        if (!num_single) return 0;
+        for (g = 0; g < G; g++)
+            if (num_single[g] != 0) return 0;  /* a single row, or not known */
+    }
+    if (!check_separation) return 1;
+
+    /* Bit l of factor g's words: level l (1-based) has a positive outcome */
+    size_t *first = (size_t *)calloc((size_t)G + 1, sizeof(size_t));
+    if (!first) return 0;
+    for (g = 0; g < G; g++) {
+        const int checked = !(slope_only && slope_only[g]);
+        if (num_levels[g] < 1) {
+            free(first);
+            return 0;
+        }
+        first[g + 1] = first[g] + (checked ? ((size_t)num_levels[g] + 64) / 64 : 0);
+    }
+    const size_t words = first[G];
+    const int B = ctools_hdfe_row_blocks(N);
+    int whole = 0, bad = 0, b;
+    uint64_t *marks = NULL;
+    if (words == 0) {
+        whole = 1;
+        goto done;
+    }
+    if (words > PPML_WHOLE_MARK_BYTES / 8 / (size_t)B) goto done;
+    /* a block's marks at least two cache lines from the next block's */
+    const size_t stride = words < 16 ? 16 : words;
+    marks = (uint64_t *)calloc((size_t)B * stride, sizeof(uint64_t));
+    if (!marks) goto done;
+
+    #pragma omp parallel for schedule(static) reduction(| : bad) if (B > 1)
+    for (b = 0; b < B; b++) {
+        uint64_t *m = marks + (size_t)b * stride;
+        ST_int i0, i1;
+        ctools_hdfe_block_range(N, B, b, &i0, &i1);
+        for (ST_int i = i0; i < i1; i++) {
+            if (!(y[i] > 0)) continue;
+            for (ST_int h = 0; h < G; h++) {
+                if (first[h + 1] == first[h]) continue;
+                const ST_int level = levels[h][i];
+                if (level < 1 || level > num_levels[h]) {
+                    bad = 1;
+                    continue;
+                }
+                m[first[h] + ((size_t)level >> 6)] |= (uint64_t)1 << (level & 63);
+            }
+        }
+    }
+    if (bad) goto done;
+    whole = 1;
+    for (g = 0; g < G && whole; g++) {
+        ST_int marked = 0;
+        for (size_t k = first[g]; k < first[g + 1]; k++) {
+            uint64_t any = 0;
+            for (b = 0; b < B; b++) any |= marks[(size_t)b * stride + k];
+            marked += (ST_int)__builtin_popcountll(any);
+        }
+        if (first[g + 1] > first[g] && marked != num_levels[g]) whole = 0;
+    }
+
+done:
+    free(marks);
+    free(first);
+    return whole;
 }
 
 /* Rows a block removed in the current round, in row order */

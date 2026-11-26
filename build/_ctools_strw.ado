@@ -1,4 +1,4 @@
-*! version 1.3.1 20261124 github.com/mdroste/stata-ctools
+*! version 1.3.2 20261124 github.com/mdroste/stata-ctools
 *! _ctools_strw — set string width metadata for ctools flat buffer optimization
 *!
 *! Usage:  _ctools_strw varlist

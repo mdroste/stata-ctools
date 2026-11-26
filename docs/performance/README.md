@@ -102,6 +102,23 @@ cell and their speedups in the same order in the last cell. The update changes
 only the line of the named command and keeps a footnote marker that follows
 the speedup.
 
+## Compare pairwise joins
+
+The README comparison runs `joinby firm` against `cjoinby` on the same
+20-variable datasets at 1M, 10M, and 25M rows. The using file holds two
+observations for each of the first half of the firms, so the join pairs every
+observation of those firms with both and leaves out the other firms; the
+result has as many observations as the master and three more variables. The
+observation count, the 23 variables and the pairing of every observation with
+an event of its firm are checked outside the timed region.
+
+To run only this pair:
+
+```sh
+python3 validation/bench.py do profile_readme --output temp/timings-joinby temp/timings-joinby "1000000 10000000 25000000" 4 joinby
+python3 validation/bench.py summarize-profile temp/timings-joinby --pairs joinby --update-readme README.md
+```
+
 ## Compare fixed-effects regressions
 
 Download the additional data, then run:

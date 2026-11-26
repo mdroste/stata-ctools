@@ -137,6 +137,78 @@ void hdfe_crosstab_free(hdfe_crosstab *C);
 ST_int *hdfe_coef_chunks(const ST_int *rowptr, const ST_int *rows, ST_int n, int nchunks);
 
 /* ------------------------------------------------------------------------
+ * A cross-tabulation kept while the weights change (hdfe_coef_plan)
+ *
+ * The cells of two effects depend on their levels alone; only the cell
+ * weights follow the row weights. hdfe_crossplan_build() finds the cells
+ * once and records where every row goes, and hdfe_crossplan_values() then
+ * gives, for any row weights, the cross-tabulation hdfe_crosstab_build()
+ * would return for them: the same cells in the same order, every cell's
+ * weight the sum of its rows' in the same order.
+ * ---------------------------------------------------------------------- */
+
+typedef struct
+{
+    hdfe_crosstab C;   /* a view: its arrays are the ones below or the caller's */
+    ST_int N;
+    ST_int *grouprow;  /* nrow + 1: the rows of each level of the row effect, grouped */
+    ST_int *cellptr;   /* nrow + 1 when cells repeat (then C.rowptr), else NULL */
+    ST_int *order;     /* N: the row at each grouped position; NULL: rows arrive grouped */
+    ST_int *cell;      /* N: the cell of each grouped position; NULL: one row per cell */
+    ST_int *col;       /* storage behind C.col, NULL when it borrows the level array */
+    ST_double *val;    /* storage behind C.val, NULL when it borrows the weights */
+    ST_int *chunk;     /* nchunk + 1: levels of the row effect, about equal rows each */
+    int nchunk;
+} hdfe_crossplan;
+
+/* Returns 0, 198 or 920; P is freed on failure. col_levels must outlive P. */
+ST_retcode hdfe_crossplan_build(hdfe_crossplan *P, ST_int N, const ST_int *row_levels,
+                                ST_int nrow, const ST_int *col_levels, ST_int ncol);
+/* Sets P->C.val for the row weights w (N, not NULL; borrowed when the rows
+ * arrive grouped and no cell repeats, so w must outlive the use of P->C) */
+void hdfe_crossplan_values(hdfe_crossplan *P, const ST_double *w);
+void hdfe_crossplan_free(hdfe_crossplan *P);
+
+/* A buffer that grows to the largest size asked of it; contents are not kept */
+typedef struct
+{
+    void *p;
+    size_t bytes;
+} hdfe_coef_buf;
+static inline void *hdfe_coef_buf_get(hdfe_coef_buf *b, size_t bytes)
+{
+    if (!b->p || bytes > b->bytes)
+    {
+        free(b->p);
+        b->p = malloc(bytes ? bytes : 1);
+        b->bytes = b->p ? bytes : 0;
+    }
+    return b->p;
+}
+static inline void hdfe_coef_buf_free(hdfe_coef_buf *b)
+{
+    free(b->p);
+    b->p = NULL;
+    b->bytes = 0;
+}
+
+/* What hdfe_coef_partial_out_plan() keeps between calls: the factors it was
+ * built for, and the structure of the two-effect or the multi-effect solver
+ * with its release function. */
+struct hdfe_coef_plan
+{
+    ST_int N;
+    int G;
+    const ST_int *levels[HDFE_COEF_MAX_EFFECTS];
+    ST_int nlev[HDFE_COEF_MAX_EFFECTS];
+    void *kept;
+    void (*kept_free)(void *kept);
+};
+/* Records S's factors as the ones plan->kept describes */
+void hdfe_coef_plan_bind(hdfe_coef_plan *plan, const HDFE_State *S, void *kept,
+                         void (*kept_free)(void *kept));
+
+/* ------------------------------------------------------------------------
  * Passes over the data rows
  *
  * B is the eliminated effect; the coefficients of the nk kept effects are
@@ -173,8 +245,12 @@ typedef struct
     ST_double *tbuf;  /* nrc * nB * K when private_b */
     ST_double *gbuf;  /* nrc * m * K, or (nB + m) * K column-major when nrc == 0 */
     ST_double *ssbuf; /* nrc * 2 * K */
+    size_t tbytes, gbytes, ssbytes; /* what the three buffers hold */
 } hdfe_coef_rowplan;
 
+/* R is all zeros before its first use. Initializing it again (for another K,
+ * on the same rows) keeps the buffers that are large enough; on failure
+ * (920) R is freed. */
 ST_retcode hdfe_coef_rowplan_init(hdfe_coef_rowplan *R, const hdfe_coef_rows *D, int K);
 void hdfe_coef_rowplan_free(hdfe_coef_rowplan *R);
 
@@ -322,7 +398,9 @@ ST_int hdfe_lap_sample_star(hdfe_lap_leaf *cs, ST_double *cum, ST_int len, uint6
  * Three or more effects (hdfe_coef_multi.c)
  * ---------------------------------------------------------------------- */
 
-HDFE_SolveResult hdfe_coef_multi_partial_out(const HDFE_State *S, ST_double *data, ST_int N,
-                                             ST_int K, hdfe_coef_method method);
+/* plan: NULL, or the plan to keep the structure in (S has weights then) */
+HDFE_SolveResult hdfe_coef_multi_partial_out(const HDFE_State *S, hdfe_coef_plan *plan,
+                                             ST_double *data, ST_int N, ST_int K,
+                                             hdfe_coef_method method);
 
 #endif /* CTOOLS_HDFE_COEF_INTERNAL_H */

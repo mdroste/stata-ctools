@@ -332,10 +332,12 @@ assert "`r(version)'"=="`version'" & "`r(plugin_version)'"=="`plugin'" & "`r(plu
 coverage_data, reference(ctools) candidate(ctools, verbose) name("ctools verbose preserves data")
 test_pass "ctools version and environment identity"
 
-/* Exercise update dispatch without network or installation. Verify that the
-   local net stub intercepts dispatch before invoking the update branch. */
-tempfile update_copy
+/* Exercise update dispatch without network or installation. A copy of ctools
+   reads GitHub's release reply from a local file and calls a net stub; PLUS
+   points at an empty folder so no installed package record is touched. */
+tempfile update_copy release_reply update_plus
 tempname source_file target_file
+local release_api "https://api.github.com/repos/mdroste/stata-ctools/releases/latest"
 file open `source_file' using "build/ctools.ado", read text
 file open `target_file' using "`update_copy'", write text replace
 file read `source_file' line
@@ -349,12 +351,16 @@ while r(eof)==0 {
         local line : subinstr local line "net install ctools," "coverage_net install ctools,"
         local ++substitutions
     }
+    if strpos(`"`macval(line)'"',`"local __api "`release_api'""') {
+        local line : subinstr local line "`release_api'" "`release_reply'"
+        local ++substitutions
+    }
     file write `target_file' `"`macval(line)'"' _n
     file read `source_file' line
 }
 file close `source_file'
 file close `target_file'
-assert `substitutions'==2
+assert `substitutions'==3
 do "`update_copy'"
 program define coverage_net
     if `"`0'"'=="__coverage_probe" {
@@ -362,14 +368,30 @@ program define coverage_net
         exit
     }
     assert strpos(`"`0'"',"install ctools,")==1
-    assert strpos(`"`0'"',"https://raw.githubusercontent.com/mdroste/stata-ctools/main/build")>0
+    assert strpos(`"`0'"',"https://raw.githubusercontent.com/mdroste/stata-ctools/$COVERAGE_NET_TAG/build")>0
     assert strpos(`"`0'"',"replace")>0
     global COVERAGE_NET_CALLED 1
     exit $COVERAGE_NET_RC
 end
+* The reply names the release after an escaped "tag_name" in the notes, which
+* must not be read as the release's own tag. No tag writes a reply without one.
+program define coverage_release
+    args tag
+    tempname fh
+    file open `fh' using "$COVERAGE_RELEASE_REPLY", write text replace
+    if "`tag'"=="" file write `fh' `"{"message":"Not Found"}"' _n
+    else file write `fh' `"{"body":"not \"tag_name\": \"v0.0.1\"","tag_name":"`tag'"}"' _n
+    file close `fh'
+end
+global COVERAGE_RELEASE_REPLY "`release_reply'"
+local plus_saved "`c(sysdir_plus)'"
+capture mkdir "`update_plus'"
+sysdir set PLUS "`update_plus'"
 global COVERAGE_NET_PROBED 0
 coverage_net __coverage_probe
 assert $COVERAGE_NET_PROBED==1
+global COVERAGE_NET_TAG "v9.9.9"
+coverage_release v9.9.9
 foreach rc in 0 631 198 {
     global COVERAGE_NET_CALLED 0
     global COVERAGE_NET_RC `rc'
@@ -377,10 +399,37 @@ foreach rc in 0 631 198 {
     capture coverage_ctools, update
     assert _rc==`rc'
     assert $COVERAGE_NET_CALLED==1
+    if `rc'==0 assert r(updated)==1 & "`r(latest_version)'"=="9.9.9" & "`r(version)'"=="`version'"
     test_pass "ctools update dispatch mocked status `rc'"
 }
-program drop coverage_net coverage_ctools
-macro drop COVERAGE_NET_PROBED COVERAGE_NET_CALLED COVERAGE_NET_RC
+global COVERAGE_NET_RC 0
+global COVERAGE_NET_TAG "v`version'"
+coverage_release v`version'
+global COVERAGE_NET_CALLED 0
+coverage_ctools, update
+assert $COVERAGE_NET_CALLED==0 & r(updated)==0 & "`r(latest_version)'"=="`version'"
+test_pass "ctools update installs nothing when up to date"
+coverage_ctools, update force
+assert $COVERAGE_NET_CALLED==1 & r(updated)==1
+test_pass "ctools update force reinstalls the latest release"
+global COVERAGE_NET_TAG "v0.0.1"
+coverage_release v0.0.1
+global COVERAGE_NET_CALLED 0
+coverage_ctools, update
+assert $COVERAGE_NET_CALLED==0 & r(updated)==0 & "`r(latest_version)'"=="0.0.1"
+test_pass "ctools update keeps a newer installed version"
+coverage_release
+capture coverage_ctools, update
+assert _rc==672 & $COVERAGE_NET_CALLED==0
+capture erase "`release_reply'"
+capture coverage_ctools, update
+assert _rc!=0 & $COVERAGE_NET_CALLED==0
+capture coverage_ctools, force
+assert _rc==198 & $COVERAGE_NET_CALLED==0
+test_pass "ctools update stops without a release in GitHub's reply"
+sysdir set PLUS "`plus_saved'"
+program drop coverage_net coverage_ctools coverage_release
+macro drop COVERAGE_NET_PROBED COVERAGE_NET_CALLED COVERAGE_NET_RC COVERAGE_NET_TAG COVERAGE_RELEASE_REPLY
 
 /* No-return is a timing extension: it must not publish a new estimation result. */
 coverage_fixture 1

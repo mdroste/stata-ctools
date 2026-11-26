@@ -50,14 +50,18 @@ These commands are pinned to official Stata commands as shipped with StataNow/MP
 | [`cdestring`](#cdestring) | `destring` | `destring.ado` 2.4.4 | September 15, 2016 | Originally written by Nicholas J. Cox |
 | [`csort`](#csort) | `sort` | Built in |  |  |
 | [`cmerge`](#cmerge) | `merge` | `merge.ado` 3.2.13 | September 12, 2023 |  |
+| [`cjoinby`](#cjoinby) | `joinby` | `joinby.ado` 2.1.0 | December 22, 2022 |  |
+| [`creshape`](#creshape) | `reshape` | `reshape.ado` 4.7.1 | October 4, 2023 |  |
 | [`cimport`](#cimport) | `import delimited` | `import_delimited.ado` 1.3.5 | April 18, 2022 |  |
 | [`cimport`](#cimport) | `import excel` | `import_excel.ado` 1.0.15 | September 20, 2019 |  |
 | [`cimport`](#cimport) | other `import` commands | import.ado 1.1.5 (14oct2025); import_parquet.ado 1.0.0 (14oct2025); import_dbase.ado 1.0.7 (01sep2019); import_sas.ado 1.0.5 (01sep2019); import_spss.ado 1.0.4 (01sep2019); import_sasxport8.ado 1.0.4 (01sep2019); import_shp.ado 1.0.8 (01jan2019) |  |  |
 | [`cexport`](#cexport) | `export delimited` | `export_delimited.ado` 1.0.9 | June 13, 2020 |  |
 | [`cexport`](#cexport) | `export excel` | `export_excel.ado` 1.1.1 | July 30, 2018 |  |
 | [`cexport`](#cexport) | other `export` commands | export.ado 1.0.13 (11jul2022); export_dbase.ado 1.0.9 (02jul2022); export_spss.ado 1.0.1 (05sep2022); export_sasxport8.ado 1.0.5 (01jul2022); export_shp.ado 1.0.6 (14mar2017) |  |  |
+| [`ccollapse`](#ccollapse) | `collapse` | `collapse.ado` 6.2.2 | June 28, 2020 |  |
 | [`csample`](#csample) | `sample` | `sample.ado` 2.4.0 | January 20, 2021 |  |
 | [`cbsample`](#cbsample) | `bsample` | `bsample.ado` 2.0.8 | January 17, 2025 |  |
+| [`cegen`](#cegen) | `egen` | `egen.ado` 3.4.2 | April 13, 2020 |  |
 | [`cencode`](#cencode) | `encode` | Built in |  |  |
 | [`cdecode`](#cdecode) | `decode` | Built in |  |  |
 | [`cqreg`](#cqreg) | `qreg` | `qreg.ado` 4.4.2 | May 8, 2020 |  |
@@ -403,6 +407,40 @@ References:
 | **Shipped with** | StataNow 19.5 (revision 14 Oct 2026) |
 | **SHA-256** | `0f70fa2a4389d8b6956733e0a06e4e4f82d7a9709bee1d4f2c460dae42aa9ac1` (`merge.ado`) |
 
+### `cjoinby`
+
+`cjoinby` reimplements `joinby`, an official Stata command. Its syntax, options, `_merge` variable, value label, and messages follow `joinby`.
+
+|  |  |
+| --- | --- |
+| **Command** | `joinby` (official Stata) |
+| **Authors** | StataCorp LLC |
+| **Version** | `joinby.ado` 2.1.0 |
+| **Date** | December 22, 2022 |
+| **Header line** | `*! version 2.1.0  22dec2022` |
+| **Shipped with** | StataNow 19.5 (revision 14 Oct 2026) |
+| **SHA-256** | `0391746fa3f7af5af09806513dc2b44adcaed880cc79c83fa6092effde45433f` (`joinby.ado`) |
+
+### `creshape`
+
+`creshape` reimplements `reshape`, an official Stata command. Its syntax, options, messages, summary table, and the characteristics it records with the data follow `reshape`. The subcommands that only declare, show or clear the settings (`creshape i`, `j`, `xij`, `xi`, `query`, `clear`), and `creshape error`, are carried out by `reshape` itself.
+
+|  |  |
+| --- | --- |
+| **Command** | `reshape` (official Stata) |
+| **Authors** | StataCorp LLC |
+| **Version** | `reshape.ado` 4.7.1 |
+| **Date** | October 4, 2023 |
+| **Header line** | `*! version 4.7.1  04oct2023` |
+| **Shipped with** | StataNow 19.5 (revision 14 Oct 2026) |
+| **SHA-256** | `3b23ebc000365d5a344b7f21209ccad82c693dacef46b0b0009c81d13d42e244` (`reshape.ado`) |
+
+The Stata manual acknowledges that this version of `reshape` was based in part on the work of Jeroen Weesie of Utrecht University (see **[D] reshape**).
+
+References:
+
+- Weesie, J. 1997. dm48: An enhancement of reshape. *Stata Technical Bulletin* 38: 2-4. Reprinted in *Stata Technical Bulletin Reprints*, vol. 7, pp. 40-43. College Station, TX: Stata Press.
+
 ### `cimport`
 
 `cimport` reimplements Stata's official `import` commands: `import delimited`, `import excel`, `import parquet`, `import dbase`, `import sas`, `import spss`, `import sasxport5`, `import sasxport8`, and `import shp`.
@@ -465,6 +503,22 @@ References:
 | **Versions** | export.ado 1.0.13 (11jul2022); export_dbase.ado 1.0.9 (02jul2022); export_spss.ado 1.0.1 (05sep2022); export_sasxport8.ado 1.0.5 (01jul2022); export_shp.ado 1.0.6 (14mar2017) |
 | **Shipped with** | StataNow 19.5 (revision 14 Oct 2026) |
 
+### `ccollapse`
+
+`ccollapse` reimplements `collapse`, an official Stata command. Its syntax, statistics, weights, storage types, labels, messages, and return codes follow `collapse`.
+
+|  |  |
+| --- | --- |
+| **Command** | `collapse` (official Stata) |
+| **Authors** | StataCorp LLC |
+| **Version** | `collapse.ado` 6.2.2 |
+| **Date** | June 28, 2020 |
+| **Header line** | `*! version 6.2.2  28jun2020` |
+| **Shipped with** | StataNow 19.5 (revision 14 Oct 2026) |
+| **SHA-256** | `365230d090ceffbff31525322c070dfe95658f7274731163b6cb34a2d99b6ecd` (`collapse.ado`) |
+
+In this Stata release `collapse.ado` passes its arguments to `collapse_17.ado` (version 1.1.0, August 17, 2022), which computes the statistics with functions built into Stata. `ccollapse` follows the results of that implementation. The definitions of the percentiles are those of `summarize, detail` and `_pctile`.
+
 ### `csample`
 
 `csample` reimplements `sample`, an official Stata command.
@@ -492,6 +546,29 @@ References:
 | **Header line** | `*! version 2.0.8  17jan2025` |
 | **Shipped with** | StataNow 19.5 (revision 14 Oct 2026) |
 | **SHA-256** | `9acab77180a9dc177fc965f6eca63cd58fce099cfe3ae5f793403eb45bc8aca1` (`bsample.ado`) |
+
+### `cegen`
+
+`cegen` reimplements `egen`, an official Stata command, and the `egen` functions that ship with Stata. Its syntax, functions, options, storage types, labels, and messages follow `egen`. The `threads()` and `verbose` options are additions in ctools.
+
+|  |  |
+| --- | --- |
+| **Command** | `egen` (official Stata) |
+| **Authors** | StataCorp LLC |
+| **Version** | `egen.ado` 3.4.2 |
+| **Date** | April 13, 2020 |
+| **Header line** | `*! version 3.4.2  13apr2020` |
+| **Shipped with** | StataNow 19.5 (revision 14 Oct 2026) |
+| **SHA-256** | `1aa7183ff63798fa6022a3d9ac1ec8f2854a6fb952fd72a4b04731a74c32d8dd` (`egen.ado`) |
+
+Several `egen` functions began as contributions by Stata users, and their files in Stata say so: `anyvalue()`, `mad()`, and `mdev()` are based on programs by Nicholas J. Cox (*Stata Technical Bulletin* 50, insert dm70), and `mtr()` is an update of a program by Timothy J. Schmidt (*Stata Technical Bulletin* 22, insert sss1.1). The Acknowledgments of [D] egen in the Stata manuals also credit David Clayton and Michael Hills with `cut()` and Nicholas J. Cox with many of the other functions.
+
+`cegen` does not copy the tax tables of `mtr()` and does not reimplement functions that ship outside Stata, such as those of `egenmore`: it passes these calls to `egen` itself.
+
+References:
+
+- Cox, N. J. 1999. dm70: Extensions to generate, extended. *Stata Technical Bulletin* 50: 9-17.
+- Schmidt, T. J. 1994. sss1.1: Updated U.S. marginal income tax rate function. *Stata Technical Bulletin* 22: 29.
 
 ### `cencode`
 

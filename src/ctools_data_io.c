@@ -180,15 +180,23 @@ int ctools_io_load_single_variable(stata_variable *var, int var_idx, size_t obs1
 
         /* Cache SPI function pointer — avoid reloading _stata_ per iteration */
         ST_IIIDp vdata_fn = IO_VDATA_FN;
+        /* Each value is compared with the missing values as it arrives
+         * (stata_variable.missing_state) */
+        const double missing = SV_missval;
+        int any_missing = 0;
         for (i = 0; i + 4 <= nobs; i += 4) {
             { int io_rc = vdata_fn((ST_int)var_idx, (ST_int)(i + 0 + obs1), &dbl_ptr[i + 0]); if (io_rc) return ctools_spi_status(io_rc, STATA_ERR_STATA_READ); }
             { int io_rc = vdata_fn((ST_int)var_idx, (ST_int)(i + 1 + obs1), &dbl_ptr[i + 1]); if (io_rc) return ctools_spi_status(io_rc, STATA_ERR_STATA_READ); }
             { int io_rc = vdata_fn((ST_int)var_idx, (ST_int)(i + 2 + obs1), &dbl_ptr[i + 2]); if (io_rc) return ctools_spi_status(io_rc, STATA_ERR_STATA_READ); }
             { int io_rc = vdata_fn((ST_int)var_idx, (ST_int)(i + 3 + obs1), &dbl_ptr[i + 3]); if (io_rc) return ctools_spi_status(io_rc, STATA_ERR_STATA_READ); }
+            any_missing |= !(dbl_ptr[i] < missing) | !(dbl_ptr[i + 1] < missing) |
+                           !(dbl_ptr[i + 2] < missing) | !(dbl_ptr[i + 3] < missing);
         }
         for (; i < nobs; i++) {
             { int io_rc = vdata_fn((ST_int)var_idx, (ST_int)(i + 0 + obs1), &dbl_ptr[i + 0]); if (io_rc) return ctools_spi_status(io_rc, STATA_ERR_STATA_READ); }
+            any_missing |= !(dbl_ptr[i] < missing);
         }
+        var->missing_state = any_missing ? CTOOLS_MISSING_SOME : CTOOLS_MISSING_NONE;
     }
 
     return 0;
@@ -208,6 +216,8 @@ void *ctools_io_load_chunk_thread(void *arg)
     if (atomic_load(a->error)) return NULL;
     double *dst = a->var->data.dbl + a->dest;
     ST_IIIDp fn = IO_VDATA_FN;
+    const double missing = SV_missval;
+    int any_missing = 0;
     for (size_t i = 0; i < a->count; i++) {
         ST_int obs = a->map ? (ST_int)a->map[a->dest + i] : (ST_int)(a->obs1 + i);
         int io_rc = fn(a->var_idx, obs, dst + i);
@@ -215,7 +225,12 @@ void *ctools_io_load_chunk_thread(void *arg)
             ctools_io_record_io_error(a->error, ctools_spi_status(io_rc, STATA_ERR_STATA_READ));
             return (void *)1;
         }
+        any_missing |= !(dst[i] < missing);
     }
+    /* the chunks of a column all store the same value; the caller settles
+     * the columns no chunk flagged */
+    if (any_missing)
+        __atomic_store_n(&a->var->missing_state, CTOOLS_MISSING_SOME, __ATOMIC_RELAXED);
     return NULL;
 }
 
@@ -275,6 +290,9 @@ int ctools_io_try_chunked_load(stata_data *data, int *var_indices, size_t nvars,
     free(chunks);
     ctools_memory_barrier();
     *rc_out = (stata_retcode)atomic_load(&error);
+    for (size_t j = 0; j < nvars && *rc_out == STATA_OK; j++)
+        if (data->vars[j].missing_state != CTOOLS_MISSING_SOME)
+            data->vars[j].missing_state = CTOOLS_MISSING_NONE;
     return 1;
 }
 
@@ -487,10 +505,15 @@ int ctools_io_load_row_parallel(stata_variable *var, int var_idx,
         /* Cache SPI function pointer — avoid reloading _stata_ per iteration */
         ST_IIIDp vdata_fn = IO_VDATA_FN;
         atomic_int load_error = 0;
-        #pragma omp parallel for schedule(static) if(n_filtered >= MIN_OBS_PER_THREAD * 2)
+        const double missing = SV_missval;
+        int any_missing = 0;
+        #pragma omp parallel for schedule(static) reduction(| : any_missing) if(n_filtered >= MIN_OBS_PER_THREAD * 2)
         for (size_t i = 0; i < n_filtered; i++) {
             { int io_rc = vdata_fn((ST_int)var_idx, (ST_int)obs_map[i], &dbl_ptr[i]); if (io_rc) ctools_io_record_io_error(&load_error, ctools_spi_status(io_rc, STATA_ERR_STATA_READ)); }
+            any_missing |= !(dbl_ptr[i] < missing);
         }
+        if (!atomic_load(&load_error))
+            var->missing_state = any_missing ? CTOOLS_MISSING_SOME : CTOOLS_MISSING_NONE;
         return atomic_load(&load_error);
     }
 
@@ -694,16 +717,22 @@ int ctools_io_load_filtered_variable(stata_variable *var, int var_idx,
 
         /* Cache SPI function pointer — avoid reloading _stata_ per iteration */
         ST_IIIDp vdata_fn = IO_VDATA_FN;
+        const double missing = SV_missval;
+        int any_missing = 0;
         /* Load using obs_map - obs_map contains 1-based Stata obs numbers */
         for (i = 0; i + 4 <= n_filtered; i += 4) {
             { int io_rc = vdata_fn((ST_int)var_idx, (ST_int)obs_map[i + 0], &dbl_ptr[i + 0]); if (io_rc) return ctools_spi_status(io_rc, STATA_ERR_STATA_READ); }
             { int io_rc = vdata_fn((ST_int)var_idx, (ST_int)obs_map[i + 1], &dbl_ptr[i + 1]); if (io_rc) return ctools_spi_status(io_rc, STATA_ERR_STATA_READ); }
             { int io_rc = vdata_fn((ST_int)var_idx, (ST_int)obs_map[i + 2], &dbl_ptr[i + 2]); if (io_rc) return ctools_spi_status(io_rc, STATA_ERR_STATA_READ); }
             { int io_rc = vdata_fn((ST_int)var_idx, (ST_int)obs_map[i + 3], &dbl_ptr[i + 3]); if (io_rc) return ctools_spi_status(io_rc, STATA_ERR_STATA_READ); }
+            any_missing |= !(dbl_ptr[i] < missing) | !(dbl_ptr[i + 1] < missing) |
+                           !(dbl_ptr[i + 2] < missing) | !(dbl_ptr[i + 3] < missing);
         }
         for (; i < n_filtered; i++) {
             { int io_rc = vdata_fn((ST_int)var_idx, (ST_int)obs_map[i + 0], &dbl_ptr[i + 0]); if (io_rc) return ctools_spi_status(io_rc, STATA_ERR_STATA_READ); }
+            any_missing |= !(dbl_ptr[i] < missing);
         }
+        var->missing_state = any_missing ? CTOOLS_MISSING_SOME : CTOOLS_MISSING_NONE;
     }
 
     return 0;
@@ -746,6 +775,7 @@ int ctools_io_load_tiled_variables(stata_data *data, int *indices,
         }
     }
     atomic_int error = 0;
+    const double missing = SV_missval;
     #pragma omp parallel for schedule(static)
     for (size_t tile = 0; tile < n; tile += IO_LOAD_TILE_ROWS) {
         size_t end = tile + IO_LOAD_TILE_ROWS;
@@ -755,13 +785,18 @@ int ctools_io_load_tiled_variables(stata_data *data, int *indices,
             ST_int idx = indices[j];
             if (v->type == STATA_TYPE_DOUBLE) {
                 ST_IIIDp read_fn = IO_VDATA_FN;
+                int any_missing = 0;
                 for (size_t i = tile; i < end; i++)
                     { int read_rc = read_fn(idx, (ST_int)map[i], v->data.dbl + i);
                     if (read_rc) {
                         ctools_io_record_io_error(&error, ctools_spi_status(read_rc, STATA_ERR_STATA_READ));
                         break;
                     }
+                    any_missing |= !(v->data.dbl[i] < missing);
                     }
+                /* the tiles of a column all store the same value */
+                if (any_missing)
+                    __atomic_store_n(&v->missing_state, CTOOLS_MISSING_SOME, __ATOMIC_RELAXED);
             } else {
                 ctools_string_arena *arena = v->_arena;
                 size_t stride = v->str_maxlen + 1;
@@ -782,6 +817,9 @@ int ctools_io_load_tiled_variables(stata_data *data, int *indices,
             }
         }
     }
+    for (size_t j = 0; j < k && !atomic_load(&error); j++)
+        if (data->vars[j].type == STATA_TYPE_DOUBLE && data->vars[j].missing_state != CTOOLS_MISSING_SOME)
+            data->vars[j].missing_state = CTOOLS_MISSING_NONE;
     return atomic_load(&error);
 }
 

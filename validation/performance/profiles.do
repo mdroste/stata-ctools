@@ -22,7 +22,7 @@ set graphics off
 if `"`outdir'"' == "" local outdir "docs/benchmarks/readme_profile"
 if `"`sizes'"' == "" local sizes "1000000 10000000 25000000"
 if "`threads'" == "" local threads = c(processors)
-local allpairs "export import sort merge sample bsample encode decode destring distinct ipolate cipolate split rangejoin winsor winsor2 rangestat binscatter binscatter2 binsreg reghdfe fereg ivreghdfe ppmlhdfe feppml hdfe psmatch2 qreg"
+local allpairs "export import sort merge joinby sample bsample encode decode destring distinct ipolate cipolate split rangejoin winsor winsor2 rangestat binscatter binscatter2 binsreg reghdfe fereg ivreghdfe ppmlhdfe feppml hdfe psmatch2 qreg"
 if `"`pairs'"' == "" local pairs "`allpairs'"
 capture mkdir "`outdir'"
 log using "`outdir'/profile.log", text replace name(profile)
@@ -37,7 +37,7 @@ program define profile_readme
     about
     ctools, version
     di "PROFILE_SETTINGS sizes=`sizes' variables=20 processors=`threads' seed=95183 pairs=`pairs'"
-    foreach cmd in cimport cexport csort cmerge csample cbsample cencode cdecode ///
+    foreach cmd in cimport cexport csort cmerge cjoinby csample cbsample cencode cdecode ///
         cdestring cdistinct distinct cinterpolate csplit crangejoin cqreg cwinsor crangestat cpsmatch ///
         cbinscatter creghdfe civreghdfe cppmlhdfe chdfe rangejoin rangestat gstats winsor2 ///
         psmatch2 binscatter binscatter2 binsreg reghdfe fereg ivreghdfe ppmlhdfe feppml hdfe ///
@@ -106,7 +106,7 @@ program define profile_readme
             quietly tabulate group
             local group_count = r(r)
         }
-        tempfile base lookup offers inputcsv outputcsv
+        tempfile base lookup events offers inputcsv outputcsv
         quietly save `base'
         preserve
         quietly keep if month==0
@@ -114,6 +114,18 @@ program define profile_readme
         rename noise lookup_value
         rename region lookup_region
         quietly save `lookup'
+        restore
+        * Two events for each of the first half of the firms. joinby pairs every
+        * observation of those firms with both events and leaves out the other
+        * firms, so its result has `N' observations again when 400 divides `N'.
+        preserve
+        quietly keep if month==0 & firm<=floor(`N'/400)
+        keep firm noise region
+        rename noise event_value
+        rename region event_region
+        quietly expand 2
+        quietly bysort firm: gen byte event = _n
+        quietly save `events'
         restore
         * Twenty-variable using input; a narrow interval yields one match per row.
         preserve
@@ -130,6 +142,8 @@ program define profile_readme
         local c_sort "csort x1 id"
         local ref_merge `"merge m:1 firm using "`lookup'", nogen"'
         local c_merge `"cmerge m:1 firm using "`lookup'", nogen"'
+        local ref_joinby `"joinby firm using "`events'""'
+        local c_joinby `"cjoinby firm using "`events'""'
         local ref_sample "sample 10"
         local c_sample "csample 10"
         local ref_bsample "bsample"
@@ -223,6 +237,7 @@ program define profile_readme
                 if `rc'==0 {
                     local expected = `N'
                     if "`cmd'"=="sample" local expected = `N'/10
+                    if "`cmd'"=="joinby" local expected = 400*floor(`N'/400)
                     capture assert _N==`expected'
                     local checkrc = _rc
                     if inlist("`cmd'","qreg","reghdfe","fereg","ivreghdfe","ppmlhdfe","feppml") {
@@ -231,6 +246,11 @@ program define profile_readme
                     }
                     if "`cmd'"=="import" {
                         capture assert c(k)==20
+                        if _rc local checkrc = _rc
+                    }
+                    * Every kept observation is paired with an event of its firm.
+                    if "`cmd'"=="joinby" {
+                        capture assert c(k)==23 & inlist(event,1,2) & firm<=floor(`N'/400) & !missing(event_value)
                         if _rc local checkrc = _rc
                     }
                     * The design has no singletons, so every row is kept.
@@ -278,6 +298,7 @@ program define profile_readme
         * Release disk space before generating the next scale.
         erase `base'
         erase `lookup'
+        erase `events'
         erase `offers'
         capture erase `inputcsv'
         capture erase `outputcsv'

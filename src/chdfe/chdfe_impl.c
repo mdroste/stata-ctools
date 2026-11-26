@@ -87,6 +87,10 @@ ST_retcode chdfe_main(const char *args)
     ctools_filtered_data fd;
     ctools_filtered_data_init(&fd);
     HDFE_LoadedFactor *raw = calloc(g, sizeof(*raw));
+    /* What the load and singleton removal learn about the factors, for the
+     * steps after them (hdfe_sample.h) */
+    HDFE_FactorOrder *order = calloc(g, sizeof(*order));
+    HDFE_Singletons sing = {0};
     int *slopes = calloc(g, sizeof(*slopes)), **levels = calloc(g, sizeof(*levels));
     int *sizes = calloc(g, sizeof(*sizes)), *keep = NULL, *columns = NULL;
     int *nested = calloc(g, sizeof(*nested)), *redundant = calloc(g, sizeof(*redundant));
@@ -99,8 +103,8 @@ ST_retcode chdfe_main(const char *args)
     int *store_vars = NULL;
     double *store_mobility = NULL;
     ctools_UnionFind *uf = NULL;
-    if (!raw || !slopes || !levels || !sizes || !nested || !redundant || !values || !intercepts ||
-        !imap || !inested || !ired)
+    if (!raw || !order || !slopes || !levels || !sizes || !nested || !redundant || !values ||
+        !intercepts || !imap || !inested || !ired)
         goto cleanup;
     int ns = 0;
     for (int j = 0; j < g; j++)
@@ -189,40 +193,36 @@ ST_retcode chdfe_main(const char *args)
     }
     for (int j = 0; j < g; j++)
         values[j] = fd.data.vars[k + j].data.dbl;
-    rc = hdfe_load_factors(raw, g, (const double *const *)values, nin);
+    /* Levels in order of first appearance, with the rows alone in a level
+     * noted; singleton removal starts from those rows, and the loaded levels
+     * are the factors' as they are when no row is dropped (shifted in place
+     * when a few are) */
+    rc = hdfe_load_factors_ordered(raw, order, g, (const double *const *)values, nin);
     if (rc)
         goto cleanup;
-    keep = malloc((size_t)nin * sizeof(*keep));
-    if (!keep)
-    {
-        rc = 920;
-        goto cleanup;
-    }
     for (int j = 0; j < g; j++)
     {
         levels[j] = raw[j].levels;
         sizes[j] = raw[j].num_levels;
     }
-    int dropped = 0;
-    if (keepsingletons)
-        for (int i = 0; i < nin; i++)
-            keep[i] = 1;
-    else
-        dropped = ctools_remove_singletons(levels, g, nin, keep, NULL, 0);
-    if (dropped < 0)
+    if (!keepsingletons && hdfe_drop_singletons(&sing, levels, sizes, order, g, nin, NULL, 0))
     {
         rc = 920;
         goto cleanup;
     }
+    const int dropped = sing.num_dropped;
     int n = nin - dropped;
     if (!n)
     {
         rc = 2000;
         goto cleanup;
     }
-    rc = hdfe_build_factors(&state, g, levels, sizes, nin, keep, n, win, weighted != 0);
+    rc = hdfe_build_factors_ordered(&state, g, raw, order, &sing, nin, win, weighted != 0, NULL);
     if (rc)
         goto cleanup;
+    /* The keep flags of the loaded rows: NULL when every row is kept */
+    keep = sing.keep;
+    sing.keep = NULL;
     weights = weighted ? malloc((size_t)n * sizeof(*weights)) : NULL;
     obs = malloc((size_t)n * sizeof(*obs));
     if (!obs || (weighted && !weights))
@@ -265,7 +265,7 @@ ST_retcode chdfe_main(const char *args)
                 goto cleanup;
             }
             for (int i = 0, q = 0; i < nin; i++)
-                if (keep[i])
+                if (!keep || keep[i])
                     f->slope[q++] = fd.data.vars[slope_col].data.dbl[i];
             slope_col++;
             double slope_scale = chdfe_unit_scale(f->slope, n);
@@ -352,7 +352,7 @@ ST_retcode chdfe_main(const char *args)
         for (int h = 0; h < c; h++)
         {
             for (int i = 0, q = 0; i < nin; i++)
-                if (keep[i])
+                if (!keep || keep[i])
                     cluster_values[q++] = fd.data.vars[k + g + ns + h].data.dbl[i];
             int nc;
             if (ctools_numeric_to_cluster_ids(cluster_values, n, clusters, &nc))
@@ -439,7 +439,7 @@ ST_retcode chdfe_main(const char *args)
         for (size_t h = 0; h < roots; h++)
             root_min[h] = INFINITY;
         for (int i = 0, q = 0; i < nin; i++)
-            if (keep[i])
+            if (!keep || keep[i])
             {
                 int root = ctools_uf_find(uf, a->levels[q++] - 1);
                 root_min[root] = fmin(root_min[root], fd.data.vars[k + imap[first]].data.dbl[i]);
@@ -639,7 +639,7 @@ ST_retcode chdfe_main(const char *args)
         {
             int source = j < g ? k + j : k + g + ns + j - g;
             for (int i = 0, q = 0; i < nin; i++)
-                if (keep[i])
+                if (!keep || keep[i])
                     codes[q++] = fd.data.vars[source].data.dbl[i];
             int ng;
             if (remap_values_sorted(codes, n, clusters, &ng))
@@ -709,6 +709,20 @@ cleanup:
             ctools_release_later(raw[j].counts);
         }
     free(raw);
+    for (int j = 0; order && j < g; j++)
+    {
+        ctools_release_later(order[j].rows.first_row);
+        ctools_release_later(order[j].rows.single_rows);
+    }
+    free(order);
+    ctools_release_later(sing.keep);
+    ctools_release_later(sing.dropped);
+    for (int j = 0; sing.affected && j < sing.G; j++)
+    {
+        ctools_release_later(sing.affected[j].level);
+        ctools_release_later(sing.affected[j].left);
+    }
+    free(sing.affected);
     free(slopes);
     free(levels);
     free(sizes);

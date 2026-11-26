@@ -1,4 +1,4 @@
-*! version 1.3.1 20261124 github.com/mdroste/stata-ctools
+*! version 1.3.2 20261124 github.com/mdroste/stata-ctools
 *! cimport parquet: a native C Parquet reader with import parquet's syntax,
 *! variables, messages and stored results.
 program define _cimport_parquet, rclass

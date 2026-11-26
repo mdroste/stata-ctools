@@ -211,6 +211,7 @@ profile_COMMANDS = {
     "export": "export",
     "sort": "sort",
     "merge": "merge",
+    "joinby": "joinby",
     "sample": "sample",
     "bsample": "bsample",
     "encode": "encode",

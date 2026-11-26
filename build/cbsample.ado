@@ -1,4 +1,4 @@
-*! version 1.3.1 20261124 github.com/mdroste/stata-ctools
+*! version 1.3.2 20261124 github.com/mdroste/stata-ctools
 *! original: Stata's bsample (bsample.ado 2.0.8, January 17, 2025)
 *! original: see help cbsample for details
 

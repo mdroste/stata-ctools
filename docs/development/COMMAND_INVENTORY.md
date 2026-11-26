@@ -28,12 +28,17 @@ by the package and validation inventories.
 | `cinterpolate` | `CTOOLS_CMD_CINTERPOLATE` | `cinterpolate_main` | `NULL` |
 | `csplit` | `CTOOLS_CMD_CSPLIT` | `csplit_main` | `csplit_cleanup_cache` |
 | `crangejoin` | `CTOOLS_CMD_CRANGEJOIN` | `crangejoin_main` | `crangejoin_cleanup_cache` |
+| `cjoinby` | `CTOOLS_CMD_CJOINBY` | `cjoinby_main` | `cjoinby_cleanup_cache` |
 | `cexport_xls` | `CTOOLS_CMD_CEXPORT` | `cexport_xls_main` | `cexport_cleanup_state` |
 | `cexport_xlsx` | `CTOOLS_CMD_CEXPORT` | `cexport_xlsx_main` | `cexport_cleanup_state` |
 | `cdecode_scan` | `CTOOLS_CMD_CDECODE` | `cdecode_scan_main` | `NULL` |
 | `group` | `CTOOLS_CMD_OTHER` | `cgroup_main` | `NULL` |
 | `hdfe_markout` | `CTOOLS_CMD_OTHER` | `hdfe_markout_main` | `NULL` |
+| `fvlevels` | `CTOOLS_CMD_OTHER` | `hdfe_fvlevels_main` | `NULL` |
 | `strlcheck` | `CTOOLS_CMD_OTHER` | `cgroup_strlcheck_main` | `NULL` |
 | `cdistinct` | `CTOOLS_CMD_CDISTINCT` | `cdistinct_main` | `NULL` |
 | `chdfe` | `CTOOLS_CMD_CHDFE` | `chdfe_main` | `NULL` |
+| `ccollapse` | `CTOOLS_CMD_CCOLLAPSE` | `ccollapse_main` | `ccollapse_cleanup_state` |
+| `cegen` | `CTOOLS_CMD_CEGEN` | `cegen_main` | `cegen_cleanup_state` |
+| `creshape` | `CTOOLS_CMD_CRESHAPE` | `creshape_main` | `creshape_cleanup_state` |
 | `dta` | `CTOOLS_CMD_OTHER` | `ctools_dta_main` | `NULL` |

@@ -54,6 +54,22 @@ typedef struct
 HDFE_SolveResult partial_out_columns(HDFE_State *S, ST_double *data, ST_int N, ST_int K,
                                      ST_int num_threads);
 
+/* partial_out_columns() for a caller that projects on the same effects again
+ * and again while only S->weights changes (the iterations of a weighted
+ * fit). plan (hdfe_coef.h; may be NULL) keeps what the solve for the
+ * coefficients finds from the levels alone, so that later calls skip it; the
+ * residuals are those of partial_out_columns(), to the last bit.
+ *
+ * The solve for the coefficients reads the weights but not the factors'
+ * level counts (weighted_counts and their inverses); every other path does.
+ * A caller that brings the counts up to date only when they are needed
+ * passes before_rows: it is called, with ctx, before any of those paths
+ * touches the data, and not at all when the coefficients are solved for. */
+struct hdfe_coef_plan;
+HDFE_SolveResult partial_out_columns_plan(HDFE_State *S, ST_double *data, ST_int N, ST_int K,
+                                          ST_int num_threads, struct hdfe_coef_plan *plan,
+                                          void (*before_rows)(void *ctx), void *ctx);
+
 /* Optional transforms: 0 symmetric Kaczmarz, 1 Kaczmarz, 2 Cimmino, 3 random
  * (symmetric) Kaczmarz, hdfe's experimental transform: a new factor order
  * for every sweep, from a fixed per-column generator.

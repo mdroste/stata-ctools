@@ -34,6 +34,10 @@ typedef struct
      * pre-pass's); the first iteration then projects the working variable
      * only. 0 (a zeroed io): the loop partials everything itself. */
     ST_double x_partialled_tol;
+    /* What the fit's projections keep between them (cppmlhdfe_internal.h),
+     * or NULL: every projection then stands alone. The caller owns it, and
+     * the factors of S must stay as they are while it is in use. */
+    ppml_projection *kept;
     ST_int *irls_keep_idx;    /* their columns, or NULL for all */
     /* Workspace (caller's) */
     ST_double *mu, *eta, *irls_w, *z_orig, *aug_copy, *previous_working;
@@ -56,6 +60,11 @@ typedef struct
     ST_double *beta_final, *w_reg, *xtx_keep, *xty_keep, *inv_xx_final, *V_keep;
     dd_real *xty_dd;
     ST_double N_ref, rss;
+    /* Input, may be NULL: N values that receive the residual of the final
+     * regression, partialled z less the partialled regressors times b, each
+     * row a double-double sum (what the sandwich reads). It is written in
+     * the pass that sums e(rss). */
+    ST_double *resid_out;
 } ppml_irls_io;
 
 ST_retcode ppml_irls_loop(ppml_irls_io *io);

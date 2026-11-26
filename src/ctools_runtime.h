@@ -182,11 +182,15 @@ typedef enum {
     CTOOLS_CMD_CPPMLHDFE,
     CTOOLS_CMD_CSPLIT,
     CTOOLS_CMD_CRANGEJOIN,
+    CTOOLS_CMD_CJOINBY,
     CTOOLS_CMD_CIO,
     CTOOLS_CMD_CPARQUET,
     CTOOLS_CMD_CINTERPOLATE,
     CTOOLS_CMD_CDISTINCT,
     CTOOLS_CMD_CHDFE,
+    CTOOLS_CMD_CEGEN,
+    CTOOLS_CMD_CCOLLAPSE,
+    CTOOLS_CMD_CRESHAPE,
     CTOOLS_CMD_OTHER
 } ctools_command_t;
 
@@ -208,6 +212,7 @@ void cio_cleanup(void);
 /* Idempotent cleanup hooks, registered alongside handlers in commands.def. */
 void csplit_cleanup_cache(void);
 void crangejoin_cleanup_cache(void);
+void cjoinby_cleanup_cache(void);
 
 /* cmerge: Clears the using dataset cache (g_using_cache) */
 void cmerge_cleanup_cache(void);
@@ -226,5 +231,11 @@ void cppmlhdfe_cleanup_state(void);
 
 /* cexport: Clears any export context - usually stack-allocated */
 void cexport_cleanup_state(void);
+
+/* ccollapse: Frees the collapsed dataset compute keeps for store */
+void ccollapse_cleanup_state(void);
+
+/* creshape: Frees the staged observations and the plan */
+void creshape_cleanup_state(void);
 
 #endif /* CTOOLS_RUNTIME_H */

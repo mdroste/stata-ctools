@@ -1,4 +1,4 @@
-*! version 1.3.1 20261124 github.com/mdroste/stata-ctools
+*! version 1.3.2 20261124 github.com/mdroste/stata-ctools
 * estat after cppmlhdfe, named in e(estat_cmd), with the subcommands and
 * conventions of ppmlhdfe's (reghdfe's) estat: summarize, vce, and ic with
 * e(df_m) + 1 degrees of freedom.

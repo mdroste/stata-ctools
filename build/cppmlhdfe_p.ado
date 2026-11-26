@@ -1,4 +1,4 @@
-*! version 1.3.1 20261124 github.com/mdroste/stata-ctools
+*! version 1.3.2 20261124 github.com/mdroste/stata-ctools
 * predict after cppmlhdfe, with ppmlhdfe_p's statistics, default (mu, with
 * its note), variable labels and notes on missing values
 program define cppmlhdfe_p

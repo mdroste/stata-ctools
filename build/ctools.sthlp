@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.3.1 20261124}{...}
+{* *! version 1.3.2 20261124}{...}
 {viewerjumpto "Syntax" "ctools##syntax"}{...}
 {viewerjumpto "Description" "ctools##description"}{...}
 {viewerjumpto "Options" "ctools##options"}{...}
@@ -18,7 +18,12 @@
 
 {p 8 17 2}
 {cmdab:ctools}
-[{cmd:,} {opt version} {opt env:ironment_check} {opt update}]
+[{cmd:,} {opt version} {opt env:ironment_check}]
+
+{p 8 17 2}
+{cmdab:ctools}{cmd:,}
+{opt update}
+[{opt force}]
 
 {p 8 17 2}
 {cmdab:ctools}{cmd:,}
@@ -72,11 +77,33 @@ directories, so it survives updates and reinstalls of ctools; its location is
 shown by {cmd:ctools, environment_check}.
 
 {phang}
-{opt update} downloads and installs the latest version of ctools from GitHub.
-Restart Stata after updating, because a loaded plugin is replaced only when
-Stata restarts. If GitHub cannot be reached or the installation fails,
-{cmd:ctools, update} reports the failure and exits with {cmd:net install}'s
-return code.
+{opt update} asks GitHub for the latest ctools release (drafts and prereleases
+are skipped) and installs it with {cmd:net install} when it is newer than the
+installed version. When ctools is up to date, or the installed version is
+newer than the latest release (a development version installed from the
+repository), nothing is installed. Restart Stata after updating, because a
+loaded plugin is replaced only when Stata restarts.
+
+{pmore}
+Stata's {cmd:ado dir} lists a package once for each address it was installed
+from, and each release has its own address. After installing a release,
+{cmd:ctools, update} therefore removes the entries left by earlier installs of
+ctools from GitHub; files that the new release also contains are kept. A ctools
+installed from elsewhere, such as SSC or a local folder, is left as it is.
+
+{pmore}
+{cmd:ctools, update} stores {cmd:r(version)} (the installed version),
+{cmd:r(latest_version)}, and {cmd:r(updated)} (1 if a release was installed).
+If GitHub cannot be reached, its reply names no release, or the installation
+fails, {cmd:ctools, update} reports the failure and exits with a nonzero
+return code: {cmd:copy}'s or {cmd:net install}'s, or 672 for a reply without
+a release. GitHub limits how often one network address may ask, so a refused
+check may work again within an hour.
+
+{phang}
+{opt force}, specified with {opt update}, installs the latest release even
+when the installed version is the same or newer. Use it to repair an
+installation or to return from a development version to the release.
 
 
 {marker threads}{...}
@@ -123,9 +150,13 @@ it is cleared.
 {p2col:{help cimport}}Import text, Excel, dBase, SAS, SPSS, and shapefiles{p_end}
 {p2col:{help cexport}}Export text, Excel, dBase, SAS, SPSS, and shapefiles{p_end}
 {p2col:{help cdistinct}}Report distinct values{p_end}
+{p2col:{help cegen}}Extensions to generate{p_end}
+{p2col:{help ccollapse}}Make dataset of summary statistics{p_end}
 {p2col:{help chdfe}}Remove fixed effects from variables{p_end}
 {p2col:{help csort}}Sort dataset{p_end}
 {p2col:{help cmerge}}Merge (join) datasets{p_end}
+{p2col:{help cjoinby}}Form all pairwise combinations within groups{p_end}
+{p2col:{help creshape}}Convert data from wide to long form and vice versa{p_end}
 {p2col:{help csample}}Resampling without replacement{p_end}
 {p2col:{help cbsample}}Resampling with replacement{p_end}
 {p2col:{help cencode}}Recast string as labeled numeric{p_end}
@@ -169,6 +200,10 @@ it is cleared.
 {phang}{cmd:. ctools, threads(8)}{p_end}
 {phang}{cmd:. ctools, threads(32) permanently}{p_end}
 {phang}{cmd:. ctools, threads(default) permanently}{p_end}
+
+{pstd}Updating:{p_end}
+{phang}{cmd:. ctools, update}{p_end}
+{phang}{cmd:. ctools, update force}{p_end}
 
 
 {title:Author}
@@ -232,6 +267,10 @@ J. Cox{p_end}
 in){p_end}
 {p2col:{help cmerge##acknowledgments:cmerge}}Stata's {cmd:merge}
 ({cmd:merge.ado} 3.2.13, September 12, 2023){p_end}
+{p2col:{help cjoinby##acknowledgments:cjoinby}}Stata's {cmd:joinby}
+({cmd:joinby.ado} 2.1.0, December 22, 2022){p_end}
+{p2col:{help creshape##acknowledgments:creshape}}Stata's {cmd:reshape}
+({cmd:reshape.ado} 4.7.1, October 4, 2023){p_end}
 {p2col:{help cimport##acknowledgments:cimport}}Stata's {cmd:import delimited}
 ({cmd:import_delimited.ado} 1.3.5, April 18, 2022); Stata's {cmd:import excel}
 ({cmd:import_excel.ado} 1.0.15, September 20, 2019); Stata's other
@@ -240,10 +279,14 @@ in){p_end}
 ({cmd:export_delimited.ado} 1.0.9, June 13, 2020); Stata's {cmd:export excel}
 ({cmd:export_excel.ado} 1.1.1, July 30, 2018); Stata's other {cmd:export}
 commands{p_end}
+{p2col:{help ccollapse##acknowledgments:ccollapse}}Stata's {cmd:collapse}
+({cmd:collapse.ado} 6.2.2, June 28, 2020){p_end}
 {p2col:{help csample##acknowledgments:csample}}Stata's {cmd:sample}
 ({cmd:sample.ado} 2.4.0, January 20, 2021){p_end}
 {p2col:{help cbsample##acknowledgments:cbsample}}Stata's {cmd:bsample}
 ({cmd:bsample.ado} 2.0.8, January 17, 2025){p_end}
+{p2col:{help cegen##acknowledgments:cegen}}Stata's {cmd:egen} ({cmd:egen.ado}
+3.4.2, April 13, 2020){p_end}
 {p2col:{help cencode##acknowledgments:cencode}}Stata's {cmd:encode} (built
 in){p_end}
 {p2col:{help cdecode##acknowledgments:cdecode}}Stata's {cmd:decode} (built
@@ -298,9 +341,11 @@ and Mauricio Caceres Bravo for
 {psee}
 Online: {help cimport}, {help cexport}, {help csort}, {help cmerge}, {help cencode},
 {help cdecode}, {help cdestring}, {help csample}, {help cbsample}, {help cwinsor},
+{help cegen},
 {help crangestat}, {help creghdfe}, {help civreghdfe}, {help cqreg}, {help cpsmatch},
 {help cbinscatter}, {help cppmlhdfe}, {help cinterpolate}, {help csplit},
-{help crangejoin}, {help cdistinct}, {help chdfe}
+{help crangejoin}, {help cjoinby}, {help creshape}, {help cdistinct}, {help chdfe}
+{p_end}{help cdistinct}, {help chdfe}, {help ccollapse}
 {p_end}
 
 {psee}

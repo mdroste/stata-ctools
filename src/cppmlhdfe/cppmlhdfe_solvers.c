@@ -713,13 +713,44 @@ HDFE_SolveResult ppml_map_options(const PPML_Options *options, HDFE_State *S, do
     return (HDFE_SolveResult){rc, !rc, max_iterations};
 }
 
+void ppml_fe_counts_sync(HDFE_State *S, ppml_projection *kept)
+{
+    if (!kept || !kept->counts_stale)
+        return;
+    ppml_update_fe_counts(S, S->weights, S->N);
+    kept->counts_stale = 0;
+}
+
+typedef struct
+{
+    HDFE_State *S;
+    ppml_projection *kept;
+} ppml_rows_sync;
+
+/* partial_out_columns_plan() is about to work on the rows */
+static void ppml_before_rows(void *ctx)
+{
+    const ppml_rows_sync *sync = (const ppml_rows_sync *)ctx;
+    ppml_fe_counts_sync(sync->S, sync->kept);
+}
+
 HDFE_SolveResult ppml_partial(const PPML_Options *options, HDFE_State *S, double *data, int N,
                               int K, int threads)
 {
+    return ppml_partial_kept(options, S, NULL, data, N, K, threads);
+}
+
+HDFE_SolveResult ppml_partial_kept(const PPML_Options *options, HDFE_State *S,
+                                   ppml_projection *kept, double *data, int N, int K,
+                                   int threads)
+{
+    if (options->acceleration || options->transform)
+        ppml_fe_counts_sync(S, kept);
     if (options->acceleration == 5)
         return ppml_lsmr(options, S, data, N, K);
     if (options->acceleration || options->transform)
         return ppml_map_options(options, S, data, N, K);
+    ppml_rows_sync sync = {S, kept};
     int pool = options->pool > 0 ? options->pool : K;
     HDFE_SolveResult out = {0, 1, 0};
     for (int k = 0; k < K; k += pool)
@@ -736,8 +767,15 @@ HDFE_SolveResult ppml_partial(const PPML_Options *options, HDFE_State *S, double
          * hdfe_coef_applies() therefore declines weights that span more than
          * HDFE_COEF_WEIGHT_SPAN, and those iterations run on the rows, which
          * never divide by that pivot. */
-        HDFE_SolveResult part = partial_out_columns(S, data + (size_t)k * N, N,
-                                                    K - k < pool ? K - k : pool, threads);
+        /* With kept, the solve's structure stays in its plan between calls,
+         * and the level counts, which only the iteration on the rows reads,
+         * are brought up to date when that iteration is about to run. */
+        HDFE_SolveResult part =
+            kept ? partial_out_columns_plan(S, data + (size_t)k * N, N,
+                                            K - k < pool ? K - k : pool, threads, kept->plan,
+                                            ppml_before_rows, &sync)
+                 : partial_out_columns(S, data + (size_t)k * N, N, K - k < pool ? K - k : pool,
+                                       threads);
         if (part.status)
             return part;
         if (part.iterations > out.iterations)

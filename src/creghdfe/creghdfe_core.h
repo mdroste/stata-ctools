@@ -12,6 +12,63 @@
 #include "creghdfe_types.h"
 
 /*
+ * The regression's columns, read from the loaded variables.
+ *
+ * The matrix that is partialled holds the kept rows of every column divided
+ * by its standard deviation. Each column needs its mean, then its sum of
+ * squared deviations (which needs the mean), then its scale (which needs
+ * that sum): three passes over the column at least. They are made here on
+ * the loaded variable, and the matrix is written once, already scaled, by
+ * the pass that also adds up its sum of squares. At 10M rows the columns do
+ * not fit a cache, so the time of this step is the memory it moves: copying
+ * the rows first and then standardizing the copy in place moves nearly twice
+ * as much.
+ *
+ * Every sum runs over the kept rows in row order, one column per thread, so
+ * the results do not depend on the thread count.
+ */
+typedef struct
+{
+    const ST_double *const *cols; /* K loaded columns, y first */
+    const ST_double *level;       /* NULL, or K entries: level[k] >= 0 makes column k the
+                                     indicator of its loaded value being level[k] */
+    const ST_int *rows;           /* the loaded row of each kept row, ascending; NULL when
+                                     every loaded row is kept */
+    ST_int N;                     /* kept rows */
+    ST_int K;
+    const ST_double *weights;     /* N weights of the kept rows, or NULL */
+} creghdfe_columns;
+
+/* sums[k] (K): the sum over the kept rows of weight * column k, and with
+ * weights *sum_w: their sum. */
+void creghdfe_column_sums(const creghdfe_columns *C, ST_double *sums, ST_double *sum_w);
+
+typedef struct
+{
+    const ST_double *means; /* K (weighted) means of the columns */
+    ST_int weight_type;     /* 2: frequency weights, whose sum counts the observations */
+    ST_double sum_weights;
+    ST_int standardize;     /* divide each column by its standard deviation */
+    ST_int use_quad;        /* sums of squared deviations in double-double arithmetic */
+    ST_int uncentered;      /* tss about zero (a regression without a constant) */
+} creghdfe_columns_opts;
+
+/*
+ * data (N x K, column-major): the kept rows of every column, divided by
+ * stdevs[k] when standardize is set. raw (N x K, or NULL): the same rows
+ * undivided. tss[k]: the (weighted) sum of squared deviations from means[k],
+ * or the sum of squares with uncentered. stdevs[k]: its root over N - 1 (the
+ * sum of the frequency weights less one), 1 when that is below 1e-30; with
+ * standardize the dependent variable's (column 0) is replaced by the power
+ * of two at or below it, which changes no bit of its mantissas. norm2[k]:
+ * the unweighted sum of squares of column k of data. C->weights are the
+ * weights the regression uses (normalized where it normalizes them).
+ */
+void creghdfe_columns_build(const creghdfe_columns *C, const creghdfe_columns_opts *opts,
+                            ST_double *data, ST_double *raw, ST_double *tss, ST_double *stdevs,
+                            ST_double *norm2);
+
+/*
  * Collinearity of the partialled regressors, as reghdfe judges it.
  *
  * data: N x K column-major, y then the K - 1 regressors, partialled, in the

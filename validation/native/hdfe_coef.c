@@ -562,6 +562,359 @@ static void allocation_sweeps(void)
             }
 }
 
+/* The rows in a random order: a design of layout 2 then has one row per cell
+ * and no grouping, the case in which a plan keeps the weights in grouped
+ * order and nothing else per cell */
+static void design_shuffle(design *d)
+{
+    for (int i = d->N - 1; i > 0; i--)
+    {
+        const int j = below(i + 1);
+        for (int g = 0; g < d->G; g++)
+        {
+            const int t = d->lv[g][i];
+            d->lv[g][i] = d->lv[g][j];
+            d->lv[g][j] = t;
+        }
+        if (d->w)
+        {
+            const double t = d->w[i];
+            d->w[i] = d->w[j];
+            d->w[j] = t;
+        }
+    }
+}
+
+/* New weights in place (the state keeps pointing at them): positive, a third
+ * of them zero when zeros is set */
+static void reweigh(design *d, int zeros)
+{
+    for (int i = 0; i < d->N; i++)
+        d->w[i] = zeros && below(3) == 0 ? 0.0 : 0.25 + 3 * uniform();
+}
+
+/* One projection with the plan and one without, from the same columns: the
+ * same result and the same bits */
+static void plan_agrees(HDFE_State *S, hdfe_coef_plan *plan, const design *d, const double *X,
+                        int K, hdfe_coef_method method)
+{
+    const size_t bytes = (size_t)d->N * K * sizeof(double);
+    double *want = malloc(bytes), *got = malloc(bytes);
+    assert(want && got);
+    memcpy(want, X, bytes);
+    memcpy(got, X, bytes);
+    const HDFE_SolveResult r0 = hdfe_coef_partial_out(S, want, d->N, K, method);
+    int declined = -1;
+    const HDFE_SolveResult r1 =
+        hdfe_coef_partial_out_plan(S, plan, got, d->N, K, method, &declined);
+    assert(!declined && !r0.status && r1.status == r0.status && r1.converged == r0.converged &&
+           r1.iterations == r0.iterations);
+    if (memcmp(got, want, bytes))
+        fprintf(stderr, "plan: G %d N %d K %d method %d differs from the call without it\n", d->G,
+                d->N, K, (int)method);
+    assert(!memcmp(got, want, bytes));
+    free(want);
+    free(got);
+}
+
+/* The level counts the iteration on the rows reads, for the design's weights */
+static void recount(HDFE_State *S, const design *d)
+{
+    for (int g = 0; g < d->G; g++)
+    {
+        FE_Factor *f = &S->factors[g];
+        memset(f->weighted_counts, 0, (size_t)d->nlev[g] * sizeof(ST_double));
+        for (int i = 0; i < d->N; i++)
+            f->weighted_counts[d->lv[g][i]] += d->w[i];
+        for (int l = 0; l < d->nlev[g]; l++)
+            f->inv_weighted_counts[l] =
+                f->weighted_counts[l] > 0 ? 1.0 / f->weighted_counts[l] : 0.0;
+    }
+}
+
+static int rows_calls;
+static void rows_called(void *ctx)
+{
+    assert(ctx == &rows_calls);
+    rows_calls++;
+}
+
+/* A plan kept over calls whose weights, batch and method change gives every
+ * time what a call without it gives; it follows the state it is handed; what
+ * the solver refuses it declines untouched; and partial_out_columns_plan()
+ * announces exactly the projections that work on the rows. */
+static void kept_plans(void)
+{
+    static const int shapes[][1 + MAXG] = {
+        {2, 30, 6, 0, 0}, {2, 6, 30, 0, 0},  {2, 40, 24, 0, 0},
+        {3, 25, 6, 4, 0}, {3, 6, 25, 12, 0}, {4, 20, 6, 4, 2},
+    };
+    static const int batches[] = {3, 1, 19, 2};
+    for (size_t s = 0; s < sizeof(shapes) / sizeof(shapes[0]); s++)
+        for (int layout = 0; layout < 5; layout++)
+            for (int weights = 1; weights < 3; weights++)
+            {
+                const int G = shapes[s][0];
+                design d;
+                /* layout 4: layout 2 with its rows shuffled */
+                design_make(&d, 260, G, shapes[s] + 1, layout == 4 ? 2 : layout, weights);
+                if (layout == 4)
+                    design_shuffle(&d);
+                double *X = columns_make(&d, 19);
+                HDFE_State S;
+                state_open(&S, &d, 19, 1e-11, 10000);
+                const int base = live;
+                hdfe_coef_plan *plan = hdfe_coef_plan_create();
+                assert(plan);
+                /* every method on one plan, in turn and back again */
+                for (int round = 0; round < 8; round++)
+                {
+                    if (round)
+                        reweigh(&d, weights == 2);
+                    plan_agrees(&S, plan, &d, X, batches[round % 4],
+                                methods[round % (G == 2 ? 4 : 3)]);
+                }
+                hdfe_coef_plan_free(plan);
+                assert(live == base);
+                state_close(&S);
+                free(X);
+                design_free(&d);
+            }
+
+    /* One plan, two states in turn; without weights nothing is kept */
+    {
+        const int first[] = {40, 24}, second[] = {25, 6, 4};
+        design d1, d2, d3;
+        design_make(&d1, 260, 2, first, 0, 1);
+        design_make(&d2, 300, 3, second, 0, 2);
+        design_make(&d3, 260, 2, first, 0, 0);
+        double *X1 = columns_make(&d1, 3), *X2 = columns_make(&d2, 3), *X3 = columns_make(&d3, 3);
+        HDFE_State S1, S2, S3;
+        state_open(&S1, &d1, 3, 1e-11, 10000);
+        state_open(&S2, &d2, 3, 1e-11, 10000);
+        state_open(&S3, &d3, 3, 1e-11, 10000);
+        const int base = live;
+        hdfe_coef_plan *plan = hdfe_coef_plan_create();
+        assert(plan);
+        for (int round = 0; round < 3; round++)
+        {
+            plan_agrees(&S1, plan, &d1, X1, 3, HDFE_COEF_AUTO);
+            plan_agrees(&S2, plan, &d2, X2, 3, HDFE_COEF_AUTO);
+            reweigh(&d1, 0);
+        }
+        hdfe_coef_plan_free(plan);
+        plan = hdfe_coef_plan_create();
+        assert(plan && live == base + 1);
+        plan_agrees(&S3, plan, &d3, X3, 3, HDFE_COEF_AUTO);
+        assert(live == base + 1);
+        hdfe_coef_plan_free(plan);
+        assert(live == base);
+
+        /* Refused states are declined before anything is read or kept */
+        plan = hdfe_coef_plan_create();
+        assert(plan);
+        double *got = malloc((size_t)d1.N * 3 * sizeof(double));
+        assert(got);
+        const size_t bytes = (size_t)d1.N * 3 * sizeof(double);
+        memcpy(got, X1, bytes);
+        const double heavy = d1.w[5];
+        d1.w[5] = 1e9 * d1.w[6];
+        int declined = 0;
+        HDFE_SolveResult r =
+            hdfe_coef_partial_out_plan(&S1, plan, got, d1.N, 3, HDFE_COEF_AUTO, &declined);
+        assert(declined == 1 && !r.status && !memcmp(got, X1, bytes) && live == base + 2);
+        /* the rows take it, and are announced */
+        recount(&S1, &d1);
+        S1.tolerance = 1e-8;
+        double *rows = malloc(bytes);
+        assert(rows);
+        memcpy(rows, X1, bytes);
+        const HDFE_SolveResult direct = partial_out_columns(&S1, rows, d1.N, 3, threads);
+        rows_calls = 0;
+        r = partial_out_columns_plan(&S1, got, d1.N, 3, threads, plan, rows_called, &rows_calls);
+        assert(rows_calls == 1 && r.status == direct.status && r.iterations == direct.iterations &&
+               !memcmp(got, rows, bytes));
+        d1.w[5] = heavy;
+        recount(&S1, &d1);
+        /* solved for the coefficients: not announced, and as without a plan */
+        memcpy(rows, X1, bytes);
+        assert(!partial_out_columns(&S1, rows, d1.N, 3, threads).status);
+        for (int round = 0; round < 2; round++)
+        {
+            memcpy(got, X1, bytes);
+            rows_calls = 0;
+            r = partial_out_columns_plan(&S1, got, d1.N, 3, threads, round ? plan : NULL,
+                                         rows_called, &rows_calls);
+            assert(!r.status && !rows_calls && !memcmp(got, rows, bytes));
+        }
+        /* a limit on the iteration of the rows, and a single effect: announced */
+        S1.maxiter = HDFE_COEF_MIN_MAXITER - 1;
+        memcpy(rows, X1, bytes);
+        const HDFE_SolveResult limited = partial_out_columns(&S1, rows, d1.N, 3, threads);
+        memcpy(got, X1, bytes);
+        rows_calls = 0;
+        r = partial_out_columns_plan(&S1, got, d1.N, 3, threads, plan, rows_called, &rows_calls);
+        assert(rows_calls == 1 && r.status == limited.status && !memcmp(got, rows, bytes));
+        S1.maxiter = 10000;
+        {
+            const int alone[] = {40};
+            design d4;
+            design_make(&d4, d1.N, 1, alone, 0, 1);
+            HDFE_State S4;
+            state_open(&S4, &d4, 3, 1e-11, 10000);
+            memcpy(got, X1, bytes);
+            declined = 0;
+            r = hdfe_coef_partial_out_plan(&S4, plan, got, d4.N, 3, HDFE_COEF_AUTO, &declined);
+            assert(declined == 1 && !memcmp(got, X1, bytes));
+            memcpy(rows, X1, bytes);
+            assert(!partial_out_columns(&S4, rows, d4.N, 3, threads).status);
+            rows_calls = 0;
+            r = partial_out_columns_plan(&S4, got, d4.N, 3, threads, plan, rows_called,
+                                         &rows_calls);
+            assert(rows_calls == 1 && !r.status && !memcmp(got, rows, bytes));
+            state_close(&S4);
+            design_free(&d4);
+        }
+        free(got);
+        free(rows);
+        hdfe_coef_plan_free(plan);
+        hdfe_coef_plan_free(NULL);
+        assert(live == base);
+        state_close(&S1);
+        state_close(&S2);
+        state_close(&S3);
+        free(X1);
+        free(X2);
+        free(X3);
+        design_free(&d1);
+        design_free(&d2);
+        design_free(&d3);
+    }
+}
+
+/* Every allocation of a call with a plan fails in turn, on a new plan (its
+ * structure is being built) and on a used one (only the weights' part and
+ * the scratch remain): r(920) or the residuals of a call without a plan,
+ * a plan that still works afterwards, and nothing left once it is freed. */
+static void plan_allocation_failures(const design *d, int K, hdfe_coef_method method)
+{
+    const size_t bytes = (size_t)d->N * K * sizeof(double);
+    double *X = columns_make(d, K);
+    double *want = malloc(bytes), *got = malloc(bytes);
+    assert(want && got);
+    HDFE_State S;
+    state_open(&S, d, K, 1e-9, 10000);
+    memcpy(want, X, bytes);
+    assert(!hdfe_coef_partial_out(&S, want, d->N, K, method).status);
+    const int base = live;
+    for (int used = 0; used < 2; used++)
+    {
+        for (int n = 1;; n++)
+        {
+            int declined = 0;
+            hdfe_coef_plan *plan = hdfe_coef_plan_create();
+            assert(plan);
+            if (used)
+            {
+                memcpy(got, X, bytes);
+                assert(!hdfe_coef_partial_out_plan(&S, plan, got, d->N, 1, method, &declined)
+                            .status);
+            }
+            memcpy(got, X, bytes);
+            allocations = 0;
+            fail_alloc = n;
+            const HDFE_SolveResult r =
+                hdfe_coef_partial_out_plan(&S, plan, got, d->N, K, method, &declined);
+            const int reached = allocations >= n;
+            fail_alloc = 0;
+            assert(!declined && (r.status == 920 || !r.status));
+            if (!r.status && r.converged)
+                assert(!memcmp(got, want, bytes));
+            /* the plan survives a failed call */
+            memcpy(got, X, bytes);
+            const HDFE_SolveResult again =
+                hdfe_coef_partial_out_plan(&S, plan, got, d->N, K, method, &declined);
+            assert(!again.status && !memcmp(got, want, bytes));
+            hdfe_coef_plan_free(plan);
+            assert(live == base);
+            if (!reached)
+            {
+                assert(!r.status && n > (used ? 1 : 8));
+                break;
+            }
+        }
+    }
+    state_close(&S);
+    free(X);
+    free(want);
+    free(got);
+}
+
+static void plan_allocation_sweeps(void)
+{
+    static const int shapes[][1 + MAXG] = {{2, 30, 6, 0, 0}, {3, 25, 6, 4, 0}, {4, 20, 6, 4, 2}};
+    for (size_t s = 0; s < sizeof(shapes) / sizeof(shapes[0]); s++)
+        for (int layout = 0; layout <= 4; layout += 2)
+        {
+            const int G = shapes[s][0];
+            design d;
+            design_make(&d, 260, G, shapes[s] + 1, layout == 4 ? 2 : layout, 1);
+            if (layout == 4)
+                design_shuffle(&d);
+            for (int m = 0; m < (G == 2 ? 4 : 3); m++)
+                plan_allocation_failures(&d, 18, methods[m]);
+            design_free(&d);
+        }
+}
+
+/* Break during a call with a plan: status 1, and the plan gives the right
+ * residuals on the next call */
+static void plan_cancellation(void)
+{
+    static const int shapes[][1 + MAXG] = {{2, 60, 9, 0, 0}, {2, 1500, 1200, 0, 0},
+                                           {3, 50, 9, 5, 0}, {3, 1500, 900, 400, 0}};
+    for (size_t s = 0; s < sizeof(shapes) / sizeof(shapes[0]); s++)
+    {
+        const int G = shapes[s][0];
+        design d;
+        design_make(&d, 6000, G, shapes[s] + 1, 0, 1);
+        double *X = columns_make(&d, 3);
+        double *got = malloc((size_t)d.N * 3 * sizeof(double));
+        assert(got);
+        HDFE_State S;
+        state_open(&S, &d, 3, 1e-12, 100000);
+        const int base = live;
+        hdfe_coef_plan *plan = hdfe_coef_plan_create();
+        assert(plan);
+        int finished = 0;
+        for (int after = 1; !finished; after++)
+        {
+            int declined = 0;
+            memcpy(got, X, (size_t)d.N * 3 * sizeof(double));
+            polls = 0;
+            cancel_after = after;
+            ctools_cancel_begin(poll_host);
+            const HDFE_SolveResult r =
+                hdfe_coef_partial_out_plan(&S, plan, got, d.N, 3, HDFE_COEF_AUTO, &declined);
+            ctools_cancel_end();
+            if (polls < after)
+            {
+                assert(!r.status && r.converged);
+                finished = 1;
+            }
+            else
+                assert(r.status == 1 && !r.converged && polls == after);
+            plan_agrees(&S, plan, &d, X, 3, HDFE_COEF_AUTO);
+        }
+        hdfe_coef_plan_free(plan);
+        assert(live == base);
+        state_close(&S);
+        free(X);
+        free(got);
+        design_free(&d);
+    }
+}
+
 #ifdef _OPENMP
 /* Large enough for every parallel loop: the residuals of each method are the
  * same bits on one thread and on four, and agree with the iteration on the
@@ -605,6 +958,27 @@ static void thread_counts(void)
         if (memcmp(one, four, bytes))
             fprintf(stderr, "case %d: residuals depend on the thread count\n", (int)c);
         assert(!memcmp(one, four, bytes));
+        if (d.w)
+        {
+            /* a plan, through the parallel loops of its own: the bits of a
+             * call without it at either thread count, for the first weights
+             * and for new ones, batch after batch */
+            hdfe_coef_plan *plan = hdfe_coef_plan_create();
+            double *first = malloc((size_t)d.N * sizeof(double));
+            assert(plan && first);
+            memcpy(first, d.w, (size_t)d.N * sizeof(double));
+            for (int round = 0; round < 3; round++)
+            {
+                omp_set_num_threads(round == 1 ? 1 : 4);
+                plan_agrees(&S, plan, &d, X, round == 2 ? 1 : K, cases[c].method);
+                reweigh(&d, round == 1);
+            }
+            omp_set_num_threads(4);
+            hdfe_coef_plan_free(plan);
+            /* the weights the state's level counts were made for */
+            memcpy(d.w, first, (size_t)d.N * sizeof(double));
+            free(first);
+        }
         /* The iteration on the rows is the yardstick for the columns it
          * solves well. It measures its progress against the raw column, so
          * it stops short on those whose level means are a million times the
@@ -661,12 +1035,15 @@ int main(void)
         iteration_limit();
         cancellation();
         allocation_sweeps();
+        kept_plans();
+        plan_cancellation();
+        plan_allocation_sweeps();
     }
 #ifdef _OPENMP
     thread_counts();
 #endif
     assert(!live);
-    puts("PASS HDFE coefficient-space methods, dispatch, limits, Break, threads and allocation "
-         "failures");
+    puts("PASS HDFE coefficient-space methods, dispatch, limits, Break, threads, allocation "
+         "failures and kept plans");
     return 0;
 }

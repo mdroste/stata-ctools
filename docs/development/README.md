@@ -80,6 +80,7 @@ shared solver receives that state as an argument.
 | `src/ctools_rowstage.h/c` | Temporary row storage for commands that move whole observations (`csort`, `cmerge`) |
 | `src/hdfe/` | Shared fixed-effects projection, group numbering and estimation-sample functions |
 | `src/formats/` | ZIP/XML, Excel cell addresses and replacing files only after writing succeeds |
+| `src/formats/ctools_dta_schema.h/c` | A dataset's description without its observations: read, edit and write a 0-observation `.dta` (`creshape`) |
 | `src/ctools_text.h/c` | CSV/Excel text transfers with length and format checks |
 | `src/ctools_rng.h`, `ctools_group.h/c`, `sort/sort_block.h` | Random sampling, groups of rows and stable block radix sorting |
 | `src/ctools_config.h` | Aligned alloc, prefetch, thread management, constants |
@@ -379,7 +380,10 @@ plugin that moves or replaces observations would leave it on the old rows
 plugin varlist and `_estimates unhold` afterwards, also after a failure
 (`cmerge` sets using-only rows to 0, as `merge` does). `crangejoin` matches
 `rangejoin`, whose `use` empties `e(sample)`: it holds, drops the copy and
-unholds. `validation/support/esample_helpers.do` compares each against the
+unholds. `cjoinby` carries the copy like `cmerge` and then clears it on every
+pairing of a master observation but the first: `joinby` expands the master
+with `expand`, whose copies are new observations outside the sample.
+`validation/support/esample_helpers.do` compares each against the
 native command.
 
 `cmerge` keeps the copied master rows so it can undo a failed merge. If strings
@@ -411,12 +415,14 @@ and `c(changed)`. Each ado wrapper runs `nobreak { capture noisily break <impl> 
 - `creghdfe`, `crangestat` and `cwinsor` with `suffix()` or `prefix()` only add variables, so this record is enough to undo their changes.
 - In-place `cwinsor` uses `undo` to copy target values and observation numbers before writing. It restores them after a write error and keeps them in runtime phase 1 until `cwinsor commit` or `cwinsor rollback`.
 - From Stata 16, `crangejoin` reads using data in a temporary frame. Earlier versions use `preserve` because loading the data replaces the master. `write` keeps the master copy loaded by `prepare` in phase 3 and restores it after a partial write failure unless `norestore` is set. `crangejoin rollback` restores it after a later failure; `crangejoin clear` frees it.
+- `cjoinby` follows the same phases (`using`, `plan`, `write`, then `clear` or `rollback`). `plan` reads only the master's keys, so a join that cannot be made fails before anything changes. `write` stages the master observations from the first one that moves (all of them under `update`, which changes shared variables in place) and keeps them in phase 3 when called with `undo`. Besides the `_ctools_undo` record, the ado records the storage type, format, labels and characteristics of the key and shared variables (`_cjoinby_undo_record`), which a join widens or extends, and restores them after the added observations are gone. Before Stata 16 `_cjoinby_impl` itself preserves the master around reading the using data in its place (`restore, preserve` works only in the program that preserved); the test hook `$CTOOLS_cjoinby_noframes` runs that path on a later Stata.
 - `cimport` and `_cio_import` copy the dataset into a temporary frame before replacing it, then restore it with `frame copy ..., replace` if needed. They use `preserve` before Stata 16 or with an empty dataset. Replacing the original frame by renaming another frame triggers a StataNow 19.5 bug: after `import excel`, a later `import spss` can return the wrong string for a user-missing value. Copying the data back avoids that problem.
 - `cbinscatter` leaves the dataset unchanged; `savedata()` builds the bins in a temporary frame.
 
 Tests set `$CTOOLS_<command>_fault` to simulate errors after a command starts
 changing data: `outputs` or `post` for `creghdfe` and `crangestat`; `outputs`,
 `store` or `post` for `cwinsor`; `schema`, `store` or `post` for `crangejoin`;
+`record`, `schema`, `store`, `post` or `strl` for `cjoinby`;
 and `load` for `cimport`. `validation/support/rollback_helpers.do` tests each
 case in the default, `snapshot` and `fast` modes.
 
@@ -1590,6 +1596,31 @@ column's scale comes from sums over fixed blocks of rows
 check are kept for the first iteration, which has the same weights and then
 projects the working variable alone (`x_partialled_tol`).
 
+From that pre-pass to the end of the fit the factors stay as they are and only
+the IRLS weights change, so the projections share a plan (`hdfe_coef_plan` in
+`hdfe_coef.h`, reached through `partial_out_columns_plan()` and
+`ppml_partial_kept()`). Which rows share a level, the cells of the effects
+and the layout of the sweeps depend on the levels alone: the first projection
+finds them, and every later one only sums the new weights into the cells
+(`hdfe_crossplan_values()`), in the order a call without a plan adds them. The
+residuals are those of `partial_out_columns()` to the last bit, which
+`validation/native/hdfe_coef.c` checks call by call for every method, with
+changing weights and batches, failed allocations and Break. A plan describes
+the level arrays it was built from; whoever keeps one must not change them in
+place. The factors' weighted level counts, which only the row iteration
+reads, are summed when a projection on the rows is about to run or the loop
+ends (`ppml_projection.counts_stale`), not after every weight update.
+
+The update of an iteration is three passes over the rows
+(`ppml_irls_step_eta()`, `ppml_irls_step_means()`,
+`ppml_irls_step_weights()`): the step's linear predictor; eta, the means, the
+largest change of eta, the floor flag and the deviance together; the weights
+and their sum. Every row's arithmetic and every sum's order are those of the
+single-purpose passes they replace, and the deviance takes each mean as
+computed for mu rather than evaluating `exp()` a second time. Changes to
+these passes are checked by comparing `e(b)`, `e(V)`, `e(ll)` and the
+iteration counts with the previous build at 15 digits, not by tolerance.
+
 `cppmlhdfe, verbose` reports the plugin's time by step
 (`_cppmlhdfe_time_*`): load, remap, singletons, degrees of freedom, the two
 separation checks (with the ReLU check's steps), starting values, the IRLS
@@ -2142,3 +2173,111 @@ Each call frees its C allocations before returning. Result variables are
 added only after all projections succeed. With `clear`, the original dataset is
 retained until the replacement dataset is ready. `validation/stata/cdistinct.do` and
 `validation/stata/chdfe.do` compare reference results and exercise output and error contracts.
+
+## Reshaping
+
+`creshape` (`src/creshape/`) replaces the whole dataset, like `cmerge` and
+`crangejoin`, but its result has other variables as well as other
+observations. The SPI moves values only, so the variables' descriptions
+travel through a `.dta` file without observations.
+
+### Plugin calls
+
+| Call | Requires | Does | Afterwards |
+|------|----------|------|------------|
+| `creshape plan long\|wide string=# report=# xilist=# maxvar=# verbose=#` | — | Stages every variable of every observation (`ctools_rowstage`), reads the request from the ado's locals (`__creshape_vars`, `_i`, `_j`, `_jv`, `_xij`, `_xi`, `_atwl`), checks it and plans the result; returns `__creshape_N`, `__creshape_k`, or `__creshape_fallback` when the ado must run `reshape` (strL, strings too wide to stage) | phase 1 |
+| `creshape schema` | phase 1 | Reads the template the ado saved (`__creshape_template`) and writes the result's description (`__creshape_schema`) | phase 2 |
+| `creshape store` | phase 2 | Fills the result, prints reshape's summary table, frees the staged copy | phase 3, nothing kept |
+| `creshape restore` | any phase | Writes the staged observations back in order (after the ado loaded the template and `set obs`) | freed |
+| `creshape clear` | — | Frees everything | freed |
+
+Between `plan` and a successful `store` the staged copy is the only copy of
+the user's observations. `ctools_command_finish()` frees a command's state on
+any nonzero return code, so `schema` and `store` report a failure in the local
+`__creshape_rc` and return zero; the ado then loads the template again, sets
+the observations and calls `restore`. `plan` fails with an ordinary return
+code: nothing has changed yet. The wrapper holds Break (`nobreak`) from `plan`
+to the end.
+
+### The ado's part
+
+```stata
+unab __creshape_vars : *
+_ctools_strw `__creshape_vars'
+plugin call ctools_plugin `__creshape_vars', "creshape plan ..."
+drop in 1/l                                        // 1 ms on 2M x 34
+save `"`__creshape_template'"', emptyok orphans    // the description; orphans keeps unattached labels
+plugin call ctools_plugin, "creshape schema"
+use `"`__creshape_schema'"', clear                 // 4 ms for 2,000 variables
+set obs `__creshape_N'                             // 0.04 s for 20M observations
+plugin call ctools_plugin *, "creshape store"
+```
+
+The settings (`_dta[ReS_i]`, `_dta[ReS_j]`, `_dta[ReS_jv]`, `_dta[ReS_Xij]`,
+`_dta[ReS_atwl]`, `_dta[ReS_str]`, `_dta[Res_Xi]`) are reshape's own
+characteristics. The basic syntax sets them through `reshape clear`,
+`reshape i`, `reshape j` and `reshape xij`, exactly as `reshape` does, and
+every subcommand that only declares, shows or clears them is passed to
+`reshape`, as are data declared in the syntax of Stata 10 (`_dta[ReS_ver]` is
+`v.1`). The measurements above and below are from StataNow 19.5 MP on a
+Ryzen 9 9950X under Windows 11 (November 26, 2026).
+
+### Files
+
+| File | Role |
+|------|------|
+| `creshape_impl.c` | The plugin calls, the state and its lifetime, messages of refused requests, the summary table |
+| `creshape_names.c` | Names and `j` values as text (no Stata calls): `real()` of what a name can hold, numbers as Stata writes them in a macro, valid names, the name table |
+| `creshape_plan.c` | The request from the ado's locals; for `long`, the `j` values from the names, each stub's variables and their string/numeric agreement; the xi variables; the result's variable list with name checks |
+| `creshape_keys.c` | Everything that reads the staged rows: order by `i` (and `j`), uniqueness, the `j` values in long data, groups of `i`, the row of each (group, value) cell, constant xi variables |
+| `creshape_schema.c` | The result's description from the template: types, formats, labels, characteristics, notes, the labels reshape sets aside for a round trip, the summary characteristics, the sort list |
+| `creshape_store.c` | The parallel writers for long and wide results |
+| `formats/ctools_dta_schema.{h,c}` | Read a format 118/119 file's description, edit it, write it with no observations; fields are copied byte for byte and value labels stay in their file encoding |
+
+### Facts the design relies on
+
+- **A sort marker without a sort.** `use` of a file without observations
+  takes the file's sort list, `set obs` from zero observations keeps it, and
+  SPI stores do not clear it. The description names the result as sorted by
+  `i` (and `j`), and the store writes the observations in that order, so Stata
+  never sorts or verifies: `sort` on 20M already sorted observations takes
+  0.29 s, more than the whole of `creshape`. The order must therefore be
+  exactly Stata's (numbers as doubles with the missing values last in their
+  order, strings by their bytes); `creshape_order_rows()` uses the shared
+  sorter, and the suite sorts each result again and compares the order.
+- **Data in order are not sorted.** One parallel pass compares neighbouring
+  rows. For long data the same pass (`keys_scan_j`) collects the `j` values in
+  per-thread sets, checks them, and flags where `i` changes; the sorter runs
+  only if a row is out of order.
+- **Wide results.** `creshape_wide_groups()` gathers the group starts from the
+  flags (each thread its share, laid end to end) and fills one cell per group
+  and `j` value with the staged row that holds it. Groups are contiguous in
+  the order, so threads write disjoint cells; the same loop compares each
+  row's xi variables with the first row of its group.
+- **Stores.** As in `ctools_rowstage.c`, each thread owns a range of result
+  observations and writes every variable of a tile of them (about 64 KiB of
+  records) before the next tile; a tile gathers and prefetches its source
+  rows first.
+- **`SF_error` prints SMCL literally; `SF_display` reads it.** Error text goes
+  through `SF_error` so that it shows under `quietly`, and is turned into
+  plain, wrapped lines first (`creshape_error_text()`). Neither function may
+  be given a string that starts with a newline or holds one before its end:
+  Stata then prints blank lines without end. One line per call.
+- **What a variable of the result inherits** was measured against `reshape`
+  with `favor(speed)`, StataNow's default; `creshape_schema.c` lists the
+  rules at its top. Two of them are easy to miss: the notes of a stub's wide
+  variables are gathered each text once and renumbered, and `label values`
+  widens a display format to the longest label (in bytes), which reshape
+  applies to the new `j`.
+- **Deliberate differences** from `reshape` are listed in
+  [the command guide](../commands/creshape.md#differences-from-reshape).
+
+### Validation
+
+`$CTOOLS_creshape_fault` fails the wrapper after the observations are dropped
+(`template`), after the description is written (`schema`) or after the new
+form is loaded and sized (`store`); `validation/stata/creshape.do` checks with
+`_ctools_rb_case` that the data come back exactly, and compares `creshape`
+with `reshape` in both directions on labelled, random and large datasets.
+`validation/stata/contracts.do` checks that `schema` and `store` are refused
+without a plan and that `clear` can be repeated.

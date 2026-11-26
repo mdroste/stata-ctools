@@ -1,38 +1,134 @@
-*! version 1.3.1 20261124 github.com/mdroste/stata-ctools
+*! version 1.3.2 20261124 github.com/mdroste/stata-ctools
 
 program define ctools, rclass
     version 14.1
 
-    syntax [, Version ENVironment_check Verbose UPDATE THReads(string) PERManently]
+    syntax [, Version ENVironment_check Verbose UPDATE FORCE THReads(string) PERManently]
 
     if "`permanently'" != "" & `"`threads'"' == "" {
         di as error "option permanently requires threads()"
         exit 198
     }
-
-    if "`update'" != "" {
-        di as text ""
-        di as text "Checking for ctools updates..."
-        di as text ""
-
-        capture noisily net install ctools, from("https://raw.githubusercontent.com/mdroste/stata-ctools/main/build") replace
-        local update_rc = _rc
-
-        if `update_rc' == 0 {
-            di as text ""
-            di as text "{bf:ctools has been updated successfully.}"
-            di as text "Restart Stata so the new plugin is loaded."
-        }
-        else {
-            * r(631) is net's "host not found": the update could not be checked.
-            di as error ""
-            di as error "Update failed with error code `update_rc'."
-            di as error "Please check your internet connection and try again."
-        }
-        exit `update_rc'
+    if "`force'" != "" & "`update'" == "" {
+        di as error "option force requires update"
+        exit 198
     }
 
-    local __ado_version "1.3.1"
+    local __ado_version "1.3.2"
+    if "`update'" != "" {
+        * GitHub's latest release excludes drafts and prereleases. Each
+        * release tag holds the installable package in build/.
+        local __api "https://api.github.com/repos/mdroste/stata-ctools/releases/latest"
+        local __site "https://raw.githubusercontent.com/mdroste/stata-ctools"
+        di as text ""
+        di as text "Checking GitHub for the latest ctools release..."
+        tempfile __reply
+        capture copy "`__api'" "`__reply'"
+        local __rc = _rc
+        if `__rc' {
+            * r(2) after a timeout and r(631) for an unknown host mean GitHub
+            * could not be reached; r(601) includes GitHub refusing the request.
+            di as error "Could not read the latest ctools release from GitHub (error code `__rc')."
+            di as error "Check your internet connection and try again. GitHub limits how often one"
+            di as error "network address may ask, so a refused check may work again within an hour."
+            exit `__rc'
+        }
+        tempname __json
+        scalar `__json' = fileread("`__reply'")
+        local __tag
+        if ustrregexm(`__json', `""tag_name"[ ]*:[ ]*"([^"]*)""') local __tag = ustrregexs(1)
+        if !ustrregexm(`"`__tag'"', "^[vV]?[0-9]+\.[0-9]+\.[0-9]+$") {
+            di as error "GitHub's reply did not name a ctools release version."
+            exit 672
+        }
+        local __latest = ustrregexra("`__tag'", "^[vV]", "")
+
+        * Compare major, minor and patch; the most significant difference wins.
+        local __have = subinstr("`__ado_version'", ".", " ", .)
+        local __want = subinstr("`__latest'", ".", " ", .)
+        local __newer 0
+        forvalues __i = 3(-1)1 {
+            local __a : word `__i' of `__have'
+            local __b : word `__i' of `__want'
+            if `__b' > `__a' local __newer 1
+            else if `__b' < `__a' local __newer -1
+        }
+        di as text "  Installed version" _col(22) as result "`__ado_version'"
+        di as text "  Latest release" _col(22) as result "`__latest'"
+        local __install = `__newer' > 0 | "`force'" != ""
+        if !`__install' & `__newer' == 0 di as text "ctools is up to date."
+        else if !`__install' {
+            di as text "The installed ctools is newer than the latest release; nothing was installed."
+            di as text "Type {cmd:ctools, update force} to install release `__latest' instead."
+        }
+        else {
+            di as text ""
+            di as text "Installing ctools `__latest'..."
+            local __from "`__site'/`__tag'/build"
+            capture noisily net install ctools, from("`__from'") replace
+            local __rc = _rc
+            if `__rc' {
+                * r(631) is net's "host not found".
+                di as error ""
+                di as error "Update failed with error code `__rc'."
+                di as error "Please check your internet connection and try again."
+                exit `__rc'
+            }
+
+            * net keeps one package record per source address, so earlier
+            * installs from GitHub (main or another tag) stay listed by ado
+            * dir and make ado uninstall ctools ambiguous. Their records are
+            * removed once the new record exists. ado uninstall keeps files
+            * that another record lists, so only files a later release
+            * dropped are deleted. Without the new record (net found every
+            * file up to date and recorded nothing), nothing is removed.
+            * Record lines are read through Mata so that quotes in package
+            * descriptions are never parsed as Stata syntax. net records a
+            * local folder with backslashes, so sources compare with slashes.
+            local __stale
+            local __found 0
+            local __trk "`c(sysdir_plus)'stata.trk"
+            capture confirm file "`__trk'"
+            if !_rc {
+                local __n 0
+                tempname __fh
+                file open `__fh' using "`__trk'", read text
+                file read `__fh' __line
+                while r(eof) == 0 {
+                    mata: st_local("__key", substr(st_local("__line"), 1, 2))
+                    if "`__key'" == "S " {
+                        local ++__n
+                        mata: st_local("__src", subinstr(substr(st_local("__line"), 3, .), char(92), "/"))
+                    }
+                    else if "`__key'" == "N " {
+                        mata: st_local("__ours", strofreal(strtrim(st_local("__line")) == "N ctools.pkg" & strpos(st_local("__src"), "mdroste/stata-ctools") > 0))
+                        mata: st_local("__this", strofreal(st_local("__src") == subinstr(st_local("__from"), char(92), "/")))
+                        if `__ours' & `__this' local __found 1
+                        else if `__ours' local __stale `__n' `__stale'
+                    }
+                    file read `__fh' __line
+                }
+                file close `__fh'
+            }
+            * Highest number first, so the numbers still to remove stay valid.
+            if `__found' {
+                foreach __i of local __stale {
+                    capture ado uninstall [`__i']
+                }
+                if "`__stale'" != "" di as text "(records of earlier ctools installs from GitHub were removed from {cmd:ado dir})"
+            }
+            di as text ""
+            di as text "{bf:ctools `__latest' has been installed.}"
+            di as text "Restart Stata so the new plugin is loaded."
+            di as text `"Release notes: {browse "https://github.com/mdroste/stata-ctools/releases/tag/`__tag'"}"'
+        }
+        * Returned last: commands run above may replace r().
+        return local version "`__ado_version'"
+        return local latest_version "`__latest'"
+        return scalar updated = `__install'
+        exit
+    }
+
     if "`environment_check'" != "" | "`version'" != "" | `"`threads'"' != "" {
         * Load the plugin if not already loaded
         _ctools_load
@@ -152,16 +248,20 @@ program define ctools, rclass
     di as result "╚██████╗   ██║   ╚██████╔╝╚██████╔╝███████╗███████║"
     di as result " ╚═════╝   ╚═╝    ╚═════╝  ╚═════╝ ╚══════╝╚══════╝"
     di as text ""
-    di as text "  {it:C-accelerated tools for Stata}{col 56}v1.3.1"
+    di as text "  {it:C-accelerated tools for Stata}{col 56}v1.3.2"
     di as text "{hline 60}"
     di as text ""
     di as text "{ul:Data Management}"
     di as text "  {help cimport:cimport}      Import delimited/Excel data"
     di as text "  {help cexport:cexport}      Export delimited/Excel data"
     di as text "  {help cdistinct:cdistinct}    Report distinct values"
+    di as text "  {help cegen:cegen}        Extensions to generate"
+    di as text "  {help ccollapse:ccollapse}    Collapse to summary statistics"
     di as text "  {help chdfe:chdfe}        Remove fixed effects from variables"
     di as text "  {help csort:csort}        Sort dataset"
     di as text "  {help cmerge:cmerge}       Merge datasets"
+    di as text "  {help cjoinby:cjoinby}      Join all pairs within groups"
+    di as text "  {help creshape:creshape}     Reshape wide to long and back"
     di as text "  {help csample:csample}      Sample without replacement"
     di as text "  {help cbsample:cbsample}     Sample with replacement"
     di as text "  {help cencode:cencode}      String to labeled numeric"
@@ -187,7 +287,7 @@ program define ctools, rclass
     di as text "{ul:Utilities}"
     di as text "  {cmd:ctools, environment_check} - Check plugin status and threads"
     di as text "  {cmd:ctools, threads(#)}        - Set threads ({cmd:permanently} saves it)"
-    di as text "  {cmd:ctools, update}            - Update to latest version"
+    di as text "  {cmd:ctools, update}            - Install the latest GitHub release"
     di as text ""
     di as text "For help: {cmd:help} {it:command}    Source: {browse github.com/mdroste/stata-ctools}"
     di as text "{hline 60}"

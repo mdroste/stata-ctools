@@ -89,12 +89,82 @@ crangejoin date . . using history.dta, by(person) suffix(_history)
 
 There is no `if`/`in` syntax: filter the master dataset beforehand. The result replaces the dataset in memory. The command does not store command-specific results in `r()` or `e()`. See `help crangejoin` or the [full help file](../build/crangejoin.sthlp).
 
+### Pairwise joins: `cjoinby`
+
+`cjoinby` forms all pairwise combinations within groups, with the syntax of Stata's `joinby`. Each observation in memory is paired with every observation of the using file that has the same values of the key variables.
+
+```stata
+cjoinby [varlist] using filename [, unmatched(none|both|master|using) update replace ///
+    _merge(varname) nolabel threads(#) verbose snapshot fast]
+```
+
+Without a varlist the join is on the variables the two datasets share. Observations found in only one dataset are left out unless `unmatched()` keeps them; `_merge` (created with `unmatched()` or `_merge()`) marks the source of each observation. Variables that both datasets have keep the master's values unless `update` (fill in missing values) or `update replace` (also overwrite with nonmissing values) is specified.
+
+```stata
+* Every child with every parent of the same family.
+use child, clear
+cjoinby family_id using parent.dta
+
+* Keep unmatched observations from both datasets and mark them.
+cjoinby family_id using parent.dta, unmatched(both)
+
+* Join on two keys; fill in missing values of the other shared variables.
+cjoinby firm year using deals.dta, update
+
+* Join on every variable the datasets have in common.
+cjoinby using deals.dta
+```
+
+Each master observation is followed by its pairings in the using file's order, and a sorted master stays sorted, as after `joinby`. Where `joinby`'s order within ties depends on `set sortseed`, `cjoinby`'s does not vary. The result replaces the dataset in memory; `r(N)`, `r(N_1)`, `r(N_2)` and `r(N_3)` hold the observation counts. See `help cjoinby` or the [guide](commands/cjoinby.md).
+
+### Reshaping: `creshape`
+
+`creshape` converts data from wide to long form and back, with the syntax of Stata's `reshape`. In wide form each `i` has one observation and one variable per value of `j` (`inc80`, `inc81`, …); in long form each `i` and `j` has one observation.
+
+```stata
+creshape long stubnames, i(varlist) [j(varname [values]) string atwl(chars) ///
+    favor(speed|memory) verbose threads(#)]
+creshape wide stubnames, i(varlist) [j(varname [values]) string atwl(chars) ///
+    favor(speed|memory) verbose threads(#)]
+creshape long | wide [, verbose threads(#)]
+```
+
+```stata
+* Wide to long: inc80 inc81 inc82 become inc, with the new variable year
+webuse reshape1, clear
+creshape long inc ue, i(id) j(year)
+
+* And back, from the settings stored with the data
+creshape wide
+
+* Long to wide, string values of j, j inside the names
+creshape wide inc ue, i(id) j(year)
+creshape long inc, i(id) j(sex) string
+creshape long inc@r ue, i(id) j(year)
+```
+
+The result is `reshape`'s: the same observations, sorted by `i` (and `j`), and the same variables with their storage types, formats, labels, notes and characteristics. The settings are the dataset characteristics `reshape` uses, so the two commands can be mixed, and `creshape i`, `j`, `xij`, `xi`, `query`, `clear` and `error` work as in `reshape`. A request that would lose information (a repeated `j` within `i`, a variable that varies within `i`) is refused before the data change. Data with `strL` variables are reshaped by `reshape` itself. See `help creshape` or the [guide](commands/creshape.md).
+
 ## Numerical precision
 
 Accumulated scalar statistics (such as total, model, and residual sums of squares)
 in `cqreg`, `creghdfe`, and `civreghdfe` may match their reference commands to only
 about seven significant digits. See [compatibility](COMPATIBILITY.md) for
 command-specific numerical differences.
+
+## Extensions to generate (cegen)
+
+```stata
+cegen mean_sales = mean(sales), by(firm)
+cegen double share = pc(sales) if year > 2000, by(firm year)
+cegen long id = group(firm year), label
+cegen total = rowtotal(q1 q2 q3 q4)
+```
+
+`cegen` takes the syntax and functions of `egen`. `by()` does not need sorted
+data and does not sort it. An argument that is a variable name is read
+directly; any other expression is evaluated by `generate` first. See
+[cegen](commands/cegen.md) for the functions and the differences from `egen`.
 
 ## Distinct values (cdistinct)
 

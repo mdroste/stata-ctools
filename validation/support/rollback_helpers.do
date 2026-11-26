@@ -102,7 +102,8 @@ program define _ctools_rb_case
             continue
         }
         local left : all globals "CTOOLS_u_*"
-        foreach g in CTOOLS_cwinsor_plugin CTOOLS_crangejoin_plugin {
+        foreach g in CTOOLS_cwinsor_plugin CTOOLS_crangejoin_plugin CTOOLS_cjoinby_plugin ///
+            CTOOLS_cjoinby_mvars CTOOLS_cjoinby_esvar {
             if "${`g'}" != "" local left `left' `g'
         }
         local frames_now ""

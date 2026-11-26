@@ -15,17 +15,21 @@ through a multibyte character.
 |---------|----------|---------------|
 | `csort` | `sort` | Yes |
 | `cmerge` | `merge` | — |
+| `cjoinby` | `joinby` | Row order does not depend on the sort seed; stores `r()` results |
+| `creshape` | `reshape` | `atwl()` in the basic syntax; a failed request leaves the data untouched; stores `r()` results |
 | `cimport` | `import` file-format subcommands | Yes |
 | `cexport` | `export` file-format subcommands | Yes |
 | `cencode` | `encode` | Yes |
 | `cdecode` | `decode` | Yes |
 | `cdestring` | `destring` | — |
 | `cdistinct` | `distinct` | Counts each variable or joint combinations |
+| `cegen` | `egen` | `by()` without sorting; the same result on every run and for any thread count |
 | `chdfe` | `hdfe` | Removes categorical effects and group-specific slopes in C |
 | `cinterpolate` | `ipolate`, `cipolate` | Preserves input row order |
 | `csplit` | `split` | — |
 | `crangejoin` | `rangejoin` | — |
 | `cwinsor` | `winsor2` | — |
+| `ccollapse` | `collapse` | A `by()` variable may also be a source; no copy of the data is made |
 | `csample` | `sample` | Yes |
 | `cbsample` | `bsample` | — |
 | `crangestat` | `rangestat` | — |
@@ -112,6 +116,27 @@ cimport delimited using data_de.csv, clear parselocale(de_DE)
 * Export to CSV and Excel with the same command family
 cexport delimited using output.csv, replace
 cexport excel using output.xlsx, replace
+```
+
+---
+
+## ccollapse
+
+`ccollapse` takes the syntax of `collapse` and produces the same dataset: observations, order, names, storage types, formats, labels and sort order. Every statistic of `collapse` is available (`mean`, `median`, `p1`-`p99`, `sd`, `semean`, `sebinomial`, `sepoisson`, `sum`, `rawsum`, `count`, `percent`, `max`, `min`, `iqr`, `first`, `last`, `firstnm`, `lastnm`), with all four weight types, `if`, `in`, `by()` and `cw`.
+
+**ctools adds:**
+
+- **Parallel implementation**: the data are read once, groups are found without sorting the observations where possible, and statistics are computed by all threads
+- **No copy of the data**: nothing is changed until every statistic is computed, so `fast` is not needed for speed and an error or Break leaves the data as they were
+- **Reproducible sums**: each group is summed in the order of its observations, whatever the order of the data and the number of threads
+- **`by()` variables as sources**: `ccollapse (count) n=id, by(id)` works, where `collapse` stops
+
+```stata
+* Means by group
+ccollapse price mpg, by(foreign)
+
+* Several statistics with target names
+ccollapse (mean) price (sd) sd_price=price (median) med_price=price (count) n=price, by(rep78)
 ```
 
 ---

@@ -9,7 +9,7 @@
 ```
 
 [![Build](https://github.com/mdroste/stata-ctools/actions/workflows/build.yml/badge.svg)](https://github.com/mdroste/stata-ctools/actions/workflows/build.yml)
-![Version](https://img.shields.io/badge/version-1.3.1-blue)
+![Version](https://img.shields.io/badge/version-1.3.2-blue)
 
 **This is an initial release. Please report problems/suggestions on [Issues](https://github.com/mdroste/stata-ctools/issues).**
 
@@ -27,6 +27,10 @@ Each ctools command reimplements an existing Stata command and is pinned to one 
 | `export` | `cexport` | Export text, Excel, dBase, SAS, SPSS, and shapefiles | 50–80× |
 | `sort` | `csort` | Sort dataset | 1.7–4×² |
 | `merge` | `cmerge` | Merge (join) datasets | 2–6×² |
+| `joinby` | [`cjoinby`](docs/commands/cjoinby.md) | Form all pairwise combinations within groups | 20–70× |
+| `reshape` | [`creshape`](docs/commands/creshape.md) | Convert data from wide to long form and vice versa | 20–40×⁷ |
+| `collapse` | [`ccollapse`](docs/commands/ccollapse.md) | Make dataset of summary statistics | 1.1–20×⁴ |
+| `egen` | [`cegen`](docs/commands/cegen.md) | Extensions to generate | 3–60×⁵ |
 | `sample` | `csample` | Resampling without replacement | 6–10× |
 | `bsample` | `cbsample` | Resampling with replacement | 2–4× |
 | `encode` | `cencode` | Recast string as labeled numeric | 30–160× |
@@ -60,6 +64,12 @@ See [Attribution](docs/ATTRIBUTION.md#community-contributed-commands) for the au
 
 ³ Measured at 1M and 10M observations only: `qreg` and `ppmlhdfe` take minutes per run at 25M.
 
+⁴ Measured at 10M observations only, on nine combinations of statistics and `by()` variables, and not yet part of the benchmark profile above; the smallest speedup is without `by()`. Against `gcollapse` the range was 4–20×; see the [command page](docs/commands/ccollapse.md#performance).
+
+⁵ Measured at 2M and 10M observations on 33 combinations of `egen` functions and `by()` variables, and not yet part of the benchmark profile above. The smallest speedups are for sums without `by()` and across variables, where `egen` is already fast; the largest are for `mode()`, `tag()` and `seq()` within groups. Against `gegen` the range at 2M was 1.3–6× for the functions `gegen` implements; see the [command page](docs/commands/cegen.md#performance).
+
+⁷ Measured on data of 1M and 10M observations in long form (ten values of `j`, three reshaped variables and three others), in both directions, against `reshape`'s default `favor(speed)`, and not yet part of the benchmark profile above. See the [`creshape` guide](docs/commands/creshape.md#performance).
+
 ## Installation
 
 ctools requires Stata 14.1+, macOS 11 or later (Apple Silicon or Intel), Windows 10 or
@@ -69,6 +79,9 @@ You can install the latest version of ctools from this GitHub repository within 
 ```stata
 net install ctools, from("https://raw.githubusercontent.com/mdroste/stata-ctools/main/build") replace
 ```
+
+Once ctools is installed, `ctools, update` checks GitHub for the latest release
+and installs it if it is newer than your version.
 
 Alternatively, you can install a recent stable version from SSC:
 ```stata

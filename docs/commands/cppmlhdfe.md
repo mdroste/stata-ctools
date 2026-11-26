@@ -130,7 +130,7 @@ replays the last fit with the same parts; `eform` (or its synonym `irr`, both
 shown as exp(b)), `noheader`, `notable` and the display options apply, and the
 replay returns `_coef_table`'s `r()`. `cppmlhdfe, version` shows the command's
 location and version and the ctools plugin; `cppmlhdfe, reload` tells how to
-reinstall ctools (`ctools, update`), where `ppmlhdfe`'s reinstalls from its
+reinstall ctools (`ctools, update force`), where `ppmlhdfe`'s reinstalls from its
 author's working copy.
 
 ## Covariance, inference, and prediction

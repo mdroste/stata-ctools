@@ -552,7 +552,38 @@ static CTOOLS_INLINE void dd_dot_weighted_multi_body(const int fused, const ST_d
         out[t + 2] = s2;
         out[t + 3] = s3;
     }
-    for (; t < n; t++) {
+    /* The one to three sums left over, in one pass as well: a double-double
+     * sum is one long chain of dependent additions, so sums taken together
+     * cost little more than one taken alone (each is still its own sum over
+     * the rows in order: the same values as one pass per sum). */
+    if (n - t == 3) {
+        const ST_double *y0 = ys[t], *y1 = ys[t + 1], *y2 = ys[t + 2];
+        dd_real s0 = {0.0, 0.0}, s1 = {0.0, 0.0}, s2 = {0.0, 0.0};
+        for (ST_int i = 0; i < N; i++) {
+            ST_double wx = w ? w[i] * x[i] : x[i];
+            dd_real p0 = two_prod_as(fused, wx, y0[i]);
+            dd_real p1 = two_prod_as(fused, wx, y1[i]);
+            dd_real p2 = two_prod_as(fused, wx, y2[i]);
+            s0 = dd_add_d(dd_add_d(s0, p0.hi), p0.lo);
+            s1 = dd_add_d(dd_add_d(s1, p1.hi), p1.lo);
+            s2 = dd_add_d(dd_add_d(s2, p2.hi), p2.lo);
+        }
+        out[t] = s0;
+        out[t + 1] = s1;
+        out[t + 2] = s2;
+    } else if (n - t == 2) {
+        const ST_double *y0 = ys[t], *y1 = ys[t + 1];
+        dd_real s0 = {0.0, 0.0}, s1 = {0.0, 0.0};
+        for (ST_int i = 0; i < N; i++) {
+            ST_double wx = w ? w[i] * x[i] : x[i];
+            dd_real p0 = two_prod_as(fused, wx, y0[i]);
+            dd_real p1 = two_prod_as(fused, wx, y1[i]);
+            s0 = dd_add_d(dd_add_d(s0, p0.hi), p0.lo);
+            s1 = dd_add_d(dd_add_d(s1, p1.hi), p1.lo);
+        }
+        out[t] = s0;
+        out[t + 1] = s1;
+    } else if (n - t == 1) {
         out[t] = dd_dot_weighted_body(fused, x, ys[t], w, N);
     }
 }

@@ -533,6 +533,21 @@ real storage types. But the round trip starts with `save`, which took 0.74 s
 for the 1.6 GB dataset, where the SPI load took 0.16 s. So the read path
 pays only for strLs, binary data or metadata, the same trade-off as writing.
 
+The metadata case exists: `src/formats/ctools_dta_schema.{h,c}` reads the
+description of a format 118 or 119 file (storage types, names, sort list,
+formats, variable and value labels, characteristics, the data label) and
+writes one back with no observations. `creshape` saves the dataset after
+dropping its observations (`save, emptyok orphans` takes under a millisecond
+and about 640 bytes per variable), rewrites that description for the reshaped
+form, and loads it with `use` before filling the values through the SPI. This
+keeps the SPI's speed for the values and takes from the file route only what
+the SPI cannot do. Two facts found on the way (StataNow 19.5): `use` of a
+file without observations takes the file's sort list and `set obs` keeps it,
+so a plugin that then writes the observations in that order has a sorted
+dataset without `sort`; and fixed-width fields are best copied byte for byte,
+since a display format such as `%tcHH:MM:SS.sss` is numeric but ends in `s`.
+See [the developer guide](README.md#reshaping).
+
 ## Open questions
 
 - Does `use` validate variable names, formats or value label order? The

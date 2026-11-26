@@ -22,4 +22,15 @@ ST_int ppml_select_fe_sample_ex(const ST_double *y, ST_int *const *levels,
     ST_int *num_singletons, ST_int *num_separated,
     const ST_int *slope_only, ST_int keep_singletons, ST_int check_separation);
 
+/* Whether ppml_select_fe_sample_ex() would keep every row of a sample whose
+ * mask is all ones, found in one pass: no factor has a row alone in a level
+ * (num_single[g], the load's count of such rows, is 0 for every factor;
+ * negative means not known; not looked at with keep_singletons), and with
+ * check_separation every level of every factor that is not slope-only has a
+ * positive outcome. Returns 1 when so; 0 when a row would be dropped or this
+ * cannot tell (the selection then decides). */
+int ppml_fe_sample_is_whole(const ST_double *y, ST_int *const *levels,
+    const ST_int *num_levels, const ST_int *num_single, ST_int G, ST_int N,
+    const ST_int *slope_only, ST_int keep_singletons, ST_int check_separation);
+
 #endif /* CPPMLHDFE_SEPARATION_H */

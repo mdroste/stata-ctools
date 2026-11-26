@@ -1,4 +1,4 @@
-*! version 1.3.1 20261124 github.com/mdroste/stata-ctools
+*! version 1.3.2 20261124 github.com/mdroste/stata-ctools
 *! original: ppmlhdfe 2.3.3 (November 2, 2025) by Sergio Correia, Paulo Guimarães, and Thomas Zylkin
 *! original: see help cppmlhdfe for details
 
@@ -1720,11 +1720,11 @@ program define _cppmlhdfe_version
 end
 
 * cppmlhdfe, reload: ppmlhdfe's reload reinstalls ppmlhdfe from its author's
-* working copy. ctools is reinstalled with ctools, update; the programs then
-* in memory are replaced after program drop _all (or discard).
+* working copy. ctools is reinstalled with ctools, update force; the programs
+* then in memory are replaced after program drop _all (or discard).
 program define _cppmlhdfe_reload
     version 14.1
-    di as text "{bf:cppmlhdfe} is part of ctools: type {stata ctools, update} to reinstall it."
+    di as text "{bf:cppmlhdfe} is part of ctools: type {stata ctools, update force} to reinstall it."
     di as text _n "{bf:Note:} You need to run {stata program drop _all} now."
 end
 

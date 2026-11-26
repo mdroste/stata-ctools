@@ -1568,11 +1568,25 @@
     },
     "update": {
       "kind": "contract",
-      "reason": "A test-only copy replaces only network dispatch; success, up-to-date, and error branches are exercised without installation.",
+      "reason": "A test-only copy reads a local release reply and replaces network dispatch; newer, up-to-date, newer-installed, missing-release and error branches are exercised without installation, and package records after a local install are checked.",
       "evidence": [
         {
           "path": "validation/stata/oracle_tests.do",
           "anchor": "ctools update dispatch mocked status"
+        },
+        {
+          "path": "validation/stata/contracts.do",
+          "anchor": "ctools update removes records of earlier GitHub installs"
+        }
+      ]
+    },
+    "force": {
+      "kind": "contract",
+      "reason": "A test-only copy reads a local release reply: force installs the latest release when ctools is up to date, and without update it is an error.",
+      "evidence": [
+        {
+          "path": "validation/stata/oracle_tests.do",
+          "anchor": "ctools update force reinstalls the latest release"
         }
       ]
     },
@@ -2727,6 +2741,128 @@
         {
           "path": "validation/stata/csort.do",
           "anchor": "SORT-02 csort x, stable"
+        }
+      ]
+    }
+  },
+  "cjoinby": {
+    "snapshot": {
+      "kind": "contract",
+      "reason": "Failures injected after the first change (schema, plugin store, after the plugin, after the strL copies) are undone from a preserve snapshot: data, variable order, storage types, formats, labels, notes, characteristics, sort marker and c(changed) equal a copy saved before; successful results equal the default mode.",
+      "evidence": [
+        {
+          "path": "validation/stata/cjoinby.do",
+          "anchor": "[rollback] `fault'"
+        },
+        {
+          "path": "validation/stata/cjoinby.do",
+          "anchor": "option `mode' gives the default results"
+        }
+      ]
+    },
+    "fast": {
+      "kind": "contract",
+      "reason": "Injected failures are reported and, with no undo, leave the data changed; successful results equal the default mode; combining fast with snapshot is refused before any change.",
+      "evidence": [
+        {
+          "path": "validation/stata/cjoinby.do",
+          "anchor": "[rollback] `fault'"
+        },
+        {
+          "path": "validation/stata/cjoinby.do",
+          "anchor": "option `mode' gives the default results"
+        },
+        {
+          "path": "validation/stata/cjoinby.do",
+          "anchor": "snapshot and fast together refused"
+        }
+      ]
+    }
+  },
+  "creshape": {
+    "i": {
+      "kind": "differential",
+      "reason": "The command suite compares the reshaped data, their description and the return code with reshape for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/creshape.do",
+          "anchor": "long and wide round trips equal reshape"
+        },
+        {
+          "path": "validation/stata/creshape.do",
+          "anchor": "two i variables"
+        }
+      ]
+    },
+    "j": {
+      "kind": "differential",
+      "reason": "The command suite compares the reshaped data, their description and the return code with reshape for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/creshape.do",
+          "anchor": "listed j values, one without variables"
+        },
+        {
+          "path": "validation/stata/creshape.do",
+          "anchor": "wide, j listed out of order"
+        }
+      ]
+    },
+    "atwl": {
+      "kind": "contract",
+      "reason": "reshape takes atwl() only in reshape xij; the suite compares that form with reshape and checks the option in the basic syntax.",
+      "evidence": [
+        {
+          "path": "validation/stata/creshape.do",
+          "anchor": "declared settings, xi list in its order, atwl: long"
+        },
+        {
+          "path": "validation/stata/creshape.do",
+          "anchor": "atwl() in the basic syntax"
+        }
+      ]
+    },
+    "string": {
+      "kind": "differential",
+      "reason": "The command suite compares the reshaped data, their description and the return code with reshape for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/creshape.do",
+          "anchor": "string j from the variable names"
+        },
+        {
+          "path": "validation/stata/creshape.do",
+          "anchor": "string j in the observations"
+        }
+      ]
+    },
+    "favor": {
+      "kind": "contract",
+      "reason": "favor() selects reshape's method; creshape records the value for reshape and rejects other values, which the suite checks.",
+      "evidence": [
+        {
+          "path": "validation/stata/creshape.do",
+          "anchor": "favor() is recorded and checked"
+        }
+      ]
+    },
+    "verbose": {
+      "kind": "contract",
+      "reason": "The option is an addition of ctools; the command suite checks its contract.",
+      "evidence": [
+        {
+          "path": "validation/stata/creshape.do",
+          "anchor": "verbose timing table; no scalars are left"
+        }
+      ]
+    },
+    "threads": {
+      "kind": "contract",
+      "reason": "The option is an addition of ctools; the suite checks that the result does not depend on it.",
+      "evidence": [
+        {
+          "path": "validation/stata/creshape.do",
+          "anchor": "threads(1) equals the default"
         }
       ]
     }

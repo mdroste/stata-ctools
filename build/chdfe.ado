@@ -1,4 +1,4 @@
-*! version 1.3.1 20261124 github.com/mdroste/stata-ctools
+*! version 1.3.2 20261124 github.com/mdroste/stata-ctools
 *! Remove absorbed fixed effects from a list of variables
 *! original: hdfe 3.2.9 (February 21, 2016; SSC distribution of August 6, 2016) by Sergio Correia
 *! original: see help chdfe for details

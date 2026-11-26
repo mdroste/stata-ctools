@@ -290,62 +290,76 @@ static void hc2_apply(void *ctx, const ST_double *p, ST_double *q)
  * Building the system
  * ======================================================================== */
 
-/* Cells grouped by level of S, for the two-pass sweep */
-static ST_retcode hc2_by_column(hc2_system *M)
+/* Cells grouped by level of S, for the two-pass sweep: where they go. With
+ * weights, *dest_out receives the position of each cell in that order (NULL
+ * when they arrive in it) for hc2_by_column_values(); the caller frees it. */
+static ST_retcode hc2_by_column(hc2_system *M, int weighted, ST_int **dest_out)
 {
     const hdfe_crosstab *C = &M->C;
     const ST_int nnz = C->nnz, nB = M->nB;
     ST_int *dest = NULL;
     int sorted = 0;
+    *dest_out = NULL;
     ST_retcode rc =
         hdfe_coef_group_rows(nnz, C->col, M->nS, NULL, 0, &M->cptr, &dest, &sorted, NULL);
     if (rc)
         return rc;
     M->crow = (ST_int *)malloc((size_t)nnz * sizeof(ST_int));
-    M->cval = C->val ? (ST_double *)malloc((size_t)nnz * sizeof(ST_double)) : NULL;
-    if (!M->crow || (C->val && !M->cval))
+    M->cval = weighted ? (ST_double *)malloc((size_t)nnz * sizeof(ST_double)) : NULL;
+    if (!M->crow || (weighted && !M->cval))
     {
         free(dest);
         return 920;
     }
     ST_int *crow = M->crow;
-    ST_double *cval = M->cval;
 #pragma omp parallel for schedule(dynamic, 1024) if (nnz > HDFE_COEF_PARALLEL_MIN)
     for (ST_int f = 0; f < nB; f++)
     {
         for (ST_int e = C->rowptr[f]; e < C->rowptr[f + 1]; e++)
-        {
-            const ST_int at = dest ? dest[e] : e;
-            crow[at] = f;
-            if (cval)
-                cval[at] = C->val[e];
-        }
+            crow[dest ? dest[e] : e] = f;
     }
-    free(dest);
+    if (weighted)
+        *dest_out = dest;
+    else
+        free(dest);
     return 0;
 }
 
-static ST_retcode hc2_system_build(hc2_system *M, const HDFE_State *S, int allow_twopass)
+/* The cells' weights in the order by column */
+static void hc2_by_column_values(hc2_system *M, const ST_int *dest)
+{
+    const hdfe_crosstab *C = &M->C;
+    const ST_int nnz = C->nnz;
+    const ST_double *RESTRICT val = C->val;
+    ST_double *RESTRICT cval = M->cval;
+#pragma omp parallel for schedule(static) if (nnz > HDFE_COEF_PARALLEL_MIN)
+    for (ST_int e = 0; e < nnz; e++)
+        cval[dest ? dest[e] : e] = val[e];
+}
+
+/* The effect that is eliminated (the one with more levels) and the one kept */
+static void hc2_system_open(hc2_system *M, const HDFE_State *S)
 {
     memset(M, 0, sizeof(*M));
-    /* eliminate the effect with more levels */
     const int b = S->factors[1].num_levels > S->factors[0].num_levels ? 1 : 0;
     const FE_Factor *fB = &S->factors[b], *fS = &S->factors[1 - b];
-    const ST_int N = S->N, nB = fB->num_levels, nS = fS->num_levels;
-    M->N = N;
-    M->nB = nB;
-    M->nS = nS;
+    M->N = S->N;
+    M->nB = fB->num_levels;
+    M->nS = fS->num_levels;
     M->lvB = fB->levels;
     M->lvS = fS->levels;
-    M->w = S->weights;
+}
 
-    ST_retcode rc = hdfe_crosstab_build(&M->C, N, M->lvB, nB, M->lvS, nS, M->w);
-    if (rc)
-        return rc;
+/* What the cells of M->C decide whatever their weights: the storage of the
+ * weights' part, the rows of B that link levels, the plan of the sweeps.
+ * weighted: the cells will carry weights. *cdest is hc2_by_column()'s. */
+static ST_retcode hc2_system_structure(hc2_system *M, int allow_twopass, int weighted,
+                                       ST_int **cdest)
+{
+    const ST_int N = M->N, nB = M->nB, nS = M->nS;
     const hdfe_crosstab *C = &M->C;
-    const ST_int *rowptr = C->rowptr, *col = C->col;
-    const ST_double *val = C->val;
-    const int par = C->nnz > HDFE_COEF_PARALLEL_MIN;
+    const ST_int *rowptr = C->rowptr;
+    *cdest = NULL;
 
     M->invB = (ST_double *)malloc((size_t)nB * sizeof(ST_double));
     M->nSw = (ST_double *)malloc((size_t)nS * sizeof(ST_double));
@@ -355,21 +369,6 @@ static ST_retcode hc2_system_build(hc2_system *M, const HDFE_State *S, int allow
     if (!M->invB || !M->nSw || !M->dS || !M->diag || !M->act)
         return 920;
 
-    /* weighted counts of B, each over its cells in order */
-    ST_double *invB = M->invB;
-#pragma omp parallel for schedule(static) if (par)
-    for (ST_int f = 0; f < nB; f++)
-    {
-        ST_double total = 0.0;
-        if (val)
-        {
-            for (ST_int e = rowptr[f]; e < rowptr[f + 1]; e++)
-                total += val[e];
-        }
-        else
-            total = (ST_double)(rowptr[f + 1] - rowptr[f]);
-        invB[f] = total > 0.0 ? 1.0 / total : 0.0;
-    }
     ST_int nact = 0, nnz_act = 0;
     for (ST_int f = 0; f < nB; f++)
     {
@@ -401,11 +400,59 @@ static ST_retcode hc2_system_build(hc2_system *M, const HDFE_State *S, int allow
     if (!M->ch_act || !M->ch_all)
         return 920;
 
+    M->D.N = N;
+    M->D.nB = nB;
+    M->D.m = nS;
+    M->D.nk = 1;
+    M->D.sorted = C->sorted;
+    M->D.lvB = M->lvB;
+    M->D.lvk[0] = M->lvS;
+    M->D.off[0] = 0;
+    M->D.off[1] = nS;
+    M->D.invB = M->invB;
+    if (M->twopass)
+        return hc2_by_column(M, weighted, cdest);
+    return 0;
+}
+
+/* What follows the weights, from the cell weights M->C.val (NULL: every cell
+ * weighs one) and the row weights w: the level counts of both effects, the
+ * diagonal of S and the cells by column. scratch holds the chunks' sums.
+ * Returns 0 or 920. */
+static ST_retcode hc2_system_values(hc2_system *M, const ST_double *w, const ST_int *cdest,
+                                    hdfe_coef_buf *scratch)
+{
+    const ST_int nB = M->nB, nS = M->nS;
+    const hdfe_crosstab *C = &M->C;
+    const ST_int *rowptr = C->rowptr, *col = C->col;
+    const ST_double *val = C->val;
+    const int par = C->nnz > HDFE_COEF_PARALLEL_MIN;
+    const int nch = M->nch;
+    M->w = w;
+    M->D.w = w;
+
+    /* weighted counts of B, each over its cells in order */
+    ST_double *invB = M->invB;
+#pragma omp parallel for schedule(static) if (par)
+    for (ST_int f = 0; f < nB; f++)
+    {
+        ST_double total = 0.0;
+        if (val)
+        {
+            for (ST_int e = rowptr[f]; e < rowptr[f + 1]; e++)
+                total += val[e];
+        }
+        else
+            total = (ST_double)(rowptr[f + 1] - rowptr[f]);
+        invB[f] = total > 0.0 ? 1.0 / total : 0.0;
+    }
+
     /* Weighted counts of S, the part of them in single-cell rows and the
      * diagonal of S: per chunk, then chunks in order. */
     {
         const size_t stride = (size_t)3 * (size_t)nS;
-        ST_double *acc = (ST_double *)malloc((size_t)nch * stride * sizeof(ST_double));
+        ST_double *acc =
+            (ST_double *)hdfe_coef_buf_get(scratch, (size_t)nch * stride * sizeof(ST_double));
         if (!acc)
             return 920;
 #pragma omp parallel for schedule(dynamic, 1) if (par && nch > 1)
@@ -447,22 +494,105 @@ static ST_retcode hc2_system_build(hc2_system *M, const HDFE_State *S, int allow
             M->dS[j] = count - single;
             M->diag[j] = count - single - square;
         }
-        free(acc);
     }
-    M->D.N = N;
-    M->D.nB = nB;
-    M->D.m = nS;
-    M->D.nk = 1;
-    M->D.sorted = C->sorted;
-    M->D.lvB = M->lvB;
-    M->D.lvk[0] = M->lvS;
-    M->D.off[0] = 0;
-    M->D.off[1] = nS;
-    M->D.w = M->w;
-    M->D.invB = M->invB;
-    if (M->twopass)
-        return hc2_by_column(M);
+    if (M->twopass && M->cval)
+        hc2_by_column_values(M, cdest);
     return 0;
+}
+
+/* The system for one projection: nothing is kept */
+static ST_retcode hc2_system_build(hc2_system *M, const HDFE_State *S, int allow_twopass)
+{
+    hc2_system_open(M, S);
+    ST_retcode rc =
+        hdfe_crosstab_build(&M->C, M->N, M->lvB, M->nB, M->lvS, M->nS, S->weights);
+    if (rc)
+        return rc;
+    ST_int *cdest = NULL;
+    hdfe_coef_buf scratch = {NULL, 0};
+    rc = hc2_system_structure(M, allow_twopass, M->C.val != NULL, &cdest);
+    if (!rc)
+        rc = hc2_system_values(M, S->weights, cdest, &scratch);
+    free(cdest);
+    hdfe_coef_buf_free(&scratch);
+    return rc;
+}
+
+/* ========================================================================
+ * The system kept between projections (hdfe_coef_plan)
+ * ======================================================================== */
+
+enum
+{
+    HC2_BUF_COUNTS, /* hc2_system_values' chunk sums */
+    HC2_BUF_A0,
+    HC2_BUF_G,
+    HC2_BUF_B,
+    HC2_BUF_DENSE,
+    HC2_BUF_DEAD,
+    HC2_BUF_SWEEP,
+    HC2_BUF_PCG,
+    HC2_BUF_MINV,
+    HC2_BUFS
+};
+
+typedef struct
+{
+    hc2_system M;      /* M.C is a view of X.C */
+    hdfe_crossplan X;  /* the cells, and where every row's weight goes */
+    ST_int *cdest;     /* two-pass sweep: hc2_by_column()'s positions */
+    int allow_twopass; /* as the structure was built */
+    hdfe_coef_rowplan R;
+    hdfe_coef_buf buf[HC2_BUFS];
+} hc2_kept;
+
+static void hc2_kept_free(void *kept)
+{
+    hc2_kept *T = (hc2_kept *)kept;
+    if (!T)
+        return;
+    memset(&T->M.C, 0, sizeof(T->M.C)); /* X's arrays */
+    hc2_system_free(&T->M);
+    hdfe_crossplan_free(&T->X);
+    free(T->cdest);
+    hdfe_coef_rowplan_free(&T->R);
+    for (int i = 0; i < HC2_BUFS; i++)
+        hdfe_coef_buf_free(&T->buf[i]);
+    free(T);
+}
+
+/* The levels' part, once. NULL with *rc set on failure. */
+static hc2_kept *hc2_kept_build(const HDFE_State *S, int allow_twopass, ST_retcode *rc)
+{
+    hc2_kept *T = (hc2_kept *)calloc(1, sizeof(*T));
+    if (!T)
+    {
+        *rc = 920;
+        return NULL;
+    }
+    hc2_system *M = &T->M;
+    hc2_system_open(M, S);
+    T->allow_twopass = allow_twopass;
+    *rc = hdfe_crossplan_build(&T->X, M->N, M->lvB, M->nB, M->lvS, M->nS);
+    if (!*rc)
+    {
+        M->C = T->X.C;
+        *rc = hc2_system_structure(M, allow_twopass, 1, &T->cdest);
+    }
+    if (*rc)
+    {
+        hc2_kept_free(T);
+        return NULL;
+    }
+    return T;
+}
+
+/* The weights' part, every call */
+static ST_retcode hc2_kept_values(hc2_kept *T, const HDFE_State *S)
+{
+    hdfe_crossplan_values(&T->X, S->weights);
+    T->M.C.val = T->X.C.val;
+    return hc2_system_values(&T->M, S->weights, T->cdest, &T->buf[HC2_BUF_COUNTS]);
 }
 
 /* ========================================================================
@@ -740,21 +870,52 @@ static hdfe_coef_method hc2_choose(const hc2_system *M, ST_int K, hdfe_coef_meth
                : HDFE_COEF_PCG;
 }
 
-static HDFE_SolveResult hc2_partial_out(const HDFE_State *S, ST_double *data, ST_int N, ST_int K,
+/* plan: NULL (nothing is kept: the system is built for this call and freed),
+ * or the plan that holds, or will hold, the system of S's two effects */
+static HDFE_SolveResult hc2_partial_out(const HDFE_State *S, hdfe_coef_plan *plan,
+                                        ST_double *data, ST_int N, ST_int K,
                                         hdfe_coef_method method)
 {
     HDFE_SolveResult result = {0, 1, 0};
     hc2_system M;
-    hdfe_coef_rowplan R;
+    hc2_kept *T = NULL;
+    hdfe_coef_rowplan R_once, *R = &R_once;
+    hdfe_coef_buf buf_once[HC2_BUFS], *buf = buf_once;
     hc2_sweep W = {&M, 0, NULL, NULL};
     ST_double *a0 = NULL, *g = NULL, *b = NULL, *pcg = NULL, *Sd = NULL, *minv = NULL;
     ST_double weakest = 1.0;
     unsigned char *dead = NULL;
     hdfe_lap *lap = NULL;
-    memset(&R, 0, sizeof(R));
+    memset(&R_once, 0, sizeof(R_once));
+    memset(buf_once, 0, sizeof(buf_once));
+    memset(&M, 0, sizeof(M));
 
     /* the dense path needs the fused bookkeeping, which is all it uses */
-    ST_retcode rc = hc2_system_build(&M, S, method != HDFE_COEF_DENSE);
+    const int allow_twopass = method != HDFE_COEF_DENSE;
+    ST_retcode rc = 0;
+    if (plan)
+    {
+        T = (hc2_kept *)plan->kept;
+        if (T && T->allow_twopass != allow_twopass)
+        {
+            hdfe_coef_plan_bind(plan, S, NULL, NULL);
+            T = NULL;
+        }
+        if (!T)
+        {
+            T = hc2_kept_build(S, allow_twopass, &rc);
+            if (!T)
+                return (HDFE_SolveResult){rc, 0, 0};
+            hdfe_coef_plan_bind(plan, S, T, hc2_kept_free);
+        }
+        rc = hc2_kept_values(T, S);
+        /* a copy that shares the kept arrays: nothing of it is freed here */
+        M = T->M;
+        R = &T->R;
+        buf = T->buf;
+    }
+    else
+        rc = hc2_system_build(&M, S, allow_twopass);
     if (rc)
         goto done;
     const ST_int nB = M.nB, nS = M.nS;
@@ -768,10 +929,12 @@ static HDFE_SolveResult hc2_partial_out(const HDFE_State *S, ST_double *data, ST
     }
 
     const int KB = K < HDFE_COEF_KMAX ? (int)K : HDFE_COEF_KMAX;
-    a0 = (ST_double *)malloc((size_t)nB * (size_t)KB * sizeof(ST_double));
-    g = (ST_double *)malloc((size_t)nS * (size_t)KB * sizeof(ST_double));
-    b = (ST_double *)malloc((size_t)nS * (size_t)KB * sizeof(ST_double));
-    if (!a0 || !g || !b || (rc = hdfe_coef_rowplan_init(&R, &M.D, KB)))
+    const size_t per_s = (size_t)nS * (size_t)KB * sizeof(ST_double);
+    a0 = (ST_double *)hdfe_coef_buf_get(&buf[HC2_BUF_A0],
+                                        (size_t)nB * (size_t)KB * sizeof(ST_double));
+    g = (ST_double *)hdfe_coef_buf_get(&buf[HC2_BUF_G], per_s);
+    b = (ST_double *)hdfe_coef_buf_get(&buf[HC2_BUF_B], per_s);
+    if (!a0 || !g || !b || (rc = hdfe_coef_rowplan_init(R, &M.D, KB)))
     {
         if (!rc)
             rc = 920;
@@ -779,8 +942,9 @@ static HDFE_SolveResult hc2_partial_out(const HDFE_State *S, ST_double *data, ST
     }
     if (chosen == HDFE_COEF_DENSE)
     {
-        Sd = (ST_double *)malloc((size_t)nS * (size_t)nS * sizeof(ST_double));
-        dead = (unsigned char *)malloc((size_t)nS);
+        Sd = (ST_double *)hdfe_coef_buf_get(&buf[HC2_BUF_DENSE],
+                                            (size_t)nS * (size_t)nS * sizeof(ST_double));
+        dead = (unsigned char *)hdfe_coef_buf_get(&buf[HC2_BUF_DEAD], (size_t)nS);
         if (!Sd || !dead)
         {
             rc = 920;
@@ -791,14 +955,17 @@ static HDFE_SolveResult hc2_partial_out(const HDFE_State *S, ST_double *data, ST
     }
     else
     {
+        ST_double *sweep = (ST_double *)hdfe_coef_buf_get(
+            &buf[HC2_BUF_SWEEP],
+            (M.twopass ? (size_t)nB : (size_t)M.nch * (size_t)nS) * (size_t)KB * sizeof(ST_double));
         if (M.twopass)
-            W.tB = (ST_double *)malloc((size_t)nB * (size_t)KB * sizeof(ST_double));
+            W.tB = sweep;
         else
-            W.buf =
-                (ST_double *)malloc((size_t)M.nch * (size_t)nS * (size_t)KB * sizeof(ST_double));
-        pcg = (ST_double *)malloc(HDFE_COEF_PCG_WORK(nS, KB) * sizeof(ST_double));
-        minv = (ST_double *)malloc((size_t)nS * sizeof(ST_double));
-        if ((!W.tB && !W.buf) || !pcg || !minv)
+            W.buf = sweep;
+        pcg = (ST_double *)hdfe_coef_buf_get(&buf[HC2_BUF_PCG],
+                                             HDFE_COEF_PCG_WORK(nS, KB) * sizeof(ST_double));
+        minv = (ST_double *)hdfe_coef_buf_get(&buf[HC2_BUF_MINV], (size_t)nS * sizeof(ST_double));
+        if (!sweep || !pcg || !minv)
         {
             rc = 920;
             goto done;
@@ -841,7 +1008,7 @@ static HDFE_SolveResult hc2_partial_out(const HDFE_State *S, ST_double *data, ST
             unsigned char state[HDFE_COEF_KMAX] = {0};
             ST_int iterations = 0;
             W.K = kb;
-            hdfe_coef_rows_rhs(&M.D, &R, X, kb, a0, g, f0, scale);
+            hdfe_coef_rows_rhs(&M.D, R, X, kb, a0, g, f0, scale);
             if (ctools_cancel_requested())
             {
                 rc = 1;
@@ -934,17 +1101,14 @@ static HDFE_SolveResult hc2_partial_out(const HDFE_State *S, ST_double *data, ST
 
 done:
     hdfe_lap_free(lap);
-    hdfe_coef_rowplan_free(&R);
-    free(W.buf);
-    free(W.tB);
-    free(a0);
-    free(g);
-    free(b);
-    free(pcg);
-    free(Sd);
-    free(dead);
-    free(minv);
-    hc2_system_free(&M);
+    if (!T)
+    {
+        /* the plan keeps its system, row plan and scratch */
+        hdfe_coef_rowplan_free(&R_once);
+        for (int i = 0; i < HC2_BUFS; i++)
+            hdfe_coef_buf_free(&buf_once[i]);
+        hc2_system_free(&M);
+    }
     if (rc)
     {
         result.status = rc;
@@ -999,16 +1163,83 @@ int hdfe_coef_applies(const HDFE_State *S)
     return 1;
 }
 
+/* S passed hdfe_coef_applies(); plan may be NULL */
+static HDFE_SolveResult hdfe_coef_solve(const HDFE_State *S, hdfe_coef_plan *plan,
+                                        ST_double *data, ST_int N, ST_int K,
+                                        hdfe_coef_method method)
+{
+    if (!data || N != S->N || K < 1 || S->maxiter < 1 || !isfinite(S->tolerance) ||
+        S->tolerance <= 0)
+        return (HDFE_SolveResult){198, 0, 0};
+    if (S->G == 2 && method == HDFE_COEF_DENSE && S->factors[0].num_levels > 46340 &&
+        S->factors[1].num_levels > 46340)
+        return (HDFE_SolveResult){198, 0, 0};
+    if (plan)
+    {
+        /* other factors than the ones the kept structure describes: start over */
+        int same = plan->kept != NULL && plan->N == S->N && plan->G == (int)S->G;
+        for (ST_int g = 0; same && g < S->G; g++)
+            same = plan->levels[g] == S->factors[g].levels &&
+                   plan->nlev[g] == S->factors[g].num_levels;
+        if (!same)
+            hdfe_coef_plan_bind(plan, S, NULL, NULL);
+    }
+    if (S->G > 2)
+        return hdfe_coef_multi_partial_out(S, plan, data, N, K, method);
+    return hc2_partial_out(S, plan, data, N, K, method);
+}
+
 HDFE_SolveResult hdfe_coef_partial_out(const HDFE_State *S, ST_double *data, ST_int N, ST_int K,
                                        hdfe_coef_method method)
 {
-    if (!hdfe_coef_applies(S) || !data || N != S->N || K < 1 || S->maxiter < 1 ||
-        !isfinite(S->tolerance) || S->tolerance <= 0)
+    if (!hdfe_coef_applies(S))
         return (HDFE_SolveResult){198, 0, 0};
-    if (S->G > 2)
-        return hdfe_coef_multi_partial_out(S, data, N, K, method);
-    if (method == HDFE_COEF_DENSE && S->factors[0].num_levels > 46340 &&
-        S->factors[1].num_levels > 46340)
-        return (HDFE_SolveResult){198, 0, 0};
-    return hc2_partial_out(S, data, N, K, method);
+    return hdfe_coef_solve(S, NULL, data, N, K, method);
+}
+
+HDFE_SolveResult hdfe_coef_partial_out_plan(const HDFE_State *S, hdfe_coef_plan *plan,
+                                            ST_double *data, ST_int N, ST_int K,
+                                            hdfe_coef_method method, int *declined)
+{
+    *declined = 0;
+    if (!hdfe_coef_applies(S))
+    {
+        *declined = 1;
+        return (HDFE_SolveResult){0, 0, 0};
+    }
+    /* the kept structure is the weighted one */
+    return hdfe_coef_solve(S, S->weights ? plan : NULL, data, N, K, method);
+}
+
+hdfe_coef_plan *hdfe_coef_plan_create(void)
+{
+    return (hdfe_coef_plan *)calloc(1, sizeof(hdfe_coef_plan));
+}
+
+void hdfe_coef_plan_bind(hdfe_coef_plan *plan, const HDFE_State *S, void *kept,
+                         void (*kept_free)(void *kept))
+{
+    if (plan->kept && plan->kept != kept && plan->kept_free)
+        plan->kept_free(plan->kept);
+    memset(plan, 0, sizeof(*plan));
+    plan->kept = kept;
+    plan->kept_free = kept_free;
+    if (!kept)
+        return;
+    plan->N = S->N;
+    plan->G = (int)S->G;
+    for (ST_int g = 0; g < S->G && g < HDFE_COEF_MAX_EFFECTS; g++)
+    {
+        plan->levels[g] = S->factors[g].levels;
+        plan->nlev[g] = S->factors[g].num_levels;
+    }
+}
+
+void hdfe_coef_plan_free(hdfe_coef_plan *plan)
+{
+    if (!plan)
+        return;
+    if (plan->kept && plan->kept_free)
+        plan->kept_free(plan->kept);
+    free(plan);
 }

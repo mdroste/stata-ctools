@@ -11,10 +11,10 @@
 *                     README sizes. Each must be at least 1000 and a multiple of 200.
 *     quick           smoke test with 10,000 observations.
 *     pairs(names)    comparisons to run, named by the Stata command; default all:
-*                     export import sort merge sample bsample encode decode
-*                     destring distinct ipolate cipolate split rangejoin winsor
-*                     winsor2 rangestat binscatter binscatter2 binsreg reghdfe
-*                     fereg ivreghdfe ppmlhdfe feppml hdfe psmatch2 qreg
+*                     export import sort merge joinby sample bsample encode
+*                     decode destring distinct ipolate cipolate split rangejoin
+*                     winsor winsor2 rangestat binscatter binscatter2 binsreg
+*                     reghdfe fereg ivreghdfe ppmlhdfe feppml hdfe psmatch2 qreg
 *                     (winsor is gstats winsor). A ctools command with several
 *                     Stata counterparts has one comparison for each: cwinsor
 *                     (winsor, winsor2), cbinscatter (binscatter, binscatter2,
@@ -54,7 +54,7 @@
 
 * Messages print with noisily; quietly blocks keep the code out of the output.
 quietly {
-    local allpairs "export import sort merge sample bsample encode decode destring distinct ipolate cipolate split rangejoin winsor winsor2 rangestat binscatter binscatter2 binsreg reghdfe fereg ivreghdfe ppmlhdfe feppml hdfe psmatch2 qreg"
+    local allpairs "export import sort merge joinby sample bsample encode decode destring distinct ipolate cipolate split rangejoin winsor winsor2 rangestat binscatter binscatter2 binsreg reghdfe fereg ivreghdfe ppmlhdfe feppml hdfe psmatch2 qreg"
     * Largest size at which these comparisons run, as in profiles.do.
     local limit_qreg 10000000
     local limit_ppmlhdfe 10000000

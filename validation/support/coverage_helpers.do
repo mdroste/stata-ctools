@@ -786,6 +786,16 @@ program define coverage_merge_preserved
     drop `original_order'
 end
 
+/* joinby leaves observations that tie in an order that depends on the sort
+   seed: order the result of either command by the master and using
+   observation numbers. coverage_joinby <joinby|cjoinby> <its arguments> */
+capture program drop coverage_joinby
+program define coverage_joinby
+    gettoken command 0 : 0
+    `command' `0'
+    sort id uid, stable
+end
+
 /* binscatter's CSV uses file write's short numeric format. Expose its original
    in-memory matrix in a namespaced test copy, without changing any computation.
    Exact anchors make reference-source changes fail instead of silently adapting. */

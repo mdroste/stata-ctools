@@ -137,6 +137,23 @@ plain Hestenes-Stiefel iteration, bit for bit, where the rounding is not
 reached, the same bits for one and four threads, and r(430) when one iteration
 is not enough.
 
+`python3 validation/run.py --native test_hdfe_grouped_native` checks the
+one-pass projections on rows that arrive grouped by a fixed effect, bit for
+bit against the general passes written out in the test: one effect whose
+levels never decrease (short runs, runs longer than a block, more columns than
+are walked together, weights, a lone decrease after the probed rows) against
+the scatter and gather, and the fused right-hand side of the coefficient-space
+solve (levels without rows, a level of 30,000 rows, one to three kept effects,
+every arrangement of the row plan) against the two separate passes.
+
+`python3 validation/run.py --native test_creghdfe_columns_native` checks
+creghdfe's column preparation (means, total sums of squares, standard
+deviations, norms and the standardized matrix, written once from the loaded
+variables) bit for bit against the copy, sum, standardize and dot-product
+passes it replaces: dropped rows, factor-variable indicators, each weight type,
+the double-double sums, the uncentered total, and matrices on either side of
+the size from which the stores bypass the cache, at both alignments.
+
 For licensed rollback checks, generate a test entry point with
 `python3 validation/support/hdfe_cancel_plugin.py --output temp/cancel/ctools_plugin.c`.
 Build a separate plugin using that source instead of `src/ctools_plugin.c`, keeping
@@ -215,6 +232,26 @@ weighted counts) must match bit for bit with and without dropped rows, connected
 components must match a rank-based union-find on disconnected designs, and the
 nesting check must agree. It also checks that every path runs serially inside a
 parallel region.
+
+`test_hdfe_sample_ordered_native` runs the sample construction whose steps share
+their work (`hdfe_load_factors_ordered`, `hdfe_drop_singletons`,
+`hdfe_build_factors_ordered`, the per-level counts all at once or job by job)
+against an independent reference and against the separate steps, on one, three
+and eight threads: the kept rows, the levels in order of first appearance among
+them, the rows per level and the weights per level summed in row order must match
+bit for bit, and the load's first rows and single-row levels must be right. Its
+thresholds are small, so a few hundred rows reach the row blocks, the singleton
+step's counting pass and its fallback to counting every level, the in-place shift
+of the levels over dropped rows, and both parallel counts; a second build uses
+other thresholds. It also drops arbitrary rows through keep flags
+(`hdfe_singletons_from_keep`, listed and not) and compares the factors with
+`hdfe_build_factors` on the same flags, and checks that
+`ppml_fe_sample_is_whole` answers yes exactly when the PPML sample selection
+removes no row.
+
+`test_hdfe_missing_native` also screens columns that carry the load's note of
+missing values (`stata_variable.missing_state`): the result is the same, and data
+noted free of them costs no allocation.
 
 `test_hdfe_numerics_native` checks weak-connection breakdown, healthy small CG
 steps, fully absorbed columns, and invariance to column/weight units. The

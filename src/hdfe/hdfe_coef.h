@@ -113,4 +113,34 @@ int hdfe_coef_applies(const HDFE_State *S);
 HDFE_SolveResult hdfe_coef_partial_out(const HDFE_State *S, ST_double *data, ST_int N, ST_int K,
                                        hdfe_coef_method method);
 
+/*
+ * Repeated projections on the same effects with changing weights (the
+ * iterations of a weighted fit). Which rows share a level, the cells of the
+ * effects and the plan of the sweeps depend on the levels alone; a call of
+ * hdfe_coef_partial_out() finds them again every time, which costs more than
+ * the solve itself on a few columns. A plan keeps them: the first call
+ * builds what later calls reuse, and every call only brings the weights'
+ * part up to date. The residuals are those of hdfe_coef_partial_out() for
+ * the same state, to the last bit.
+ *
+ * A plan describes the level arrays it was first used with (their
+ * addresses, N and the numbers of levels; a call with others starts over).
+ * The caller must not change the levels in place while it keeps the plan,
+ * and frees it with hdfe_coef_plan_free(). One plan serves one projection at
+ * a time. Between calls it holds 4 to 8 bytes per row and effect pair, and
+ * the scratch of the last solve.
+ */
+typedef struct hdfe_coef_plan hdfe_coef_plan;
+hdfe_coef_plan *hdfe_coef_plan_create(void); /* NULL when memory runs out */
+void hdfe_coef_plan_free(hdfe_coef_plan *plan);
+
+/* hdfe_coef_partial_out() with the structure kept in plan (NULL, or a state
+ * without weights: nothing is kept). Where hdfe_coef_partial_out() would
+ * refuse the state itself (hdfe_coef_applies() is 0), *declined is set, data
+ * is left as it is and the result's status is 0: the caller iterates on the
+ * rows. */
+HDFE_SolveResult hdfe_coef_partial_out_plan(const HDFE_State *S, hdfe_coef_plan *plan,
+                                            ST_double *data, ST_int N, ST_int K,
+                                            hdfe_coef_method method, int *declined);
+
 #endif /* CTOOLS_HDFE_COEF_H */
