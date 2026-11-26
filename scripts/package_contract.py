@@ -5,6 +5,8 @@ import hashlib
 import json
 import re
 
+NET_INSTALL_MAX_FILES = 100
+
 
 def check_package(directory, metadata_only=False, integrity=False):
     entries = [
@@ -35,6 +37,11 @@ def check_package(directory, metadata_only=False, integrity=False):
             errors.append(f"license file not in manifest: {name}")
     if len(entries) != len(set(entries)):
         errors.append("duplicate manifest entries")
+    # net install stops with r(640) "package file too long" above this
+    # (Stata 19.5; 1.3.2 first listed 107 files)
+    if len(entries) > NET_INSTALL_MAX_FILES:
+        errors.append(f"{len(entries)} files in the manifest; net install takes at most "
+                      f"{NET_INSTALL_MAX_FILES}: fold a helper into its only caller")
     inventory = {p.name for p in directory.iterdir() if p.suffix in {".ado", ".sthlp"}}
     for name in sorted(inventory - set(entries)):
         errors.append(f"not in manifest: {name}")

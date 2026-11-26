@@ -1986,3 +1986,250 @@ end
 
 * r(sorted) = 1 when the observations are in ascending order of varlist
 * (Stata's sort order: strings bytewise, missing values above numbers)
+
+* The programs below were separate ado files until ctools 1.3.2. Stata's
+* net install takes at most 100 files per package, so helpers that only
+* this file calls are kept here as its subprograms.
+
+* Private helper for cmerge.
+program define _cmerge_native, rclass
+    args cmdline
+    local 0 `"`cmdline'"'
+    gettoken mtype 0 : 0, parse(" ")
+    syntax [anything] using/ [, Keep(string) ASSert(string) GENerate(name) ///
+        NOGENerate KEEPUSing(string) SORTED FORCE NOREPort Verbose noLabels ///
+        NONotes UPDATE REPLACE PRESERVE_order(integer 0) THReads(integer 0) ///
+        SNAPshot FAST TEMPdta DEBUG]
+    local nolabel = cond("`labels'" != "", "nolabel", "")
+    local opts `sorted' `force' `noreport' `nolabel' `nonotes' `update' `replace' `debug'
+    local keep_codes
+    if "`keep'" != "" _cmerge_results keep_codes : `keep'
+    if "`nogenerate'" != "" {
+        tempvar marker
+        local generate `marker'
+    }
+    if "`assert'" != "" local opts `opts' assert(`assert')
+    if "`generate'" != "" local opts `opts' generate(`generate')
+    if "`keepusing'" != "" local opts `opts' keepusing(`keepusing')
+    * merge prints what it prints; the note only with verbose
+    if "`verbose'" != "" di as txt "(note: strL variables are involved; cmerge runs {bf:merge})"
+    local caller = cond("$CTOOLS_cmerge_caller" != "", "$CTOOLS_cmerge_caller", "`c(stata_version)'")
+    * merge can fail after sorting the master, so by default this path keeps
+    * a snapshot: a frame in memory, which cmerge restores after a failure
+    * (preserve before Stata 16). Options snapshot (cmerge preserved already)
+    * and fast need none here.
+    local preserved = 0
+    if "`snapshot'`fast'" == "" {
+        if c(stata_version) >= 16 frame copy `c(frame)' $CTOOLS_cmerge_snapframe
+        else {
+            preserve
+            local preserved = 1
+        }
+    }
+    * The native merge sorts by keys. Carry the master's original ordinal so
+    * this fallback honors the same order option as the plugin. Missing
+    * ordinals put using-only rows after the master, retaining their key order.
+    if `preserve_order' {
+        tempvar master_order
+        quietly gen double `master_order' = _n
+    }
+    capture noisily version `caller': merge `mtype' `anything' using `"`using'"', `opts'
+    local rc = _rc
+    if `preserve_order' & inlist(`rc', 0, 9) {
+        sort `master_order', stable
+        drop `master_order'
+    }
+    if `rc' {
+        * merge exits 9 only when assert() fails; its result stays in memory
+        if `rc' == 9 {
+            global CTOOLS_cmerge_assert_failed 1
+            if `preserved' restore, not
+        }
+        exit `rc'
+    }
+    * Validation hook: fail as Break would once the result is in place
+    if "$CTOOLS_cmerge_fault" == "post" exit 1
+    local mvar = cond("`generate'" != "", "`generate'", "_merge")
+    forvalues c = 1/5 {
+        quietly count if `mvar' == `c'
+        local count`c' = r(N)
+    }
+    if "`keep'" != "" {
+        local keep_list : subinstr local keep_codes " " ",", all
+        quietly keep if inlist(`mvar', `keep_list')
+    }
+    if "`nogenerate'" != "" drop `mvar'
+    return scalar N = _N
+    forvalues c = 1/5 {
+        return scalar N_`c' = `count`c''
+    }
+    return scalar time = .
+    return local using `"`using'"'
+    return local keyvars "`anything'"
+    if `preserved' restore, not
+end
+
+* Private helper for cmerge.
+program define _cmerge_results
+    gettoken macname 0 : 0
+    gettoken colon 0 : 0
+    local codes ""
+    foreach w of local 0 {
+        local l = strlen(`"`w'"')
+        local c ""
+        if inlist(`"`w'"', "1", "2", "3", "4", "5") local c `w'
+        else if substr("masters", 1, max(3, `l')) == `"`w'"' local c 1
+        else if substr("usings", 1, max(2, `l')) == `"`w'"' local c 2
+        else if substr("matches", 1, max(3, `l')) == `"`w'"' local c 3
+        else if substr("matched", 1, max(3, `l')) == `"`w'"' local c 3
+        else if substr("match_updates", 1, max(8, `l')) == `"`w'"' local c 4
+        else if substr("match_conflicts", 1, max(8, `l')) == `"`w'"' local c 5
+        else {
+            di as err `"`w':  invalid {it:resulttype}"'
+            di as err "{p 4 4 2}"
+            di as err "results, specified in options {bf:assert()} and {bf:keep()},"
+            di as err "are the integers 1 through 5, or"
+            di as err "{bf:master} (equivalent to 1),"
+            di as err "{bf:using} (2),"
+            di as err "{bf:match} (3),"
+            di as err "{bf:match_update} (4), or"
+            di as err "{bf:match_conflict} (5).  The last two arise only when"
+            di as err "option {cmd:update} is specified."
+            di as err "{p_end}"
+            exit 198
+        }
+        local codes `codes' `c'
+    }
+    local codes : list uniq codes
+    local codes : list sort codes
+    c_local `macname' "`codes'"
+end
+
+* Private helper for cmerge.
+program define _cmerge_template
+    args file newvars mergevars
+    local keepvars : list newvars - mergevars
+    if "`keepvars'" != "" keep `keepvars'
+    if _N > 0 {
+        quietly keep in 1
+        quietly drop in 1
+    }
+    foreach v of local mergevars {
+        quietly generate byte `v' = .
+    }
+    * keep, unlike drop _all, retains the _dta notes and characteristics
+    * that append passes on to the master
+    if "`keepvars'" == "" {
+        if "`mergevars'" != "" keep `mergevars'
+        else drop _all
+    }
+    quietly save `"`file'"', emptyok replace
+end
+
+* Private helper for cmerge.
+program define _cmerge_keys_sorted, rclass
+    syntax varlist
+    local n : word count `varlist'
+    local v : word `n' of `varlist'
+    local cond "(`v'[_n-1] <= `v')"
+    forvalues j = `=`n'-1'(-1)1 {
+        local v : word `j' of `varlist'
+        local cond "(`v'[_n-1] < `v' | (`v'[_n-1] == `v' & `cond'))"
+    }
+    capture assert `cond' in 2/l
+    return scalar sorted = (_rc == 0)
+end
+
+* Private helper for cmerge.
+program define _cmerge_label_mergevar
+    args mergevar
+    capture label list _merge
+    if _rc {
+        label define _merge 1 "Master only (1)" 2 "Using only (2)" ///
+            3 "Matched (3)" 4 "Missing updated (4)" 5 "Nonmissing conflict (5)"
+    }
+    label values `mergevar' _merge
+    label variable `mergevar' "Matching result from merge"
+end
+
+* Private helper for cmerge.
+program define _cmerge_assert
+    args codes n1 n2 n3 n4 n5
+    local failed = 0
+    forvalues c = 1/5 {
+        if !`: list c in codes' & `n`c'' > 0 local failed = 1
+    }
+    if !`failed' exit
+    local n : word count `codes'
+    local comma = cond(`n' > 2, ",", "")
+    di as err "{p 0 4 2}"
+    di as err "after {bf:merge}, not all observations"
+    local i = 0
+    foreach c of local codes {
+        local ++i
+        if `c' == 1 local text "from master"
+        else if `c' == 2 local text "from using"
+        else if `c' == 3 local text "matched"
+        else if `c' == 4 local text "matched and updated"
+        else local text "matched and conflicting"
+        if `i' == 1 di as err "`text'`comma'"
+        else if `i' < `n' di as err "`text'`comma'"
+        else di as err "or `text'"
+    }
+    di as err "{p_end}"
+    di as err "(merged result left in memory)"
+    global CTOOLS_cmerge_assert_failed 1
+    exit 9
+end
+
+* Private helper for cmerge.
+program define _cmerge_table
+    args isupdate m1 m2 m3 m4 m5 mergevar
+    if "`mergevar'" != "" {
+        forvalues c = 1/5 {
+            local v`c' "(`mergevar'==`c')"
+        }
+    }
+    di
+    di as txt _col(5) "Result" _col(33) "Number of obs"
+    di as txt _col(5) "{hline 41}"
+    di as txt _col(5) "Not matched" _col(30) as res %16.0fc (`m1'+`m2')
+    if (`m1' | `m2') {
+        di as txt _col(9) "from master" _col(30) as res %16.0fc `m1' as txt "  `v1'"
+        di as txt _col(9) "from using" _col(30) as res %16.0fc `m2' as txt "  `v2'"
+        di
+    }
+    if "`isupdate'" == "" {
+        di as txt _col(5) "Matched" _col(30) as res %16.0fc `m3' as txt "  `v3'"
+    }
+    else {
+        if (`m1' == 0 & `m2' == 0) di
+        di as txt _col(5) "Matched" _col(30) as res %16.0fc (`m3'+`m4'+`m5')
+        di as txt _col(9) "not updated" _col(30) as res %16.0fc `m3' as txt "  `v3'"
+        di as txt _col(9) "missing updated" _col(30) as res %16.0fc `m4' as txt "  `v4'"
+        di as txt _col(9) "nonmissing conflict" _col(30) as res %16.0fc `m5' as txt "  `v5'"
+    }
+    di as txt _col(5) "{hline 41}"
+end
+
+* Private helper for cmerge.
+program define _cmerge_clear_sortedby
+    local marked : sortedby
+    if "`marked'" == "" | _N == 0 exit
+    local v : word 1 of `marked'
+    * Stata drops the sort marker when a sort variable changes: change one
+    * value with replace, then put the original back through Mata (no copy
+    * of the variable is needed)
+    capture confirm string variable `v'
+    if _rc {
+        mata: __ctools_sb_hold = st_data(1, "`v'")
+        quietly replace `v' = cond(`v' == 0, 1, 0) in 1
+        mata: st_store(1, "`v'", __ctools_sb_hold)
+    }
+    else {
+        mata: __ctools_sb_hold = st_sdata(1, "`v'")
+        quietly replace `v' = cond(`v' == "", "x", "") in 1
+        mata: st_sstore(1, "`v'", __ctools_sb_hold)
+    }
+    mata: mata drop __ctools_sb_hold
+end

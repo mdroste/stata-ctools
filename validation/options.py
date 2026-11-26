@@ -1071,6 +1071,15 @@ suites remain authoritative for format metadata, random draws, and diagnostics.
 """
 
 
+def program_lines(root, file, program):
+    """The lines of one program in build/<file>.ado, from program define to end."""
+    lines = (root / f"build/{file}.ado").read_text().splitlines()
+    start = next(i for i, line in enumerate(lines)
+                 if re.match(rf"\s*program define {program}\b", line))
+    stop = next(i for i in range(start + 1, len(lines)) if lines[i].strip() == "end")
+    return lines[start:stop + 1]
+
+
 def inventory(root=ROOT):
     found = {}
     for path in sorted((root / "build").glob("c*.ado")):
@@ -1104,17 +1113,17 @@ def inventory(root=ROOT):
         if not opts:
             raise ValueError("public command has no audited syntax: " + str(path))
         found[path.stem] = opts
-    # Statistical-format dispatch options are composed in private adapters.
+    # Statistical-format dispatch options are composed in private adapters,
+    # subprograms of cimport.ado and cexport.ado.
     for cmd, helper in [("cimport", "_cio_import"), ("cexport", "_cio_export")]:
-        for line in (root / f"build/{helper}.ado").read_text().splitlines():
+        for line in program_lines(root, cmd, helper):
             if not re.search(r"\blocal (?:options|syntax_opts)\b", line):
                 continue
             for token in re.findall(r"\b([A-Z][A-Za-z]*(?:\([^)]*\))?)", line):
                 word = token.split("(")[0]
                 if word != "CLEAR":
                     found[cmd][word.lower()] = word
-    shp = (root / "build/_cio_shp_export.ado").read_text()
-    for line in shp.splitlines():
+    for line in program_lines(root, "cexport", "_cio_shp_export"):
         if not re.match(r"\s*syntax\b", line):
             continue
         args = re.sub(r"\([^()]*\)", "", line.split(",", 1)[1])
