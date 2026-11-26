@@ -1,9 +1,12 @@
 #include "cppmlhdfe_internal.h"
 
 /* One block: four double-double sums over the rows i % 4 interleave their
- * dependency chains, then are added in lane order. */
-static dd_real ppml_quad_dot_block(const double *x, const double *y, const double *w, int lo,
-                                   int hi)
+ * dependency chains, then are added in lane order. Compiled for the FMA
+ * instruction as well (ctools_ols.h): the same sums, the product errors in
+ * one instruction where the CPU has it. */
+static CTOOLS_INLINE dd_real ppml_quad_dot_block_body(const int fused, const double *x,
+                                                      const double *y, const double *w, int lo,
+                                                      int hi)
 {
     dd_real s[4] = {{0, 0}, {0, 0}, {0, 0}, {0, 0}};
     int i = lo;
@@ -12,14 +15,14 @@ static dd_real ppml_quad_dot_block(const double *x, const double *y, const doubl
         for (int l = 0; l < 4; l++)
         {
             double xy = x[i + l] * y[i + l];
-            dd_real prod = two_prod(xy, w ? w[i + l] : 1.0);
+            dd_real prod = two_prod_as(fused, xy, w ? w[i + l] : 1.0);
             s[l] = dd_add_d(dd_add_d(s[l], prod.hi), prod.lo);
         }
     }
     for (; i < hi; i++)
     {
         double xy = x[i] * y[i];
-        dd_real prod = two_prod(xy, w ? w[i] : 1.0);
+        dd_real prod = two_prod_as(fused, xy, w ? w[i] : 1.0);
         s[0] = dd_add_d(dd_add_d(s[0], prod.hi), prod.lo);
     }
     dd_real sum = s[0];
@@ -27,6 +30,9 @@ static dd_real ppml_quad_dot_block(const double *x, const double *y, const doubl
         sum = dd_add_d(dd_add_d(sum, s[l].hi), s[l].lo);
     return sum;
 }
+CTOOLS_FMA_VARIANTS(static, dd_real, ppml_quad_dot_block,
+                    (const double *x, const double *y, const double *w, int lo, int hi), x, y, w,
+                    lo, hi)
 
 /* A double-double inner product over fixed blocks of rows, each summed in
  * order and then combined in block order, so the result does not depend on

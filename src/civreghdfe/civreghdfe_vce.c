@@ -203,19 +203,12 @@ ST_retcode ivvce_compute_full(
     ST_int i;
     ST_retcode rc = 0;
 
-    /* Compute residual sum of squares */
+    /* Residual sum of squares, sum (w * e) * e, over fixed blocks of rows
+       added in a fixed order. (An OpenMP reduction adds its threads' partial
+       sums in whatever order they finish: e(V) then differed in its last bit
+       from one run to the next.) */
     ST_double rss = 0.0;
-    if (weights && weight_type != 0) {
-        #pragma omp parallel for schedule(static) reduction(+:rss) if(N > 10000)
-        for (i = 0; i < N; i++) {
-            rss += weights[i] * resid[i] * resid[i];
-        }
-    } else {
-        #pragma omp parallel for schedule(static) reduction(+:rss) if(N > 10000)
-        for (i = 0; i < N; i++) {
-            rss += resid[i] * resid[i];
-        }
-    }
+    ctools_matmul_atdb(resid, resid, (weights && weight_type != 0) ? weights : NULL, N, 1, 1, &rss);
 
     /* ivreg2: sigma^2 = e'e/(N-dofminus), V scaled by
        (N-dofminus)/(N-K-dofminus-sdofminus) without clusters */

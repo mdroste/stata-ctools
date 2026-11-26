@@ -17,11 +17,23 @@
  * ============================================================================ */
 
 /*
+ * The three cross products below (A'B, A'A, A' diag(w) B) share one kernel:
+ * ordinary double arithmetic, one cache-blocked pass over the rows for all
+ * pairs of columns, in parallel over fixed chunks of rows. An element is the
+ * same sum at every thread count and depends only on its two columns, the
+ * weights and N, so ctools_matmul_ata(A), ctools_matmul_atb(A, A) and
+ * ctools_matmul_atdb(A, A, NULL) agree bit for bit, and an element of a
+ * product equals the same element of a product of more columns. When A and B
+ * are the same array with K1 == K2 the result is exactly symmetric (one
+ * triangle is computed and mirrored). A scratch allocation that fails only
+ * selects a slower arrangement of the same sums. A and B may be the same
+ * array; C must not overlap them.
+ */
+
+/*
  * Matrix multiply C = A' * B
  * A is N x K1, B is N x K2, Result C is K1 x K2
  * All matrices stored in column-major order.
- *
- * OPTIMIZED: Uses K-way unrolled dot products and OpenMP parallelization
  */
 void ctools_matmul_atb(const ST_double * restrict A, const ST_double * restrict B,
                        ST_int N, ST_int K1, ST_int K2,
@@ -30,10 +42,6 @@ void ctools_matmul_atb(const ST_double * restrict A, const ST_double * restrict 
 /*
  * Gram matrix C = A' * A
  * A is N x K, Result C is K x K (symmetric), column-major.
- *
- * Each element is the same unrolled dot product ctools_matmul_atb(A, A, ...)
- * computes, so the two give identical results; only the upper triangle is
- * computed (in parallel) and then mirrored.
  */
 void ctools_matmul_ata(const ST_double *A, ST_int N, ST_int K, ST_double *C);
 
@@ -67,9 +75,7 @@ void ctools_matmul_ab(const ST_double * restrict A, const ST_double * restrict B
 /*
  * Weighted matrix multiply C = A' * diag(w) * B
  * A is N x K1, B is N x K2, w is N x 1 (weights, may be NULL)
- * Result C is K1 x K2
- *
- * OPTIMIZED: Uses SIMD-accelerated weighted dot products and OpenMP parallelization
+ * Result C is K1 x K2; element (i, j) sums (w[r] * A[r,i]) * B[r,j].
  */
 void ctools_matmul_atdb(const ST_double * restrict A, const ST_double * restrict B,
                         const ST_double * restrict w, ST_int N, ST_int K1, ST_int K2,

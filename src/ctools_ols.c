@@ -132,28 +132,298 @@ ST_int ctools_solve_cholesky(const ST_double *A, const ST_double *b, ST_int n, S
 }
 
 /* ========================================================================
- * Compensated dot product using FMA-based error-free transformations.
- * Achieves near-quad-precision accumulation for OLS numerical stability.
+ * Compensated (Kahan) products: every product enters with its exact error.
+ * Near-quad-precision accumulation for OLS numerical stability.
  * ======================================================================== */
+
+/* (s, c) += x * y: the running sum in s; in c the rounding errors of the
+ * additions and of the products */
+#define KAHAN_STEP(s, c, x, y, fused)                                                              \
+    do {                                                                                           \
+        const ST_double p_ = (x) * (y);                                                            \
+        const ST_double pe_ =                                                                      \
+            (fused) ? __builtin_fma((x), (y), -p_) : CTOOLS_PROD_ERR((x), (y), p_);                \
+        const ST_double t_ = (s) + p_;                                                             \
+        const ST_double v_ = t_ - (s);                                                             \
+        const ST_double te_ = ((s) - (t_ - v_)) + (p_ - v_);                                       \
+        (c) += te_ + pe_;                                                                          \
+        (s) = t_;                                                                                  \
+    } while (0)
+
+/* n rows of x against nr (1 to 4) right-hand columns. The sums advance
+ * together, which keeps up to four dependency chains in flight instead of
+ * one; each is the sequential sum over the rows. sc holds (s, c) per
+ * right-hand column and is continued, not reset. */
+static CTOOLS_INLINE void kahan_rows_body(const int fused, const int nr, const ST_double *x,
+                                          const ST_double *const *r, ST_int n, ST_double *sc)
+{
+    const ST_double *r0 = r[0], *r1 = r[nr > 1 ? 1 : 0];
+    const ST_double *r2 = r[nr > 2 ? 2 : 0], *r3 = r[nr > 3 ? 3 : 0];
+    ST_double s0 = sc[0], c0 = sc[1];
+    ST_double s1 = nr > 1 ? sc[2] : 0.0, c1 = nr > 1 ? sc[3] : 0.0;
+    ST_double s2 = nr > 2 ? sc[4] : 0.0, c2 = nr > 2 ? sc[5] : 0.0;
+    ST_double s3 = nr > 3 ? sc[6] : 0.0, c3 = nr > 3 ? sc[7] : 0.0;
+
+    for (ST_int i = 0; i < n; i++) {
+        const ST_double xi = x[i];
+        KAHAN_STEP(s0, c0, xi, r0[i], fused);
+        if (nr > 1) KAHAN_STEP(s1, c1, xi, r1[i], fused);
+        if (nr > 2) KAHAN_STEP(s2, c2, xi, r2[i], fused);
+        if (nr > 3) KAHAN_STEP(s3, c3, xi, r3[i], fused);
+    }
+    sc[0] = s0; sc[1] = c0;
+    if (nr > 1) { sc[2] = s1; sc[3] = c1; }
+    if (nr > 2) { sc[4] = s2; sc[5] = c2; }
+    if (nr > 3) { sc[6] = s3; sc[7] = c3; }
+}
+
+#define KAHAN_ROWS_PARAMS (const ST_double *x, const ST_double *const *r, ST_int n, ST_double *sc)
+#define KAHAN_ROWS(nr)                                                                             \
+    static CTOOLS_INLINE void kahan_rows##nr##_body(const int fused, const ST_double *x,           \
+                                                    const ST_double *const *r, ST_int n,           \
+                                                    ST_double *sc)                                 \
+    {                                                                                              \
+        kahan_rows_body(fused, nr, x, r, n, sc);                                                   \
+    }                                                                                              \
+    CTOOLS_FMA_VARIANTS_VOID(static, kahan_rows##nr, KAHAN_ROWS_PARAMS, x, r, n, sc)
+KAHAN_ROWS(1)
+KAHAN_ROWS(2)
+KAHAN_ROWS(3)
+KAHAN_ROWS(4)
+
+static void kahan_rows(int nr, const ST_double *x, const ST_double *const *r, ST_int n,
+                       ST_double *sc)
+{
+    switch (nr) {
+    case 1: kahan_rows1(x, r, n, sc); break;
+    case 2: kahan_rows2(x, r, n, sc); break;
+    case 3: kahan_rows3(x, r, n, sc); break;
+    default: kahan_rows4(x, r, n, sc); break;
+    }
+}
 
 ST_double kahan_dot(const ST_double * RESTRICT x,
                     const ST_double * RESTRICT y,
                     ST_int N)
 {
-    ST_double s = 0.0;
-    ST_double c = 0.0;
-    ST_int i;
+    ST_double sc[2] = {0.0, 0.0};
+    const ST_double *r[1] = {y};
 
-    for (i = 0; i < N; i++) {
-        ST_double p = x[i] * y[i];
-        ST_double pe = CTOOLS_PROD_ERR(x[i], y[i], p);
-        ST_double t = s + p;
-        ST_double v = t - s;
-        ST_double te = (s - (t - v)) + (p - v);
-        c += te + pe;
-        s = t;
+    kahan_rows1(x, r, N, sc);
+    return sc[0] + sc[1];
+}
+
+/* ------------------------------------------------------------------------
+ * ctools_kahan_cross: X'X and X'y, compensated, blocked and in parallel
+ *
+ * The pairs of left column j are (x_j, y) when y is given, then (x_j, x_k)
+ * for k = j .. K-1, in that order: the right-hand columns of x_j, taken
+ * four at a time.
+ * ------------------------------------------------------------------------ */
+
+/* Rows per pass inside a block of the block arrangement: the columns of
+ * that many rows stay in the cache while every pair is taken. The sums are
+ * continued from pass to pass, so this changes no result. */
+#define CTOOLS_KAHAN_ROWS 2048
+/* Blocks summed at once by the block arrangement, and the (s, c) pairs it
+ * may keep per block: beyond that the column arrangement runs */
+#define CTOOLS_KAHAN_WAVE 64
+#define CTOOLS_KAHAN_PAIRS ((size_t)1 << 16)
+/* Element products below which the work stays on the calling thread */
+#define CTOOLS_KAHAN_PARALLEL 400000.0
+
+static inline const ST_double *kahan_cross_rhs(const ST_double *X, const ST_double *y, ST_int N,
+                                               ST_int j, ST_int rhs)
+{
+    if (y) {
+        if (rhs == 0) return y;
+        rhs--;
     }
-    return s + c;
+    return X + (size_t)(j + rhs) * N;
+}
+
+/* Where the sums go: doubles (X'X in both triangles, and X'y), or the upper
+ * triangle of X'X in long double */
+typedef struct {
+    ST_double *xtx, *xty;
+    long double *wide;
+    int has_y;
+    ST_int K;
+} kahan_cross_out;
+
+/* The pair's value is hi + lo */
+static inline void kahan_cross_store(const kahan_cross_out *o, ST_int j, ST_int rhs, ST_double hi,
+                                     ST_double lo)
+{
+    if (o->has_y) {
+        if (rhs == 0) {
+            o->xty[j] = hi + lo;
+            return;
+        }
+        rhs--;
+    }
+    const ST_int k = j + rhs;
+    if (o->wide) {
+        o->wide[(size_t)j * o->K + k] = (long double)hi + (long double)lo;
+        return;
+    }
+    const ST_double value = hi + lo;
+    o->xtx[(size_t)j * o->K + k] = value;
+    o->xtx[(size_t)k * o->K + j] = value;
+}
+
+/* Rows lo .. lo+len-1 of left column j against its right-hand columns
+ * t .. t+n_now-1, the (s, c) pairs in sc continued. With w the left column
+ * is w[i] * x_j[i], rounded before it is multiplied. */
+static inline void kahan_cross_rows(const ST_double *X, const ST_double *y, const ST_double *w,
+                                    ST_int N, ST_int j, ST_int t, int n_now, size_t lo, ST_int len,
+                                    ST_double *sc)
+{
+    ST_double wx[CTOOLS_KAHAN_ROWS];
+    const ST_double *col[4], *r[4];
+
+    for (int q = 0; q < n_now; q++) col[q] = kahan_cross_rhs(X, y, N, j, t + q);
+    for (ST_int r0 = 0; r0 < len; r0 += CTOOLS_KAHAN_ROWS) {
+        const ST_int rows = (len - r0 < CTOOLS_KAHAN_ROWS) ? len - r0 : CTOOLS_KAHAN_ROWS;
+        const size_t at = lo + (size_t)r0;
+        const ST_double *x = X + (size_t)j * N + at;
+        if (w) {
+            const ST_double *wi = w + at;
+            for (ST_int i = 0; i < rows; i++) wx[i] = wi[i] * x[i];
+            x = wx;
+        }
+        for (int q = 0; q < n_now; q++) r[q] = col[q] + at;
+        kahan_rows(n_now, x, r, rows, sc);
+    }
+}
+
+/* Rows lo .. lo+len-1, every pair: sc receives (s, c) per pair, the pairs in
+ * the order of the left columns and their right-hand columns */
+static void kahan_cross_block(const ST_double *X, const ST_double *y, const ST_double *w, ST_int N,
+                              ST_int K, ST_int lo, ST_int len, ST_double *sc, size_t npairs)
+{
+    memset(sc, 0, 2 * npairs * sizeof(ST_double));
+    for (ST_int r0 = 0; r0 < len; r0 += CTOOLS_KAHAN_ROWS) {
+        const ST_int rows = (len - r0 < CTOOLS_KAHAN_ROWS) ? len - r0 : CTOOLS_KAHAN_ROWS;
+        ST_double *p = sc;
+        for (ST_int j = 0; j < K; j++) {
+            const ST_int n_rhs = K - j + (y != NULL);
+            for (ST_int t = 0; t < n_rhs; t += 4) {
+                const int n_now = (n_rhs - t < 4) ? (int)(n_rhs - t) : 4;
+                kahan_cross_rows(X, y, w, N, j, t, n_now, (size_t)lo + (size_t)r0, rows, p);
+                p += 2 * n_now;
+            }
+        }
+    }
+}
+
+static void kahan_cross_core(const ST_double *X, const ST_double *y, const ST_double *w, ST_int N,
+                             ST_int K, const kahan_cross_out *out)
+{
+    const int has_y = out->has_y;
+    /* N + CTOOLS_KAHAN_BLOCK - 1 would overflow int for N near INT_MAX */
+    const ST_int nblocks = N / CTOOLS_KAHAN_BLOCK + (N % CTOOLS_KAHAN_BLOCK != 0);
+    const size_t npairs = (size_t)K * ((size_t)K + 1) / 2 + (has_y ? (size_t)K : 0);
+    const int threaded = (double)N * (double)npairs >= CTOOLS_KAHAN_PARALLEL;
+    const ST_int wave = (nblocks < CTOOLS_KAHAN_WAVE) ? nblocks : CTOOLS_KAHAN_WAVE;
+    ST_double *part = NULL;
+    dd_real *total = NULL;
+    (void)threaded; /* read only by the OpenMP clauses */
+
+    /* Block arrangement: the blocks of a wave in parallel, every pair in one
+     * pass over a block's rows, then the wave's blocks added in order */
+    if (nblocks > 1 && npairs <= CTOOLS_KAHAN_PAIRS) {
+        part = (ST_double *)malloc((size_t)wave * 2 * npairs * sizeof(ST_double));
+        total = (dd_real *)malloc(npairs * sizeof(dd_real));
+        if (!part || !total) {
+            free(part);
+            free(total);
+            part = NULL;
+            total = NULL;
+        }
+    }
+    if (part) {
+        for (size_t p = 0; p < npairs; p++) total[p] = (dd_real){0.0, 0.0};
+        for (ST_int b0 = 0; b0 < nblocks; b0 += wave) {
+            const ST_int nb = (nblocks - b0 < wave) ? nblocks - b0 : wave;
+            ST_int b;
+#ifdef _OPENMP
+            #pragma omp parallel for schedule(dynamic, 1) if(threaded)
+#endif
+            for (b = 0; b < nb; b++) {
+                const ST_int lo = (b0 + b) * CTOOLS_KAHAN_BLOCK;
+                const ST_int len = (N - lo < CTOOLS_KAHAN_BLOCK) ? N - lo : CTOOLS_KAHAN_BLOCK;
+                kahan_cross_block(X, y, w, N, K, lo, len, part + (size_t)b * 2 * npairs, npairs);
+            }
+            for (b = 0; b < nb; b++) {
+                const ST_double *sc = part + (size_t)b * 2 * npairs;
+                for (size_t p = 0; p < npairs; p++) {
+                    total[p] = dd_add_d(dd_add_d(total[p], sc[2 * p]), sc[2 * p + 1]);
+                }
+            }
+        }
+        size_t p = 0;
+        for (ST_int j = 0; j < K; j++) {
+            const ST_int n_rhs = K - j + has_y;
+            for (ST_int rhs = 0; rhs < n_rhs; rhs++, p++) {
+                kahan_cross_store(out, j, rhs, total[p].hi, total[p].lo);
+            }
+        }
+        free(part);
+        free(total);
+        return;
+    }
+
+    /* Column arrangement (one block, very many pairs, or no memory for the
+     * block sums): the left columns in parallel, each taking its blocks in
+     * order. The same sums, with no scratch beyond the stack. */
+    ST_int j;
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(dynamic, 1) if(threaded && K > 1)
+#endif
+    for (j = 0; j < K; j++) {
+        const ST_int n_rhs = K - j + has_y;
+        for (ST_int t = 0; t < n_rhs; t += 4) {
+            const int n_now = (n_rhs - t < 4) ? (int)(n_rhs - t) : 4;
+            dd_real sum[4] = {{0.0, 0.0}, {0.0, 0.0}, {0.0, 0.0}, {0.0, 0.0}};
+            ST_double sc[8] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+            for (ST_int b = 0; b < nblocks; b++) {
+                const ST_int lo = b * CTOOLS_KAHAN_BLOCK;
+                const ST_int len = (N - lo < CTOOLS_KAHAN_BLOCK) ? N - lo : CTOOLS_KAHAN_BLOCK;
+                for (int q = 0; q < 8; q++) sc[q] = 0.0;
+                kahan_cross_rows(X, y, w, N, j, t, n_now, (size_t)lo, len, sc);
+                if (nblocks > 1) {
+                    for (int q = 0; q < n_now; q++) {
+                        sum[q] = dd_add_d(dd_add_d(sum[q], sc[2 * q]), sc[2 * q + 1]);
+                    }
+                }
+            }
+            for (int q = 0; q < n_now; q++) {
+                /* one block: the sequential sum's own (s, c) */
+                if (nblocks > 1) kahan_cross_store(out, j, t + q, sum[q].hi, sum[q].lo);
+                else kahan_cross_store(out, j, t + q, sc[2 * q], sc[2 * q + 1]);
+            }
+        }
+    }
+}
+
+void ctools_kahan_cross(const ST_double *X, const ST_double *y, ST_int N, ST_int K,
+                        ST_double *xtx, ST_double *xty)
+{
+    if (K <= 0) return;
+    if (N < 0) N = 0;
+    if (!xty) y = NULL;
+    const kahan_cross_out out = {xtx, xty, NULL, y != NULL, K};
+    kahan_cross_core(X, y, NULL, N, K, &out);
+}
+
+void ctools_kahan_cross_weighted(const ST_double *X, const ST_double *w, ST_int N, ST_int K,
+                                 long double *upper)
+{
+    if (K <= 0) return;
+    if (N < 0) N = 0;
+    const kahan_cross_out out = {NULL, NULL, upper, 0, K};
+    kahan_cross_core(X, NULL, w, N, K, &out);
 }
 
 /* ========================================================================
@@ -161,31 +431,33 @@ ST_double kahan_dot(const ST_double * RESTRICT x,
  * These match Stata's quadcross() precision for RSS/TSS calculations
  * ======================================================================== */
 
-ST_double dd_sum_sq(const ST_double *x, ST_int N)
+static CTOOLS_INLINE ST_double dd_sum_sq_body(const int fused, const ST_double *x, ST_int N)
 {
     dd_real sum = {0.0, 0.0};
     ST_int i;
 
     for (i = 0; i < N; i++) {
-        dd_real prod = two_prod(x[i], x[i]);
+        dd_real prod = two_prod_as(fused, x[i], x[i]);
         /* Add both hi and lo parts to accumulator */
         sum = dd_add_d(sum, prod.hi);
         sum = dd_add_d(sum, prod.lo);
     }
     return sum.hi + sum.lo;
 }
+CTOOLS_FMA_VARIANTS(, ST_double, dd_sum_sq, (const ST_double *x, ST_int N), x, N)
 
-ST_double dd_sum_sq_weighted(const ST_double *x, const ST_double *w, ST_int N)
+static CTOOLS_INLINE ST_double dd_sum_sq_weighted_body(const int fused, const ST_double *x,
+                                                       const ST_double *w, ST_int N)
 {
     dd_real sum = {0.0, 0.0};
     ST_int i;
 
     for (i = 0; i < N; i++) {
         /* Compute x[i]^2 with error tracking */
-        dd_real sq = two_prod(x[i], x[i]);
+        dd_real sq = two_prod_as(fused, x[i], x[i]);
         /* Multiply by weight: w * sq.hi and w * sq.lo */
-        dd_real wsq_hi = two_prod(w[i], sq.hi);
-        dd_real wsq_lo = two_prod(w[i], sq.lo);
+        dd_real wsq_hi = two_prod_as(fused, w[i], sq.hi);
+        dd_real wsq_lo = two_prod_as(fused, w[i], sq.lo);
         /* Accumulate all parts */
         sum = dd_add_d(sum, wsq_hi.hi);
         sum = dd_add_d(sum, wsq_hi.lo);
@@ -194,32 +466,38 @@ ST_double dd_sum_sq_weighted(const ST_double *x, const ST_double *w, ST_int N)
     }
     return sum.hi + sum.lo;
 }
+CTOOLS_FMA_VARIANTS(, ST_double, dd_sum_sq_weighted,
+                    (const ST_double *x, const ST_double *w, ST_int N), x, w, N)
 
-ST_double dd_sum_sq_dev(const ST_double *x, ST_double mean, ST_int N)
+static CTOOLS_INLINE ST_double dd_sum_sq_dev_body(const int fused, const ST_double *x,
+                                                  ST_double mean, ST_int N)
 {
     dd_real sum = {0.0, 0.0};
     ST_int i;
 
     for (i = 0; i < N; i++) {
         ST_double d = x[i] - mean;
-        dd_real prod = two_prod(d, d);
+        dd_real prod = two_prod_as(fused, d, d);
         sum = dd_add_d(sum, prod.hi);
         sum = dd_add_d(sum, prod.lo);
     }
     return sum.hi + sum.lo;
 }
+CTOOLS_FMA_VARIANTS(, ST_double, dd_sum_sq_dev, (const ST_double *x, ST_double mean, ST_int N), x,
+                    mean, N)
 
-ST_double dd_sum_sq_dev_weighted(const ST_double *x, ST_double mean,
-                                  const ST_double *w, ST_int N)
+static CTOOLS_INLINE ST_double dd_sum_sq_dev_weighted_body(const int fused, const ST_double *x,
+                                                           ST_double mean, const ST_double *w,
+                                                           ST_int N)
 {
     dd_real sum = {0.0, 0.0};
     ST_int i;
 
     for (i = 0; i < N; i++) {
         ST_double d = x[i] - mean;
-        dd_real sq = two_prod(d, d);
-        dd_real wsq_hi = two_prod(w[i], sq.hi);
-        dd_real wsq_lo = two_prod(w[i], sq.lo);
+        dd_real sq = two_prod_as(fused, d, d);
+        dd_real wsq_hi = two_prod_as(fused, w[i], sq.hi);
+        dd_real wsq_lo = two_prod_as(fused, w[i], sq.lo);
         sum = dd_add_d(sum, wsq_hi.hi);
         sum = dd_add_d(sum, wsq_hi.lo);
         sum = dd_add_d(sum, wsq_lo.hi);
@@ -227,23 +505,31 @@ ST_double dd_sum_sq_dev_weighted(const ST_double *x, ST_double mean,
     }
     return sum.hi + sum.lo;
 }
+CTOOLS_FMA_VARIANTS(, ST_double, dd_sum_sq_dev_weighted,
+                    (const ST_double *x, ST_double mean, const ST_double *w, ST_int N), x, mean, w,
+                    N)
 
-dd_real dd_dot_weighted(const ST_double *x, const ST_double *y, const ST_double *w, ST_int N)
+static CTOOLS_INLINE dd_real dd_dot_weighted_body(const int fused, const ST_double *x,
+                                                  const ST_double *y, const ST_double *w, ST_int N)
 {
     dd_real sum = {0.0, 0.0};
     ST_int i;
 
     for (i = 0; i < N; i++) {
         ST_double wx = w ? w[i] * x[i] : x[i];
-        dd_real prod = two_prod(wx, y[i]);
+        dd_real prod = two_prod_as(fused, wx, y[i]);
         sum = dd_add_d(sum, prod.hi);
         sum = dd_add_d(sum, prod.lo);
     }
     return sum;
 }
+CTOOLS_FMA_VARIANTS(, dd_real, dd_dot_weighted,
+                    (const ST_double *x, const ST_double *y, const ST_double *w, ST_int N), x, y,
+                    w, N)
 
-void dd_dot_weighted_multi(const ST_double *x, const ST_double *const *ys, ST_int n,
-                           const ST_double *w, ST_int N, dd_real *out)
+static CTOOLS_INLINE void dd_dot_weighted_multi_body(const int fused, const ST_double *x,
+                                                     const ST_double *const *ys, ST_int n,
+                                                     const ST_double *w, ST_int N, dd_real *out)
 {
     ST_int t = 0;
 
@@ -252,10 +538,10 @@ void dd_dot_weighted_multi(const ST_double *x, const ST_double *const *ys, ST_in
         dd_real s0 = {0.0, 0.0}, s1 = {0.0, 0.0}, s2 = {0.0, 0.0}, s3 = {0.0, 0.0};
         for (ST_int i = 0; i < N; i++) {
             ST_double wx = w ? w[i] * x[i] : x[i];
-            dd_real p0 = two_prod(wx, y0[i]);
-            dd_real p1 = two_prod(wx, y1[i]);
-            dd_real p2 = two_prod(wx, y2[i]);
-            dd_real p3 = two_prod(wx, y3[i]);
+            dd_real p0 = two_prod_as(fused, wx, y0[i]);
+            dd_real p1 = two_prod_as(fused, wx, y1[i]);
+            dd_real p2 = two_prod_as(fused, wx, y2[i]);
+            dd_real p3 = two_prod_as(fused, wx, y3[i]);
             s0 = dd_add_d(dd_add_d(s0, p0.hi), p0.lo);
             s1 = dd_add_d(dd_add_d(s1, p1.hi), p1.lo);
             s2 = dd_add_d(dd_add_d(s2, p2.hi), p2.lo);
@@ -267,9 +553,13 @@ void dd_dot_weighted_multi(const ST_double *x, const ST_double *const *ys, ST_in
         out[t + 3] = s3;
     }
     for (; t < n; t++) {
-        out[t] = dd_dot_weighted(x, ys[t], w, N);
+        out[t] = dd_dot_weighted_body(fused, x, ys[t], w, N);
     }
 }
+CTOOLS_FMA_VARIANTS_VOID(, dd_dot_weighted_multi,
+                         (const ST_double *x, const ST_double *const *ys, ST_int n,
+                          const ST_double *w, ST_int N, dd_real *out),
+                         x, ys, n, w, N, out)
 
 /* dd_dot_weighted_multi over fixed blocks of CTOOLS_DD_BLOCK rows: each
  * block's sums run in row order and the blocks are added in block order, so
@@ -348,42 +638,11 @@ void compute_xtx_xty(
     ST_double *xty          /* Output: (K-1) x 1 */
 )
 {
-    ST_int j, k;
-    ST_int K_x = K - 1;  /* Number of X columns (excluding y) */
-    const ST_double *y = &data[0];  /* Column 0 is y */
-
-    /* Initialize output */
-    memset(xtx, 0, (size_t)K_x * K_x * sizeof(ST_double));
-    memset(xty, 0, K_x * sizeof(ST_double));
-
     /* Kahan-compensated dot products for numerical stability.
      * reghdfe uses Mata's quadcross() (quad-precision), so we need
      * compensated summation to match after FE partialling out.
      * BLAS dsyrk would be faster but lacks the precision needed here. */
-
-#ifdef _OPENMP
-    /* Parallel computation of X'y and diagonal of X'X */
-    #pragma omp parallel for schedule(static) if(K_x > 2)
-#endif
-    for (j = 0; j < K_x; j++) {
-        const ST_double *xj = &data[(size_t)(j + 1) * N];
-        xty[j] = kahan_dot(xj, y, N);
-        xtx[(size_t)j * K_x + j] = kahan_dot(xj, xj, N);
-    }
-
-    /* Off-diagonal elements (symmetric, trivially parallelizable) */
-#ifdef _OPENMP
-    #pragma omp parallel for schedule(dynamic) if(K_x > 4) private(k)
-#endif
-    for (j = 0; j < K_x; j++) {
-        const ST_double *xj = &data[(size_t)(j + 1) * N];
-        for (k = j + 1; k < K_x; k++) {
-            const ST_double *xk = &data[(size_t)(k + 1) * N];
-            ST_double val = kahan_dot(xj, xk, N);
-            xtx[(size_t)j * K_x + k] = val;
-            xtx[(size_t)k * K_x + j] = val;  /* Symmetric */
-        }
-    }
+    ctools_kahan_cross(data + (size_t)N, data, N, K - 1, xtx, xty);
 }
 
 /* ========================================================================

@@ -1005,6 +1005,7 @@ int main(int argc, char **argv)
 
 #if defined(CTOOLS_CASE_sep24_native_5)
 #include "ctools_matrix.c"
+#include "ctools_ols.c"
 int main(void) {
  double X[]={1,2,3,4},D[]={1.0/30},e[]={1,-1,2,1},w[]={1,2,1,2},V[1]; int ids[]={0,0,1,1};
  ctools_vce_data d={.X_eff=X,.D=D,.resid=e,.weights=w,.N=4,.K=1,.weight_type=1,.normalize_weights=1};

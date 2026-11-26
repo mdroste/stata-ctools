@@ -1079,26 +1079,12 @@ ST_retcode ivest_fit_core(civ_fit_io *io)
     /* Step 3: Compute Z'X and Z'y */
     if (weights && weight_type != 0) {
         matmul_atdb(Z, X_all, weights, N, K_iv, K_total, ZtX);
-        /* Z'y */
-        for (i = 0; i < K_iv; i++) {
-            ST_double sum = 0.0;
-            const ST_double *z_col = Z + (size_t)i * N;
-            for (k = 0; k < N; k++) {
-                sum += z_col[k] * weights[k] * y[k];
-            }
-            Zty[i] = sum;
-        }
+        /* Z'y: each element sums (z * w) * y, as Z'X does */
+        matmul_atdb(Z, y, weights, N, K_iv, 1, Zty);
     } else {
         matmul_atb(Z, X_all, N, K_iv, K_total, ZtX);
         /* Z'y */
-        for (i = 0; i < K_iv; i++) {
-            ST_double sum = 0.0;
-            const ST_double *z_col = Z + (size_t)i * N;
-            for (k = 0; k < N; k++) {
-                sum += z_col[k] * y[k];
-            }
-            Zty[i] = sum;
-        }
+        matmul_atb(Z, y, N, K_iv, 1, Zty);
     }
 
     /* Step 4: Compute (Z'Z)^-1 * Z'X  -> temp1 (K_iv x K_total) */
@@ -1134,17 +1120,6 @@ ST_retcode ivest_fit_core(civ_fit_io *io)
         }
     }
 
-    /* X'PzX = X_hat' * X_hat using Kahan-compensated dot products (symmetric);
-     * every element is an independent sum, so the columns run in parallel */
-    #pragma omp parallel for schedule(dynamic) if(K_total > 1 && (size_t)N * K_total > 200000)
-    for (j = 0; j < K_total; j++) {
-        for (ST_int a = 0; a <= j; a++) {
-            ST_double val = kahan_dot(X_hat + (size_t)a * N, X_hat + (size_t)j * N, N);
-            XtPzX[j * K_total + a] = val;
-            XtPzX[a * K_total + j] = val;
-        }
-    }
-
     /* X'Pzy = X_hat' * y_hat where y_hat = Z * (Z'Z)^{-1} * Z'y */
     /* Step 6: Compute (Z'Z)^-1 * Z'y */
     ZtZ_inv_Zty = (ST_double *)calloc(K_iv, sizeof(ST_double));
@@ -1161,7 +1136,9 @@ ST_retcode ivest_fit_core(civ_fit_io *io)
         ZtZ_inv_Zty[i] = sum;
     }
 
-    /* Compute y_hat = Z * ZtZ_inv_Zty, then X'Pzy = X_hat' * y_hat via Kahan */
+    /* Compute y_hat = Z * ZtZ_inv_Zty, then X'PzX = X_hat' * X_hat and
+     * X'Pzy = X_hat' * y_hat with Kahan-compensated products: every element
+     * an independent sum, all of them in one blocked pass over the rows */
     {
         ST_double *y_hat = (ST_double *)malloc(N * sizeof(ST_double));
         if (!y_hat) {
@@ -1170,13 +1147,10 @@ ST_retcode ivest_fit_core(civ_fit_io *io)
         }
         ctools_matmul_xb(Z, N, K_iv, ZtZ_inv_Zty, 1, y_hat);
         if (weights && weight_type != 0) {
+            #pragma omp parallel for schedule(static) if(N > 200000)
             for (i = 0; i < N; i++) y_hat[i] = sqrt(weights[i]) * y_hat[i];
         }
-        /* X'Pzy[a] = X_hat[:,a] . y_hat */
-        #pragma omp parallel for schedule(static) if(K_total > 1 && (size_t)N * K_total > 200000)
-        for (i = 0; i < K_total; i++) {
-            XtPzy[i] = kahan_dot(X_hat + (size_t)i * N, y_hat, N);
-        }
+        ctools_kahan_cross(X_hat, y_hat, N, K_total, XtPzX, XtPzy);
         free(y_hat);
     }
     free(X_hat);

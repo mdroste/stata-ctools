@@ -1527,9 +1527,41 @@ its allocations (`validation/native/hdfe_coef.c`).
 `validation/performance/benchmark_hdfe_coef.c` times every method on
 synthetic designs without Stata and backs the thresholds in the source.
 
+The cross products of the estimators follow the same rule. Each kernel makes
+one cache-blocked pass over the rows for all pairs of columns, in parallel
+over row ranges that depend only on N, and adds the ranges in order, so an
+element is the same sum at every thread count and depends only on its two
+columns, the weights and N:
+
+- `ctools_matmul_ata()`, `ctools_matmul_atb()`, `ctools_matmul_atdb()`
+  (`ctools_matrix.c`): ordinary double sums. The three agree bit for bit on
+  the same columns, and a product of a matrix with itself is exactly
+  symmetric.
+- `ctools_kahan_cross()` and `ctools_kahan_cross_weighted()` (`ctools_ols.c`):
+  compensated sums with exact product errors, for `creghdfe`'s X'X and X'y,
+  `civreghdfe`'s X'PzX and X'Pzy, and the meat of the robust covariance. Up to
+  `CTOOLS_KAHAN_BLOCK` rows an element is exactly `kahan_dot()` of its
+  columns; beyond that the blocks are summed that way and added in
+  double-double.
+
+These functions return nothing: when their scratch allocation fails they
+compute the same sums column by column instead, without it. Kernels of
+error-free products (`kahan_dot()`, the `dd_*` sums, `ppml_quad_dot()`) are
+compiled twice on baseline x86-64, with Dekker's split product and for the FMA
+instruction, and pick at run time (`CTOOLS_FMA_VARIANTS` in `ctools_ols.h`).
+Both forms give the exact error of every product, so the choice changes no
+result; this relies on `-ffp-contract=off`, as the rest of the numerical code
+does. `validation/native/cross_products.c` holds all of this to sequential
+references bit for bit.
+
 A failed projection must return an error to Stata. The shared robust and
 clustered covariance functions return 920 for allocation or cluster-sort failures
 and 498 for invalid covariance settings. Return matrices only after success.
+The clustered meat sums every cluster's e'X in row order: in one pass per
+regressor over the rows when there are at most a quarter as many clusters as
+rows and the sums fit `CTOOLS_VCE_CLUSTER_SUMS`, from observations sorted by
+cluster otherwise; the result is the same. An allocation that fails inside
+either covariance function is an error (920), never a change of path.
 Zero residual variance produces a valid zero covariance matrix.
 
 Sorting uses the number of workers available to OpenMP, which can differ from

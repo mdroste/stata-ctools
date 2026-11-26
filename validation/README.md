@@ -160,7 +160,16 @@ level means a million times the noise. It also checks the dispatch of
 `partial_out_columns()`, the iteration limit, Break at every poll, every
 allocation failure, and, with OpenMP, that 300,000-row designs give the same
 bits on one thread and on four.
-Both run through `python3 validation/run.py --native <test_name>` with serial and
+`test_cross_products_native` holds the estimators' cross products
+(`ctools_matmul_ata/atb/atdb`), the compensated ones (`ctools_kahan_cross`,
+`kahan_dot`, the double-double sums) and the robust and clustered meats to
+sequential references: bit for bit wherever the definition is the sequential
+sum, within rounding of a double-double sum otherwise. It runs each kernel
+again with its scratch allocation refused (the other loop arrangement must
+give the same bits), on one thread against four, across block, chunk and wave
+edges, with every weight type and with clusters random, sorted and empty, and
+builds the clustered meat both ways (`CTOOLS_VCE_CLUSTER_SUMS`).
+All three run through `python3 validation/run.py --native <test_name>` with serial and
 OpenMP sanitizer variants. The licensed `chdfe` suite additionally compares every
 per-effect DoF/exact/nested/owner field with `hdfe`.
 

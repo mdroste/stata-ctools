@@ -22,29 +22,197 @@
  * ============================================================================ */
 
 /*
+ * Cross products C = A' diag(w) B (w == NULL: unit weights).
+ *
+ * Every element is one fixed sum, whatever the thread count and whichever of
+ * the two loop arrangements below computes it. The rows are cut into blocks
+ * of CTOOLS_CROSS_BLOCK; a block's products (w[i] * a[i]) * b[i] are added by
+ * cross_dot(); the blocks of a chunk are added in order, and the chunk sums
+ * are added in order. Where the chunks begin depends only on N, so an element
+ * depends only on its two columns, the weights and N.
+ *
+ * One pass over the rows serves every pair of columns: the columns of a block
+ * stay in the cache while all their products are taken, where one pass over
+ * the whole arrays per pair reads the data K1 * K2 times from memory.
+ */
+#define CTOOLS_CROSS_BLOCK 512
+/* A chunk is at least this many blocks, and there are at most
+ * CTOOLS_CROSS_CHUNKS of them */
+#define CTOOLS_CROSS_CHUNK_BLOCKS 8
+#define CTOOLS_CROSS_CHUNKS 64
+/* Chunk sums kept at once by the chunk arrangement (doubles): beyond this
+ * the column arrangement runs, which keeps none */
+#define CTOOLS_CROSS_SUMS ((size_t)8 << 20)
+/* Columns of A per pass of the column arrangement */
+#define CTOOLS_CROSS_STRIP 256
+/* Element products below which the work stays on the calling thread */
+#define CTOOLS_CROSS_PARALLEL 400000
+
+/* Eight sums in the lane order ctools_simd_dot() uses, so that the compiler
+ * can vectorize the loop without reassociating anything */
+static inline ST_double cross_dot(const ST_double * restrict x, const ST_double * restrict y,
+                                  ST_int n)
+{
+    ST_double s0 = 0, s1 = 0, s2 = 0, s3 = 0, s4 = 0, s5 = 0, s6 = 0, s7 = 0;
+    ST_int i = 0;
+    for (; i + 8 <= n; i += 8) {
+        s0 += x[i] * y[i];         s1 += x[i + 1] * y[i + 1];
+        s2 += x[i + 2] * y[i + 2]; s3 += x[i + 3] * y[i + 3];
+        s4 += x[i + 4] * y[i + 4]; s5 += x[i + 5] * y[i + 5];
+        s6 += x[i + 6] * y[i + 6]; s7 += x[i + 7] * y[i + 7];
+    }
+    ST_double s = ((s0 + s4) + (s2 + s6)) + ((s1 + s5) + (s3 + s7));
+    for (; i < n; i++) s += x[i] * y[i];
+    return s;
+}
+
+/* cross_dot() of (w[i] * x[i]) and y: the value cross_dot(wx, y, n) has when
+ * wx[i] = w[i] * x[i] was stored first */
+static inline ST_double cross_dot_weighted(const ST_double * restrict w,
+                                           const ST_double * restrict x,
+                                           const ST_double * restrict y, ST_int n)
+{
+    ST_double s0 = 0, s1 = 0, s2 = 0, s3 = 0, s4 = 0, s5 = 0, s6 = 0, s7 = 0;
+    ST_int i = 0;
+    for (; i + 8 <= n; i += 8) {
+        s0 += (w[i] * x[i]) * y[i];             s1 += (w[i + 1] * x[i + 1]) * y[i + 1];
+        s2 += (w[i + 2] * x[i + 2]) * y[i + 2]; s3 += (w[i + 3] * x[i + 3]) * y[i + 3];
+        s4 += (w[i + 4] * x[i + 4]) * y[i + 4]; s5 += (w[i + 5] * x[i + 5]) * y[i + 5];
+        s6 += (w[i + 6] * x[i + 6]) * y[i + 6]; s7 += (w[i + 7] * x[i + 7]) * y[i + 7];
+    }
+    ST_double s = ((s0 + s4) + (s2 + s6)) + ((s1 + s5) + (s3 + s7));
+    for (; i < n; i++) s += (w[i] * x[i]) * y[i];
+    return s;
+}
+
+/* Blocks [first, last) of chunk c out of nch, for nblk blocks in all */
+static inline void cross_chunk_span(ST_int nblk, ST_int nch, ST_int c, ST_int *first, ST_int *last)
+{
+    *first = (ST_int)((long long)nblk * c / nch);
+    *last = (ST_int)((long long)nblk * (c + 1) / nch);
+}
+
+/* The sums of blocks [first, last) for every pair of columns, into acc
+ * (K1 x K2; with sym only the elements i <= j) */
+static void cross_chunk(const ST_double *A, const ST_double *B, const ST_double *w, ST_int N,
+                        ST_int K1, ST_int K2, int sym, ST_int first, ST_int last,
+                        ST_double * restrict acc)
+{
+    ST_double wa[CTOOLS_CROSS_BLOCK];
+
+    memset(acc, 0, (size_t)K1 * (size_t)K2 * sizeof(ST_double));
+    for (ST_int blk = first; blk < last; blk++) {
+        const ST_int i0 = blk * CTOOLS_CROSS_BLOCK;
+        const ST_int len = (N - i0 < CTOOLS_CROSS_BLOCK) ? N - i0 : CTOOLS_CROSS_BLOCK;
+        for (ST_int i = 0; i < K1; i++) {
+            const ST_double *a = A + (size_t)i * N + i0;
+            if (w) {
+                const ST_double *wi = w + i0;
+                for (ST_int t = 0; t < len; t++) wa[t] = wi[t] * a[t];
+                a = wa;
+            }
+            for (ST_int j = sym ? i : 0; j < K2; j++) {
+                acc[(size_t)j * K1 + i] += cross_dot(a, B + (size_t)j * N + i0, len);
+            }
+        }
+    }
+}
+
+/* Column j of C by the column arrangement: no scratch beyond the stack, the
+ * columns of A taken CTOOLS_CROSS_STRIP at a time */
+static void cross_column(const ST_double *A, const ST_double *B, const ST_double *w, ST_int N,
+                         ST_int K1, int sym, ST_int nblk, ST_int nch, ST_int j, ST_double *C)
+{
+    ST_double part[CTOOLS_CROSS_STRIP];
+    const ST_int ilim = sym ? j + 1 : K1;
+    const ST_double *b = B + (size_t)j * N;
+    ST_double *c_col = C + (size_t)j * K1;
+
+    for (ST_int s0 = 0; s0 < ilim; s0 += CTOOLS_CROSS_STRIP) {
+        const ST_int sn = (ilim - s0 < CTOOLS_CROSS_STRIP) ? ilim - s0 : CTOOLS_CROSS_STRIP;
+        for (ST_int i = 0; i < sn; i++) c_col[s0 + i] = 0.0;
+        for (ST_int c = 0; c < nch; c++) {
+            ST_int first, last;
+            cross_chunk_span(nblk, nch, c, &first, &last);
+            for (ST_int i = 0; i < sn; i++) part[i] = 0.0;
+            for (ST_int blk = first; blk < last; blk++) {
+                const ST_int i0 = blk * CTOOLS_CROSS_BLOCK;
+                const ST_int len = (N - i0 < CTOOLS_CROSS_BLOCK) ? N - i0 : CTOOLS_CROSS_BLOCK;
+                for (ST_int i = 0; i < sn; i++) {
+                    const ST_double *a = A + (size_t)(s0 + i) * N + i0;
+                    part[i] += w ? cross_dot_weighted(w + i0, a, b + i0, len)
+                                 : cross_dot(a, b + i0, len);
+                }
+            }
+            for (ST_int i = 0; i < sn; i++) c_col[s0 + i] += part[i];
+        }
+    }
+}
+
+/* C = A' diag(w) B. With sym (A and B the same K1 = K2 columns) the elements
+ * i <= j are computed and mirrored. */
+static void cross_product(const ST_double *A, const ST_double *B, const ST_double *w, ST_int N,
+                          ST_int K1, ST_int K2, int sym, ST_double *C)
+{
+    const size_t cells = (size_t)K1 * (size_t)K2;
+    if (K1 <= 0 || K2 <= 0) return;
+    if (N < 0) N = 0;
+
+    /* N + CTOOLS_CROSS_BLOCK - 1 would overflow int for N near INT_MAX */
+    const ST_int nblk = N / CTOOLS_CROSS_BLOCK + (N % CTOOLS_CROSS_BLOCK != 0);
+    ST_int nch = nblk / CTOOLS_CROSS_CHUNK_BLOCKS;
+    if (nch > CTOOLS_CROSS_CHUNKS) nch = CTOOLS_CROSS_CHUNKS;
+    if (nch < 1) nch = 1;
+    const int threaded = (double)N * (double)cells >= (double)CTOOLS_CROSS_PARALLEL;
+    ST_double *sums = NULL;
+    (void)threaded; /* read only by the OpenMP clauses */
+
+    if (nch == 1) {
+        cross_chunk(A, B, w, N, K1, K2, sym, 0, nblk, C);
+    } else if (cells <= CTOOLS_CROSS_SUMS / (size_t)nch &&
+               (sums = (ST_double *)malloc((size_t)nch * cells * sizeof(ST_double))) != NULL) {
+        /* Chunks in parallel, each into its own sums */
+        ST_int c;
+        #pragma omp parallel for schedule(dynamic, 1) if(threaded)
+        for (c = 0; c < nch; c++) {
+            ST_int first, last;
+            cross_chunk_span(nblk, nch, c, &first, &last);
+            cross_chunk(A, B, w, N, K1, K2, sym, first, last, sums + (size_t)c * cells);
+        }
+        for (size_t e = 0; e < cells; e++) {
+            ST_double total = 0.0;
+            for (c = 0; c < nch; c++) total += sums[(size_t)c * cells + e];
+            C[e] = total;
+        }
+        free(sums);
+    } else {
+        /* Many elements, or no memory for the chunk sums: the columns of C in
+         * parallel, each adding its chunks in order (the same sums) */
+        ST_int j;
+        #pragma omp parallel for schedule(dynamic, 1) if(threaded)
+        for (j = 0; j < K2; j++) {
+            cross_column(A, B, w, N, K1, sym, nblk, nch, j, C);
+        }
+    }
+
+    if (sym) {
+        for (ST_int j = 0; j < K2; j++) {
+            for (ST_int i = 0; i < j; i++) {
+                C[(size_t)i * K1 + j] = C[(size_t)j * K1 + i];
+            }
+        }
+    }
+}
+
+/*
  * Matrix multiply C = A' * B
  * A is N x K1, B is N x K2, Result C is K1 x K2
- *
- * OPTIMIZED: Uses K-way unrolled dot products and OpenMP parallelization
  */
 void ctools_matmul_atb(const ST_double * restrict A, const ST_double * restrict B,
                        ST_int N, ST_int K1, ST_int K2,
                        ST_double * restrict C)
 {
-    ST_int j;
-
-    memset(C, 0, (size_t)K1 * K2 * sizeof(ST_double));
-
-    /* Parallelize over output columns - i must be private to avoid race condition */
-    #pragma omp parallel for schedule(static) if((size_t)K1 * K2 > 4)
-    for (j = 0; j < K2; j++) {
-        ST_int i;  /* Declare inside parallel region to make it private */
-        const ST_double *b_col = B + (size_t)j * N;
-        for (i = 0; i < K1; i++) {
-            const ST_double *a_col = A + (size_t)i * N;
-            C[(size_t)j * K1 + i] = ctools_dot_unrolled(a_col, b_col, N);
-        }
-    }
+    cross_product(A, B, NULL, N, K1, K2, A == B && K1 == K2, C);
 }
 
 /*
@@ -52,21 +220,7 @@ void ctools_matmul_atb(const ST_double * restrict A, const ST_double * restrict 
  */
 void ctools_matmul_ata(const ST_double *A, ST_int N, ST_int K, ST_double *C)
 {
-    ST_int j;
-
-    #pragma omp parallel for schedule(dynamic) if(K > 2)
-    for (j = 0; j < K; j++) {
-        ST_int i;
-        const ST_double *a_j = A + (size_t)j * N;
-        for (i = 0; i <= j; i++) {
-            C[(size_t)j * K + i] = ctools_dot_unrolled(A + (size_t)i * N, a_j, N);
-        }
-    }
-    for (j = 0; j < K; j++) {
-        for (ST_int i = 0; i < j; i++) {
-            C[(size_t)i * K + j] = C[(size_t)j * K + i];
-        }
-    }
+    cross_product(A, A, NULL, N, K, K, 1, C);
 }
 
 /* Rows per block of the row-blocked kernels: a block of a few columns
@@ -152,42 +306,13 @@ void ctools_matmul_ab(const ST_double * restrict A, const ST_double * restrict B
 }
 
 /*
- * Weighted matrix multiply C = A' * diag(w) * B
- *
- * OPTIMIZED: Uses SIMD-accelerated weighted dot products (AVX2/NEON with FMA)
- * and OpenMP parallelization
+ * Weighted matrix multiply C = A' * diag(w) * B (w == NULL: unit weights)
  */
 void ctools_matmul_atdb(const ST_double * restrict A, const ST_double * restrict B,
                         const ST_double * restrict w, ST_int N, ST_int K1, ST_int K2,
                         ST_double * restrict C)
 {
-    ST_int j;
-
-    memset(C, 0, (size_t)K1 * K2 * sizeof(ST_double));
-
-    if (w) {
-        /* Weighted case: use SIMD-accelerated weighted dot product */
-        #pragma omp parallel for schedule(static) if((size_t)K1 * K2 > 4)
-        for (j = 0; j < K2; j++) {
-            ST_int i;  /* Private to each thread */
-            const ST_double *b_col = B + (size_t)j * N;
-            for (i = 0; i < K1; i++) {
-                const ST_double *a_col = A + (size_t)i * N;
-                C[(size_t)j * K1 + i] = ctools_simd_dot_weighted(w, a_col, b_col, (size_t)N);
-            }
-        }
-    } else {
-        /* Unweighted case: use SIMD-accelerated dot product */
-        #pragma omp parallel for schedule(static) if((size_t)K1 * K2 > 4)
-        for (j = 0; j < K2; j++) {
-            ST_int i;  /* Private to each thread */
-            const ST_double *b_col = B + (size_t)j * N;
-            for (i = 0; i < K1; i++) {
-                const ST_double *a_col = A + (size_t)i * N;
-                C[(size_t)j * K1 + i] = ctools_simd_dot(a_col, b_col, (size_t)N);
-            }
-        }
-    }
+    cross_product(A, B, w, N, K1, K2, A == B && K1 == K2, C);
 }
 
 /* ============================================================================
@@ -305,53 +430,14 @@ ST_retcode ctools_vce_robust(const ctools_vce_data *d, ST_double dof_adj, ST_dou
         obs_w[idx] = w_i;
     }
 
-    /* meat[j,k] = sum_i (w_i * x_ij) * x_ik, each element accumulated over
-     * the observations in order with compensated (twice-working-precision)
-     * products and sums, as Mata's quadcross() accumulates reghdfe's meat:
-     * with nearly collinear regressors D*meat*D cancels most of the digits,
-     * and long double is no wider than double on some platforms. Column
-     * pairs are independent, so the rows of the upper triangle run in
-     * parallel, a few columns k per pass. */
-#define CTOOLS_MEAT_ADD(acc, comp, a, b) do { \
-        ST_double p_ = (a) * (b); \
-        ST_double pe_ = CTOOLS_PROD_ERR((a), (b), p_); \
-        ST_double t_ = (acc) + p_; \
-        ST_double v_ = t_ - (acc); \
-        (comp) += ((acc) - (t_ - v_)) + (p_ - v_) + pe_; \
-        (acc) = t_; \
-    } while (0)
-    #pragma omp parallel for schedule(dynamic) if(K > 1 && (size_t)N * (size_t)K > 100000)
-    for (j = 0; j < K; j++) {
-        const ST_double *xj = d->X_eff + (size_t)j * N;
-        ST_int kk = j;
-        for (; kk + 3 < K; kk += 4) {
-            const ST_double *x0 = d->X_eff + (size_t)kk * N;
-            const ST_double *x1 = x0 + N, *x2 = x1 + N, *x3 = x2 + N;
-            ST_double a0 = 0.0, a1 = 0.0, a2 = 0.0, a3 = 0.0;
-            ST_double c0 = 0.0, c1 = 0.0, c2 = 0.0, c3 = 0.0;
-            for (ST_int ii = 0; ii < N; ii++) {
-                ST_double wxj = obs_w[ii] * xj[ii];
-                CTOOLS_MEAT_ADD(a0, c0, wxj, x0[ii]);
-                CTOOLS_MEAT_ADD(a1, c1, wxj, x1[ii]);
-                CTOOLS_MEAT_ADD(a2, c2, wxj, x2[ii]);
-                CTOOLS_MEAT_ADD(a3, c3, wxj, x3[ii]);
-            }
-            meat[(size_t)j * K + kk] = (long double)a0 + (long double)c0;
-            meat[(size_t)j * K + kk + 1] = (long double)a1 + (long double)c1;
-            meat[(size_t)j * K + kk + 2] = (long double)a2 + (long double)c2;
-            meat[(size_t)j * K + kk + 3] = (long double)a3 + (long double)c3;
-        }
-        for (; kk < K; kk++) {
-            const ST_double *xk = d->X_eff + (size_t)kk * N;
-            ST_double acc = 0.0, comp = 0.0;
-            for (ST_int ii = 0; ii < N; ii++) {
-                ST_double wxj = obs_w[ii] * xj[ii];
-                CTOOLS_MEAT_ADD(acc, comp, wxj, xk[ii]);
-            }
-            meat[(size_t)j * K + kk] = (long double)acc + (long double)comp;
-        }
-    }
-#undef CTOOLS_MEAT_ADD
+    /* meat[j,k] = sum_i (w_i * x_ij) * x_ik with compensated
+     * (twice-working-precision) products and sums, as Mata's quadcross()
+     * accumulates reghdfe's meat: with nearly collinear regressors D*meat*D
+     * cancels most of the digits, and long double is no wider than double on
+     * some platforms. Every element of the upper triangle is an independent
+     * sum; ctools_kahan_cross_weighted() takes them all in one blocked pass
+     * over the rows, in parallel. */
+    ctools_kahan_cross_weighted(d->X_eff, obs_w, N, K, meat);
     free(obs_w);
     /* Mirror upper triangle to lower */
     for (j = 0; j < K; j++) {
@@ -390,6 +476,85 @@ ST_retcode ctools_vce_robust(const ctools_vce_data *d, ST_double dof_adj, ST_dou
     return 0;
 }
 
+/* Cluster sums (long doubles) the clustered VCE may hold at once: within
+ * this, and with at most a quarter as many clusters as rows, every cluster's
+ * e'X is formed in one pass per regressor over the rows; otherwise the
+ * observations are sorted by cluster and the clusters taken in blocks */
+#ifndef CTOOLS_VCE_CLUSTER_SUMS
+#define CTOOLS_VCE_CLUSTER_SUMS ((size_t)16 << 20)
+#endif
+
+/* meat (upper triangle) += sums * sums' for one cluster's e'X */
+static inline void vce_meat_add(long double *meat, const long double *sums, ST_int K)
+{
+    for (ST_int jj = 0; jj < K; jj++) {
+        long double ecXj = sums[jj];
+        meat[(size_t)jj * K + jj] += ecXj * ecXj;
+        for (ST_int kk = jj + 1; kk < K; kk++) {
+            meat[(size_t)jj * K + kk] += ecXj * sums[kk];
+        }
+    }
+}
+
+/* The clustered meat with the observations sorted by cluster: bounded scratch
+ * whatever the number of clusters. Returns 0 or 920. */
+static ST_retcode vce_cluster_meat_sorted(const ctools_vce_data *d, const ST_int *cluster_ids,
+                                          ST_int num_clusters, const ST_double *e_w,
+                                          long double *meat)
+{
+    const ST_int N = d->N, K = d->K;
+    ST_int k;
+    ST_int *sort_perm = (ST_int *)malloc((size_t)N * sizeof(ST_int));
+    ST_int *boundaries = (ST_int *)malloc(((size_t)num_clusters + 1) * sizeof(ST_int));
+    /* Clusters are processed in blocks: the e'X sums of a block are formed
+     * one regressor per thread (each sum over its cluster's observations in
+     * sorted order), then the outer products are added in cluster order. */
+    ST_int block_clusters = 65536 / (K > 0 ? K : 1);
+    if (block_clusters < 1) block_clusters = 1;
+    if (block_clusters > num_clusters) block_clusters = num_clusters;
+    long double *block_sums =
+        (long double *)malloc((size_t)block_clusters * (size_t)K * sizeof(long double));
+
+    /* Sort observations by cluster using counting sort */
+    if (!sort_perm || !boundaries || !block_sums ||
+        vce_sort_by_cluster(cluster_ids, N, num_clusters, sort_perm, boundaries) != 0) {
+        free(sort_perm);
+        free(boundaries);
+        free(block_sums);
+        return 920;
+    }
+
+    /* c0 advances to c1, which never passes num_clusters (c0 += block_clusters
+     * could overflow int on the last block) */
+    for (ST_int c0 = 0, c1; c0 < num_clusters; c0 = c1) {
+        c1 = (num_clusters - c0 < block_clusters) ? num_clusters : c0 + block_clusters;
+        #ifdef _OPENMP
+        const size_t block_obs = (size_t)(boundaries[c1] - boundaries[c0]);
+        #pragma omp parallel for schedule(static) if(K > 1 && block_obs * (size_t)K > 100000)
+        #endif
+        for (k = 0; k < K; k++) {
+            const ST_double *xk = d->X_eff + (size_t)k * N;
+            for (ST_int c = c0; c < c1; c++) {
+                long double acc = 0.0L;
+                for (ST_int pos = boundaries[c]; pos < boundaries[c + 1]; pos++) {
+                    ST_int obs = sort_perm[pos];
+                    acc += (long double)e_w[obs] * (long double)xk[obs];
+                }
+                block_sums[(size_t)(c - c0) * K + k] = acc;
+            }
+        }
+
+        /* Accumulate outer product ecX * ecX' into meat (upper triangle) */
+        for (ST_int c = c0; c < c1; c++) {
+            vce_meat_add(meat, block_sums + (size_t)(c - c0) * K, K);
+        }
+    }
+    free(sort_perm);
+    free(boundaries);
+    free(block_sums);
+    return 0;
+}
+
 /*
  * Compute clustered sandwich VCE.
  */
@@ -425,40 +590,14 @@ ST_retcode ctools_vce_cluster(const ctools_vce_data *d,
     long double *meat = (long double *)calloc((size_t)K * K, sizeof(long double));
     long double *temp = (long double *)malloc((size_t)K * K * sizeof(long double));
     long double *ecX = (long double *)malloc(K * sizeof(long double));
-    ST_int *sort_perm = (ST_int *)malloc(N * sizeof(ST_int));
-    ST_int *boundaries = (ST_int *)malloc(((size_t)num_clusters + 1) * sizeof(ST_int));
-
-    if (!meat || !temp || !ecX || !sort_perm || !boundaries) {
-        if (meat) free(meat);
-        if (temp) free(temp);
-        if (ecX) free(ecX);
-        if (sort_perm) free(sort_perm);
-        if (boundaries) free(boundaries);
-        if (w_norm) free(w_norm);
-        return 920;
-    }
-
-    /* Sort observations by cluster using counting sort */
-    if (vce_sort_by_cluster(cluster_ids, N, num_clusters, sort_perm, boundaries) != 0) {
-        free(meat); free(temp); free(ecX);
-        free(sort_perm); free(boundaries);
-        if (w_norm) free(w_norm);
-        return 920;
-    }
-
     /* Weighted residual of every observation */
     ST_double *e_w = (ST_double *)malloc((size_t)N * sizeof(ST_double));
-    /* Clusters are processed in blocks: the e'X sums of a block are formed
-     * one regressor per thread (each sum over its cluster's observations in
-     * sorted order), then the outer products are added in cluster order. */
-    ST_int block_clusters = 65536 / (K > 0 ? K : 1);
-    if (block_clusters < 1) block_clusters = 1;
-    if (block_clusters > num_clusters) block_clusters = num_clusters;
-    long double *block_sums = (long double *)malloc((size_t)block_clusters * (size_t)K * sizeof(long double));
-    if (!e_w || !block_sums) {
-        free(e_w); free(block_sums);
-        free(meat); free(temp); free(ecX);
-        free(sort_perm); free(boundaries);
+
+    if (!meat || !temp || !ecX || !e_w) {
+        free(meat);
+        free(temp);
+        free(ecX);
+        free(e_w);
         if (w_norm) free(w_norm);
         return 920;
     }
@@ -474,45 +613,59 @@ ST_retcode ctools_vce_cluster(const ctools_vce_data *d,
         }
     }
 
-    /* c0 advances to c1, which never passes num_clusters (c0 += block_clusters
-     * could overflow int on the last block) */
-    for (ST_int c0 = 0, c1; c0 < num_clusters; c0 = c1) {
-        c1 = (num_clusters - c0 < block_clusters) ? num_clusters : c0 + block_clusters;
-        #ifdef _OPENMP
-        const size_t block_obs = (size_t)(boundaries[c1] - boundaries[c0]);
-        #pragma omp parallel for schedule(static) if(K > 1 && block_obs * (size_t)K > 100000)
-        #endif
+    /* e'X of every cluster: each element sums its cluster's observations in
+     * row order. When all the sums fit, a regressor's pass over the rows adds
+     * every observation to its cluster's sum (the regressors in parallel):
+     * the rows are read in order and nothing is sorted. Otherwise the
+     * observations are sorted by cluster and the clusters taken in blocks;
+     * the sums, and the order in which their outer products enter the meat
+     * (cluster order), are the same. */
+    ST_retcode meat_rc = 0;
+    long double *all_sums = NULL;
+    /* The sums fit when there are few of them next to the data: at most a
+     * quarter as many clusters as rows (the sums then take no more than half
+     * the memory of X_eff), and CTOOLS_VCE_CLUSTER_SUMS in all */
+    const int sums_fit = num_clusters <= N / 4 &&
+                         (size_t)num_clusters <= CTOOLS_VCE_CLUSTER_SUMS / (size_t)K;
+    if (sums_fit) {
+        all_sums = (long double *)malloc((size_t)num_clusters * (size_t)K * sizeof(long double));
+        if (!all_sums) meat_rc = 920;
+    }
+    if (all_sums) {
+        #pragma omp parallel for schedule(static) if(K > 1 && (size_t)N * (size_t)K > 100000)
         for (k = 0; k < K; k++) {
             const ST_double *xk = d->X_eff + (size_t)k * N;
-            for (ST_int c = c0; c < c1; c++) {
-                long double acc = 0.0L;
-                for (ST_int pos = boundaries[c]; pos < boundaries[c + 1]; pos++) {
-                    ST_int obs = sort_perm[pos];
+            long double *sums_k = all_sums + (size_t)k * num_clusters;
+            for (ST_int c = 0; c < num_clusters; c++) sums_k[c] = 0.0L;
+            /* A run of rows of one cluster (data sorted by it) is added in a
+             * register: the same additions, without a store and a reload of
+             * the sum per row */
+            for (ST_int obs = 0; obs < N;) {
+                const ST_int c = cluster_ids[obs];
+                long double acc = sums_k[c];
+                do {
                     acc += (long double)e_w[obs] * (long double)xk[obs];
-                }
-                block_sums[(size_t)(c - c0) * K + k] = acc;
+                    obs++;
+                } while (obs < N && cluster_ids[obs] == c);
+                sums_k[c] = acc;
             }
         }
-
-        /* Accumulate outer product ecX * ecX' into meat (upper triangle) */
-        for (ST_int c = c0; c < c1; c++) {
-            const long double *sums = block_sums + (size_t)(c - c0) * K;
-            for (ST_int jj = 0; jj < K; jj++) {
-                long double ecXj = sums[jj];
-                meat[(size_t)jj * K + jj] += ecXj * ecXj;
-                for (ST_int kk = jj + 1; kk < K; kk++) {
-                    meat[(size_t)jj * K + kk] += ecXj * sums[kk];
-                }
-            }
+        for (ST_int c = 0; c < num_clusters; c++) {
+            for (k = 0; k < K; k++) ecX[k] = all_sums[(size_t)k * num_clusters + c];
+            vce_meat_add(meat, ecX, K);
         }
+        free(all_sums);
+    } else if (!sums_fit) {
+        meat_rc = vce_cluster_meat_sorted(d, cluster_ids, num_clusters, e_w, meat);
     }
     free(e_w);
-    free(block_sums);
-
     free(ecX);
-    free(sort_perm);
-    free(boundaries);
     if (w_norm) free(w_norm);
+    if (meat_rc) {
+        free(meat);
+        free(temp);
+        return meat_rc;
+    }
 
     /* Mirror upper triangle to lower */
     for (ST_int jj = 0; jj < K; jj++) {

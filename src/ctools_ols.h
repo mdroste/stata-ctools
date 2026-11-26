@@ -126,6 +126,68 @@ static inline dd_real dd_add_d(dd_real a, ST_double b) {
 }
 
 /* ========================================================================
+ * Kernels of error-free products, compiled twice on baseline x86-64
+ *
+ * The split product above costs seventeen operations per element, the FMA
+ * instruction two. A kernel that takes "fused" as a constant first argument
+ * and forms its products with two_prod_as() is compiled once with the split
+ * and once for the FMA instruction, and the copy the CPU can run is chosen
+ * at run time. Both copies compute the exact error of every product (the
+ * split is exact in its range and uses the instruction outside it), so the
+ * choice changes no result. This relies, like the rest of the code, on
+ * -ffp-contract=off: no other multiply-add may fuse.
+ * ======================================================================== */
+#if !defined(__FMA__) && (defined(__x86_64__) || defined(__i386__)) && \
+    (defined(__GNUC__) || defined(__clang__))
+#define CTOOLS_FMA_DISPATCH 1
+#if defined(__clang__)
+#define CTOOLS_FMA_TARGET __attribute__((target("fma")))
+#else
+/* 128-bit vectors at most: the FMA instruction brings AVX with it, and GCC
+ * does not keep 256-bit spills aligned on the Windows x64 stack */
+#define CTOOLS_FMA_TARGET __attribute__((target("fma,prefer-vector-width=128")))
+#endif
+#define CTOOLS_CPU_HAS_FMA() (__builtin_cpu_supports("fma") != 0)
+#else
+#define CTOOLS_FMA_DISPATCH 0
+#define CTOOLS_FMA_TARGET
+#define CTOOLS_CPU_HAS_FMA() 0
+#endif
+
+/* two_prod() inside such a kernel. fused may be nonzero only in a function
+ * declared CTOOLS_FMA_TARGET. */
+static CTOOLS_INLINE dd_real two_prod_as(const int fused, ST_double a, ST_double b) {
+    ST_double p = a * b;
+    ST_double e = fused ? __builtin_fma(a, b, -p) : CTOOLS_PROD_ERR(a, b, p);
+    return (dd_real){p, e};
+}
+
+/* Define ret name params from static CTOOLS_INLINE ret name##_body(const int
+ * fused, ...): the arguments after the parameter list are those passed on. */
+#if CTOOLS_FMA_DISPATCH
+#define CTOOLS_FMA_VARIANTS(linkage, ret, name, params, ...)                                       \
+    static ret name##_split params { return name##_body(0, __VA_ARGS__); }                         \
+    CTOOLS_FMA_TARGET static ret name##_fused params { return name##_body(1, __VA_ARGS__); }       \
+    linkage ret name params                                                                        \
+    {                                                                                              \
+        return CTOOLS_CPU_HAS_FMA() ? name##_fused(__VA_ARGS__) : name##_split(__VA_ARGS__);       \
+    }
+#define CTOOLS_FMA_VARIANTS_VOID(linkage, name, params, ...)                                       \
+    static void name##_split params { name##_body(0, __VA_ARGS__); }                               \
+    CTOOLS_FMA_TARGET static void name##_fused params { name##_body(1, __VA_ARGS__); }             \
+    linkage void name params                                                                       \
+    {                                                                                              \
+        if (CTOOLS_CPU_HAS_FMA()) name##_fused(__VA_ARGS__);                                       \
+        else name##_split(__VA_ARGS__);                                                            \
+    }
+#else
+#define CTOOLS_FMA_VARIANTS(linkage, ret, name, params, ...)                                       \
+    linkage ret name params { return name##_body(0, __VA_ARGS__); }
+#define CTOOLS_FMA_VARIANTS_VOID(linkage, name, params, ...)                                       \
+    linkage void name params { name##_body(0, __VA_ARGS__); }
+#endif
+
+/* ========================================================================
  * Quad-precision accumulation functions
  * Match Stata's quadcross() precision for RSS/TSS calculations
  * ======================================================================== */
@@ -167,10 +229,35 @@ int dd_dot_weighted_multi_blocked(const ST_double *x, const ST_double *const *ys
  * Dot product variants for numerical precision
  * ======================================================================== */
 
-/* Kahan-compensated dot product for numerical stability */
+/* Kahan-compensated dot product for numerical stability: the rows in order,
+ * each product with its exact error */
 ST_double kahan_dot(const ST_double * RESTRICT x,
                     const ST_double * RESTRICT y,
                     ST_int N);
+
+/* Compensated cross products of the K columns of X (N x K, column-major):
+ * xtx (K x K, both triangles) receives X'X and, when y is not NULL, xty (K)
+ * receives X'y. Up to CTOOLS_KAHAN_BLOCK rows every element is exactly
+ * kahan_dot() of its two columns. Beyond that each block of
+ * CTOOLS_KAHAN_BLOCK rows is summed as kahan_dot() does and the blocks are
+ * added in order in double-double, which equals kahan_dot() to its own
+ * accuracy; the blocks are fixed by N, so an element is the same at every
+ * thread count and depends only on its two columns. The blocks run in
+ * parallel, all pairs of columns in one pass over the rows. No failure mode:
+ * a scratch allocation that fails selects a slower arrangement of the same
+ * sums. */
+#define CTOOLS_KAHAN_BLOCK 32768
+void ctools_kahan_cross(const ST_double *X, const ST_double *y, ST_int N, ST_int K,
+                        ST_double *xtx, ST_double *xty);
+
+/* The same sums for X' diag(w) X: element (j, k) adds (w[i] * X[i,j]) * X[i,k],
+ * the weighted left factor rounded to double first and that product taken
+ * with its exact error. Only the upper triangle upper[j * K + k], k >= j, is
+ * written, each element as the long double sum of its two parts (the running
+ * sum and its compensation for one block, the double-double total for more),
+ * for callers that go on in extended precision. */
+void ctools_kahan_cross_weighted(const ST_double *X, const ST_double *w, ST_int N, ST_int K,
+                                 long double *upper);
 
 /* BLAS-like optimized dot product with 8-way unrolling */
 ST_double fast_dot(const ST_double * RESTRICT x,
