@@ -632,8 +632,19 @@ HDFE_SolveResult ppml_partial(const PPML_Options *options, HDFE_State *S, double
     HDFE_SolveResult out = {0, 1, 0};
     for (int k = 0; k < K; k += pool)
     {
-        HDFE_SolveResult part =
-            partial_out_columns(S, data + (size_t)k * N, N, K - k < pool ? K - k : pool, threads);
+        /* The iteration on the rows, not the coefficient-space solve that
+         * partial_out_columns() would choose (hdfe_coef.h). The IRLS weights
+         * of zero outcomes whose mean heads to zero fall without bound, and
+         * an effect tied to the others only through such rows then has a
+         * pivot below rounding: a solve for the coefficients cannot place
+         * it, and the refit of eta after the last iteration threw those rows
+         * back by several units (low-mobility two-way panels at
+         * tolerance(1e-12), validation/stata/cppmlhdfe.do). The row
+         * iteration never divides by that pivot, and the IRLS above is
+         * built around how it treats those rows. */
+        (void)threads;
+        HDFE_SolveResult part = partial_out_columns_options(S, data + (size_t)k * N, N,
+                                                            K - k < pool ? K - k : pool, 0, 1);
         if (part.status)
             return part;
         if (part.iterations > out.iterations)

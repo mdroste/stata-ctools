@@ -4,7 +4,7 @@ Linear regression with high-dimensional fixed effects.
 
 ## Overview
 
-`creghdfe` estimates linear regressions with multiple high-dimensional fixed effects. It removes fixed effects in C using a conjugate-gradient solver. See [Compatibility](../COMPATIBILITY.md) for differences from `reghdfe`.
+`creghdfe` estimates linear regressions with multiple high-dimensional fixed effects. It removes fixed effects in C: two to eight categorical effects are solved for their coefficients (a direct factorization when the effects other than the largest have about a thousand levels or fewer, conjugate gradients on the distinct combinations of levels otherwise); other models use reghdfe's alternating projections with conjugate gradients. See [Compatibility](../COMPATIBILITY.md) for differences from `reghdfe`.
 
 ## Syntax
 
@@ -30,9 +30,9 @@ creghdfe depvar indepvars [if] [in] [weight] [, absorb(varlist) options]
 | `individual(indvar)`, `aggregation(mean\|sum)` | With `group()`: individual (inventor) fixed effects, `indvar` in `absorb()`, entering each group as the mean (default) or sum of its individuals' effects, as reghdfe |
 | `dofadjustments(string)` | Absorbed degrees-of-freedom adjustments; default `all` |
 | `tolerance(#)` | Projection tolerance; default `1e-8` |
-| `iterate(#)` | Maximum projection iterations; default 16,000 |
-| `transform(str)`, `acceleration(str)` | reghdfe's MAP variants with its names and abbreviations: `symmetric_kaczmarz` (default), `kaczmarz`, `cimmino`; `cg` (default), `sd`, `aitken`, `none`. `kaczmarz` with `cg` runs with reghdfe's warning; `rand_kaczmarz` is r(3498), as there |
-| `technique(map\|lsmr\|lsqr)`, `preconditioner()` | Checked as reghdfe checks them (`technique(cg)` r(3498)); creghdfe always solves with MAP to the same tolerance |
+| `iterate(#)` | Maximum solver iterations; default 16,000. A limit below 1,000 is a limit on reghdfe's iteration and runs it (a direct solve has no iterations to limit) |
+| `transform(str)`, `acceleration(str)` | reghdfe's MAP variants with its names and abbreviations: `symmetric_kaczmarz` (default), `kaczmarz`, `cimmino`; `cg` (default), `sd`, `aitken`, `none`. `kaczmarz` with `cg` runs with reghdfe's warning; `rand_kaczmarz` is r(3498), as there. Either option runs MAP, also when it names the default |
+| `technique(map\|lsmr\|lsqr)`, `preconditioner()` | Checked as reghdfe checks them (`technique(cg)` r(3498)); each runs MAP, reghdfe's default iteration, to the same tolerance. `technique(map)` asks for it by name |
 | `prune`, `poolsize(#)`, `compact`, `fastregress`, `parallel(#)` | Accepted as reghdfe accepts them; no effect (data are held in C; threads replace worker processes) |
 | `abort(0)` | reghdfe's undocumented solver property: keep the projection after `iterate()` iterations without convergence, `e(converged)` = 0. `miniter()`, `min_ok()`, `accel_start()`, `accel_freq()` are accepted with no effect; other `key(value)` options are r(198) |
 | `version(#)` | Not supported: `version(3)` and `version(5)` (historical reghdfe) are r(198), other numbers r(9) as in reghdfe |
@@ -223,7 +223,9 @@ creghdfe y x1 x2, absorb(firm year industry)
 
 ### Implementation details
 
-**CG Solver and HDFE Absorption:**
+**HDFE Absorption:**
+- **Coefficient-space solve** (two to eight categorical effects): the effect with the most levels is eliminated exactly from its level means; the coefficients of the others solve a system of the size of their levels, by dense Cholesky when that is about a thousand or fewer, otherwise by conjugate gradients over the distinct cells of the effects for all variables at once. Two effects whose graph is poorly connected switch to an approximate-Cholesky preconditioner of the graph Laplacian after 60 plain iterations
+- **Row-space iteration** (slopes, `individual()`, more than eight effects, `technique()`/`transform()`/`acceleration()`, `iterate()` below 1,000): conjugate gradients on the symmetric Kaczmarz sweep, as reghdfe
 - **Symmetric Kaczmarz transform**: Forward and backward projection sweeps provide the symmetric operator used by CG
 - **Pre-computed inverse group counts**: Multiplies by `1.0/count` instead of dividing, to avoid repeated division
 - **Counting sort for CSR index construction**: Builds compressed sparse row indices in O(N+L) instead of O(N log N), where L is the number of FE levels
@@ -320,7 +322,7 @@ where αᵢ represents the fixed effects for each absorbed variable.
 | Feature | `reghdfe` | `creghdfe` |
 |---------|-----------|------------|
 | Implementation | Stata + Mata | C with OpenMP |
-| Algorithm | Method of Alternating Projections | CG with Kaczmarz |
+| Algorithm | Method of Alternating Projections | Coefficient-space solve (direct or preconditioned CG); CG with Kaczmarz on request |
 | Parallelization | Limited | Yes |
 
 Memory use depends on the dataset, options, and number of threads.

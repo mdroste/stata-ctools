@@ -122,6 +122,7 @@ program define _creghdfe_impl, eclass
     local __transform_code = `s(transform_code)'
     local __accel_code = `s(accel_code)'
     local __kcg = `s(kcg)'
+    local __map = `s(explicit)'
     local __timeit = ("`timeit'" != "")
     * reghdfe's group() and individual() (groupvar() is spelled out, as in
     * reghdfe): the regression has one row per group (a patent), and with
@@ -837,10 +838,13 @@ program define _creghdfe_impl, eclass
     scalar __creghdfe_num_cluster = `ncl'
     scalar __creghdfe_dkraay_bw = `dkraay_bw'
     scalar __creghdfe_dof_continuous = strpos(" `dofmethods' ", " continuous ") > 0
-    * transform() and acceleration() of reghdfe's MAP solver, and abort()
+    * transform() and acceleration() of reghdfe's MAP solver, and abort();
+    * map: a solver option was given, so that iteration runs (the default
+    * solves for the coefficients of the effects, see the help)
     scalar __creghdfe_transform = `__transform_code'
     scalar __creghdfe_acceleration = `__accel_code'
     scalar __creghdfe_abort = `__abort'
+    scalar __creghdfe_map = `__map'
 
     * Build threads option string
     local threads_code ""
@@ -1787,6 +1791,8 @@ program define _creghdfe_solver_opts, sclass
     version 14.1
     syntax [, TECHnique(string) TRANSform(string) ACCELeration(string) PRECONDitioner(string) ///
         PARALLEL(string asis)]
+    * any of the four given: that iteration is run, at its defaults too
+    local explicit = (`"`technique'`transform'`acceleration'`preconditioner'"' != "")
     if "`technique'" == "" local technique map
     if !inlist("`technique'", "map", "cg", "lsmr", "lsqr") {
         di as error "invalid technique: `technique'"
@@ -1860,6 +1866,7 @@ program define _creghdfe_solver_opts, sclass
     }
     sreturn clear
     sreturn local kcg = ("`transform'" == "kaczmarz" & "`acceleration'" == "conjugate_gradient")
+    sreturn local explicit `explicit'
     sreturn local technique `technique'
     sreturn local transform_code `tcode'
     sreturn local accel_code `acode'

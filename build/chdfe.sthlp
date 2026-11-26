@@ -83,6 +83,16 @@ adjustments. No variable is created when there is no eligible pair.
 {opt maxiterations(#)} limits iterations; the default is 10,000 and {cmd:.}
 removes the practical limit. Failure to converge returns error 430.
 
+{pstd}With two to eight categorical effects and no slopes, {cmd:chdfe} solves
+for the coefficients of the effects instead of iterating over the
+observations: the effect with the most levels is eliminated exactly, and the
+others are solved by a direct factorization (about a thousand levels or fewer
+in total) or by conjugate gradients on the distinct combinations of levels.
+The residuals are those of the same projection to the same tolerance; the
+reported number of iterations is 1 for a direct solve. {opt transform()},
+{opt acceleration()} and a {opt maxiterations()} below 1000 run {cmd:hdfe}'s
+iteration over the observations instead.
+
 {pstd}{opt poolsize(#)} sets how many variables have their fixed effects
 removed together. The default is 10. Smaller values use less memory.
 
@@ -96,7 +106,8 @@ Abbreviations are allowed. {opt acceleration(str)} selects
 ({cmd:sd}), {cmd:aitken}, {cmd:none}, or {cmd:hdfe}'s experimental
 {cmd:hybrid} (three plain sweeps, then conjugate gradient). As in {cmd:hdfe},
 {cmd:kaczmarz} with conjugate gradient runs, with a warning that it is
-unlikely to converge. Intermediate estimates and the number of iterations may
+unlikely to converge. Either option runs that iteration, also when it names
+the default. Intermediate estimates and the number of iterations may
 differ from those of {cmd:hdfe}.
 
 {pstd}{opt threads(#)} sets the maximum number of threads, from 1 to 256. Zero

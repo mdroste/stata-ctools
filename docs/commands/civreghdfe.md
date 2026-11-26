@@ -97,8 +97,8 @@ of the bootstrap model. Needs `vce(robust)` or `vce(cluster)`; not with
 ### Estimation Options
 | Option | Description |
 |--------|-------------|
-| `tolerance(#)` | CG solver convergence tolerance (default: 1e-8) |
-| `maxiter(#)` | Maximum CG iterations (default: 500) |
+| `tolerance(#)` | Fixed-effect solver convergence tolerance (default: 1e-8) |
+| `maxiter(#)` | Maximum solver iterations (default: 16,000; `iterate()` is a synonym). A limit below 1,000 runs reghdfe's iteration |
 | `liml`, `fuller(#)`, `kclass(#)` | Alternative IV estimators |
 | `gmm2s`, `cue` | Two-step or continuously updated GMM |
 | `wmatrix(matrix)`, `smatrix(matrix)` | `ivreg2`'s user-supplied weighting matrix W (the `gmmw` model; first step of `gmm2s`) and covariance matrix S |
@@ -180,7 +180,7 @@ The full instrument set consists of the excluded instruments plus all exogenous 
 `civreghdfe` implements 2SLS estimation in four steps:
 
 ### Step 1: HDFE Absorption
-Absorb fixed effects from all variables (y, endogenous X, exogenous X, instruments Z) using the conjugate gradient (CG) solver with symmetric Kaczmarz iteration.
+Absorb fixed effects from all variables (y, endogenous X, exogenous X, instruments Z). Two to eight categorical effects are solved for their coefficients, as in `creghdfe` (a direct factorization when the effects other than the largest have about a thousand levels or fewer, conjugate gradients on the distinct combinations of levels otherwise). Slopes, an iteration limit below 1,000 and reghdfe's `technique()`, `transform()`, `acceleration()` and `preconditioner()` use the conjugate gradient (CG) solver with symmetric Kaczmarz iteration.
 
 ### Step 2: First Stage
 Regress each endogenous variable on all instruments (excluded + exogenous) using demeaned data.
@@ -334,7 +334,8 @@ For valid 2SLS estimation:
 The implementation uses the following methods:
 
 **HDFE Absorption (shared with `creghdfe`):**
-- **CG solver with symmetric Kaczmarz transform**: Forward and backward sweeps define the projection operator
+- **Coefficient-space solve**: the default for categorical effects (see [creghdfe](creghdfe.md#performance))
+- **CG solver with symmetric Kaczmarz transform**: Forward and backward sweeps define the projection operator of the row-space iteration
 - **Pre-computed inverse group counts**: Multiplies instead of divides in the inner demeaning loop
 - **Counting sort for CSR construction**: O(N+L) sparse index builds
 - **Thread-local buffers**: Eliminates contention during parallel demeaning
@@ -357,7 +358,7 @@ Runtime depends on data and hardware; report the dataset, options, hardware, thr
 | Feature | `ivreghdfe` | `civreghdfe` |
 |---------|-------------|--------------|
 | Implementation | Stata + Mata | C with OpenMP |
-| HDFE Algorithm | Alternating projections | CG with Kaczmarz |
+| HDFE Algorithm | Alternating projections | Coefficient-space solve; CG with Kaczmarz on request |
 | Parallelization | Limited | Yes |
 
 ## See Also

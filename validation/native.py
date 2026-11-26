@@ -30,6 +30,12 @@ COMPANIONS = {
         "hdfe/hdfe_indiv.c",
     ],
     "crangestat/crangestat_impl.c": ["crangestat/crangestat_kernels.c"],
+    "hdfe/hdfe_solver.c": [
+        "hdfe/hdfe_coef_core.c",
+        "hdfe/hdfe_coef.c",
+        "hdfe/hdfe_coef_multi.c",
+        "hdfe/hdfe_coef_lap.c",
+    ],
     "cpsmatch/cpsmatch_impl.c": [
         "cpsmatch/cpsmatch_kernels.c",
         "cpsmatch/cpsmatch_options.c",

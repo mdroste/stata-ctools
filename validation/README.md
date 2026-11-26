@@ -152,6 +152,14 @@ absorbed effects, allocation failures, and parallel block reductions.
 `test_hdfe_paths_native` checks analytically constructed weighted/unweighted slope
 residuals, orthogonality, idempotence, complete native metadata, nesting,
 disconnected groups, singleton removal, extreme scaling, and pool/thread counts.
+`test_hdfe_coef_native` holds every method of the coefficient-space projection
+(dense, conjugate gradients, Laplacian preconditioner; two to four effects) to a
+Gram-Schmidt orthogonalization of the dummies on small designs: repeated cells,
+disconnected and nested effects, zero weights, more columns than one batch, and
+level means a million times the noise. It also checks the dispatch of
+`partial_out_columns()`, the iteration limit, Break at every poll, every
+allocation failure, and, with OpenMP, that 300,000-row designs give the same
+bits on one thread and on four.
 Both run through `python3 validation/run.py --native <test_name>` with serial and
 OpenMP sanitizer variants. The licensed `chdfe` suite additionally compares every
 per-effect DoF/exact/nested/owner field with `hdfe`.

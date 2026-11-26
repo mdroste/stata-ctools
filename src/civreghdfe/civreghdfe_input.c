@@ -152,6 +152,9 @@ ST_retcode civreghdfe_read_input(civreghdfe_input *input)
     input->dof_continuous = 1;
     if (SF_scal_use("__civreghdfe_dof_continuous", &dval) == 0)
         input->dof_continuous = dval != 0;
+    input->map = 0;
+    if (SF_scal_use("__civreghdfe_map", &dval) == 0)
+        input->map = dval != 0;
     for (ST_int g = 0; g < 10; g++) {
         input->slope_flag[g] = 0;
         input->fe_absvar[g] = g + 1;

@@ -3465,7 +3465,13 @@ benchmark_reghdfe_dof y x1 x2, absorb(id1 id2 id3 coarse)
 benchmark_reghdfe_dof y x1 x2, absorb(id1 id2 id3) vce(robust)
 benchmark_reghdfe_dof y x1 x2, absorb(id1 id2 id3) vce(cluster id1)
 benchmark_reghdfe_dof y x1 x2, absorb(id1 id2 id3) vce(cluster id3)
-benchmark_reghdfe_dof y x1 x2, absorb(id1 id2 coarse) vce(cluster coarse)
+* Six figures here: the covariance of x1 and the constant is 4.6e-7, a
+* correlation of 0.08, and reghdfe's own value moves by 1.4e-13 (its seventh
+* figure) between tolerance(1e-8) and tolerance(1e-13). Seven figures hold
+* only for a solver that repeats reghdfe's iterations step for step, which
+* technique(map) does and the default, a direct solve, does not.
+benchmark_reghdfe_dof y x1 x2, absorb(id1 id2 coarse) vce(cluster coarse) minsf(6)
+benchmark_reghdfe_dof y x1 x2, absorb(id1 id2 coarse) vce(cluster coarse) extra(technique(map))
 
 * Each dofadjustments() setting, with and without nesting
 foreach dof in all none firstpair pairwise clusters "pairwise clusters" "firstpair clusters" {

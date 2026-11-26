@@ -7,6 +7,7 @@
  */
 
 #include "hdfe_solver.h"
+#include "hdfe_coef.h"
 #include "../ctools_unroll.h"
 #include "../ctools_simd.h"
 
@@ -438,8 +439,10 @@ ST_int cg_solve_column_threaded(HDFE_State *S, ST_double *y, ST_int thread_id)
  * For G=1, uses direct demean (no CG iteration needed).
  * ======================================================================== */
 
-HDFE_SolveResult partial_out_columns(HDFE_State *S, ST_double *data, ST_int N, ST_int K,
-                                     ST_int num_threads)
+/* coefficients != 0: categorical effects go to the coefficient-space solver
+ * (hdfe_coef.h); otherwise every G >= 2 runs the CG iteration below. */
+static HDFE_SolveResult partial_out_columns_impl(HDFE_State *S, ST_double *data, ST_int N, ST_int K,
+                                                 int coefficients)
 {
     ST_int k;
     ST_int max_iters = 0;
@@ -450,7 +453,6 @@ HDFE_SolveResult partial_out_columns(HDFE_State *S, ST_double *data, ST_int N, S
     {
         return (HDFE_SolveResult){198, 0, 0};
     }
-    (void)num_threads; /* Use S->num_threads or OpenMP default */
     if (ctools_cancel_requested())
         return (HDFE_SolveResult){1, 0, 0};
     ctools_cancel_team team = {0};
@@ -482,6 +484,9 @@ HDFE_SolveResult partial_out_columns(HDFE_State *S, ST_double *data, ST_int N, S
         return (HDFE_SolveResult){0, 1, 1};
     }
 
+    if (coefficients && S->maxiter >= HDFE_COEF_MIN_MAXITER && hdfe_coef_applies(S))
+        return hdfe_coef_partial_out(S, data, N, K, HDFE_COEF_AUTO);
+
 /* General CG solve for G >= 2 */
 #pragma omp parallel num_threads(S->num_threads) reduction(max : max_iters)  \
     reduction(| : any_failed)
@@ -512,6 +517,13 @@ HDFE_SolveResult partial_out_columns(HDFE_State *S, ST_double *data, ST_int N, S
     }
     if (ctools_cancel_requested()) return (HDFE_SolveResult){1, 0, max_iters};
     return (HDFE_SolveResult){any_failed ? 430 : 0, !any_failed, max_iters};
+}
+
+HDFE_SolveResult partial_out_columns(HDFE_State *S, ST_double *data, ST_int N, ST_int K,
+                                     ST_int num_threads)
+{
+    (void)num_threads; /* Use S->num_threads or OpenMP default */
+    return partial_out_columns_impl(S, data, N, K, 1);
 }
 
 /* hdfe's experimental random Kaczmarz: a symmetric sweep (forward, then
@@ -610,8 +622,9 @@ HDFE_SolveResult partial_out_columns_options(HDFE_State *S, double *data, int N,
         return (HDFE_SolveResult){1, 0, 0};
     if (S->G == 0)
         return (HDFE_SolveResult){0, 1, 0};
+    /* reghdfe's default iteration, asked for by name */
     if (transform == 0 && acceleration == 1)
-        return partial_out_columns(S, data, N, K, S->num_threads);
+        return partial_out_columns_impl(S, data, N, K, 0);
     int failed = 0, max_iterations = 0;
     const double tol_sq = S->tolerance * S->tolerance;
     ctools_cancel_team team = {0};

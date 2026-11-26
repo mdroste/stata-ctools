@@ -53,7 +53,7 @@ error 2000.
 | `dofadjustments(list)` | `all` (default), `none`, or a selection of `pairwise`/`firstpair`, `clusters`, and `continuous` |
 | `groupvar(newvar)` | Connected-component IDs for the first pair of nonnested categorical effects |
 | `tolerance(#)` | Convergence tolerance; default `1e-8` |
-| `maxiterations(#)` | Iteration limit; default 10,000; `.` removes the practical limit |
+| `maxiterations(#)` | Iteration limit; default 10,000; `.` removes the practical limit. A limit below 1,000 runs hdfe's iteration over the observations |
 | `poolsize(#)` | Number of variables from which fixed effects are removed together; default 10 |
 | `transform(str)`, `tra()` | `symmetric_kaczmarz` (default), `kaczmarz`, `cimmino`, or hdfe's experimental `random_kaczmarz`/`rand_kaczmarz` (a symmetric sweep in a random order drawn once per variable from a fixed generator; Stata's random-number state is untouched) |
 | `acceleration(str)` | `conjugate_gradient`/`cg` (default), `steepest_descent`/`sd`, `aitken`, `none`, or hdfe's experimental `hybrid` (three plain sweeps, then conjugate gradient) |
@@ -61,6 +61,11 @@ error 2000.
 | `verbose`, `verbose(#)`, `timeit` | Report time by computation stage |
 
 As `hdfe`, `chdfe` reports the singleton observations it drops and the iterations used.
+With two to eight categorical effects and no slopes it solves for the coefficients of the effects
+(the effect with the most levels is eliminated exactly; the others by a direct factorization when
+they have about a thousand levels or fewer, by conjugate gradients on the distinct combinations of
+levels otherwise), and the iterations reported are 1 for a direct solve. `transform()` and
+`acceleration()`, also at their default values, run hdfe's iteration over the observations.
 `kaczmarz` with conjugate gradient runs with hdfe's warning that it is unlikely to converge
 (it stops by reghdfe's Hestenes rule and is less accurate than the other choices). Intermediate estimates and iteration counts
 may differ from `hdfe`, even when the final estimates agree. Nonconvergence produces error 430. `groupvar()`

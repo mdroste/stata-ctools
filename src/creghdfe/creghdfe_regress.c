@@ -898,8 +898,9 @@ ST_retcode creghdfe_full_regression(int retain)
          * a hundred times tighter than tolerance(), its atol and btol */
         projection.status = hdfe_indiv_partial_out(g_state, &indiv, data, N, K, tolerance / 100.0,
                                                    maxiter, &projection.iterations);
-    } else if (input.transform != 0 || input.acceleration != 1) {
-        /* transform() and acceleration() other than reghdfe's defaults */
+    } else if (input.map || input.transform != 0 || input.acceleration != 1) {
+        /* reghdfe's MAP iteration, asked for by option (technique(),
+         * transform(), acceleration() or preconditioner()) */
         projection = partial_out_columns_options(g_state, data, N, K, input.transform,
                                                  input.acceleration);
     } else {

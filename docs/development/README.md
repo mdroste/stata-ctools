@@ -1491,7 +1491,43 @@ A wrapper that keeps a statistic between plugin calls holds it in a `tempname`
 scalar, not a global name.
 
 `partial_out_columns()` returns an error status, convergence status and iteration
-count. A failed projection must return an error to Stata. The shared robust and
+count. It has two solvers behind it:
+
+- **Coefficient space** (`src/hdfe/hdfe_coef*.c`, interface in `hdfe_coef.h`):
+  two to eight categorical effects without slopes, when `S->maxiter` is at
+  least `HDFE_COEF_MIN_MAXITER` (1,000). The effect with the most levels is
+  eliminated from its level means; the coefficients of the others solve
+  `S b = Dk' W M_B x` by dense Cholesky (about 1,000 kept levels or fewer), or
+  by conjugate gradients on the distinct cells for up to 16 columns at once.
+  Two effects use the diagonal of `S` as preconditioner and switch to an
+  approximate Cholesky factor of the graph Laplacian when 60 iterations were
+  not enough; three or more use a symmetric block Gauss-Seidel sweep. A column
+  that reaches the rounding of its own size before the tolerance is solved
+  again from its residuals (at most three rounds).
+- **Row space** (`hdfe_solver.c`): conjugate gradients on the symmetric
+  Kaczmarz sweep, reghdfe's default. It serves slopes, more than eight
+  effects, small iteration limits (reghdfe's `iterate()` counts its sweeps;
+  tests pin `iterate(1)` as r(430) and the result after `iterate(2) abort(0)`),
+  every call of `partial_out_columns_options()`, and all of `cppmlhdfe`.
+
+The wrappers send `technique()`, `transform()`, `acceleration()` and
+`preconditioner()` to the row-space iteration even at their default values
+(`__creghdfe_map`, `__civreghdfe_map`, `chdfe`'s `rowspace` argument).
+`cppmlhdfe` stays on the rows because its IRLS weights fall without bound for
+zero outcomes whose mean heads to zero: an effect tied to the others only
+through such rows has a pivot below rounding, a coefficient solve cannot place
+it, and the refit of eta after the last iteration then moved those rows by
+several units (`validation/stata/cppmlhdfe.do`, low-mobility panels).
+
+Both solvers are deterministic across thread counts: sums run over fixed
+blocks that are combined in a fixed order. The coefficient-space module keeps
+no static data and allocates with `malloc`/`calloc`/`free` only, so bootstrap
+replicates may call it concurrently and the native harnesses can fail each of
+its allocations (`validation/native/hdfe_coef.c`).
+`validation/performance/benchmark_hdfe_coef.c` times every method on
+synthetic designs without Stata and backs the thresholds in the source.
+
+A failed projection must return an error to Stata. The shared robust and
 clustered covariance functions return 920 for allocation or cluster-sort failures
 and 498 for invalid covariance settings. Return matrices only after success.
 Zero residual variance produces a valid zero covariance matrix.
@@ -1988,9 +2024,10 @@ and calls the shared projection routines. Intercepts and slopes are separate
 factors; slopes paired with an intercept are centered within their category.
 Weights, slopes, and projection inputs are rescaled by powers of two to keep
 squared norms in range; residuals are returned in the original units.
-Projection columns are processed in pools. The default uses the same symmetric
-Kaczmarz/conjugate-gradient solver as `creghdfe`; optional transforms and
-accelerators are exposed through `partial_out_columns_options()`.
+Projection columns are processed in pools. The default calls
+`partial_out_columns()`, as `creghdfe` does (coefficient space for categorical
+effects, the symmetric Kaczmarz/conjugate-gradient iteration otherwise);
+`transform()` and `acceleration()` go through `partial_out_columns_options()`.
 
 Each call frees its C allocations before returning. Result variables are
 added only after all projections succeed. With `clear`, the original dataset is

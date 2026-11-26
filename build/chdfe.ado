@@ -40,7 +40,10 @@ program define chdfe, eclass
     if `maxiterations'<1 | `maxiterations'!=floor(`maxiterations') | `maxiterations'>2147483646 exit 198
     if `verbosity' | "`timeit'" != "" local verbose verbose
     * hdfe's transforms and accelerations, with its abbreviations; the
-    * experimental random Kaczmarz and hybrid acceleration included
+    * experimental random Kaczmarz and hybrid acceleration included. Either
+    * option given runs that iteration on the rows, at hdfe's defaults too;
+    * without them the plugin solves for the coefficients of the effects
+    local rowspace = cond(`"`transform'`acceleration'"' != "", "rowspace", "")
     local transform = lower("`transform'")
     local trans = 0
     if "`transform'" != "" {
@@ -254,7 +257,7 @@ program define chdfe, eclass
     if "`keepids'"!="" local storeids storeids
     capture noisily plugin call ctools_plugin `inputs' `fevars' `slopevars' `clusters' `weightvar' ///
         `outputs' `used' `groupoutput' `touse', ///
-        "chdfe `k' `g' `nc' `wt' `keeps' `maxiterations' `flags' `poolsize' `trans' `accel' `hasgroup' `slopecodes' tol=`tolerance' `threadopt' `verbose' `storeids'"
+        "chdfe `k' `g' `nc' `wt' `keeps' `maxiterations' `flags' `poolsize' `trans' `accel' `hasgroup' `slopecodes' tol=`tolerance' `threadopt' `verbose' `storeids' `rowspace'"
     local rc = _rc
     * hdfe's messages: the singletons dropped, its warning on Kaczmarz with
     * conjugate gradient (which it runs anyway), and the iterations

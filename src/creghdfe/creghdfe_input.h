@@ -34,8 +34,11 @@ typedef struct
     /* reghdfe's transform() and acceleration() of the main projection
      * (partial_out_columns_options codes; 0 and 1, symmetric Kaczmarz with
      * CG, by default), and its abort(): 0 keeps a projection that reached
-     * iterate() without converging, reported as e(converged) = 0 */
-    ST_int transform, acceleration, abort_nonconv;
+     * iterate() without converging, reported as e(converged) = 0. map: one
+     * of technique(), transform(), acceleration() or preconditioner() was
+     * given, so the main projection runs that iteration even at its default
+     * values (partial_out_columns() would solve for the coefficients) */
+    ST_int transform, acceleration, abort_nonconv, map;
 } creghdfe_input;
 ST_retcode creghdfe_read_input(creghdfe_input *input);
 #endif

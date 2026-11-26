@@ -2593,15 +2593,19 @@ end
  * to minsf significant figures.
  *
  * Syntax: benchmark_reghdfe_dof varlist, absorb(varlist) [vce(string)
- *             dofadjustments(string) minsf(real)]
+ *             dofadjustments(string) minsf(real) extra(string)]
+ *
+ * extra() holds further options given to both commands.
  ******************************************************************************/
 capture program drop benchmark_reghdfe_dof
 program define benchmark_reghdfe_dof
-    syntax varlist(min=2), Absorb(varlist) [vce(string) DOFadjustments(string) minsf(real 7)]
+    syntax varlist(min=2), Absorb(varlist) [vce(string) DOFadjustments(string) minsf(real 7) ///
+        extra(string)]
 
     local opts "absorb(`absorb')"
     if "`vce'" != "" local opts "`opts' vce(`vce')"
     if "`dofadjustments'" != "" local opts "`opts' dofadjustments(`dofadjustments')"
+    if "`extra'" != "" local opts "`opts' `extra'"
     local testname "df_a: `opts'"
 
     foreach cmd in reghdfe creghdfe {

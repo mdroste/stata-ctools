@@ -164,6 +164,13 @@ int main(void)
             cancelled_result(partial_out_columns(&s,data,s.N,8,threads));
         }
         s.G=2;
+        /* The coefficient-space methods ask between their phases and once per
+         * iteration, from the calling thread only. */
+        for (int method=HDFE_COEF_AUTO; method<=HDFE_COEF_PCG_LAP; method++)
+        for (int after=1; after<=4; after++) {
+            reset_data(data,s.N,8); begin(after);
+            cancelled_result(hdfe_coef_partial_out(&s,data,s.N,8,(hdfe_coef_method)method));
+        }
         /* Individual/group LSMR and fixed-effect recovery use the same flag. */
         int ptr[513], ind[512];
         for (int i=0; i<=512; i++) ptr[i]=i;

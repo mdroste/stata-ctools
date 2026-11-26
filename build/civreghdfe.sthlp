@@ -510,12 +510,16 @@ kernel whatever {opt kernel()} is, and with {opt kiefer} they are the iid
 {dlgtab:Estimation Settings}
 
 {phang}
-{opt tolerance(#)} specifies the convergence tolerance for the conjugate gradient
-solver used in HDFE absorption. Default is 1e-8.
+{opt tolerance(#)} specifies the convergence tolerance of the solver used in
+HDFE absorption. Default is 1e-8.
 
 {phang}
-{opt maxiter(#)} specifies the maximum number of CG iterations. Default is
+{opt maxiter(#)} specifies the maximum number of solver iterations. Default is
 16000, as in {cmd:reghdfe} and {cmd:ivreghdfe}; {opt iterate(#)} is a synonym.
+A limit below 1000 is taken as a limit on {cmd:reghdfe}'s iteration and runs
+that one (see Methods and Formulas), as do {cmd:reghdfe}'s
+{opt technique()}, {opt transform()}, {opt acceleration()} and
+{opt preconditioner()}, which {cmd:ivreghdfe} passes on.
 Both {opt maxiter()} and {opt tolerance()} must be positive. Failure to remove
 fixed effects within the iteration limit returns error 430.
 
@@ -1007,8 +1011,13 @@ matrix is not unique.
 {pstd}
 {cmd:civreghdfe} implements IV estimation with the following steps:
 
-{phang2}1. Absorb fixed effects from all variables (y, endogenous X, exogenous X, instruments Z)
-using the conjugate gradient (CG) solver with symmetric Kaczmarz iteration.
+{phang2}1. Absorb fixed effects from all variables (y, endogenous X, exogenous X, instruments Z).
+With two to eight categorical effects the coefficients of the effects are solved for
+directly: the effect with the most levels is eliminated exactly and the others by a
+factorization (about a thousand levels or fewer) or by conjugate gradients on the
+distinct combinations of levels, as in {helpb creghdfe}. Slopes, a single effect, an
+iteration limit below 1000 and {cmd:reghdfe}'s solver options use {cmd:reghdfe}'s
+iteration instead: conjugate gradients on the symmetric Kaczmarz sweep.
 As in {cmd:ivreghdfe}, which partials the fixed effects out before it estimates,
 the ranks are those of Stata's {cmd:invsym()} of the partialled (weighted)
 cross-products: a regressor or instrument is dropped when the fixed effects absorb it

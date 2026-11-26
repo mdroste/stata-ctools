@@ -1185,8 +1185,12 @@ static ST_retcode do_iv_regression(void)
             for (ST_int i = 0; i < N; i++) x[i] /= col_scale[c];
         }
     }
-    HDFE_SolveResult projection = partial_out_columns(state, all_data + (size_t)N * col_excl, N,
-                                                      total_cols - col_excl, num_threads);
+    /* a solver option of reghdfe's given: its default iteration, on the rows */
+    HDFE_SolveResult projection =
+        input.map ? partial_out_columns_options(state, all_data + (size_t)N * col_excl, N,
+                                                total_cols - col_excl, 0, 1)
+                  : partial_out_columns(state, all_data + (size_t)N * col_excl, N,
+                                        total_cols - col_excl, num_threads);
     #pragma omp parallel for schedule(dynamic) if ((size_t)N * total_cols > 100000)
     for (ST_int c = col_excl; c < total_cols; c++) {
         if (col_scale[c] == 1.0) continue;

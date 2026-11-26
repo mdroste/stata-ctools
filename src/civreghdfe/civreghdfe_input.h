@@ -12,6 +12,11 @@ typedef struct
      * absorbed effect fe_absvar[g] (1-based); the num_slopes slope variables
      * follow the tsset columns. dof_continuous: dofadjustments(continuous) */
     ST_int num_slopes, slope_flag[10], fe_absvar[10], dof_continuous;
+    /* One of reghdfe's technique(), transform(), acceleration() or
+     * preconditioner() was given: the projection runs reghdfe's default
+     * iteration on the rows (partial_out_columns() would solve for the
+     * coefficients of the effects) */
+    ST_int map;
 } civreghdfe_input;
 ST_retcode civreghdfe_read_input(civreghdfe_input *input);
 #endif

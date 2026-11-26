@@ -180,7 +180,8 @@ int ppml_simplex(const PPML_Options *options, HDFE_State *S, const double *y, co
     /* The positive-sample null space must be resolved more accurately than
      * the sign threshold; otherwise projection noise can flag extra zeros. */
     S->tolerance = fmin(1e-12, options->simplex_tol * .1);
-    pr = partial_out_columns(S, data, N, K, 1);
+    /* on the rows, as every projection of this command (see ppml_partial) */
+    pr = partial_out_columns_options(S, data, N, K, 0, 1);
     if (pr.status)
     {
         rc = -pr.status;

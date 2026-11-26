@@ -610,6 +610,7 @@ def test_refactor_boundaries_native():
         "formats/excel_address.h",
         "hdfe/hdfe_types.h",
         "hdfe/hdfe_solver.h",
+        "hdfe/hdfe_coef.h",
         "hdfe/hdfe_remap.h",
     ]
     with tempfile.TemporaryDirectory(prefix="ctools-boundaries-") as tmp:

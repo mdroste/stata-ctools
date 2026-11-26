@@ -33,6 +33,12 @@ ST_int cg_solve_column_threaded(HDFE_State *S, ST_double *y, ST_int thread_id);
  * Returns: status (0, 1 for cancellation, 198 for invalid configuration,
  * 920 for allocation failure, or 430 for nonconvergence),
  * convergence flag, and maximum iterations used across columns.
+ *
+ * Two or more categorical effects (no slopes) are solved for their
+ * coefficients (hdfe_coef.h), unless S->maxiter is below
+ * HDFE_COEF_MIN_MAXITER. Everything else, and every call of
+ * partial_out_columns_options(), runs the iteration on the rows: conjugate
+ * gradients on the symmetric Kaczmarz sweep, reghdfe's default.
  * ======================================================================== */
 typedef struct
 {
@@ -50,6 +56,8 @@ HDFE_SolveResult partial_out_columns(HDFE_State *S, ST_double *data, ST_int N, S
  * Acceleration: 0 none, 1 CG, 2 steepest descent, 3 Aitken, 4 hybrid (hdfe's
  * experimental acceleration: three plain sweeps, then CG). Every pair runs,
  * Kaczmarz with CG included (CG may then fail to converge, as in hdfe).
+ * Always iterates on the rows: (0, 1) is the iteration partial_out_columns()
+ * falls back on, for callers whose user named a transform or acceleration.
  * Uses the same state/buffer and column-major ownership contract above. */
 HDFE_SolveResult partial_out_columns_options(HDFE_State *S, ST_double *data, ST_int N, ST_int K,
                                             int transform, int acceleration);

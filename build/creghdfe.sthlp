@@ -45,12 +45,12 @@
 
 {syntab:Convergence}
 {synopt:{opt tol:erance(#)}}convergence tolerance; default is {cmd:1e-8}{p_end}
-{synopt:{opt iterate(#)}}maximum iterations; default is {cmd:16000}{p_end}
+{synopt:{opt iterate(#)}}maximum iterations; default is {cmd:16000} (below 1000: of {cmd:reghdfe}'s iteration){p_end}
 {synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
 {synopt:{opt nostand:ardize}}do not standardize variables before iteration{p_end}
 {synopt:{opt tra:nsform(str)}}{cmd:sym}metric_kaczmarz (default), {cmd:kac}zmarz or {cmd:cim}mino, as in {cmd:reghdfe}{p_end}
 {synopt:{opt accel:eration(str)}}{cmd:cg} (default), {cmd:sd}, {cmd:a}itken or {cmd:none}, as in {cmd:reghdfe}{p_end}
-{synopt:{opt tech:nique(str)}, {opt precond:itioner(str)}}accepted as in {cmd:reghdfe}; creghdfe solves with MAP{p_end}
+{synopt:{opt tech:nique(str)}, {opt precond:itioner(str)}}accepted as in {cmd:reghdfe}; run {cmd:reghdfe}'s iteration (MAP){p_end}
 {synopt:{opt prune}, {opt pool:size(#)}, {opt compact}, {opt par:allel(#)}, {opt fastreg:ress}}accepted as in {cmd:reghdfe}; no effect{p_end}
 
 {syntab:Residuals}
@@ -434,13 +434,29 @@ notes both. {opt wildbootstrap()} may be combined with
 {dlgtab:Convergence}
 
 {phang}
-{opt tolerance(#)} specifies a positive convergence tolerance for the iterative
-demeaning algorithm. The default is {cmd:1e-8}.
+{opt tolerance(#)} specifies a positive convergence tolerance for the
+fixed-effect solver. The default is {cmd:1e-8}.
+
+{pmore}
+With two to eight absorbed categorical effects (no slopes, no
+{opt individual()}) creghdfe solves for the coefficients of the effects
+instead of iterating over the observations as {cmd:reghdfe} does. The effect
+with the most levels is eliminated exactly. The others are solved by a direct
+factorization when they have about a thousand levels or fewer in total (year,
+industry, state), and otherwise by conjugate gradients on the distinct
+combinations of levels; for two effects that are poorly connected (workers who
+rarely change firm) the iteration is preconditioned with an approximate
+factorization of their graph. The residuals are those of the same projection,
+to the same {opt tolerance()}; {cmd:e(ic)} is 1 for a direct solve. Every other
+model, and any of the options below that names {cmd:reghdfe}'s iteration, runs
+the method of alternating projections (MAP).
 
 {phang}
 {opt iterate(#)} specifies a positive maximum number of iterations for the
-demeaning algorithm (and for recovering {opt savefe} effects). The default is
-{cmd:16000}, as in {cmd:reghdfe}.
+solver (and for recovering {opt savefe} effects). The default is
+{cmd:16000}, as in {cmd:reghdfe}. A limit below 1000 is taken as a limit on
+{cmd:reghdfe}'s iteration, whose sweeps it counts, and runs MAP: a direct
+solve has no iterations to limit.
 
 {phang}
 {opt threads(#)} sets the maximum number of threads, from 1 to 256.
@@ -458,14 +474,17 @@ and errors: transforms {cmd:symmetric_kaczmarz} (default), {cmd:kaczmarz} and
 {cmd:steepest_descent} ({cmd:sd}), {cmd:aitken} and {cmd:none} ({cmd:off}).
 {cmd:kaczmarz} with {cmd:cg} runs, with {cmd:reghdfe}'s warning that it is
 unlikely to converge; {cmd:rand_kaczmarz} is r(3498), as in {cmd:reghdfe}.
-The estimates agree with the default's to within the tolerance.
+Either option runs MAP, also when it names the default
+({cmd:acceleration(cg)}). The estimates agree with the default's to within
+the tolerance.
 
 {phang}
 {opt technique(map|lsmr|lsqr)} and {opt preconditioner(str)} are checked as
-{cmd:reghdfe} checks them ({cmd:technique(cg)} is r(3498), as there), but
-creghdfe always solves with the method of alternating projections (MAP), to
-the same {opt tolerance()} (with {opt individual()}, with LSMR). The
-estimates agree to within the tolerance; {cmd:e(ic)} counts MAP iterations.
+{cmd:reghdfe} checks them ({cmd:technique(cg)} is r(3498), as there). Each of
+them runs the method of alternating projections (MAP), {cmd:reghdfe}'s
+default iteration, to the same {opt tolerance()} (with {opt individual()},
+LSMR): {cmd:technique(map)} is how to ask for it by name. The estimates agree
+to within the tolerance; {cmd:e(ic)} then counts MAP iterations.
 {opt prune}, {opt poolsize(#)}, {opt compact}, {opt fastregress} and
 {opt parallel(#)} ({cmd:reghdfe}'s memory, speed and worker-process options)
 are accepted and have no effect: creghdfe holds the data in C and runs in

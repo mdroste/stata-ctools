@@ -66,6 +66,7 @@ ST_retcode chdfe_main(const char *args)
     double tolerance = ctools_parse_double_option(cursor, "tol", 1e-8);
     if (!isfinite(tolerance) || tolerance < 1e-16 || tolerance >= 1)
         return 198;
+    const int rowspace = ctools_parse_bool_option(cursor, "rowspace");
     ST_retcode rc = 920;
     HDFE_State state = {0};
     ctools_filtered_data fd;
@@ -456,8 +457,11 @@ ST_retcode chdfe_main(const char *args)
             }
         }
         double tick = ctools_timer_seconds();
+        /* transform() or acceleration() given: that iteration, on the rows */
         HDFE_SolveResult result =
-            partial_out_columns_options(&state, data, n, width, transform, accel);
+            rowspace || transform != 0 || accel != 1
+                ? partial_out_columns_options(&state, data, n, width, transform, accel)
+                : partial_out_columns(&state, data, n, width, state.num_threads);
         solve_time += ctools_timer_seconds() - tick;
         rc = result.status;
         if (rc)

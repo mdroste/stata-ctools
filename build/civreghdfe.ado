@@ -195,9 +195,13 @@ program define civreghdfe, eclass byable(recall)
         exit 5
     }
     * reghdfe's solver options, which ivreghdfe passes on, are checked as
-    * reghdfe checks them; civreghdfe's solver does not use them
+    * reghdfe checks them. Any of them given runs reghdfe's default
+    * iteration (symmetric Kaczmarz with conjugate gradient) whatever its
+    * value; without them the plugin solves for the coefficients of the
+    * effects (see the help)
     _civreghdfe_solver_opts, technique(`technique') transform(`transform') ///
         acceleration(`acceleration') preconditioner(`preconditioner')
+    local __map = (`"`technique'`transform'`acceleration'`preconditioner'"' != "")
     * timeit: the timing breakdown (verbose's)
     local __timeit = ("`timeit'" != "")
     * iweights, as ivreg2 takes them: without absorb() (reghdfe takes none)
@@ -1378,6 +1382,7 @@ program define civreghdfe, eclass byable(recall)
     scalar __civreghdfe_weight_type = `weight_type'
     scalar __civreghdfe_vce_type = `vce_type'
     scalar __civreghdfe_maxiter = `maxiter'
+    scalar __civreghdfe_map = `__map'
     scalar __civreghdfe_tolerance = `tolerance'
     scalar __civreghdfe_verbose = ("`verbose'" != "")
     scalar __civreghdfe_nested_fe_index = `nested_fe_index'

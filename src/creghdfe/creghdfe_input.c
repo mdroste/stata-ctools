@@ -210,6 +210,9 @@ ST_retcode creghdfe_read_input(creghdfe_input *input)
         input->acceleration = (ST_int)val;
     if (SF_scal_use("__creghdfe_abort", &val) == 0)
         input->abort_nonconv = val != 0;
+    input->map = 0;
+    if (SF_scal_use("__creghdfe_map", &val) == 0)
+        input->map = val != 0;
 
     input->K = K;
     input->G = G;
