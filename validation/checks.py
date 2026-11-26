@@ -12,6 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from scripts import package_contract
 from scripts import stage_package as packaging
 from scripts.package_contract import check_package
 from scripts.stage_package import stage
@@ -228,6 +229,20 @@ def package_packages():
             }
             (staged / "cppmlhdfe_p.ado").unlink()
             assert packaging.check_package(staged)
+        # One file over net install's limit (r(640) "package file too long")
+        # is a manifest error, even when every file is present.
+        staged = packaging.stage(source, directory / "stage-limit", ["mac_arm"], "test-only")
+        manifest = staged / "ctools.pkg"
+        listed = sum(line.startswith("f ") for line in manifest.read_text().splitlines())
+        limit = package_contract.NET_INSTALL_MAX_FILES
+        assert listed <= limit, (listed, limit)
+        fillers = [f"_ctools_fill{i}.ado" for i in range(limit + 1 - listed)]
+        for name in fillers:
+            (staged / name).write_text("program define _ctools_fill\nend\n")
+        with manifest.open("a") as handle:
+            handle.write("".join(f"f {name}\n" for name in fillers))
+        errors = packaging.check_package(staged)
+        assert any("net install takes at most" in error for error in errors), errors
         (source / "ctools_linux.plugin").unlink()
         package_must_reject(
             lambda: packaging.stage(
