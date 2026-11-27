@@ -9,7 +9,7 @@
 ```
 
 [![Build](https://github.com/mdroste/stata-ctools/actions/workflows/build.yml/badge.svg)](https://github.com/mdroste/stata-ctools/actions/workflows/build.yml)
-![Version](https://img.shields.io/badge/version-1.4.0-blue)
+![Version](https://img.shields.io/badge/version-1.3.2-blue)
 
 **This is an initial release. Please report problems/suggestions on [Issues](https://github.com/mdroste/stata-ctools/issues).**
 
@@ -23,22 +23,22 @@ Except for `csql`, each ctools command reimplements an existing Stata command an
 
 | Stata command | Replaced with | Description | Approx. speedup¹ |
 | --- | --- | --- | ---: |
-| `import` | `cimport` | Import text, Excel, dBase, SAS, SPSS, and shapefiles | 10–20× |
+| `import` | `cimport` | Import text, Excel, dBase, SAS, SPSS, and shapefiles | 20–30× |
 | `export` | `cexport` | Export text, Excel, dBase, SAS, SPSS, and shapefiles | 50–80× |
-| `sort` | `csort` | Sort dataset | 1.7–4× |
-| `merge` | `cmerge` | Merge (join) datasets | 2–6× |
-| `joinby` | [`cjoinby`](docs/commands/cjoinby.md) | Form all pairwise combinations within groups | 20–70× |
+| `sort` | `csort` | Sort dataset | 1.7–5× |
+| `merge` | `cmerge` | Merge (join) datasets | 3–8× |
+| `joinby` | [`cjoinby`](docs/commands/cjoinby.md) | Form all pairwise combinations within groups | 20–100× |
 | `reshape` | [`creshape`](docs/commands/creshape.md) | Convert data from wide to long form and vice versa | 20–40× |
 | `collapse` | [`ccollapse`](docs/commands/ccollapse.md) | Make dataset of summary statistics | 1.1–20× |
 | `egen` | [`cegen`](docs/commands/cegen.md) | Extensions to generate | 3–60× |
-| `sample` | `csample` | Resampling without replacement | 6–10× |
-| `bsample` | `cbsample` | Resampling with replacement | 2–4× |
-| `encode` | `cencode` | Recast string as labeled numeric | 30–160× |
+| `sample` | `csample` | Resampling without replacement | 5–10× |
+| `bsample` | `cbsample` | Resampling with replacement | 3–4× |
+| `encode` | `cencode` | Recast string as labeled numeric | 20–110× |
 | `decode` | `cdecode` | Recast labeled numeric as string | 2–5× |
-| `destring` | `cdestring` | Recast string as numeric type | 20–40× |
+| `destring` | `cdestring` | Recast string as numeric type | 20–50× |
 | `ipolate` | [`cinterpolate`](docs/USAGE.md#interpolation-cinterpolate) | Linear interpolation and extrapolation | 50–90× |
-| `split` | [`csplit`](docs/USAGE.md#string-fields-csplit) | Split strings into fields | 140–270× |
-| `qreg` | `cqreg` | Quantile regression | 8–10× |
+| `split` | [`csplit`](docs/USAGE.md#string-fields-csplit) | Split strings into fields | 140–210× |
+| `qreg` | `cqreg` | Quantile regression | 20–50× |
 
 ### User-written commands
 
@@ -46,18 +46,18 @@ See [Attribution](docs/ATTRIBUTION.md#community-contributed-commands) for the au
 
 | Stata command | Replaced with | Description | Approx. speedup¹ |
 | --- | --- | --- | ---: |
-| `distinct` | [`cdistinct`](docs/commands/cdistinct.md) | Report distinct values | 10–40× |
-| `cipolate` | [`cinterpolate, cubic`](docs/USAGE.md#interpolation-cinterpolate) | Local cubic interpolation | 40–80× |
+| `distinct` | [`cdistinct`](docs/commands/cdistinct.md) | Report distinct values | 6–30× |
+| `cipolate` | [`cinterpolate, cubic`](docs/USAGE.md#interpolation-cinterpolate) | Local cubic interpolation | 40–70× |
 | `rangejoin` | [`crangejoin`](docs/USAGE.md#interval-joins-crangejoin) | Join observations within inclusive intervals | 10–30× |
-| `geonear`<br>`geodist` | [`cgeonear`](docs/commands/cgeonear.md) | Nearest neighbors and distances by geodetic distance | 430–460×<br>40–70× |
-| `winsor2`<br>`gstats winsor` | `cwinsor` | Winsorize variables | 20–60×<br>1.9–4× |
-| `rangestat` | `crangestat` | Range statistics of variables | 30–70× |
-| `binscatter`<br>`binscatter2`<br>`binsreg` | `cbinscatter` | Binned scatter plots | 7–40×<br>3–20×<br>3–30× |
-| `psmatch2` | `cpsmatch` | Propensity score matching | 3–4× |
-| `reghdfe`<br>`fereg` | `creghdfe` | OLS with multi-way fixed effects | 30–40×<br>1.4–1.6× |
-| `ivreghdfe` | `civreghdfe` | 2SLS/GMM with multi-way fixed effects | 20–40× |
-| `ppmlhdfe`<br>`feppml` | `cppmlhdfe` | PPML with multi-way fixed effects | 30–50×<br>1.9–3× |
-| `hdfe` | [`chdfe`](docs/commands/chdfe.md) | Remove fixed effects from variables | 5–20× |
+| `geonear`<br>`geodist` | [`cgeonear`](docs/commands/cgeonear.md) | Nearest neighbors and distances by geodetic distance | 440–470×<br>50–80× |
+| `winsor2`<br>`gstats winsor` | `cwinsor` | Winsorize variables | 20–60×<br>2–4× |
+| `rangestat` | `crangestat` | Range statistics of variables | 60–90× |
+| `binscatter`<br>`binscatter2`<br>`binsreg` | `cbinscatter` | Binned scatter plots | 5–30×<br>2–20×<br>2–30× |
+| `psmatch2` | `cpsmatch` | Propensity score matching | 4–7× |
+| `reghdfe`<br>`fereg` | `creghdfe` | OLS with multi-way fixed effects | 30–70×<br>1.7–3× |
+| `ivreghdfe` | `civreghdfe` | 2SLS/GMM with multi-way fixed effects | 30–60× |
+| `ppmlhdfe`<br>`feppml` | `cppmlhdfe` | PPML with multi-way fixed effects | 30–50×<br>2–3× |
+| `hdfe` | [`chdfe`](docs/commands/chdfe.md) | Remove fixed effects from variables | 20–100× |
 | `reclink`<br>`matchit`<br>`strgroup` | [`cfuzzyjoin`](docs/commands/cfuzzyjoin.md) | Fuzzy record linkage, similarity joins, and groups of similar strings | 480–780×<br>2,800–16,000×<br>84–450×² |
 
 ### New commands
