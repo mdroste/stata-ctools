@@ -1,4 +1,4 @@
-*! version 1.3.2 20261124 github.com/mdroste/stata-ctools
+*! version 1.4.0 20261127 github.com/mdroste/stata-ctools
 * Footnote of a cppmlhdfe fit, named in e(footnote): the absorbed degrees of
 * freedom table e(dof_table), formatted as reghdfe's footnote (which
 * ppmlhdfe shows); nothing without absorbed effects.

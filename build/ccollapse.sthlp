@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.3.2 20261124}{...}
+{* *! version 1.4.0 20261127}{...}
 {viewerjumpto "Syntax" "ccollapse##syntax"}{...}
 {viewerjumpto "Description" "ccollapse##description"}{...}
 {viewerjumpto "Options" "ccollapse##options"}{...}

@@ -83,7 +83,9 @@ void ctools_filtered_data_release(ctools_filtered_data *fd);
 #define CTOOLS_LOAD_NO_SORT_ORDER 0x02 /* Omit identity sort_order; caller will not sort */
 #define CTOOLS_LOAD_MARKER 0x04        /* Select by a sample marker, the last plugin variable */
 #define CTOOLS_LOAD_ROW_TILES 0x08     /* Read every variable of a tile of rows together (one pass over the
-                                          Stata observations) whenever the columns can be tiled */
+                                          Stata observations) whenever the columns can be tiled. Loads of
+                                          numeric variables only do so without the flag (from 2 variables
+                                          and 200,000 selected rows); it matters for loads with strings */
 
 /*
     Load variables with if/in filtering applied at load time.

@@ -1,4 +1,4 @@
-*! version 1.3.2 20261124 github.com/mdroste/stata-ctools
+*! version 1.4.0 20261127 github.com/mdroste/stata-ctools
 * estat after creghdfe, named in e(estat_cmd), with the subcommands of
 * reghdfe's estat: summarize (without its header, as reghdfe), vce, and ic
 * with e(df_m) + 1 degrees of freedom (the regressors and the constant);

@@ -1,4 +1,4 @@
-*! version 1.3.2 20261124 github.com/mdroste/stata-ctools
+*! version 1.4.0 20261127 github.com/mdroste/stata-ctools
 *! original: Stata's sample (sample.ado 2.4.0, January 20, 2021)
 *! original: see help csample for details
 

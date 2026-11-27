@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.3.2 20261124}{...}
+{* *! version 1.4.0 20261127}{...}
 {viewerjumpto "Syntax" "creshape##syntax"}{...}
 {viewerjumpto "Description" "creshape##description"}{...}
 {viewerjumpto "Options" "creshape##options"}{...}

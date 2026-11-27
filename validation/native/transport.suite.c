@@ -923,10 +923,14 @@ static void check_values(const ctools_filtered_data *fd, int first, int last,
  * was reached in OpenMP builds and falls back without changing any value. */
 static void numeric_tiles(void)
 {
-    const int rows[] = {50004, 100003, 60004, 120003};
-    const int columns[] = {128, 128, 256, 256};
+    /* the last two: numeric loads of a few columns (three, for the three
+     * allocation failures below) with IO_AUTO_TILE_MIN_ROWS selected rows
+     * take row tiles without being asked */
+    const int rows[] = {50004, 100003, 60004, 120003, IO_AUTO_TILE_MIN_ROWS + 4,
+                        2 * IO_AUTO_TILE_MIN_ROWS + 3};
+    const int columns[] = {128, 128, 256, 256, 3, 3};
     shape = 0;
-    for (int c = 0; c < 4; c++) {
+    for (int c = 0; c < (int)(sizeof(rows) / sizeof(rows[0])); c++) {
         nrows = rows[c]; ncols = columns[c]; filter = c % 2;
         for (int no_order = 0; no_order <= 1; no_order++) {
             int flags = no_order ? CTOOLS_LOAD_NO_SORT_ORDER : CTOOLS_LOAD_CHECK_IF;
@@ -959,11 +963,14 @@ static void numeric_tiles(void)
  * fixtures are also too short to enable the separate chunked-load scheduler. */
 static void numeric_below_tile_gates(void)
 {
-    const int rows[] = {50004, 100003, 50003, 100001, 10004, 20003};
-    const int columns[] = {127, 127, 128, 128, 2000, 2000};
-    const size_t selected_rows[] = {50000, 50000, 49999, 49999, 10000, 10000};
+    /* the last: two numeric columns one selected row short of
+     * IO_AUTO_TILE_MIN_ROWS */
+    const int rows[] = {50004, 100003, 50003, 100001, 10004, 20003, IO_AUTO_TILE_MIN_ROWS + 3};
+    const int columns[] = {127, 127, 128, 128, 2000, 2000, 2};
+    const size_t selected_rows[] = {50000, 50000, 49999, 49999, 10000, 10000,
+                                    IO_AUTO_TILE_MIN_ROWS - 1};
     shape = 0;
-    for (int c = 0; c < 6; c++) {
+    for (int c = 0; c < (int)(sizeof(rows) / sizeof(rows[0])); c++) {
         nrows = rows[c]; ncols = columns[c]; filter = c % 2;
         for (int no_order = 0; no_order <= 1; no_order++) {
             int flags = no_order ? CTOOLS_LOAD_NO_SORT_ORDER : CTOOLS_LOAD_CHECK_IF;

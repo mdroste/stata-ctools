@@ -1,4 +1,4 @@
-*! version 1.3.2 20261124 github.com/mdroste/stata-ctools
+*! version 1.4.0 20261127 github.com/mdroste/stata-ctools
 *! original: Stata's export delimited (export_delimited.ado 1.0.9, June 13, 2020)
 *! original: Stata's export excel (export_excel.ado 1.1.1, July 30, 2018)
 *! original: see help cexport for details

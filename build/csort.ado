@@ -1,4 +1,4 @@
-*! version 1.3.2 20261124 github.com/mdroste/stata-ctools
+*! version 1.4.0 20261127 github.com/mdroste/stata-ctools
 *! original: Stata's sort (built in)
 *! original: see help csort for details
 

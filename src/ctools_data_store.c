@@ -326,7 +326,13 @@ stata_retcode ctools_io_data_store_impl(stata_data *data, int *var_indices, size
     few_columns = nvars >= 2 && nvars <= 4 && nobs >= MIN_OBS_PER_THREAD * 2 &&
                   ctools_get_max_threads() >= (int)(2 * nvars);
 #endif
-    if (few_columns || (store_tile_ok && string_bytes >= IO_MIN_TILED_STRING_BYTES))
+    /* Row tiles whenever the columns can be tiled: each observation's
+     * memory is then written once for all its columns, not once per column.
+     * Measured 2026-11-27 (1M-10M rows, 5-24 columns): numeric columns took
+     * 0.27-0.41 of the column-chunk store's time, with string columns
+     * among them 0.43-0.56 (string_bytes is no longer a condition, unless
+     * IO_AUTO_TILES is 0: the rule before, for A/B measurements). */
+    if (few_columns || (store_tile_ok && (IO_AUTO_TILES || string_bytes >= IO_MIN_TILED_STRING_BYTES)))
     {
         atomic_int row_error = 0;
 #pragma omp parallel

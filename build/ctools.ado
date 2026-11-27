@@ -1,4 +1,4 @@
-*! version 1.3.2 20261124 github.com/mdroste/stata-ctools
+*! version 1.4.0 20261127 github.com/mdroste/stata-ctools
 
 program define ctools, rclass
     version 14.1
@@ -14,7 +14,7 @@ program define ctools, rclass
         exit 198
     }
 
-    local __ado_version "1.3.2"
+    local __ado_version "1.4.0"
     if "`update'" != "" {
         * GitHub's latest release excludes drafts and prereleases. Each
         * release tag holds the installable package in build/.
@@ -248,7 +248,7 @@ program define ctools, rclass
     di as result "╚██████╗   ██║   ╚██████╔╝╚██████╔╝███████╗███████║"
     di as result " ╚═════╝   ╚═╝    ╚═════╝  ╚═════╝ ╚══════╝╚══════╝"
     di as text ""
-    di as text "  {it:C-accelerated tools for Stata}{col 56}v1.3.2"
+    di as text "  {it:C-accelerated tools for Stata}{col 56}v1.4.0"
     di as text "{hline 60}"
     di as text ""
     di as text "{ul:Data Management}"

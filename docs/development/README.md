@@ -227,10 +227,27 @@ Parameters:
 | `CTOOLS_LOAD_SKIP_IF` | `0x01` | Load every observation in the range; use only when the caller knows filtering is unnecessary. |
 | `CTOOLS_LOAD_NO_SORT_ORDER` | `0x02` | Omit the identity permutation and leave `fd.data.sort_order == NULL`. |
 | `CTOOLS_LOAD_MARKER` | `0x04` | Select the rows where the last plugin variable, a numeric sample marker, is nonzero (missing counts, as in `if`). Load-all mode leaves the marker out. |
+| `CTOOLS_LOAD_ROW_TILES` | `0x08` | Read all the variables of a tile of rows together, from two variables on with at least 200,000 selected rows, also when string variables are among them. |
 
 The function records selected observations in `obs_map`, using their original
 one-based Stata observation numbers, then reads their values. Memory use is
 O(N_selected x K).
+
+Stata stores the values of an observation next to each other, so reading one
+variable at a time fetches every observation's memory once per variable. A
+load of two or more numeric variables with at least 200,000 selected rows
+(`IO_AUTO_TILE_MIN_VARS`, `IO_AUTO_TILE_MIN_ROWS`) therefore reads row tiles
+without the flag: on 300,000 to 10 million rows and 2 to 24 variables this
+took 0.40 to 0.98 of the column-wise load's time (2026-11-27; 0.76 to 1.03
+with an `if` condition, where Stata's evaluation of it dominates). A load with
+a string variable keeps the column-wise route unless the flag is given (0.94
+to 1.09 there). `ctools_data_store()` and its variants write row tiles
+whenever the columns can be tiled (at least four, 200,000 rows, no strL),
+which took 0.27 to 0.56 of the column-chunk store's time from five columns
+on. A command gets both by loading and storing through these functions; it
+needs no flag of its own. [DATA_TRANSFER_TILES.md](DATA_TRANSFER_TILES.md)
+has the measurements, the `IO_AUTO_TILES` switch and how to compare the two
+rules on another machine.
 
 Stata evaluates `SF_ifobs()` one observation at a time. With an `if` condition,
 each call costs about 11 ns: about 0.11 seconds per 10 million rows, even when

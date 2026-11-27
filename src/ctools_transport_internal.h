@@ -62,6 +62,17 @@ enum
  * cells. Re-measure the tile sweep before changing these thresholds. */
 #define IO_NUMERIC_TILE_MIN_VARS 128
 #define IO_NUMERIC_TILE_MIN_ROWS 50000
+/* Loads of numeric columns only take row tiles from this many columns and
+ * selected rows on without being asked: one column goes row-parallel anyway
+ * (sweep of 2026-11-27 in ctools_data_load_ex, from 300K rows up) */
+#define IO_AUTO_TILE_MIN_VARS 2
+#define IO_AUTO_TILE_MIN_ROWS 200000
+/* 1: those row-tile defaults of the loader and the bulk store; 0: the rules
+ * before them, for A/B measurements on other machines
+ * (docs/development/DATA_TRANSFER_TILES.md) */
+#ifndef IO_AUTO_TILES
+#define IO_AUTO_TILES 1
+#endif
 #define IO_SERIAL_BASE_WORK 16384
 #define IO_SERIAL_COLUMN_WORK 256
 #define IO_DIRECT_GATHER_MAX_ROWS 262144

@@ -1,4 +1,4 @@
-*! version 1.3.2 20261124 github.com/mdroste/stata-ctools
+*! version 1.4.0 20261127 github.com/mdroste/stata-ctools
 *! ctools: estimated terms and base/omitted placeholders of an fvexpand-ed list
 * names() is an fvexpand result. A term is a placeholder, not estimated, only
 * when every #-component carries a base (b.) or omitted (o.) marker:

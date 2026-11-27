@@ -1,4 +1,4 @@
-*! version 1.3.2 20261124 github.com/mdroste/stata-ctools
+*! version 1.4.0 20261127 github.com/mdroste/stata-ctools
 *! C-accelerated collapse: make a dataset of summary statistics
 *! original: Stata's collapse (collapse.ado 6.2.2, June 28, 2020)
 *! original: see help ccollapse for details

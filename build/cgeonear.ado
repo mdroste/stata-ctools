@@ -1,4 +1,4 @@
-*! version 1.3.2 20261124 github.com/mdroste/stata-ctools
+*! version 1.4.0 20261127 github.com/mdroste/stata-ctools
 *! C-accelerated nearest neighbors and geodetic distances (ctools)
 *! original: geonear 2.0.3 (September 4, 2019) by Robert Picard
 *! original: geodist 1.1.0 (June 18, 2019) by Robert Picard

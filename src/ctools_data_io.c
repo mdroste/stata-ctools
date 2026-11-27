@@ -866,6 +866,25 @@ stata_retcode ctools_data_load_ex(ctools_filtered_data *result,
         return ctools_io_load_status(rc);
     }
 
+    /* Numeric columns, from two on and with many rows, are read in row tiles
+     * whether or not the caller asked for them (CTOOLS_LOAD_ROW_TILES):
+     * Stata keeps each observation's values together, so a column at a time
+     * fetches every observation's memory once per column, a tile of rows
+     * once for all of them. Measured 2026-11-27 (300K-10M rows, 2-24 numeric
+     * columns of 2-64 in memory, all or half of the rows selected): row tiles
+     * took 0.40-0.98 of the column scheduler's time (0.76-1.03 with an if
+     * condition, whose evaluation dominates); the values are the same. Loads
+     * with a string column gained nothing either way (0.94-1.09) and keep the
+     * rule below (docs/development/DATA_TRANSFER_TILES.md). */
+    #ifdef _OPENMP
+    if (IO_AUTO_TILES && !(flags & CTOOLS_LOAD_ROW_TILES) && nvars >= IO_AUTO_TILE_MIN_VARS &&
+        n_filtered >= IO_AUTO_TILE_MIN_ROWS && n_filtered >= MIN_OBS_PER_THREAD * 2) {
+        int numeric = 1;
+        for (size_t j = 0; j < nvars && numeric; j++) numeric = !SF_var_is_string(var_indices[j]);
+        if (numeric) flags |= CTOOLS_LOAD_ROW_TILES;
+    }
+    #endif
+
     int tile_ok = 0;
     #ifdef _OPENMP
     tile_ok = nvars >= IO_MIN_TILED_VARS &&

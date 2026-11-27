@@ -1,4 +1,4 @@
-*! version 1.3.2 20261124 github.com/mdroste/stata-ctools
+*! version 1.4.0 20261127 github.com/mdroste/stata-ctools
 *! C-accelerated distinct value counts
 *! original: distinct 1.4.3 (September 3, 2023) by Gary Longton and Nicholas J. Cox
 *! original: see help cdistinct for details

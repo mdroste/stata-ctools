@@ -1,4 +1,4 @@
-*! version 1.3.2 20261124 github.com/mdroste/stata-ctools
+*! version 1.4.0 20261127 github.com/mdroste/stata-ctools
 *! ctools: e(b) and e(V) from a plugin's compact results
 * _ctools_ebv <b> <V>, names() vmatrix() [base() stub() kkeep() bmatrix()
 *     collinear() cons() kept() colnames()]

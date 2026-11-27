@@ -1,4 +1,4 @@
-*! version 1.3.2 20261124 github.com/mdroste/stata-ctools
+*! version 1.4.0 20261127 github.com/mdroste/stata-ctools
 *! C-accelerated joinby: all pairwise combinations within groups (ctools)
 *! original: Stata's joinby (joinby.ado 2.1.0, December 22, 2022)
 *! original: see help cjoinby for details

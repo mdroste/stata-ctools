@@ -1,4 +1,4 @@
-*! version 1.3.2 20261124 github.com/mdroste/stata-ctools
+*! version 1.4.0 20261127 github.com/mdroste/stata-ctools
 *! e() results shared by creghdfe and cppmlhdfe.
 * _ctools_hdfe_post, stub(name) absvars(string) nhdfe(#) vce(name)
 *     [extended(string) clustvars(string) nclust(numlist) dofmethod(string)]

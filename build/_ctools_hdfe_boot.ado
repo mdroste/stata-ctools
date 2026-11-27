@@ -1,4 +1,4 @@
-*! version 1.3.2 20261124 github.com/mdroste/stata-ctools
+*! version 1.4.0 20261127 github.com/mdroste/stata-ctools
 *! Bootstrap options and Stata-RNG draws of the HDFE estimators.
 * Design: docs/development/BOOTSTRAP_PLAN.md (sections 4.2-4.3, 4.7 and 5.8).
 *

@@ -1,4 +1,4 @@
-*! version 1.3.2 20261124 github.com/mdroste/stata-ctools
+*! version 1.4.0 20261127 github.com/mdroste/stata-ctools
 *! ctools: a file name with a leading ~ read as the home directory
 * _ctools_home lname name sets the caller's local lname to name, with a
 * leading ~ (alone, or before / or \) replaced by the home directory: HOME,

@@ -1,4 +1,4 @@
-*! version 1.3.2 20261124 github.com/mdroste/stata-ctools
+*! version 1.4.0 20261127 github.com/mdroste/stata-ctools
 *! original: ppmlhdfe 2.3.3 (November 2, 2025) by Sergio Correia, Paulo Guimarães, and Thomas Zylkin
 *! original: see help cppmlhdfe for details
 
