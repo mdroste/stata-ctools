@@ -972,14 +972,17 @@ static ST_retcode do_compute_bins(void) {
                 rc = CBINSCATTER_ERR_MEMORY;
                 goto cleanup;
             }
-            for (ST_int i = 0; i < N_valid; i++)
-                x_stored[i] = (ST_double)(float)((ST_double)(float)x[i] + x_raw_mean);
-
             /* Like binscatter, add the means back to the residuals themselves,
-             * so bins, bin means and the fit line share the original scale */
-            for (ST_int i = 0; i < N_valid; i++) {
-                y[i] += y_raw_mean;
-                x[i] += x_raw_mean;
+             * so bins, bin means and the fit line share the original scale
+             * (the same pass over the rows, on every thread) */
+            {
+                ST_int i;
+                #pragma omp parallel for schedule(static) if (N_valid > 200000)
+                for (i = 0; i < N_valid; i++) {
+                    x_stored[i] = (ST_double)(float)((ST_double)(float)x[i] + x_raw_mean);
+                    y[i] += y_raw_mean;
+                    x[i] += x_raw_mean;
+                }
             }
 
             int few = x_has_few_values(x_stored, N_valid,

@@ -25,6 +25,8 @@ If you use a ctools command in published work, please cite the original command.
 | [`cdistinct`](#cdistinct) | `distinct` | Gary Longton and Nicholas J. Cox | 1.4.3 | September 3, 2023 | [*Stata Journal* 23(4), package dm0042_5](https://doi.org/10.1177/1536867X231212454), November 8, 2023 | Yes |
 | [`crangestat`](#crangestat) | `rangestat` | Robert Picard, Nicholas J. Cox, and Roberto Ferrer | 1.1.1 | May 9, 2017 | [SSC](https://ideas.repec.org/c/boc/bocode/s458161.html), May 11, 2017 | Yes |
 | [`crangejoin`](#crangejoin) | `rangejoin` | Robert Picard | 1.1.3 | April 13, 2021 | [SSC](https://ideas.repec.org/c/boc/bocode/s458162.html), April 15, 2021 | Yes |
+| [`cgeonear`](#cgeonear) | `geonear` | Robert Picard | 2.0.3 | September 4, 2019 | [SSC](https://ideas.repec.org/c/boc/bocode/s457146.html), September 14, 2019 | Yes |
+| [`cgeonear`](#cgeonear) | `geodist` | Robert Picard | 1.1.0 | June 18, 2019 | [SSC](https://ideas.repec.org/c/boc/bocode/s457147.html), June 24, 2019 | Yes |
 | [`cinterpolate`](#cinterpolate) | `cipolate` | Nicholas J. Cox | 1.0.0 | July 4, 2002 | [SSC](https://ideas.repec.org/c/boc/bocode/s426202.html), October 16, 2005 | Yes |
 | [`cwinsor`](#cwinsor) | `winsor2` | Yujun Lian | 1.1 | December 16, 2014 | [SSC](https://ideas.repec.org/c/boc/bocode/s457765.html), November 25, 2020 | Yes |
 | [`cwinsor`](#cwinsor) | `gstats winsor` | Mauricio Caceres Bravo | gtools 1.10.1 (gstats.ado 0.5.0) | December 5, 2022 (gstats.ado: June 11, 2019) | [SSC](https://ideas.repec.org/c/boc/bocode/s458514.html), December 5, 2022 | Yes |
@@ -36,6 +38,9 @@ If you use a ctools command in published work, please cite the original command.
 | [`civreghdfe`](#civreghdfe) | `ivreg2` | Christopher F Baum, Mark E Schaffer, and Steven Stillman | 4.1.12 | August 14, 2024 | [SSC](https://ideas.repec.org/c/boc/bocode/s425401.html), August 14, 2024 | Yes |
 | [`cppmlhdfe`](#cppmlhdfe) | `ppmlhdfe` | Sergio Correia, Paulo Guimarães, and Thomas Zylkin | 2.3.3 | November 2, 2025 | [SSC](https://ideas.repec.org/c/boc/bocode/s458622.html), January 11, 2026 | Yes |
 | [`chdfe`](#chdfe) | `hdfe` | Sergio Correia | 3.2.9 | February 21, 2016 | [SSC](https://ideas.repec.org/c/boc/bocode/s457985.html), August 6, 2016 | Yes |
+| [`cfuzzyjoin`](#cfuzzyjoin) | `reclink` | Michael Blasnik | 1.7 | January 14, 2010 | [SSC](https://ideas.repec.org/c/boc/bocode/s456876.html), January 18, 2010 | Yes |
+| [`cfuzzyjoin`](#cfuzzyjoin) | `matchit` | Julio D. Raffo | 1.5.2 | May 2020 | [SSC](https://ideas.repec.org/c/boc/bocode/s457992.html), May 20, 2020 | Yes |
+| [`cfuzzyjoin`](#cfuzzyjoin) | `strgroup` | Julian Reif | 1.0.4 | December 17, 2021 | [SSC](https://ideas.repec.org/c/boc/bocode/s457151.html), August 22, 2023 | Yes |
 
 The Source column gives the distribution date of each package. I checked for newer versions on November 25, 2026.
 
@@ -130,6 +135,37 @@ References:
 References:
 
 - Picard, R. 2016. RANGEJOIN: Stata module to form pairwise combinations if a key variable is within range. Statistical Software Components S458162, Boston College Department of Economics. Revised April 15, 2021.
+
+### `cgeonear`
+
+`cgeonear` reimplements two commands written by Robert Picard. Given a using file it follows `geonear`, and given four coordinates it follows `geodist`: their syntax, options, distance formulas, messages, and results.
+
+|  |  |
+| --- | --- |
+| **Command** | `geonear` |
+| **Authors** | Robert Picard |
+| **Version** | 2.0.3 |
+| **Date** | September 4, 2019 |
+| **Header line** | `*! version 2.0.3  04sep2019 Robert Picard, robertpicard@gmail.com` |
+| **Source** | SSC (`ssc install geonear`), distributed September 14, 2019. |
+| **Latest version?** | Yes, as of November 25, 2026. |
+| **SHA-256** | `70aa47f8d5ba1833a6920a07a257242d0acfb720a213cd92f0a27a19dce53990` (`geonear.ado`) |
+
+|  |  |
+| --- | --- |
+| **Command** | `geodist` |
+| **Authors** | Robert Picard |
+| **Version** | 1.1.0 |
+| **Date** | June 18, 2019 |
+| **Header line** | `*! version 1.1.0  18jun2019 Robert Picard, picard@netbox.com` |
+| **Source** | SSC (`ssc install geodist`), distributed June 24, 2019. |
+| **Latest version?** | Yes, as of November 25, 2026. |
+| **SHA-256** | `8e7fb2c90692c3b49ee21489331853cd631537e64019f1d5ef92957cdb03c402` (`geodist.ado`) |
+
+References:
+
+- Picard, R. 2010. GEONEAR: Stata module to find nearest neighbors using geodetic distances. Statistical Software Components S457146, Boston College Department of Economics. Revised September 14, 2019.
+- Picard, R. 2010. GEODIST: Stata module to compute geographical distances. Statistical Software Components S457147, Boston College Department of Economics. Revised June 24, 2019.
 
 ### `cinterpolate`
 
@@ -440,6 +476,59 @@ The Stata manual acknowledges that this version of `reshape` was based in part o
 References:
 
 - Weesie, J. 1997. dm48: An enhancement of reshape. *Stata Technical Bulletin* 38: 2-4. Reprinted in *Stata Technical Bulletin Reprints*, vol. 7, pp. 40-43. College Station, TX: Stata Press.
+
+### `cfuzzyjoin`
+
+`cfuzzyjoin` reimplements three community commands: `reclink`, written by Michael Blasnik, as `cfuzzyjoin link`; `matchit`, written by Julio D. Raffo (World Intellectual Property Organization), as `cfuzzyjoin match`; and `strgroup`, written by Julian Reif (University of Illinois), as `cfuzzyjoin group`. The syntax, options, scores, results, and messages of each subcommand follow its original.
+
+|  |  |
+| --- | --- |
+| **Command** | `reclink` |
+| **Authors** | Michael Blasnik |
+| **Version** | 1.7 |
+| **Date** | January 14, 2010 |
+| **Header line** | `*! v 1.7 14-Jan-2010 M. Blasnik:  Record Linkage` |
+| **Source** | SSC (`ssc install reclink`), distributed January 18, 2010. |
+| **Latest version?** | Yes, as of November 25, 2026. |
+| **SHA-256** | `2b20363477ad680ef0d6f6a5cce744ad4ecdddddbf92e8e74894e90fbed3299d` (`reclink.ado`) |
+
+|  |  |
+| --- | --- |
+| **Command** | `matchit` |
+| **Authors** | Julio D. Raffo |
+| **Version** | 1.5.2 |
+| **Date** | May 2020 |
+| **Header line** | `*! 1.5.2 J.D. Raffo May 2020` |
+| **Source** | SSC (`ssc install matchit`), distributed May 20, 2020. |
+| **Latest version?** | Yes, as of November 25, 2026. |
+| **SHA-256** | `1d9e82074a70f3094b704c063facb23a7ad3752feb900204f6af0060b0e64acd` (`matchit.ado`) |
+
+|  |  |
+| --- | --- |
+| **Command** | `strgroup` |
+| **Authors** | Julian Reif |
+| **Version** | 1.0.4 |
+| **Date** | December 17, 2021 |
+| **Header line** | `*! strgroup 1.0.4 17dec2021 by Julian Reif` |
+| **Source** | SSC (`ssc install strgroup`), distributed August 22, 2023. |
+| **Latest version?** | Yes, as of November 25, 2026. |
+| **SHA-256** | `3f99d7ea62ea48b5ec35124d7f40d0169943087f0e184f354e95973f1f6c046e` (`strgroup.ado`) |
+
+Julian Reif's GitHub repository (github.com/reifjulian/strgroup) has a newer `strgroup`, 1.0.5 (January 2026), with a faster plugin; SSC distributes 1.0.4, which `cfuzzyjoin group` follows.
+
+`matchit` computes gram frequencies with `freqindex` 1.3.1 (April 2019), also by Julio D. Raffo and distributed on SSC (`ssc install freqindex`); `cfuzzyjoin match` follows its similarity functions too.
+
+`strgroup`'s plugin computes the Levenshtein distance with code adapted from David Necas's python-Levenshtein module. `cfuzzyjoin group` computes the same distance with the bit-parallel algorithm of Myers (1999), in the form Hyyrö (2003) gives for the distance between whole strings, and a banded dynamic program (Ukkonen 1985) beyond 64 bytes.
+
+References:
+
+- Blasnik, M. 2007. RECLINK: Stata module to probabilistically match records. Statistical Software Components S456876, Boston College Department of Economics. Revised January 18, 2010.
+- Raffo, J. 2015. MATCHIT: Stata module to match two datasets based on similar text patterns. Statistical Software Components S457992, Boston College Department of Economics. Revised May 20, 2020.
+- Raffo, J., and S. Lhuillery. 2009. How to play the "Names Game": Patent retrieval comparing different heuristics. *Research Policy* 38(10): 1617-1627.
+- Reif, J. 2010. STRGROUP: Stata module to match strings based on their Levenshtein edit distance. Statistical Software Components S457151, Boston College Department of Economics. Revised August 22, 2023.
+- Myers, G. 1999. A fast bit-vector algorithm for approximate string matching based on dynamic programming. *Journal of the ACM* 46(3): 395-415.
+- Hyyrö, H. 2003. A bit-vector algorithm for computing Levenshtein and Damerau edit distances. *Nordic Journal of Computing* 10(1): 29-39.
+- Ukkonen, E. 1985. Algorithms for approximate string matching. *Information and Control* 64(1-3): 100-118.
 
 ### `cimport`
 

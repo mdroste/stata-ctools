@@ -622,6 +622,80 @@ for keys in ["g", "g s"]:
             setup=joinby_setup,
         )
 
+# Base locations at every observation with coordinates (x and z are missing
+# in some rows of the third fixture, which leaves those rows without a base
+# location), neighbors at every sixth: their identifiers equal the bases',
+# which makes ignoreself observable. Wide-form ellipsoid distances can differ
+# from geonear's in the last digits (geonear measures some pairs from the
+# neighbor), so the ellipsoid is compared in long form.
+geonear_setup = """gen double lat = 40 + .75*x
+gen double lon = -100 + .75*z
+tempfile places
+preserve
+keep if mod(id,6)==0
+keep id lat lon
+rename (id lat lon) (pid plat plon)
+save `places'
+restore"""
+for opt in [
+    "",
+    "nearcount(3)",
+    "near(2) ignoreself",
+    "wide near(2) genstub(place) miles",
+    "radius(6000)",
+    "ops(500) report(1) maxbases(10)",
+]:
+    case(
+        "cgeonear",
+        f"geonear {opt}",
+        "neighbors nearcount ignoreself wide genstub miles radius ops report maxbases threads verbose",
+        f'geonear id lat lon using "`places\'", neighbors(pid plat plon) {opt}',
+        f'cgeonear id lat lon using "`places\'", neighbors(pid plat plon) {opt} threads(2) verbose',
+        setup=geonear_setup,
+        sortby="id",
+    )
+for opt in [
+    "long",
+    "long within(40) near(0)",
+    "long within(30) near(2) limit(3)",
+    "long within(30) ignoreself miles",
+    "long near(3) ellipsoid",
+    "long within(20) a(6377397.155) f(299.1528128)",
+]:
+    case(
+        "cgeonear",
+        f"geonear {opt}",
+        "long within nearcount limit ignoreself miles ellipsoid a f threads",
+        f'geonear id lat lon using "`places\'", n(pid plat plon) {opt}',
+        f'cgeonear id lat lon using "`places\'", n(pid plat plon) {opt} threads(2)',
+        setup=geonear_setup,
+    )
+
+# cgeonear's distance form (geodist's): one distance per observation, from
+# variables and from constants
+geodist_setup = """gen double lat = 40 + 5*x
+gen double lon = -100 + 20*z
+gen double lat2 = 41 + 10*z2
+gen double lon2 = -95 + 15*x"""
+for opt in ["", "miles", "sphere", "sphere radius(6000) miles", "ellipsoid(6378249.145, 293.465)",
+            "maxiter(3)"]:
+    case(
+        "cgeonear",
+        f"geodist {opt}",
+        "generate miles sphere radius ellipsoid maxiter threads verbose",
+        f"geodist lat lon lat2 lon2, generate(d) {opt}",
+        f"cgeonear lat lon lat2 lon2, generate(d) {opt} threads(2) verbose",
+        setup=geodist_setup,
+    )
+case(
+    "cgeonear",
+    "geodist constants and if",
+    "generate",
+    "geodist 42.27 -83.75 lat lon if g > 3, gen(d)",
+    "cgeonear 42.27 -83.75 lat lon if g > 3, gen(d)",
+    setup=geodist_setup,
+)
+
 for opt in [
     "nquantiles(5)",
     "nquantiles(25)",
@@ -1063,6 +1137,67 @@ case(
     setup="replace g=g+100*group\nreplace h=h+100*group",
 )
 
+# cfuzzyjoin against reclink, matchit and strgroup. Names with near
+# duplicates (typos, an appended number) make every option change the result;
+# the using data hold one record per name, where reclink and cfuzzyjoin agree
+# (help cfuzzyjoin: duplicated using records).
+fuzzy_names = """gen str24 nm = word("acme acne acmee beta betta bet gamma gama delta", 1 + mod(id, 9)) + " " + string(mod(id, 13))
+replace nm = upper(nm) if mod(id, 17) == 0
+replace nm = "" if mod(id, 29) == 0
+gen str12 city = word("boston newton salem", 1 + mod(id, 3))"""
+fuzzy_using = fuzzy_names + """
+tempfile usingdata
+preserve
+replace nm = nm + "x" if mod(id, 4) == 0
+bysort nm (id): keep if _n == 1
+keep id nm city
+rename (id nm) (uid unm)
+save `usingdata'
+restore
+keep id nm city"""
+for opt in ["threshold(0.3)", "threshold(0.5) normalize(longer)", "threshold(2) normalize(none)",
+            "threshold(0.3) first", "threshold(0.3) noclean"]:
+    for qualifier in ["", "if group==1", "in 50/550"]:
+        case(
+            "cfuzzyjoin",
+            f"strgroup {opt} {qualifier}",
+            "generate threshold normalize first noclean force threads verbose",
+            f"strgroup nm {qualifier}, gen(out) {opt} force",
+            f"cfuzzyjoin group nm {qualifier}, gen(out) {opt} force threads(2) verbose",
+            setup=fuzzy_names,
+        )
+for opt in ["", "similmethod(token)", "similmethod(ngram, 3) score(simple)", "score(minsimple)",
+            "similmethod(soundex_fk)", "time flag(10) keepmata"]:
+    case(
+        "cfuzzyjoin",
+        f"matchit columns {opt}",
+        "generate similmethod score time flag keepmata threads verbose",
+        f"matchit nm nm2, gen(out) {opt}",
+        f"cfuzzyjoin match nm nm2, gen(out) {opt} threads(2) verbose",
+        setup=fuzzy_names + '\ngen str24 nm2 = subinstr(nm, "a", "e", 1)',
+    )
+for opt in ["", "threshold(0.7)", "similmethod(token) threshold(0.3)", "score(minsimple) threshold(0.8)",
+            "stopwordsauto swthreshold(0.05)", "diagnose generate(sim)"]:
+    case(
+        "cfuzzyjoin",
+        f"matchit using {opt}",
+        "idusing txtusing override threshold similmethod score stopwordsauto swthreshold diagnose generate threads",
+        f'coverage_fuzzy id uid : matchit id nm using "`usingdata\'", idusing(uid) txtusing(unm) override {opt}',
+        f'coverage_fuzzy id uid : cfuzzyjoin match id nm using "`usingdata\'", idusing(uid) txtusing(unm) override {opt} threads(2)',
+        setup=fuzzy_using,
+    )
+link_using = fuzzy_using.replace("rename (id nm) (uid unm)", "rename id uid")
+for opt in ["", "wmatch(10 2) wnomatch(8 1) minscore(0.7)", "required(city) uprefix(R_) _merge(how)",
+            "exactstr(city) orblock(none) minbigram(0.7)"]:
+    case(
+        "cfuzzyjoin",
+        f"reclink {opt}",
+        "idmaster idusing gen wmatch wnomatch minscore required uprefix _merge exactstr orblock minbigram threads verbose",
+        f'coverage_fuzzy id uid : reclink nm city using "`usingdata\'", idmaster(id) idusing(uid) gen(score) {opt}',
+        f'coverage_fuzzy id uid : cfuzzyjoin link nm city using "`usingdata\'", idmaster(id) idusing(uid) gen(score) {opt} threads(2) verbose',
+        setup=link_using,
+    )
+
 """Audit public option declarations against executable differential cases.
 
 This is an inventory gate, not a claim that a passing call proves equivalence.
@@ -1091,7 +1226,14 @@ def inventory(root=ROOT):
             m = re.match(r"\s*program define (\w+)", line)
             if m:
                 program = m[1]
-            if program not in (path.stem, path.stem + "_excel", "_" + path.stem + "_impl"):
+            # cfuzzyjoin parses each subcommand in a program of its own
+            if path.stem == "cfuzzyjoin" and program in (
+                "_cfuzzyjoin_link", "_cfuzzyjoin_match", "_cfuzzyjoin_group"):
+                pass
+            # cgeonear parses its distance form (geodist's) in a program of its own
+            elif path.stem == "cgeonear" and program == "_cgeonear_dist":
+                pass
+            elif program not in (path.stem, path.stem + "_excel", "_" + path.stem + "_impl"):
                 continue
             m = re.match(r"\s*(?:capture noisily |capture )?syntax\b(.*)", line)
             if not m or "," not in m[1]:

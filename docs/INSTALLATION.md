@@ -62,6 +62,10 @@ notarization tickets; first use may require internet access. See
 [macOS signing](development/MACOS_SIGNING.md) for verification and setup details.
 
 
+### DuckDB for csql
+
+`csql` needs the DuckDB library, which is not in the package. In Stata, `csql, install` downloads the pinned release (DuckDB 2.0.1, about 20 MB) from GitHub, checks its SHA-256 checksum and saves it in PLUS. Offline, download `duckdb-shared-libs-<platform>.tar.gz` from [DuckDB's release](https://github.com/duckdb/duckdb/releases/tag/v2.0.1) and type `csql, install from(<folder>)`. See [csql](commands/csql.md#installing-duckdb).
+
 ## Troubleshooting
 
 ### The plugin does not match the installed ado files

@@ -632,6 +632,12 @@ def audit_main(argv=None):
     frozen.mkdir()
     for path in [args.build / plugin, *sorted(args.build.glob("*.ado"))]:
         shutil.copy2(path, frozen / path.name)
+    # Commands carry the src/ado helpers as subprograms; the workloads that
+    # time a helper directly (_ctools_group) need its file. An older build
+    # that still ships its own helper files keeps them.
+    for path in sorted((ROOT / "src/ado").glob("*.ado")):
+        if not (frozen / path.name).exists():
+            shutil.copy2(path, frozen / path.name)
     harness = out / (args.label + ".do")
     write_workload("audit", harness)
     clock = out / "clock.plugin"

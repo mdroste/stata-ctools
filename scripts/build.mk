@@ -101,6 +101,14 @@ MAC_BASE_FLAGS = -O3 -Wall -Wextra -fPIC -DSYSTEM=APPLEMAC -DSD_FASTMODE \
 # through __declspec(dllexport) in stplugin.h.)
 MAC_EXPORT_FLAGS = -Wl,-exported_symbol,_stata_call -Wl,-exported_symbol,_pginit
 
+# Output symbols: -S drops debug information and -x the local symbols, which
+# nothing reads at run time. The Windows and Linux links use -s for the same
+# reason. A build for profiling or debugging sets its own flags.
+#
+# GCC builds leave out -funroll-loops: it added 30% to the Windows plugin with
+# no measured gain, and results are bit-identical without it (the hot reductions
+# unroll by hand, see ctools_unroll.h). In clang it is the default at -O3.
+
 # macOS Apple Silicon (arm64) with OpenMP and Accelerate
 # Check for static libomp.a (preferred for bundling)
 LIBOMP_STATIC_ARM := $(shell test -f $(LIBOMP_PREFIX)/lib/libomp.a && echo yes || echo no)
@@ -110,14 +118,14 @@ ifeq ($(LIBOMP_STATIC_ARM),yes)
                      -mmacosx-version-min=11.0 \
                      -mcpu=apple-m1 \
                      -Xpreprocessor -fopenmp -I$(LIBOMP_PREFIX)/include
-    LDFLAGS_MAC_ARM = -liconv -bundle -arch arm64 -flto -Wl,-S -Wl,-dead_strip $(MAC_EXPORT_FLAGS) $(LIBOMP_PREFIX)/lib/libomp.a \
+    LDFLAGS_MAC_ARM = -liconv -bundle -arch arm64 -flto -Wl,-S -Wl,-x -Wl,-dead_strip $(MAC_EXPORT_FLAGS) $(LIBOMP_PREFIX)/lib/libomp.a \
                       -framework Accelerate
     MAC_ARM_HAS_OMP = yes
 else
     CFLAGS_MAC_ARM = $(MAC_BASE_FLAGS) -arch arm64 \
                      -mmacosx-version-min=11.0 \
                      -mcpu=apple-m1
-    LDFLAGS_MAC_ARM = -liconv -bundle -arch arm64 -flto -Wl,-S -Wl,-dead_strip $(MAC_EXPORT_FLAGS) -framework Accelerate
+    LDFLAGS_MAC_ARM = -liconv -bundle -arch arm64 -flto -Wl,-S -Wl,-x -Wl,-dead_strip $(MAC_EXPORT_FLAGS) -framework Accelerate
     MAC_ARM_HAS_OMP = no
 endif
 
@@ -134,14 +142,14 @@ ifeq ($(LIBOMP_STATIC_X86),yes)
                      -mmacosx-version-min=11.0 \
                      -march=x86-64 -mtune=generic \
                      -Xpreprocessor -fopenmp -I$(LIBOMP_INTEL)/include
-    LDFLAGS_MAC_X86 = -liconv -bundle -arch x86_64 -flto -Wl,-S -Wl,-dead_strip $(MAC_EXPORT_FLAGS) $(LIBOMP_INTEL)/lib/libomp.a \
+    LDFLAGS_MAC_X86 = -liconv -bundle -arch x86_64 -flto -Wl,-S -Wl,-x -Wl,-dead_strip $(MAC_EXPORT_FLAGS) $(LIBOMP_INTEL)/lib/libomp.a \
                       -framework Accelerate
     MAC_X86_HAS_OMP = yes
 else
     CFLAGS_MAC_X86 = $(MAC_BASE_FLAGS) -arch x86_64 \
                      -mmacosx-version-min=11.0 \
                      -march=x86-64 -mtune=generic
-    LDFLAGS_MAC_X86 = -liconv -bundle -arch x86_64 -flto -Wl,-S -Wl,-dead_strip $(MAC_EXPORT_FLAGS) -framework Accelerate
+    LDFLAGS_MAC_X86 = -liconv -bundle -arch x86_64 -flto -Wl,-S -Wl,-x -Wl,-dead_strip $(MAC_EXPORT_FLAGS) -framework Accelerate
     MAC_X86_HAS_OMP = no
 endif
 
@@ -155,10 +163,10 @@ ifeq ($(DETECTED_OS),Windows)
     # Native Windows build (requires MSYS2/MinGW) - static link libgomp
     CC_WIN = gcc
     CFLAGS_WIN = -O3 -Wall -shared -DSYSTEM=STWIN32 -DSD_FASTMODE -fopenmp \
-                 -fno-fast-math -ffp-contract=off -funroll-loops -ftree-vectorize -flto \
+                 -fno-fast-math -ffp-contract=off -ftree-vectorize -flto \
                  -fdata-sections -ffunction-sections \
                  -fno-strict-aliasing -march=x86-64 -mtune=generic $(INCLUDE_DIRS)
-    LDFLAGS_WIN = -flto -Wl,--gc-sections -Wl,-S \
+    LDFLAGS_WIN = -flto -Wl,--gc-sections -s \
                   -static-libgcc -Wl,-Bstatic -lgomp -lwinpthread -Wl,-Bdynamic
     WIN_HAS_OMP = yes
     WIN_OMP_STATIC = yes
@@ -170,20 +178,20 @@ else
         # llvm-mingw: OpenMP support via bundled libomp.dll
         CC_WIN = $(LLVM_MINGW_PREFIX)/bin/x86_64-w64-mingw32-clang
         CFLAGS_WIN = -O3 -Wall -shared -DSYSTEM=STWIN32 -DSD_FASTMODE -fopenmp \
-                     -fno-fast-math -ffp-contract=off -funroll-loops -ftree-vectorize -flto \
+                     -fno-fast-math -ffp-contract=off -ftree-vectorize -flto \
                      -fdata-sections -ffunction-sections \
                      -fno-strict-aliasing -march=x86-64 -mtune=generic $(INCLUDE_DIRS)
-        LDFLAGS_WIN = -flto -Wl,--gc-sections -Wl,-S -fopenmp -lpthread
+        LDFLAGS_WIN = -flto -Wl,--gc-sections -s -fopenmp -lpthread
         WIN_HAS_OMP = yes
         WIN_OMP_STATIC = no
     else ifeq ($(MINGW_EXISTS),yes)
         # mingw-w64: no OpenMP
         CC_WIN = x86_64-w64-mingw32-gcc
         CFLAGS_WIN = -O3 -Wall -Wno-unknown-pragmas -shared -DSYSTEM=STWIN32 -DSD_FASTMODE \
-                     -fno-fast-math -ffp-contract=off -funroll-loops -ftree-vectorize -flto \
+                     -fno-fast-math -ffp-contract=off -ftree-vectorize -flto \
                      -fdata-sections -ffunction-sections \
                      -fno-strict-aliasing -march=x86-64 -mtune=generic $(INCLUDE_DIRS)
-        LDFLAGS_WIN = -flto -Wl,--gc-sections -Wl,-S -static-libgcc -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic
+        LDFLAGS_WIN = -flto -Wl,--gc-sections -s -static-libgcc -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic
         WIN_HAS_OMP = no
         WIN_OMP_STATIC = no
     else
@@ -212,7 +220,7 @@ else
 endif
 
 LINUX_BASE_FLAGS = -O3 -Wall -Wextra -shared -fPIC -DSYSTEM=STUNIX -DSD_FASTMODE \
-                   -fno-fast-math -ffp-contract=off -funroll-loops -ftree-vectorize -flto \
+                   -fno-fast-math -ffp-contract=off -ftree-vectorize -flto \
                    -fdata-sections -ffunction-sections \
                    -fno-strict-aliasing $(INCLUDE_DIRS)
 
@@ -255,18 +263,18 @@ LINUX_EXPORT_FLAGS = -Wl,--version-script=$(SRC_DIR)/ctools_plugin.map
 ifeq ($(LINUX_HAS_OMP),yes)
     ifeq ($(LINUX_HAS_OPENBLAS),yes)
         CFLAGS_LINUX = $(LINUX_BASE_FLAGS) -fopenmp -DHAVE_OPENBLAS
-        LDFLAGS_LINUX = -flto -Wl,--gc-sections -Wl,-S $(LINUX_EXPORT_FLAGS) -fopenmp -lopenblas -lm -ldl
+        LDFLAGS_LINUX = -flto -Wl,--gc-sections -s $(LINUX_EXPORT_FLAGS) -fopenmp -lopenblas -lm -ldl
     else
         CFLAGS_LINUX = $(LINUX_BASE_FLAGS) -fopenmp
-        LDFLAGS_LINUX = -flto -Wl,--gc-sections -Wl,-S $(LINUX_EXPORT_FLAGS) -fopenmp -lm -ldl
+        LDFLAGS_LINUX = -flto -Wl,--gc-sections -s $(LINUX_EXPORT_FLAGS) -fopenmp -lm -ldl
     endif
 else
     ifeq ($(LINUX_HAS_OPENBLAS),yes)
         CFLAGS_LINUX = $(LINUX_BASE_FLAGS) -DHAVE_OPENBLAS
-        LDFLAGS_LINUX = -flto -Wl,--gc-sections -Wl,-S $(LINUX_EXPORT_FLAGS) -lopenblas -lm -ldl
+        LDFLAGS_LINUX = -flto -Wl,--gc-sections -s $(LINUX_EXPORT_FLAGS) -lopenblas -lm -ldl
     else
         CFLAGS_LINUX = $(LINUX_BASE_FLAGS)
-        LDFLAGS_LINUX = -flto -Wl,--gc-sections -Wl,-S $(LINUX_EXPORT_FLAGS) -lm -ldl
+        LDFLAGS_LINUX = -flto -Wl,--gc-sections -s $(LINUX_EXPORT_FLAGS) -lm -ldl
     endif
 endif
 

@@ -16,6 +16,9 @@ through a multibyte character.
 | `csort` | `sort` | Yes |
 | `cmerge` | `merge` | — |
 | `cjoinby` | `joinby` | Row order does not depend on the sort seed; stores `r()` results |
+| `cgeonear` | `geonear`, `geodist` | One command for nearest neighbors and distances; exact k-d tree search in parallel; the same results for any thread count; observations of one `baseid` keep their order |
+| `csql` | — (new) | SQL through DuckDB on the data in memory, `.dta`, Parquet, CSV and JSON files; results larger than memory saved as Parquet |
+| `cfuzzyjoin` | `reclink`, `matchit`, `strgroup` | One command for record linkage, similarity joins and string groups; the same results for any thread count; `link` and `group` store `r()` results |
 | `creshape` | `reshape` | `atwl()` in the basic syntax; a failed request leaves the data untouched; stores `r()` results |
 | `cimport` | `import` file-format subcommands | Yes |
 | `cexport` | `export` file-format subcommands | Yes |

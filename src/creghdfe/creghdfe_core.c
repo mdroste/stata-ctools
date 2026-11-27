@@ -69,7 +69,7 @@ static inline const ST_double *column_values(const creghdfe_columns *C, ST_int k
 }
 
 /* Sum of weight * value in row order */
-static ST_double column_sum(const creghdfe_columns *C, ST_int k)
+ST_double creghdfe_column_sum(const creghdfe_columns *C, ST_int k)
 {
     const ST_int N = C->N;
     const ST_double *RESTRICT w = C->weights;
@@ -112,7 +112,7 @@ void creghdfe_column_sums(const creghdfe_columns *C, ST_double *sums, ST_double 
             *sum_w = total;
             continue;
         }
-        sums[k] = column_sum(C, k);
+        sums[k] = creghdfe_column_sum(C, k);
     }
 }
 
@@ -313,18 +313,43 @@ static ST_double column_write(const creghdfe_columns *C, ST_int k, ST_double inv
     return (((s[0] + s[4]) + (s[1] + s[5])) + ((s[2] + s[6]) + (s[3] + s[7])));
 }
 
-void creghdfe_columns_build(const creghdfe_columns *C, const creghdfe_columns_opts *opts,
-                            ST_double *data, ST_double *raw, ST_double *tss, ST_double *stdevs,
-                            ST_double *norm2)
+/* Column k's scale from ss, its sum of squared deviations from its mean:
+ * tss[k] and stdevs[k] as creghdfe_columns_build() documents them. Returns
+ * 1 / stdevs[k], the factor the column is multiplied by. */
+static ST_double column_scale(const creghdfe_columns *C, const creghdfe_columns_opts *opts,
+                              ST_int k, ST_double ss, ST_double *tss, ST_double *stdevs)
+{
+    const ST_double df = (C->weights && opts->weight_type == 2) ? opts->sum_weights - 1.0
+                                                                : (ST_double)(C->N - 1);
+    tss[k] = ss;
+    stdevs[k] = sqrt(ss / df);
+    if (stdevs[k] < 1e-30)
+        stdevs[k] = 1.0;
+    /* Without a constant the total sum of squares is uncentered, as in
+     * reghdfe (the standard deviations stay centered) */
+    if (opts->uncentered)
+        tss[k] = column_ss(C, k, 0.0);
+    /* An arbitrary response multiplier rounds small identifying
+     * components beside a large fitted component before OLS ever sees
+     * them. A power of two preserves the response's bits (away from
+     * under/overflow) and keeps its standard deviation in [1,2).
+     * Regressor scaling and rank decisions are unchanged. */
+    if (k == 0 && opts->standardize && isfinite(stdevs[0]) && stdevs[0] > 0.0)
+    {
+        int exponent;
+        frexp(stdevs[0], &exponent);
+        stdevs[0] = ldexp(1.0, exponent - 1);
+    }
+    return 1.0 / stdevs[k];
+}
+
+void creghdfe_column_build(const creghdfe_columns *C, const creghdfe_columns_opts *opts, ST_int k,
+                           ST_double *data, ST_double *raw, ST_double *tss, ST_double *stdevs,
+                           ST_double *norm2)
 {
     const ST_int N = C->N, K = C->K;
     const ST_double *weights = C->weights;
-    const ST_double df = (weights && opts->weight_type == 2) ? opts->sum_weights - 1.0
-                                                             : (ST_double)(N - 1);
     const int stream = (size_t)N * (size_t)K * sizeof(ST_double) > CREGHDFE_STREAM_BYTES;
-    ST_int k;
-#pragma omp parallel for schedule(static) if (K > 1 && (size_t)N * (size_t)K > 200000)
-    for (k = 0; k < K; k++)
     {
         ST_double *RESTRICT dst = data + (size_t)k * N;
         ST_double *RESTRICT raw_k = raw ? raw + (size_t)k * N : NULL;
@@ -347,26 +372,7 @@ void creghdfe_columns_build(const creghdfe_columns *C, const creghdfe_columns_op
         }
         else
             ss = column_ss(C, k, mean);
-        tss[k] = ss;
-        stdevs[k] = sqrt(ss / df);
-        if (stdevs[k] < 1e-30)
-            stdevs[k] = 1.0;
-        /* Without a constant the total sum of squares is uncentered, as in
-         * reghdfe (the standard deviations stay centered) */
-        if (opts->uncentered)
-            tss[k] = column_ss(C, k, 0.0);
-        /* An arbitrary response multiplier rounds small identifying
-         * components beside a large fitted component before OLS ever sees
-         * them. A power of two preserves the response's bits (away from
-         * under/overflow) and keeps its standard deviation in [1,2).
-         * Regressor scaling and rank decisions are unchanged. */
-        if (k == 0 && opts->standardize && isfinite(stdevs[0]) && stdevs[0] > 0.0)
-        {
-            int exponent;
-            frexp(stdevs[0], &exponent);
-            stdevs[0] = ldexp(1.0, exponent - 1);
-        }
-        const ST_double inv = 1.0 / stdevs[k];
+        const ST_double inv = column_scale(C, opts, k, ss, tss, stdevs);
         if (opts->use_quad)
         {
             if (opts->standardize)
@@ -380,6 +386,166 @@ void creghdfe_columns_build(const creghdfe_columns *C, const creghdfe_columns_op
         else
             norm2[k] = column_write(C, k, inv, opts->standardize != 0, stream, dst, raw_k);
     }
+}
+
+void creghdfe_columns_build(const creghdfe_columns *C, const creghdfe_columns_opts *opts,
+                            ST_double *data, ST_double *raw, ST_double *tss, ST_double *stdevs,
+                            ST_double *norm2)
+{
+    const ST_int N = C->N, K = C->K;
+    ST_int k;
+    (void)N; /* read by the pragma alone */
+#pragma omp parallel for schedule(static) if (K > 1 && (size_t)N * (size_t)K > 200000)
+    for (k = 0; k < K; k++)
+        creghdfe_column_build(C, opts, k, data, raw, tss, stdevs, norm2);
+}
+
+/* ========================================================================
+ * One absorbed effect, projected as the column is written (creghdfe_core.h)
+ * ======================================================================== */
+
+void creghdfe_column_scale(const creghdfe_columns *C, const creghdfe_columns_opts *opts, ST_int k,
+                           ST_double *tss, ST_double *stdevs)
+{
+    (void)column_scale(C, opts, k, column_ss(C, k, opts->means[k]), tss, stdevs);
+}
+
+/* The values column k holds before the projection, x * inv: their squares
+ * to the eight chains exactly as column_store() adds them (the sum is
+ * returned), and each to its level's sum in row order, as the projection's
+ * scatter adds it. */
+static ST_double column_level_sums(const creghdfe_columns *C, ST_int k, ST_double inv, int scale,
+                                   const creghdfe_absorbed *E, ST_double *RESTRICT sums)
+{
+    const ST_int N = C->N;
+    const ST_int *RESTRICT levels = E->levels;
+    const ST_double *RESTRICT w = C->weights;
+    ST_double buf[CREGHDFE_COLUMN_BLOCK];
+    ST_double s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, s7 = 0.0;
+    memset(sums, 0, (size_t)E->num_levels * sizeof(ST_double));
+    for (ST_int i0 = 0; i0 < N; i0 += CREGHDFE_COLUMN_BLOCK)
+    {
+        const ST_int n = N - i0 < CREGHDFE_COLUMN_BLOCK ? N - i0 : CREGHDFE_COLUMN_BLOCK;
+        const ST_double *RESTRICT x = column_values(C, k, i0, n, buf);
+        const ST_int *RESTRICT lv = levels + i0;
+        const ST_int main = n - (n % 8);
+        for (ST_int i = 0; i < main; i += 8)
+        {
+            const ST_double v0 = scale ? x[i] * inv : x[i];
+            const ST_double v1 = scale ? x[i + 1] * inv : x[i + 1];
+            const ST_double v2 = scale ? x[i + 2] * inv : x[i + 2];
+            const ST_double v3 = scale ? x[i + 3] * inv : x[i + 3];
+            const ST_double v4 = scale ? x[i + 4] * inv : x[i + 4];
+            const ST_double v5 = scale ? x[i + 5] * inv : x[i + 5];
+            const ST_double v6 = scale ? x[i + 6] * inv : x[i + 6];
+            const ST_double v7 = scale ? x[i + 7] * inv : x[i + 7];
+            s0 += v0 * v0;
+            s1 += v1 * v1;
+            s2 += v2 * v2;
+            s3 += v3 * v3;
+            s4 += v4 * v4;
+            s5 += v5 * v5;
+            s6 += v6 * v6;
+            s7 += v7 * v7;
+            if (w)
+            {
+                const ST_double *RESTRICT wi = w + i0 + i;
+                sums[lv[i] - 1] += v0 * wi[0];
+                sums[lv[i + 1] - 1] += v1 * wi[1];
+                sums[lv[i + 2] - 1] += v2 * wi[2];
+                sums[lv[i + 3] - 1] += v3 * wi[3];
+                sums[lv[i + 4] - 1] += v4 * wi[4];
+                sums[lv[i + 5] - 1] += v5 * wi[5];
+                sums[lv[i + 6] - 1] += v6 * wi[6];
+                sums[lv[i + 7] - 1] += v7 * wi[7];
+            }
+            else
+            {
+                sums[lv[i] - 1] += v0;
+                sums[lv[i + 1] - 1] += v1;
+                sums[lv[i + 2] - 1] += v2;
+                sums[lv[i + 3] - 1] += v3;
+                sums[lv[i + 4] - 1] += v4;
+                sums[lv[i + 5] - 1] += v5;
+                sums[lv[i + 6] - 1] += v6;
+                sums[lv[i + 7] - 1] += v7;
+            }
+        }
+        /* the last rows of the column, fewer than eight, join the first chain */
+        for (ST_int i = main; i < n; i++)
+        {
+            const ST_double v = scale ? x[i] * inv : x[i];
+            s0 += v * v;
+            sums[lv[i] - 1] += w ? v * w[i0 + i] : v;
+        }
+    }
+    return (((s0 + s4) + (s1 + s5)) + ((s2 + s6) + (s3 + s7)));
+}
+
+void creghdfe_column_absorb(const creghdfe_columns *C, const creghdfe_columns_opts *opts, ST_int k,
+                            const creghdfe_absorbed *E, const ST_double *stdevs, ST_double *norm2,
+                            ST_double *sums, ST_double *data)
+{
+    const ST_int N = C->N;
+    const ST_double inv = 1.0 / stdevs[k];
+    const int scale = opts->standardize != 0;
+    const ST_int *RESTRICT levels = E->levels;
+    const ST_double *RESTRICT level_inv = E->inv, *RESTRICT level_counts = E->counts;
+    ST_double *RESTRICT dst = data + (size_t)k * N;
+    ST_double buf[CREGHDFE_COLUMN_BLOCK];
+
+    /* level sums, to level means, then every value less its level's */
+    norm2[k] = column_level_sums(C, k, inv, scale, E, sums);
+    if (level_inv)
+    {
+        for (ST_int l = 0; l < E->num_levels; l++)
+            sums[l] *= level_inv[l];
+    }
+    else
+    {
+        for (ST_int l = 0; l < E->num_levels; l++)
+        {
+            if (level_counts[l] > 0)
+                sums[l] /= level_counts[l];
+        }
+    }
+#ifdef CREGHDFE_STREAM_STORES
+    const int stream = (size_t)N * (size_t)C->K * sizeof(ST_double) > CREGHDFE_STREAM_BYTES &&
+                       ((uintptr_t)dst & 7) == 0;
+    const __m128d vinv = _mm_set1_pd(inv);
+#endif
+    for (ST_int i0 = 0; i0 < N; i0 += CREGHDFE_COLUMN_BLOCK)
+    {
+        const ST_int n = N - i0 < CREGHDFE_COLUMN_BLOCK ? N - i0 : CREGHDFE_COLUMN_BLOCK;
+        const ST_double *RESTRICT x = column_values(C, k, i0, n, buf);
+        const ST_int *RESTRICT lv = levels + i0;
+        ST_double *RESTRICT d = dst + i0;
+        ST_int i = 0;
+#ifdef CREGHDFE_STREAM_STORES
+        if (stream)
+        {
+            /* pairs on 16-byte boundaries, written past the cache */
+            if (((uintptr_t)d & 15) != 0)
+            {
+                d[0] = (scale ? x[0] * inv : x[0]) - sums[lv[0] - 1];
+                i = 1;
+            }
+            for (; i + 2 <= n; i += 2)
+            {
+                __m128d v = _mm_loadu_pd(x + i);
+                if (scale)
+                    v = _mm_mul_pd(v, vinv);
+                _mm_stream_pd(d + i, _mm_sub_pd(v, _mm_set_pd(sums[lv[i + 1] - 1], sums[lv[i] - 1])));
+            }
+        }
+#endif
+        for (; i < n; i++)
+            d[i] = (scale ? x[i] * inv : x[i]) - sums[lv[i] - 1];
+    }
+#ifdef CREGHDFE_STREAM_STORES
+    if (stream)
+        _mm_sfence();
+#endif
 }
 
 /* ========================================================================

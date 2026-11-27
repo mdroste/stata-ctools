@@ -41,6 +41,8 @@
 #include "../creghdfe/creghdfe_hdfe.h"  /* heterogeneous slopes, shared with creghdfe */
 #include "../ctools_unroll.h"
 #include "../ctools_release.h"
+#include "../ctools_threads.h"
+#include "../hdfe/hdfe_solver.h"
 
 static HDFE_State *iv_state = NULL;
 
@@ -125,6 +127,330 @@ static ST_retcode civ_gather_kept(ST_double *dst, const ST_double *src, const ST
     free(start);
     return 0;
 }
+
+/* The loaded rows that are valid and kept, ascending, into rows[0..N):
+   kept holds the flags of the valid rows in order, or is NULL when all are
+   kept. Row blocks in parallel, each starting where the valid rows and the
+   kept rows before it end. Returns 0, 198 when the rows do not number N, or
+   920. */
+static ST_retcode civ_kept_rows(ST_int *rows, const ST_int *valid, const ST_int *kept,
+                                ST_int N_total, ST_int N)
+{
+    const int B = ctools_hdfe_row_blocks(N_total);
+    ST_int *valid_before = (ST_int *)calloc((size_t)B + 1, sizeof(ST_int));
+    ST_int *kept_before = (ST_int *)calloc((size_t)B + 1, sizeof(ST_int));
+    ST_retcode rc = 0;
+    int b;
+    if (!valid_before || !kept_before) {
+        free(valid_before);
+        free(kept_before);
+        return 920;
+    }
+    #pragma omp parallel for schedule(static) if (B > 1)
+    for (b = 0; b < B; b++) {
+        ST_int i0, i1, n = 0;
+        ctools_hdfe_block_range(N_total, B, b, &i0, &i1);
+        for (ST_int ii = i0; ii < i1; ii++) n += valid[ii] != 0;
+        valid_before[b + 1] = n;
+    }
+    for (b = 0; b < B; b++) valid_before[b + 1] += valid_before[b];
+    #pragma omp parallel for schedule(static) if (B > 1)
+    for (b = 0; b < B; b++) {
+        ST_int i0, i1, v = valid_before[b], n = 0;
+        ctools_hdfe_block_range(N_total, B, b, &i0, &i1);
+        for (ST_int ii = i0; ii < i1; ii++) {
+            if (!valid[ii]) continue;
+            n += !kept || kept[v];
+            v++;
+        }
+        kept_before[b + 1] = n;
+    }
+    for (b = 0; b < B; b++) kept_before[b + 1] += kept_before[b];
+    if (kept_before[B] != N) {
+        rc = 198;
+    } else {
+        #pragma omp parallel for schedule(static) if (B > 1)
+        for (b = 0; b < B; b++) {
+            ST_int i0, i1, v = valid_before[b], idx = kept_before[b];
+            ctools_hdfe_block_range(N_total, B, b, &i0, &i1);
+            for (ST_int ii = i0; ii < i1; ii++) {
+                if (!valid[ii]) continue;
+                if (!kept || kept[v]) rows[idx++] = ii;
+                v++;
+            }
+        }
+    }
+    free(valid_before);
+    free(kept_before);
+    return rc;
+}
+
+/*
+    The columns the fixed effects are partialled out of.
+
+    Each column needs, before the projection, its (weighted) sum of squares
+    about zero and about its mean (civ_wss, civ_wss_dev) and its largest
+    absolute value, the power of two below which it is divided by so that the
+    solver works at unit scale; afterwards it is multiplied by that power
+    again. Taken one after the other on a copy of the loaded column those are
+    six passes over 80 MB per column at 10M rows, each a single chain of
+    additions. Here the retained rows go from the loaded column straight to
+    the column's place in the matrix that is partialled, and the passes are
+    shared:
+
+      civ_column_gather()  the rows, the largest absolute value and, without
+                           weights, the sum and the sum of squares
+      civ_column_sums()    with weights (normalized by then): their sum, the
+                           weighted sum and the weighted sum of squares
+      civ_column_center()  the sum of squared deviations, and the column
+                           divided by its power of two
+      civ_columns_restore() after the projection, every column times its
+                           power of two again, on all threads
+
+    With a single absorbed effect the projection is each value less the
+    (weighted) mean of its level, and civ_column_absorb() takes the place of
+    civ_column_center(), the projection and civ_columns_restore(): the level
+    sums are added up from the scaled values in the pass that takes the
+    squared deviations, and one more pass writes the column projected.
+
+    Every sum adds the same values in row order as civ_wss(), civ_wss_dev()
+    and project_and_subtract_fe() (hdfe_solver.c) do, a column on one thread,
+    and every value is rounded by the same operations: the results are theirs
+    to the last bit.
+*/
+typedef struct {
+    const ST_double *src; /* the loaded column */
+    const ST_int *rows;   /* the loaded row of each retained row; NULL: the first N as they are */
+    ST_double *x;         /* N: the column's place in the matrix */
+    ST_double *copy;      /* N or NULL: receives the partialled column as well */
+    const ST_double *w;   /* N weights as the regression uses them, or NULL */
+    ST_int N;
+    ST_double largest;    /* max |x| */
+    ST_double sw, sum;    /* sum of the weights (N without), (weighted) sum */
+    ST_double ss_unc;     /* civ_wss() of the column */
+    ST_double ss_pre;     /* civ_wss_dev() of the column */
+    ST_double scale;      /* the power of two the column is divided by; 1: left as it is */
+} civ_column;
+
+static void civ_column_gather(civ_column *c, int take_sums)
+{
+    const ST_double *RESTRICT src = c->src;
+    const ST_int *RESTRICT rows = c->rows;
+    ST_double *RESTRICT x = c->x;
+    const ST_int N = c->N;
+    ST_double largest = 0.0, sum = 0.0, ss = 0.0;
+    if (take_sums) {
+        for (ST_int i = 0; i < N; i++) {
+            const ST_double v = src[rows ? rows[i] : i];
+            const ST_double a = fabs(v);
+            x[i] = v;
+            if (a > largest) largest = a;
+            sum += v;
+            ss += v * v;
+        }
+        c->sw = (ST_double)N;
+        c->sum = sum;
+        c->ss_unc = ss;
+    } else {
+        for (ST_int i = 0; i < N; i++) {
+            const ST_double v = src[rows ? rows[i] : i];
+            const ST_double a = fabs(v);
+            x[i] = v;
+            if (a > largest) largest = a;
+        }
+    }
+    c->largest = largest;
+}
+
+static void civ_column_sums(civ_column *c)
+{
+    const ST_double *RESTRICT x = c->x, *RESTRICT w = c->w;
+    const ST_int N = c->N;
+    ST_double sw = 0.0, sum = 0.0, ss = 0.0;
+    for (ST_int i = 0; i < N; i++) {
+        const ST_double wx = w[i] * x[i];
+        sw += w[i];
+        sum += wx;
+        ss += wx * x[i];
+    }
+    c->sw = sw;
+    c->sum = sum;
+    c->ss_unc = ss;
+}
+
+/* The power of two at or below the largest absolute value (1 for a column
+   of zeros or with a value that is not finite) */
+static void civ_column_set_scale(civ_column *c)
+{
+    int exponent = 0;
+    c->scale = 1.0;
+    if (c->largest > 0.0 && isfinite(c->largest)) {
+        frexp(c->largest, &exponent);
+        c->scale = ldexp(1.0, exponent - 1);
+    }
+}
+
+/* x / scale. A power of two whose reciprocal is one too divides and
+   multiplies to the same double; the others (a scale near the ends of the
+   exponent range) are divided by. */
+#define CIV_SCALED(v, scale, inv, by_inv) ((by_inv) ? (v) * (inv) : (v) / (scale))
+static int civ_scale_inverse(ST_double scale, ST_double *inv)
+{
+    *inv = 1.0;
+    if (!(scale >= 0x1p-1000 && scale <= 0x1p1000)) return 0;
+    *inv = 1.0 / scale;
+    return 1;
+}
+
+static void civ_column_center(civ_column *c)
+{
+    ST_double *RESTRICT x = c->x;
+    const ST_double *RESTRICT w = c->w;
+    const ST_int N = c->N;
+    civ_column_set_scale(c);
+    const ST_double scale = c->scale;
+    ST_double inv;
+    const int by_inv = civ_scale_inverse(scale, &inv);
+    const int rescale = scale != 1.0;
+    ST_double s = 0.0;
+    if (c->sw <= 0.0) {
+        c->ss_pre = 0.0;
+        if (rescale) {
+            for (ST_int i = 0; i < N; i++) x[i] = CIV_SCALED(x[i], scale, inv, by_inv);
+        }
+        return;
+    }
+    const ST_double m = c->sum / c->sw;
+    if (w) {
+        for (ST_int i = 0; i < N; i++) {
+            const ST_double v = x[i], d = v - m;
+            s += w[i] * d * d;
+            if (rescale) x[i] = CIV_SCALED(v, scale, inv, by_inv);
+        }
+    } else {
+        for (ST_int i = 0; i < N; i++) {
+            const ST_double v = x[i], d = v - m;
+            s += d * d;
+            if (rescale) x[i] = CIV_SCALED(v, scale, inv, by_inv);
+        }
+    }
+    c->ss_pre = s;
+}
+
+/* civ_column_center(), the projection on the one absorbed effect f (no
+   slope) and the return to the column's units. sums: f->num_levels doubles
+   of scratch. */
+static void civ_column_absorb(civ_column *c, const FE_Factor *f, ST_double *RESTRICT sums)
+{
+    ST_double *RESTRICT x = c->x, *RESTRICT copy = c->copy;
+    const ST_double *RESTRICT w = c->w;
+    const ST_int *RESTRICT levels = f->levels;
+    const ST_int N = c->N, num_levels = f->num_levels;
+    /* the counts project_and_subtract_fe() divides by */
+    const ST_double *RESTRICT inv_counts =
+        (w != NULL && f->inv_weighted_counts != NULL) ? f->inv_weighted_counts : f->inv_counts;
+    const ST_double *RESTRICT counts =
+        (w != NULL && f->weighted_counts != NULL) ? f->weighted_counts : f->counts;
+    civ_column_set_scale(c);
+    const ST_double scale = c->scale;
+    ST_double inv;
+    const int by_inv = civ_scale_inverse(scale, &inv);
+    const int rescale = scale != 1.0;
+    const int centered = !(c->sw <= 0.0);
+    const ST_double m = centered ? c->sum / c->sw : 0.0;
+    ST_double s = 0.0;
+    memset(sums, 0, (size_t)num_levels * sizeof(ST_double));
+    if (w) {
+        for (ST_int i = 0; i < N; i++) {
+            const ST_double v = x[i], d = v - m;
+            const ST_double vs = rescale ? CIV_SCALED(v, scale, inv, by_inv) : v;
+            s += w[i] * d * d;
+            sums[levels[i] - 1] += vs * w[i];
+        }
+    } else {
+        for (ST_int i = 0; i < N; i++) {
+            const ST_double v = x[i], d = v - m;
+            const ST_double vs = rescale ? CIV_SCALED(v, scale, inv, by_inv) : v;
+            s += d * d;
+            sums[levels[i] - 1] += vs;
+        }
+    }
+    c->ss_pre = centered ? s : 0.0;
+    if (inv_counts != NULL) {
+        for (ST_int l = 0; l < num_levels; l++) sums[l] *= inv_counts[l];
+    } else {
+        for (ST_int l = 0; l < num_levels; l++) {
+            if (counts[l] > 0) sums[l] /= counts[l];
+        }
+    }
+    for (ST_int i = 0; i < N; i++) {
+        const ST_double vs = rescale ? CIV_SCALED(x[i], scale, inv, by_inv) : x[i];
+        ST_double r = vs - sums[levels[i] - 1];
+        if (rescale) r *= scale;
+        x[i] = r;
+        if (copy) copy[i] = r;
+    }
+}
+
+/* Rows per block of civ_columns_restore() */
+#define CIV_RESTORE_BLOCK 16384
+
+/* Every column times its power of two, and the columns that have one copied
+   to their copy: blocks of rows on all threads */
+static void civ_columns_restore(civ_column *cols, ST_int ncols, ST_int N)
+{
+    const ST_int nblk = N / CIV_RESTORE_BLOCK + (N % CIV_RESTORE_BLOCK != 0);
+    ST_int blk;
+    #pragma omp parallel for schedule(static) if ((size_t)N * (size_t)ncols > 200000)
+    for (blk = 0; blk < nblk; blk++) {
+        const ST_int i0 = blk * CIV_RESTORE_BLOCK;
+        const ST_int i1 = (N - i0 < CIV_RESTORE_BLOCK) ? N : i0 + CIV_RESTORE_BLOCK;
+        for (ST_int k = 0; k < ncols; k++) {
+            ST_double *RESTRICT x = cols[k].x, *RESTRICT copy = cols[k].copy;
+            const ST_double scale = cols[k].scale;
+            if (scale != 1.0) {
+                if (copy) {
+                    for (ST_int i = i0; i < i1; i++) {
+                        const ST_double v = x[i] * scale;
+                        x[i] = v;
+                        copy[i] = v;
+                    }
+                } else {
+                    for (ST_int i = i0; i < i1; i++) x[i] *= scale;
+                }
+            } else if (copy) {
+                memcpy(copy + i0, x + i0, (size_t)(i1 - i0) * sizeof(ST_double));
+            }
+        }
+    }
+}
+
+/* A column's passes between the gather and the projection, as a task of the
+   helper threads (the solver is prepared meanwhile) or of a loop */
+static void *civ_column_center_run(void *arg)
+{
+    civ_column *c = (civ_column *)arg;
+    if (c->w) civ_column_sums(c);
+    civ_column_center(c);
+    return NULL;
+}
+
+/* A loaded variable's memory back to the system, as a task of the helper
+   threads (2 ms per 80 MB on Windows, and the next step need not wait) */
+static void *civ_variable_free_run(void *arg)
+{
+    stata_variable_free((stata_variable *)arg);
+    return NULL;
+}
+
+static void civ_release_prepared(void *prepared)
+{
+    partial_out_prepared_free((struct hdfe_coef_prepared *)prepared);
+}
+
+/* Values (rows times columns) from which the columns' passes run on the
+   helper threads beside the solver's preparation */
+#define CIV_AHEAD_MIN_VALUES ((size_t)1000000)
 
 /* The slope description creghdfe's slope routines read: factor g is a
    slope when slope_idx[g] != 0, of the absorbed effect fe_absvar[g] */
@@ -503,7 +829,7 @@ static ST_retcode civ_build_extra(civ_extra_buf *b, ST_int N, ST_int K_exog_in, 
     free(keep);
 
     /* bw(auto) */
-    if (!rc && kernel_type > 0 && bw < 0 && Z_raw) {
+    if (!rc && kernel_type > 0 && bw < 0 && (Z_raw || abw_fe)) {
         ST_double has_cons = 0, span = 0;
         SF_scal_use("__civreghdfe_has_cons", &has_cons);
         SF_scal_use("__civreghdfe_tspan", &span);
@@ -563,6 +889,9 @@ static ST_retcode do_iv_regression(void)
     ST_double *slope_c[10] = {0};  /* compacted slope variables (slope factors only) */
     ST_int *cluster_ids_c = NULL, *cluster2_ids_c = NULL;
     ST_double *all_data = NULL, *beta = NULL, *V = NULL, *first_stage_F = NULL, *abw_fe = NULL;
+    civ_column *part_cols = NULL;             /* the partialled columns of all_data */
+    struct hdfe_coef_prepared *prepared = NULL; /* the projection's part done ahead of the columns */
+    ctools_persistent_pool *free_pool = NULL; /* helper threads returning the loaded variables */
     perm_idx_t *est_obs = NULL;
     HDFE_State *state = NULL;
     /* vce(bootstrap): what the retained model needs beyond the fit's arrays */
@@ -962,19 +1291,44 @@ static ST_retcode do_iv_regression(void)
      * weight, and the wrapper's e(N_full) counts rows */
     if ((iv_rc = ctools_scal_save("__civreghdfe_N_rows", (ST_double)N))) goto iv_cleanup;
 
-    /* Allocate final arrays */
-    y_c = (ST_double *)ctools_safe_malloc2((size_t)N, sizeof(ST_double));
-    X_endog_c = (K_endog > 0) ? (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)K_endog, sizeof(ST_double)) : NULL;
-    X_exog_c = (K_exog > 0) ? (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)K_exog, sizeof(ST_double)) : NULL;
-    /* Z_c holds the K_iv instruments followed by the ts_cols tsset columns
-       (panel, time), which share its lifetime */
-    Z_c = (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)(K_iv + ts_cols), sizeof(ST_double));
-    ST_double *ts_c = Z_c ? Z_c + (size_t)N * K_iv : NULL;
+    /* The matrix that the fixed effects are partialled out of, N x
+       total_cols column-major: Z = [copy of X_exog | excluded instruments],
+       then y, X_endog and X_exog. The retained rows of every column go
+       straight to its place in it; Z's copy of X_exog is filled from the
+       partialled X_exog, which gives exactly what partialling it separately
+       would. Two spare rows (total_cols values each after the N x total_cols
+       block) hold each column's pre-partialling sums of squares, centred and
+       uncentred; they share all_data's lifetime. */
+    const ST_int total_cols = 1 + K_endog + K_exog + K_iv;
+    const ST_int col_excl = K_exog;
+    const ST_int col_y = K_iv;
+    const ST_int col_endog = K_iv + 1;
+    const ST_int col_exog = K_iv + 1 + K_endog;
+    /* columns partialled: every one from the excluded instruments on */
+    const ST_int n_part = total_cols - col_excl;
+    all_data = (ST_double *)ctools_safe_malloc3((size_t)N + 2, (size_t)total_cols, sizeof(ST_double));
+    part_cols = (civ_column *)calloc((size_t)n_part, sizeof(civ_column));
+    /* The unpartialled columns are read again by the bootstrap's refits
+       and, without absorbed effects, by bw(auto): only then are they kept
+       apart, as y_c, X_endog_c, X_exog_c and Z_c = [X_exog | excluded
+       instruments]. Z_c's storage ends with the ts_cols tsset columns
+       (panel, time), which share its lifetime; without the copies it holds
+       those alone. */
+    const int keep_raw = bs_retain || (G == 0 && kernel_type > 0 && bw < 0);
+    if (keep_raw) {
+        y_c = (ST_double *)ctools_safe_malloc2((size_t)N, sizeof(ST_double));
+        X_endog_c = (K_endog > 0) ? (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)K_endog, sizeof(ST_double)) : NULL;
+        X_exog_c = (K_exog > 0) ? (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)K_exog, sizeof(ST_double)) : NULL;
+    }
+    const ST_int z_cols = (keep_raw ? K_iv : 0) + ts_cols;
+    Z_c = z_cols > 0 ? (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)z_cols, sizeof(ST_double)) : NULL;
+    ST_double *ts_c = Z_c ? Z_c + (size_t)N * (keep_raw ? K_iv : 0) : NULL;
     weights_c = has_weights ? (ST_double *)ctools_safe_malloc2((size_t)N, sizeof(ST_double)) : NULL;
     cluster_ids_c = has_cluster ? (ST_int *)ctools_safe_malloc2((size_t)N, sizeof(ST_int)) : NULL;
     cluster2_ids_c = has_cluster2 ? (ST_int *)ctools_safe_malloc2((size_t)N, sizeof(ST_int)) : NULL;
 
-    if (!y_c || !Z_c || (K_endog > 0 && !X_endog_c) || (K_exog > 0 && !X_exog_c) ||
+    if (!all_data || !part_cols || (z_cols > 0 && !Z_c) ||
+        (keep_raw && (!y_c || (K_endog > 0 && !X_endog_c) || (K_exog > 0 && !X_exog_c))) ||
         (has_weights && !weights_c) || (has_cluster && !cluster_ids_c) ||
         (has_cluster2 && !cluster2_ids_c)) {
         SF_error("civreghdfe: Memory allocation failed for compacted arrays\n");
@@ -997,13 +1351,11 @@ static ST_retcode do_iv_regression(void)
             iv_rc = 920;
             goto iv_cleanup;
         }
-        const ST_int *kept_valid = fe_sing.keep;  /* N_valid flags, NULL = all kept */
-        ST_int valid_idx = 0;  /* Index into kept_valid */
-        ST_int out_idx = 0;    /* Index into final arrays (N-sized) */
-        for (ST_int ii = 0; ii < N_total && rows; ii++) {
-            if (!valid_mask[ii]) continue;
-            if (!kept_valid || kept_valid[valid_idx]) rows[out_idx++] = ii;
-            valid_idx++;
+        /* fe_sing.keep: N_valid flags, NULL = all kept */
+        if (rows && (iv_rc = civ_kept_rows(rows, valid_mask, fe_sing.keep, N_total, N))) {
+            SF_error("civreghdfe: could not list the retained rows\n");
+            free(rows);
+            goto iv_cleanup;
         }
         /* A wrapper that sets __civreghdfe_sample_clear takes its estimation
          * sample from its sample marker (the last plugin variable, 1 on every
@@ -1028,10 +1380,16 @@ static ST_retcode do_iv_regression(void)
             }
         }
         if (rows) {
-            for (ST_int j = 0; j < N; j++) {
-                filtered.obs_map[j] = filtered.obs_map[rows[j]];
-                if (has_cluster) cluster_ids_c[j] = cluster_ids[rows[j]];
-                if (has_cluster2) cluster2_ids_c[j] = cluster2_ids[rows[j]];
+            /* obs_map in place and in order (a row moves down); the
+               clusters into arrays of their own */
+            for (ST_int j = 0; j < N; j++) filtered.obs_map[j] = filtered.obs_map[rows[j]];
+            if (has_cluster || has_cluster2) {
+                ST_int j;
+                #pragma omp parallel for schedule(static) if (N > 200000)
+                for (j = 0; j < N; j++) {
+                    if (has_cluster) cluster_ids_c[j] = cluster_ids[rows[j]];
+                    if (has_cluster2) cluster2_ids_c[j] = cluster2_ids[rows[j]];
+                }
             }
         } else {
             if (has_cluster) memcpy(cluster_ids_c, cluster_ids, (size_t)N * sizeof(ST_int));
@@ -1041,10 +1399,12 @@ static ST_retcode do_iv_regression(void)
            (whose total, in row order, the same task adds up) */
         const ST_int n_gather = 1 + K_endog + K_exog + K_excl_in + ts_cols + (has_weights ? 1 : 0);
         ST_int c;
+        /* The regression's columns go to their places in all_data, with the
+           sums that do not wait for the normalized weights taken on the way
+           (civ_column_gather) */
         #pragma omp parallel for schedule(dynamic) if ((size_t)N * (size_t)n_gather > 200000)
         for (c = 0; c < n_gather; c++) {
-            const ST_double *src;
-            ST_double *dst;
+            ST_int col;
             if (has_weights && c == n_gather - 1) {
                 civ_gather(weights_c, filtered.data.vars[var_weight_idx].data.dbl, rows, N);
                 ST_double total = 0.0;
@@ -1052,24 +1412,60 @@ static ST_retcode do_iv_regression(void)
                 sum_w_c = total;
                 continue;
             } else if (c == 0) {
-                src = filtered.data.vars[var_y_idx].data.dbl;
-                dst = y_c;
+                col = col_y;
             } else if (c < 1 + K_endog) {
-                src = filtered.data.vars[var_endog_start_idx + (c - 1)].data.dbl;
-                dst = X_endog_c + (size_t)(c - 1) * N;
+                col = col_endog + (c - 1);
             } else if (c < 1 + K_endog + K_exog) {
-                src = filtered.data.vars[var_exog_start_idx + (c - 1 - K_endog)].data.dbl;
-                dst = X_exog_c + (size_t)(c - 1 - K_endog) * N;
+                col = col_exog + (c - 1 - K_endog);
             } else if (c < 1 + K_endog + K_exog + K_excl_in) {
-                ST_int k = c - 1 - K_endog - K_exog;
-                src = filtered.data.vars[var_excl_start_idx + k].data.dbl;
-                dst = Z_c + (size_t)(K_exog + k) * N;
+                col = col_excl + (c - 1 - K_endog - K_exog);
             } else {
                 ST_int k = c - 1 - K_endog - K_exog - K_excl_in;
-                src = filtered.data.vars[var_ts_start_idx + k].data.dbl;
-                dst = ts_c + (size_t)k * N;
+                civ_gather(ts_c + (size_t)k * N, filtered.data.vars[var_ts_start_idx + k].data.dbl,
+                           rows, N);
+                continue;
             }
-            civ_gather(dst, src, rows, N);
+            /* y, X_endog, X_exog and the excluded instruments are loaded in
+               that order from var_y_idx on */
+            civ_column *pc = &part_cols[col - col_excl];
+            pc->src = filtered.data.vars[var_y_idx + c].data.dbl;
+            pc->rows = rows;
+            pc->x = all_data + (size_t)col * N;
+            /* Z's copy of an exogenous regressor */
+            pc->copy = col >= col_exog ? all_data + (size_t)(col - col_exog) * N : NULL;
+            pc->N = N;
+            civ_column_gather(pc, !has_weights);
+            pc->src = NULL;
+            pc->rows = NULL;
+        }
+        if (keep_raw) {
+            /* the columns as they are now, for the readers named above */
+            const ST_int n_raw = 1 + K_endog + 2 * K_exog + K_excl_in;
+            #pragma omp parallel for schedule(dynamic) if ((size_t)N * (size_t)n_raw > 200000)
+            for (c = 0; c < n_raw; c++) {
+                const ST_double *from;
+                ST_double *to;
+                if (c == 0) {
+                    from = all_data + (size_t)col_y * N;
+                    to = y_c;
+                } else if (c < 1 + K_endog) {
+                    from = all_data + (size_t)(col_endog + c - 1) * N;
+                    to = X_endog_c + (size_t)(c - 1) * N;
+                } else if (c < 1 + K_endog + K_exog) {
+                    from = all_data + (size_t)(col_exog + c - 1 - K_endog) * N;
+                    to = X_exog_c + (size_t)(c - 1 - K_endog) * N;
+                } else if (c < 1 + K_endog + 2 * K_exog) {
+                    /* Z = [X_exog, excluded instruments] */
+                    const ST_int k = c - 1 - K_endog - K_exog;
+                    from = all_data + (size_t)(col_exog + k) * N;
+                    to = Z_c + (size_t)k * N;
+                } else {
+                    const ST_int k = c - 1 - K_endog - 2 * K_exog;
+                    from = all_data + (size_t)(col_excl + k) * N;
+                    to = Z_c + (size_t)(K_exog + k) * N;
+                }
+                memcpy(to, from, (size_t)N * sizeof(ST_double));
+            }
         }
         /* slope variables, one array per slope factor */
         for (ST_int g = 0, k = 0; g < G && !iv_rc; g++) {
@@ -1084,8 +1480,6 @@ static ST_retcode do_iv_regression(void)
         }
         free(rows);
         if (iv_rc) goto iv_cleanup;
-        /* Z = [X_exog, excluded instruments] */
-        if (K_exog > 0) memcpy(Z_c, X_exog_c, (size_t)N * K_exog * sizeof(ST_double));
     }
 
     /* The FE levels keep their valid rows until the factors are built, which
@@ -1119,7 +1513,19 @@ static ST_retcode do_iv_regression(void)
     /* Free original arrays and filtered data (kept alive for direct reads during compaction) */
     free(cluster_ids); free(cluster2_ids); free(valid_mask);
     cluster_ids = cluster2_ids = valid_mask = NULL;
-    ctools_filtered_data_free(&filtered);
+    /* The loaded variables, each as a task of the helper threads while the
+       factors are built: handing 560 MB back takes 14 ms in turn here. What
+       is left of filtered goes when the tasks are done (before the
+       projection, or at the exit). Without the helpers, now. */
+    if (filtered.data.vars && filtered.data.nvars > 1 &&
+        filtered.data.nobs >= CTOOLS_FREE_THREADED_ROWS && (free_pool = ctools_get_global_pool()) &&
+        ctools_persistent_pool_submit_batch(free_pool, civ_variable_free_run, filtered.data.vars,
+                                            filtered.data.nvars, sizeof(filtered.data.vars[0])) == 0) {
+        /* free_pool: waited for below */
+    } else {
+        free_pool = NULL;
+        ctools_filtered_data_free(&filtered);
+    }
 
     /* Check we still have enough observations */
     if (N <= K_total || N < K_iv) {
@@ -1265,39 +1671,16 @@ static ST_retcode do_iv_regression(void)
     t_fwl = ctools_timer_seconds() - t_fwl_start;
     double t_partial_start = ctools_timer_seconds();
 
-    /* Partial out FEs from all variables using CG solver */
-    ST_int total_cols = 1 + K_endog + K_exog + K_iv;
-
-    /* Combine all data into one array for parallel processing. Two spare
-       rows (total_cols values each after the N x total_cols block) hold each
-       column's pre-partialling sums of squares, centred and uncentred; they
-       share all_data's lifetime. */
-    all_data = (ST_double *)ctools_safe_malloc3((size_t)N + 2, (size_t)total_cols, sizeof(ST_double));
-    if (!all_data) {
-        SF_error("civreghdfe: Memory allocation failed for demeaning buffer\n");
-        iv_rc = 920;
-        goto iv_cleanup;
+    /* The loaded variables have gone back by now, or do so here */
+    if (free_pool) {
+        ctools_persistent_pool_wait(free_pool);
+        free_pool = NULL;
+        ctools_filtered_data_free(&filtered);
     }
 
-    /* Column blocks of all_data: Z = [copy of X_exog | excluded instruments],
-       then y, X_endog and X_exog. The fixed effects are partialled out of
-       the columns from the excluded instruments on; Z's copy of X_exog is
-       filled from the partialled X_exog afterwards, which gives exactly what
-       partialling it separately would. */
-    const ST_int col_excl = K_exog;
-    const ST_int col_y = K_iv;
-    const ST_int col_endog = K_iv + 1;
-    const ST_int col_exog = K_iv + 1 + K_endog;
-    if (K_excl_in > 0) {
-        memcpy(all_data + (size_t)N * col_excl, Z_c + (size_t)N * K_exog, (size_t)N * K_excl_in * sizeof(ST_double));
-    }
-    memcpy(all_data + (size_t)N * col_y, y_c, N * sizeof(ST_double));
-    if (K_endog > 0) {
-        memcpy(all_data + (size_t)N * col_endog, X_endog_c, (size_t)N * K_endog * sizeof(ST_double));
-    }
-    if (K_exog > 0) {
-        memcpy(all_data + (size_t)N * col_exog, X_exog_c, (size_t)N * K_exog * sizeof(ST_double));
-    }
+    /* Partial out FEs from all variables. The columns are in all_data since
+       the compaction; they are weighted as the regression is. */
+    for (ST_int p = 0; p < n_part; p++) part_cols[p].w = weights_c;
 
     /* Pre-partialling (weighted) sums of squares of every column: about the
        mean (ss_pre, for partial()'s redundancy rule, absorb_tol being
@@ -1307,19 +1690,6 @@ static ST_retcode do_iv_regression(void)
     const ST_double absorb_tol = (tolerance / 10.0 < 1e-6) ? tolerance / 10.0 : 1e-6;
     ST_double *ss_pre = all_data + (size_t)N * total_cols;
     ST_double *ss_unc = all_data + (size_t)(N + 1) * total_cols;
-    #pragma omp parallel for schedule(dynamic) if ((size_t)N * total_cols > 100000)
-    for (ST_int c = col_excl; c < total_cols; c++) {
-        ss_pre[c] = civ_wss_dev(all_data + (size_t)c * N, weights_c, N);
-        ss_unc[c] = civ_wss(all_data + (size_t)c * N, weights_c, N);
-    }
-    for (ST_int k = 0; k < K_exog; k++) {
-        ss_pre[k] = ss_pre[col_exog + k];
-        ss_unc[k] = ss_unc[col_exog + k];
-    }
-    const ST_double *ss_unc_endog = ss_unc + col_endog;
-    ST_double *ss_exog = ss_pre + col_exog;  /* compacted with X_exog below */
-    ST_double *ss_unc_exog = ss_unc + col_exog;  /* likewise */
-    const ST_double *ss_unc_excl = ss_unc + col_excl;
 
     /* Partial out the FEs from every column in one pass, then the partial()
        variables by weighted FWL on the FE-demeaned data: the residual of the
@@ -1331,37 +1701,80 @@ static ST_retcode do_iv_regression(void)
        of 1e5 as in units of 1. Without it, a column of large values with
        little within variation (1000*id + noise) can come back as noise
        larger than the column itself. */
-    ST_double *col_scale = (ST_double *)malloc((size_t)total_cols * sizeof(ST_double));
-    if (!col_scale) {
-        SF_error("civreghdfe: Memory allocation failed for demeaning buffer\n");
-        iv_rc = 920;
-        goto iv_cleanup;
-    }
-    #pragma omp parallel for schedule(dynamic) if ((size_t)N * total_cols > 100000)
-    for (ST_int c = col_excl; c < total_cols; c++) {
-        ST_double *x = all_data + (size_t)c * N, largest = 0.0;
-        for (ST_int i = 0; i < N; i++) largest = fmax(largest, fabs(x[i]));
-        int exponent = 0;
-        col_scale[c] = 1.0;
-        if (largest > 0.0 && isfinite(largest)) {
-            frexp(largest, &exponent);
-            col_scale[c] = ldexp(1.0, exponent - 1);
-            for (ST_int i = 0; i < N; i++) x[i] /= col_scale[c];
+    HDFE_SolveResult projection = {0, 1, 0};
+    ST_double *const part_data = all_data + (size_t)N * col_excl;
+    if (state->G == 1 && !state->factors[0].slope && !input.map && state->N == N &&
+        state->num_threads >= 1 && maxiter >= 1 && isfinite(tolerance) && tolerance > 0 &&
+        !ctools_cancel_requested()) {
+        /* A single absorbed effect, which partial_out_columns() projects on
+           in one step: each column's remaining passes with that projection
+           and the return to its units done in them (civ_column_absorb). The
+           level sums are a column's scratch; the whole team runs the loop, a
+           column per thread. */
+        const FE_Factor *f = &state->factors[0];
+        const int team = omp_get_max_threads();
+        const size_t lanes = (size_t)(n_part < team ? n_part : team);
+        ST_double *level_sums = (ST_double *)ctools_safe_malloc3(lanes, (size_t)f->num_levels,
+                                                                  sizeof(ST_double));
+        if (!level_sums) {
+            SF_error("civreghdfe: Memory allocation failed for demeaning buffer\n");
+            iv_rc = 920;
+            goto iv_cleanup;
         }
+        ST_int p;
+        #pragma omp parallel for schedule(static) if (n_part > 1 && (size_t)N * (size_t)n_part > 200000)
+        for (p = 0; p < n_part; p++) {
+            civ_column *pc = &part_cols[p];
+            if (pc->w) civ_column_sums(pc);
+            civ_column_absorb(pc, f, level_sums + (size_t)omp_get_thread_num() * (size_t)f->num_levels);
+        }
+        free(level_sums);
+        projection = ctools_cancel_requested() ? (HDFE_SolveResult){1, 0, 1}
+                                               : (HDFE_SolveResult){0, 1, 1};
+    } else {
+        /* A column's passes are one thread's work, so the columns keep n_part
+           threads busy. When the projection will be solved for the effects'
+           coefficients, what that solve can do before it sees a column
+           (hdfe_solver.h) is done meanwhile: the columns run on the helper
+           threads and this thread prepares the solve with the OpenMP team. */
+        const int ahead = state->G >= 2 && !input.map &&
+                          (size_t)N * (size_t)n_part >= CIV_AHEAD_MIN_VALUES;
+        ctools_persistent_pool *column_pool = ahead ? ctools_get_global_pool() : NULL;
+        if (column_pool &&
+            ctools_persistent_pool_submit_batch(column_pool, civ_column_center_run, part_cols,
+                                                (size_t)n_part, sizeof(part_cols[0])) == 0) {
+            prepared = partial_out_prepare(state, n_part);
+            ctools_persistent_pool_wait(column_pool);
+        } else {
+            ST_int p;
+            #pragma omp parallel for schedule(static) if (n_part > 1 && (size_t)N * (size_t)n_part > 200000)
+            for (p = 0; p < n_part; p++) civ_column_center_run(&part_cols[p]);
+        }
+        /* a solver option of reghdfe's given: its default iteration, on the
+           rows; otherwise with what was prepared, if anything */
+        projection = input.map ? partial_out_columns_options(state, part_data, N, n_part, 0, 1)
+                               : partial_out_columns_prepared(state, part_data, N, n_part,
+                                                              num_threads, prepared);
+        if (prepared) {
+            /* its memory goes back after the command */
+            ctools_release_later_call(civ_release_prepared, prepared);
+            prepared = NULL;
+        }
+        /* back to the columns' units, and Z's copy of X_exog */
+        civ_columns_restore(part_cols, n_part, N);
     }
-    /* a solver option of reghdfe's given: its default iteration, on the rows */
-    HDFE_SolveResult projection =
-        input.map ? partial_out_columns_options(state, all_data + (size_t)N * col_excl, N,
-                                                total_cols - col_excl, 0, 1)
-                  : partial_out_columns(state, all_data + (size_t)N * col_excl, N,
-                                        total_cols - col_excl, num_threads);
-    #pragma omp parallel for schedule(dynamic) if ((size_t)N * total_cols > 100000)
-    for (ST_int c = col_excl; c < total_cols; c++) {
-        if (col_scale[c] == 1.0) continue;
-        ST_double *x = all_data + (size_t)c * N;
-        for (ST_int i = 0; i < N; i++) x[i] *= col_scale[c];
+    for (ST_int p = 0; p < n_part; p++) {
+        ss_pre[col_excl + p] = part_cols[p].ss_pre;
+        ss_unc[col_excl + p] = part_cols[p].ss_unc;
     }
-    free(col_scale);
+    for (ST_int k = 0; k < K_exog; k++) {
+        ss_pre[k] = ss_pre[col_exog + k];
+        ss_unc[k] = ss_unc[col_exog + k];
+    }
+    const ST_double *ss_unc_endog = ss_unc + col_endog;
+    ST_double *ss_exog = ss_pre + col_exog;  /* compacted with X_exog below */
+    ST_double *ss_unc_exog = ss_unc + col_exog;  /* likewise */
+    const ST_double *ss_unc_excl = ss_unc + col_excl;
     if (bs_retain && !projection.status) {
         const size_t n_tilde = (size_t)N * (size_t)(total_cols - col_excl);
         if (!(bs_tilde = (ST_double *)malloc(n_tilde * sizeof(ST_double)))) {
@@ -1386,9 +1799,6 @@ static ST_retcode do_iv_regression(void)
         }
     }
     ST_retcode fwl_rc = 0;
-    if (!projection.status && K_exog > 0) {
-        memcpy(all_data, all_data + (size_t)N * col_exog, (size_t)N * K_exog * sizeof(ST_double));
-    }
     if (!projection.status && is_partial) {
         fwl_rc = civ_fwl_partial_out(all_data, N, total_cols, col_exog, 0, K_exog,
                                      is_partial, weights_c, ss_exog, absorb_tol, 1);
@@ -2054,7 +2464,7 @@ static ST_retcode do_iv_regression(void)
 
     civ_extra_buf xb;
     memset(&xb, 0, sizeof(xb));
-    if (!rc) rc = civ_build_extra(&xb, N, input.K_exog, K_excl_in, Z_c, G, K_exog_orig,
+    if (!rc) rc = civ_build_extra(&xb, N, input.K_exog, K_excl_in, keep_raw ? Z_c : NULL, G, K_exog_orig,
                                   is_collinear_x, K_iv, kernel_type, bw, abw_fe);
     test_cols.orthog_x = xb.ox;
     test_cols.n_orthog_x = xb.n_ox;
@@ -2298,6 +2708,13 @@ iv_cleanup:
        including after a failed result publication. The memory is returned
        by a helper thread after the plugin call (ctools_release.h): at 10M
        rows that is over 1 GB, 50 ms or more on Windows. */
+    /* the tasks that return the loaded variables, before what is left of them */
+    if (free_pool) {
+        ctools_persistent_pool_wait(free_pool);
+        free_pool = NULL;
+    }
+    if (prepared) ctools_release_later_call(civ_release_prepared, prepared);
+    ctools_release_later(part_cols);
     ctools_release_later(cluster_ids); ctools_release_later(cluster2_ids);
     ctools_release_later(valid_mask); ctools_release_later(singleton_mask);
     if (fe_levels_c) {
@@ -2314,6 +2731,8 @@ iv_cleanup:
         ctools_release_later(fe_sing.affected[g].left);
     }
     ctools_release_later(fe_sing.affected);
+    for (ST_int g = 0; fe_sing.rows_left && g < fe_sing.G; g++) ctools_release_later(fe_sing.rows_left[g]);
+    ctools_release_later(fe_sing.rows_left);
     ctools_release_later(level_max); ctools_release_later(is_partial);
     ctools_release_later(is_collinear_x); ctools_release_later(test_idx); ctools_release_later(ts_int);
     ctools_release_later(fe_redundant); ctools_release_later(fe_nested); ctools_release_later(fe_exact);

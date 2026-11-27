@@ -22,7 +22,7 @@ set graphics off
 if `"`outdir'"' == "" local outdir "docs/benchmarks/readme_profile"
 if `"`sizes'"' == "" local sizes "1000000 10000000 25000000"
 if "`threads'" == "" local threads = c(processors)
-local allpairs "export import sort merge joinby sample bsample encode decode destring distinct ipolate cipolate split rangejoin winsor winsor2 rangestat binscatter binscatter2 binsreg reghdfe fereg ivreghdfe ppmlhdfe feppml hdfe psmatch2 qreg"
+local allpairs "export import sort merge joinby sample bsample encode decode destring distinct ipolate cipolate split rangejoin geonear geodist winsor winsor2 rangestat binscatter binscatter2 binsreg reghdfe fereg ivreghdfe ppmlhdfe feppml hdfe psmatch2 qreg"
 if `"`pairs'"' == "" local pairs "`allpairs'"
 capture mkdir "`outdir'"
 log using "`outdir'/profile.log", text replace name(profile)
@@ -41,14 +41,16 @@ program define profile_readme
         cdestring cdistinct distinct cinterpolate csplit crangejoin cqreg cwinsor crangestat cpsmatch ///
         cbinscatter creghdfe civreghdfe cppmlhdfe chdfe rangejoin rangestat gstats winsor2 ///
         psmatch2 binscatter binscatter2 binsreg reghdfe fereg ivreghdfe ppmlhdfe feppml hdfe ///
-        cipolate ftools ivreg2 {
+        cipolate ftools ivreg2 cgeonear geonear geodist {
         capture noisily which `cmd'
     }
-    * qreg and ppmlhdfe take minutes per run at 25M observations, so their pairs
-    * are not run above this size. validation/bench_profiles.py (profile_LIMITS)
+    * qreg, ppmlhdfe and geonear take minutes per run at 25M observations, so
+    * their pairs are not run above this size. validation/bench_profiles.py (profile_LIMITS)
     * and readme_benchmarks.do repeat these limits.
     local limit_qreg 10000000
     local limit_ppmlhdfe 10000000
+    * geonear takes over ten minutes per run at 25M observations.
+    local limit_geonear 10000000
     * Older ctools releases installed a linear cipolate; the reference is SSC's cubic one.
     capture findfile cipolate.ado
     if !_rc & strpos(" `pairs' ", " cipolate ") {
@@ -106,7 +108,7 @@ program define profile_readme
             quietly tabulate group
             local group_count = r(r)
         }
-        tempfile base lookup events offers inputcsv outputcsv
+        tempfile base lookup events offers places inputcsv outputcsv
         quietly save `base'
         preserve
         quietly keep if month==0
@@ -126,6 +128,15 @@ program define profile_readme
         quietly expand 2
         quietly bysort firm: gen byte event = _n
         quietly save `events'
+        restore
+        * One place per firm, at the coordinates (in degrees, within a few of 0)
+        * of its first observation: geonear finds the nearest place of every
+        * observation.
+        preserve
+        quietly keep if month==0
+        keep firm z noise
+        rename (z noise) (place_lat place_lon)
+        quietly save `places'
         restore
         * Twenty-variable using input; a narrow interval yields one match per row.
         preserve
@@ -164,6 +175,10 @@ program define profile_readme
         local c_split `"csplit code, gen(part) parse("|")"'
         local ref_rangejoin `"rangejoin month -.5 .5 using "`offers'", by(firm) keepusing(x2 region)"'
         local c_rangejoin `"crangejoin month -.5 .5 using "`offers'", by(firm) keepusing(x2 region)"'
+        local ref_geonear `"geonear id z noise using "`places'", neighbors(firm place_lat place_lon)"'
+        local c_geonear `"cgeonear id z noise using "`places'", neighbors(firm place_lat place_lon)"'
+        local ref_geodist "geodist z noise x2 x3, gen(result)"
+        local c_geodist "cgeonear z noise x2 x3, gen(result)"
         local ref_qreg "qreg y x1 x2 x3"
         local c_qreg "cqreg y x1 x2 x3"
         local ref_winsor "gstats winsor x1 x2 x3, cuts(1 99) replace"
@@ -253,6 +268,15 @@ program define profile_readme
                         capture assert c(k)==23 & inlist(event,1,2) & firm<=floor(`N'/400) & !missing(event_value)
                         if _rc local checkrc = _rc
                     }
+                    * Every observation has a nearest place and a distance.
+                    if "`cmd'"=="geonear" {
+                        capture assert c(k)==22 & !missing(nid, km_to_nid)
+                        if _rc local checkrc = _rc
+                    }
+                    if "`cmd'"=="geodist" {
+                        capture assert c(k)==21 & !missing(result)
+                        if _rc local checkrc = _rc
+                    }
                     * The design has no singletons, so every row is kept.
                     if "`cmd'"=="hdfe" {
                         capture assert !missing(res_y, res_x1, res_x2)
@@ -300,6 +324,7 @@ program define profile_readme
         erase `lookup'
         erase `events'
         erase `offers'
+        erase `places'
         capture erase `inputcsv'
         capture erase `outputcsv'
     }

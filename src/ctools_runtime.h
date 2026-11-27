@@ -191,6 +191,9 @@ typedef enum {
     CTOOLS_CMD_CEGEN,
     CTOOLS_CMD_CCOLLAPSE,
     CTOOLS_CMD_CRESHAPE,
+    CTOOLS_CMD_CFUZZYJOIN,
+    CTOOLS_CMD_CSQL,
+    CTOOLS_CMD_CGEONEAR,
     CTOOLS_CMD_OTHER
 } ctools_command_t;
 
@@ -237,5 +240,8 @@ void ccollapse_cleanup_state(void);
 
 /* creshape: Frees the staged observations and the plan */
 void creshape_cleanup_state(void);
+
+/* cfuzzyjoin: Frees the staged data, indexes and results */
+void cfuzzyjoin_cleanup_state(void);
 
 #endif /* CTOOLS_RUNTIME_H */

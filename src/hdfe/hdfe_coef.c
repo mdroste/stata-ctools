@@ -609,12 +609,19 @@ static ST_retcode hc2_dense_sum(const hc2_system *M, ST_double *Sd)
     int nch = M->nch;
     while (nch > 1 && n2 * (size_t)nch * sizeof(ST_double) > 2 * HDFE_COEF_BUFFER_BYTES)
         nch /= 2;
-    ST_int *bound = hdfe_coef_chunks(rowptr, M->act, M->nact, nch);
-    ST_double *buf = (ST_double *)malloc(n2 * (size_t)nch * sizeof(ST_double));
-    ST_double *dense = (ST_double *)calloc((size_t)nS * (size_t)nch, sizeof(ST_double));
+    /* the chunks of the sweep when their number stands */
+    ST_int *bound_own = nch == M->nch ? NULL : hdfe_coef_chunks(rowptr, M->act, M->nact, nch);
+    const ST_int *bound = bound_own ? bound_own : (nch == M->nch ? M->ch_act : NULL);
+    /* A chunk's sums and its row are one thread's while the chunks run:
+     * each chunk's lie HDFE_COEF_PAD entries from the next one's, or the
+     * threads would share the lines where they meet (a row of twenty
+     * levels is two and a half lines) */
+    const size_t bstride = n2 + HDFE_COEF_PAD, rstride = (size_t)nS + HDFE_COEF_PAD;
+    ST_double *buf = (ST_double *)malloc(bstride * (size_t)nch * sizeof(ST_double));
+    ST_double *dense = (ST_double *)calloc(rstride * (size_t)nch, sizeof(ST_double));
     if (!bound || !buf || !dense)
     {
-        free(bound);
+        free(bound_own);
         free(buf);
         free(dense);
         return 920;
@@ -622,8 +629,8 @@ static ST_retcode hc2_dense_sum(const hc2_system *M, ST_double *Sd)
 #pragma omp parallel for schedule(dynamic, 1) if (nch > 1)
     for (int c = 0; c < nch; c++)
     {
-        ST_double *RESTRICT B = buf + (size_t)c * n2;
-        ST_double *RESTRICT row = dense + (size_t)c * nS;
+        ST_double *RESTRICT B = buf + (size_t)c * bstride;
+        ST_double *RESTRICT row = dense + (size_t)c * rstride;
         memset(B, 0, n2 * sizeof(ST_double));
         for (ST_int a = bound[c]; a < bound[c + 1]; a++)
         {
@@ -641,9 +648,7 @@ static ST_retcode hc2_dense_sum(const hc2_system *M, ST_double *Sd)
                     const ST_double v1 = row[j1] * ib;
                     if (v1 == 0.0)
                         continue;
-                    ST_double *RESTRICT Bj = B + (size_t)j1 * nS;
-                    for (ST_int j2 = 0; j2 <= j1; j2++)
-                        Bj[j2] += v1 * row[j2];
+                    hdfe_coef_row_add(B + (size_t)j1 * nS, row, v1, j1 + 1, nS);
                 }
                 for (ST_int e = e0; e < e1; e++)
                     row[col[e] - 1] = 0.0;
@@ -672,11 +677,11 @@ static ST_retcode hc2_dense_sum(const hc2_system *M, ST_double *Sd)
         {
             ST_double total = 0.0;
             for (int c = 0; c < nch; c++)
-                total += buf[(size_t)c * n2 + (size_t)j1 * nS + j2];
+                total += buf[(size_t)c * bstride + (size_t)j1 * nS + j2];
             Sd[(size_t)j1 * nS + j2] = total;
         }
     }
-    free(bound);
+    free(bound_own);
     free(buf);
     free(dense);
     return 0;
@@ -870,32 +875,65 @@ static hdfe_coef_method hc2_choose(const hc2_system *M, ST_int K, hdfe_coef_meth
                : HDFE_COEF_PCG;
 }
 
-/* plan: NULL (nothing is kept: the system is built for this call and freed),
- * or the plan that holds, or will hold, the system of S's two effects */
-static HDFE_SolveResult hc2_partial_out(const HDFE_State *S, hdfe_coef_plan *plan,
-                                        ST_double *data, ST_int N, ST_int K,
-                                        hdfe_coef_method method)
+/*
+ * A projection in two steps. hc2_setup() does what the levels and the
+ * weights decide (the system, the choice of method, the factor or the
+ * preconditioner's diagonal, the scratch) and reads no column; hc2_solve()
+ * projects the columns. A context is used where it lies (its sweep points
+ * into it) and is released with hc2_context_free() whatever the steps
+ * returned.
+ */
+typedef struct
 {
-    HDFE_SolveResult result = {0, 1, 0};
     hc2_system M;
-    hc2_kept *T = NULL;
-    hdfe_coef_rowplan R_once, *R = &R_once;
-    hdfe_coef_buf buf_once[HC2_BUFS], *buf = buf_once;
-    hc2_sweep W = {&M, 0, NULL, NULL};
-    ST_double *a0 = NULL, *g = NULL, *b = NULL, *pcg = NULL, *Sd = NULL, *minv = NULL;
-    ST_double weakest = 1.0;
-    unsigned char *dead = NULL;
-    hdfe_lap *lap = NULL;
-    memset(&R_once, 0, sizeof(R_once));
-    memset(buf_once, 0, sizeof(buf_once));
-    memset(&M, 0, sizeof(M));
+    hc2_kept *T; /* the plan's system, of which M is then a view; NULL: M is the context's own */
+    hdfe_coef_rowplan R_once, *R;
+    hdfe_coef_buf buf_once[HC2_BUFS], *buf;
+    hc2_sweep W;
+    ST_double *a0, *g, *b, *pcg, *Sd, *minv;
+    ST_double weakest;
+    unsigned char *dead;
+    hdfe_lap *lap;
+    hdfe_coef_method method, chosen;
+    ST_int K; /* columns the choice and the scratch were made for */
+    int KB;
+} hc2_context;
+
+static void hc2_context_free(hc2_context *X)
+{
+    hdfe_lap_free(X->lap);
+    X->lap = NULL;
+    if (!X->T)
+    {
+        /* a plan keeps its system, row plan and scratch */
+        hdfe_coef_rowplan_free(&X->R_once);
+        for (int i = 0; i < HC2_BUFS; i++)
+            hdfe_coef_buf_free(&X->buf_once[i]);
+        hc2_system_free(&X->M);
+    }
+}
+
+/* plan: NULL (nothing is kept: the system is built for this context and
+ * freed with it), or the plan that holds, or will hold, the system of S's
+ * two effects. Returns 0, 1, 198 or 920. */
+static ST_retcode hc2_setup(hc2_context *X, const HDFE_State *S, hdfe_coef_plan *plan, ST_int K,
+                            hdfe_coef_method method)
+{
+    memset(X, 0, sizeof(*X));
+    X->R = &X->R_once;
+    X->buf = X->buf_once;
+    X->W.M = &X->M;
+    X->weakest = 1.0;
+    X->method = method;
+    X->K = K;
+    hc2_system *M = &X->M;
 
     /* the dense path needs the fused bookkeeping, which is all it uses */
     const int allow_twopass = method != HDFE_COEF_DENSE;
     ST_retcode rc = 0;
     if (plan)
     {
-        T = (hc2_kept *)plan->kept;
+        hc2_kept *T = (hc2_kept *)plan->kept;
         if (T && T->allow_twopass != allow_twopass)
         {
             hdfe_coef_plan_bind(plan, S, NULL, NULL);
@@ -905,95 +943,100 @@ static HDFE_SolveResult hc2_partial_out(const HDFE_State *S, hdfe_coef_plan *pla
         {
             T = hc2_kept_build(S, allow_twopass, &rc);
             if (!T)
-                return (HDFE_SolveResult){rc, 0, 0};
+                return rc;
             hdfe_coef_plan_bind(plan, S, T, hc2_kept_free);
         }
+        X->T = T;
         rc = hc2_kept_values(T, S);
         /* a copy that shares the kept arrays: nothing of it is freed here */
-        M = T->M;
-        R = &T->R;
-        buf = T->buf;
+        *M = T->M;
+        X->R = &T->R;
+        X->buf = T->buf;
     }
     else
-        rc = hc2_system_build(&M, S, allow_twopass);
+        rc = hc2_system_build(M, S, allow_twopass);
     if (rc)
-        goto done;
-    const ST_int nB = M.nB, nS = M.nS;
-    hdfe_coef_method chosen = hc2_choose(&M, K, method);
-    if (chosen == HDFE_COEF_DENSE && M.twopass)
+        return rc;
+    const ST_int nB = M->nB, nS = M->nS;
+    hdfe_coef_method chosen = hc2_choose(M, K, method);
+    if (chosen == HDFE_COEF_DENSE && M->twopass)
         chosen = HDFE_COEF_PCG;
+    X->chosen = chosen;
     if (ctools_cancel_requested())
-    {
-        rc = 1;
-        goto done;
-    }
+        return 1;
 
+    hdfe_coef_buf *buf = X->buf;
     const int KB = K < HDFE_COEF_KMAX ? (int)K : HDFE_COEF_KMAX;
     const size_t per_s = (size_t)nS * (size_t)KB * sizeof(ST_double);
-    a0 = (ST_double *)hdfe_coef_buf_get(&buf[HC2_BUF_A0],
-                                        (size_t)nB * (size_t)KB * sizeof(ST_double));
-    g = (ST_double *)hdfe_coef_buf_get(&buf[HC2_BUF_G], per_s);
-    b = (ST_double *)hdfe_coef_buf_get(&buf[HC2_BUF_B], per_s);
-    if (!a0 || !g || !b || (rc = hdfe_coef_rowplan_init(R, &M.D, KB)))
-    {
-        if (!rc)
-            rc = 920;
-        goto done;
-    }
+    X->KB = KB;
+    X->a0 = (ST_double *)hdfe_coef_buf_get(&buf[HC2_BUF_A0],
+                                           (size_t)nB * (size_t)KB * sizeof(ST_double));
+    X->g = (ST_double *)hdfe_coef_buf_get(&buf[HC2_BUF_G], per_s);
+    X->b = (ST_double *)hdfe_coef_buf_get(&buf[HC2_BUF_B], per_s);
+    if (!X->a0 || !X->g || !X->b)
+        return 920;
+    if ((rc = hdfe_coef_rowplan_init(X->R, &M->D, KB)))
+        return rc;
     if (chosen == HDFE_COEF_DENSE)
     {
-        Sd = (ST_double *)hdfe_coef_buf_get(&buf[HC2_BUF_DENSE],
-                                            (size_t)nS * (size_t)nS * sizeof(ST_double));
-        dead = (unsigned char *)hdfe_coef_buf_get(&buf[HC2_BUF_DEAD], (size_t)nS);
-        if (!Sd || !dead)
-        {
-            rc = 920;
-            goto done;
-        }
-        if ((rc = hc2_dense_factor(&M, Sd, dead, &weakest)))
-            goto done;
+        X->Sd = (ST_double *)hdfe_coef_buf_get(&buf[HC2_BUF_DENSE],
+                                               (size_t)nS * (size_t)nS * sizeof(ST_double));
+        X->dead = (unsigned char *)hdfe_coef_buf_get(&buf[HC2_BUF_DEAD], (size_t)nS);
+        if (!X->Sd || !X->dead)
+            return 920;
+        if ((rc = hc2_dense_factor(M, X->Sd, X->dead, &X->weakest)))
+            return rc;
     }
     else
     {
         ST_double *sweep = (ST_double *)hdfe_coef_buf_get(
-            &buf[HC2_BUF_SWEEP],
-            (M.twopass ? (size_t)nB : (size_t)M.nch * (size_t)nS) * (size_t)KB * sizeof(ST_double));
-        if (M.twopass)
-            W.tB = sweep;
+            &buf[HC2_BUF_SWEEP], (M->twopass ? (size_t)nB : (size_t)M->nch * (size_t)nS) *
+                                     (size_t)KB * sizeof(ST_double));
+        if (M->twopass)
+            X->W.tB = sweep;
         else
-            W.buf = sweep;
-        pcg = (ST_double *)hdfe_coef_buf_get(&buf[HC2_BUF_PCG],
-                                             HDFE_COEF_PCG_WORK(nS, KB) * sizeof(ST_double));
-        minv = (ST_double *)hdfe_coef_buf_get(&buf[HC2_BUF_MINV], (size_t)nS * sizeof(ST_double));
-        if (!sweep || !pcg || !minv)
-        {
-            rc = 920;
-            goto done;
-        }
+            X->W.buf = sweep;
+        X->pcg = (ST_double *)hdfe_coef_buf_get(&buf[HC2_BUF_PCG],
+                                                HDFE_COEF_PCG_WORK(nS, KB) * sizeof(ST_double));
+        X->minv = (ST_double *)hdfe_coef_buf_get(&buf[HC2_BUF_MINV], (size_t)nS * sizeof(ST_double));
+        if (!sweep || !X->pcg || !X->minv)
+            return 920;
         /* The diagonal of S, not the level counts that the row-space sweep
          * uses implicitly: where most rows of B have a single cell the two
          * differ widely across levels, and the diagonal needs 25 to 40%
          * fewer iterations (benchmark_hdfe_coef.c, worker-firm graphs). A
          * level whose diagonal is rounding is not linked to any other. */
-        const ST_double *scale = M.twopass ? M.nSw : M.dS;
+        const ST_double *scale = M->twopass ? M->nSw : M->dS;
+        ST_double *minv = X->minv;
         for (ST_int j = 0; j < nS; j++)
-            minv[j] = (M.diag[j] > 1e-12 * scale[j] && M.diag[j] > 0.0) ? 1.0 / M.diag[j] : 0.0;
+            minv[j] = (M->diag[j] > 1e-12 * scale[j] && M->diag[j] > 0.0) ? 1.0 / M->diag[j] : 0.0;
         if (chosen == HDFE_COEF_PCG_LAP)
         {
             int oversize = 0;
-            lap = hc2_laplacian(&M, &oversize);
-            if (!lap)
-            {
-                rc = oversize ? 198 : 920;
-                goto done;
-            }
+            X->lap = hc2_laplacian(M, &oversize);
+            if (!X->lap)
+                return oversize ? 198 : 920;
         }
     }
-    if (ctools_cancel_requested())
-    {
-        rc = 1;
-        goto done;
-    }
+    return ctools_cancel_requested() ? 1 : 0;
+}
+
+/* The residuals of the K columns of data, after a hc2_setup() for K that
+ * returned 0 */
+static HDFE_SolveResult hc2_solve(hc2_context *X, const HDFE_State *S, ST_double *data, ST_int N,
+                                  ST_int K)
+{
+    HDFE_SolveResult result = {0, 1, 0};
+    hc2_system *M = &X->M;
+    hc2_sweep *W = &X->W;
+    const hdfe_coef_rowplan *R = X->R;
+    const hdfe_coef_method method = X->method, chosen = X->chosen;
+    ST_double *a0 = X->a0, *g = X->g, *b = X->b, *pcg = X->pcg, *Sd = X->Sd, *minv = X->minv;
+    const ST_double weakest = X->weakest;
+    const unsigned char *dead = X->dead;
+    const ST_int nS = M->nS;
+    const int KB = X->KB;
+    ST_retcode rc = 0;
 
     for (ST_int k0 = 0; k0 < K; k0 += KB)
     {
@@ -1003,12 +1046,12 @@ static HDFE_SolveResult hc2_partial_out(const HDFE_State *S, hdfe_coef_plan *pla
         ST_int total = 0;
         for (int round = 0; round < HDFE_COEF_ROUNDS; round++)
         {
-            ST_double *X = data + (size_t)(k0 + first) * (size_t)N;
+            ST_double *col = data + (size_t)(k0 + first) * (size_t)N;
             ST_double f0[HDFE_COEF_KMAX], scale[HDFE_COEF_KMAX];
             unsigned char state[HDFE_COEF_KMAX] = {0};
             ST_int iterations = 0;
-            W.K = kb;
-            hdfe_coef_rows_rhs(&M.D, R, X, kb, a0, g, f0, scale);
+            W->K = kb;
+            hdfe_coef_rows_rhs(&M->D, R, col, kb, a0, g, f0, scale);
             if (ctools_cancel_requested())
             {
                 rc = 1;
@@ -1022,13 +1065,13 @@ static HDFE_SolveResult hc2_partial_out(const HDFE_State *S, hdfe_coef_plan *pla
             }
             else
             {
-                hc2_lap_ctx lap_ctx = {lap, nS, kb};
-                hdfe_coef_pcg_problem P = {nS,   kb,           hc2_apply,  &W, NULL, NULL,
-                                           minv, S->tolerance, S->maxiter, 0,  0};
+                hc2_lap_ctx lap_ctx = {X->lap, nS, kb};
+                hdfe_coef_pcg_problem P = {nS,   kb,           hc2_apply,  W, NULL, NULL,
+                                           minv, S->tolerance, S->maxiter, 0, 0};
                 ST_retcode solve = 430;
                 ST_int used = 0;
-                int resume = lap != NULL;
-                if (!lap)
+                int resume = X->lap != NULL;
+                if (!X->lap)
                 {
                     /* automatic: a short plain run settles well connected data */
                     const int probe =
@@ -1048,13 +1091,13 @@ static HDFE_SolveResult hc2_partial_out(const HDFE_State *S, hdfe_coef_plan *pla
                     if (solve == 430 && probe)
                     {
                         int oversize = 0;
-                        lap = hc2_laplacian(&M, &oversize);
-                        if (!lap && !oversize)
+                        X->lap = hc2_laplacian(M, &oversize);
+                        if (!X->lap && !oversize)
                         {
                             rc = 920;
                             goto done;
                         }
-                        lap_ctx.L = lap;
+                        lap_ctx.L = X->lap;
                         P.warm = 1;
                         resume = 1;
                     }
@@ -1064,7 +1107,7 @@ static HDFE_SolveResult hc2_partial_out(const HDFE_State *S, hdfe_coef_plan *pla
                     /* from where the plain run stopped, with the factor when
                      * there is one; what that run used counts against the
                      * limit */
-                    if (lap)
+                    if (X->lap)
                     {
                         P.precond = hc2_lap_apply;
                         P.precond_ctx = &lap_ctx;
@@ -1090,8 +1133,8 @@ static HDFE_SolveResult hc2_partial_out(const HDFE_State *S, hdfe_coef_plan *pla
                 rc = 1;
                 goto done;
             }
-            hc2_eliminated(&M, kb, a0, b);
-            hdfe_coef_rows_residual(&M.D, X, kb, a0, b);
+            hc2_eliminated(M, kb, a0, b);
+            hdfe_coef_rows_residual(&M->D, col, kb, a0, b);
             if (!hdfe_coef_refine_span(state, kb, &first, &kb))
                 break;
         }
@@ -1100,15 +1143,6 @@ static HDFE_SolveResult hc2_partial_out(const HDFE_State *S, hdfe_coef_plan *pla
     }
 
 done:
-    hdfe_lap_free(lap);
-    if (!T)
-    {
-        /* the plan keeps its system, row plan and scratch */
-        hdfe_coef_rowplan_free(&R_once);
-        for (int i = 0; i < HC2_BUFS; i++)
-            hdfe_coef_buf_free(&buf_once[i]);
-        hc2_system_free(&M);
-    }
     if (rc)
     {
         result.status = rc;
@@ -1116,6 +1150,23 @@ done:
     }
     else if (!result.converged)
         result.status = 430;
+    return result;
+}
+
+/* plan: NULL (nothing is kept: the system is built for this call and freed),
+ * or the plan that holds, or will hold, the system of S's two effects */
+static HDFE_SolveResult hc2_partial_out(const HDFE_State *S, hdfe_coef_plan *plan,
+                                        ST_double *data, ST_int N, ST_int K,
+                                        hdfe_coef_method method)
+{
+    hc2_context X;
+    HDFE_SolveResult result = {0, 0, 0};
+    const ST_retcode rc = hc2_setup(&X, S, plan, K, method);
+    if (rc)
+        result.status = rc;
+    else
+        result = hc2_solve(&X, S, data, N, K);
+    hc2_context_free(&X);
     return result;
 }
 
@@ -1209,6 +1260,67 @@ HDFE_SolveResult hdfe_coef_partial_out_plan(const HDFE_State *S, hdfe_coef_plan 
     }
     /* the kept structure is the weighted one */
     return hdfe_coef_solve(S, S->weights ? plan : NULL, data, N, K, method);
+}
+
+/* ========================================================================
+ * A projection prepared ahead of its columns
+ * ======================================================================== */
+
+struct hdfe_coef_prepared
+{
+    int G;
+    ST_int N, K;
+    hc2_context two; /* two effects */
+    void *multi;     /* three or more: hdfe_coef_multi_prepare()'s */
+};
+
+hdfe_coef_prepared *hdfe_coef_prepare(const HDFE_State *S, ST_int K, hdfe_coef_method method)
+{
+    /* as hdfe_coef_partial_out() and hdfe_coef_solve() refuse */
+    if (!hdfe_coef_applies(S) || K < 1 || S->maxiter < 1 || !isfinite(S->tolerance) ||
+        S->tolerance <= 0)
+        return NULL;
+    if (S->G == 2 && method == HDFE_COEF_DENSE && S->factors[0].num_levels > 46340 &&
+        S->factors[1].num_levels > 46340)
+        return NULL;
+    hdfe_coef_prepared *P = (hdfe_coef_prepared *)calloc(1, sizeof(*P));
+    if (!P)
+        return NULL;
+    P->G = (int)S->G;
+    P->N = S->N;
+    P->K = K;
+    ST_retcode rc = 0;
+    if (S->G > 2)
+        P->multi = hdfe_coef_multi_prepare(S, K, method, &rc);
+    else
+        rc = hc2_setup(&P->two, S, NULL, K, method);
+    if (rc)
+    {
+        hdfe_coef_prepared_free(P);
+        return NULL;
+    }
+    return P;
+}
+
+HDFE_SolveResult hdfe_coef_partial_out_prepared(const HDFE_State *S, hdfe_coef_prepared *prepared,
+                                                ST_double *data, ST_int N, ST_int K)
+{
+    if (!prepared || !S || !data || N != S->N || N != prepared->N || K != prepared->K ||
+        (int)S->G != prepared->G)
+        return (HDFE_SolveResult){198, 0, 0};
+    if (prepared->G > 2)
+        return hdfe_coef_multi_solve(prepared->multi, S, data, N, K);
+    return hc2_solve(&prepared->two, S, data, N, K);
+}
+
+void hdfe_coef_prepared_free(hdfe_coef_prepared *prepared)
+{
+    if (!prepared)
+        return;
+    /* a context that was never set up is all zeros, and frees nothing */
+    hc2_context_free(&prepared->two);
+    hdfe_coef_multi_free(prepared->multi);
+    free(prepared);
 }
 
 hdfe_coef_plan *hdfe_coef_plan_create(void)

@@ -27,6 +27,8 @@ See [build requirements](PLATFORMS.md) for compiler and library setup and the
 - [Shared ado helpers and error handling](#shared-ado-helpers-and-error-handling)
 - [Bootstrap for the HDFE estimators](#bootstrap-for-the-hdfe-estimators)
 - [Interpolation, splitting, and interval joins](#interpolation-splitting-and-interval-joins)
+- [Geodetic nearest neighbors and distances (cgeonear)](#geodetic-nearest-neighbors-and-distances-cgeonear)
+- [SQL through DuckDB (csql)](#sql-through-duckdb-csql)
 - [Maintaining shared code](#maintaining-shared-code)
 - [Repository conventions](#repository-conventions)
 
@@ -416,6 +418,7 @@ and `c(changed)`. Each ado wrapper runs `nobreak { capture noisily break <impl> 
 - In-place `cwinsor` uses `undo` to copy target values and observation numbers before writing. It restores them after a write error and keeps them in runtime phase 1 until `cwinsor commit` or `cwinsor rollback`.
 - From Stata 16, `crangejoin` reads using data in a temporary frame. Earlier versions use `preserve` because loading the data replaces the master. `write` keeps the master copy loaded by `prepare` in phase 3 and restores it after a partial write failure unless `norestore` is set. `crangejoin rollback` restores it after a later failure; `crangejoin clear` frees it.
 - `cjoinby` follows the same phases (`using`, `plan`, `write`, then `clear` or `rollback`). `plan` reads only the master's keys, so a join that cannot be made fails before anything changes. `write` stages the master observations from the first one that moves (all of them under `update`, which changes shared variables in place) and keeps them in phase 3 when called with `undo`. Besides the `_ctools_undo` record, the ado records the storage type, format, labels and characteristics of the key and shared variables (`_cjoinby_undo_record`), which a join widens or extends, and restores them after the added observations are gone. Before Stata 16 `_cjoinby_impl` itself preserves the master around reading the using data in its place (`restore, preserve` works only in the program that preserved); the test hook `$CTOOLS_cjoinby_noframes` runs that path on a later Stata.
+- `cfuzzyjoin link` and `match` read the master data and then the using file in place of it, inside `preserve`, so an error brings the master back. The plugin keeps the master's columns between calls (`link_master`, `link_using`, `link_layout`, `link_store`; `match_master`, `match_using`, `match_store`); `link` adds its variables to the restored master (an empty dataset of the using variables is appended for their descriptions) and `match` replaces the data with the pairs. `group` is one call that only fills its new variable.
 - `cimport` and `_cio_import` copy the dataset into a temporary frame before replacing it, then restore it with `frame copy ..., replace` if needed. They use `preserve` before Stata 16 or with an empty dataset. Replacing the original frame by renaming another frame triggers a StataNow 19.5 bug: after `import excel`, a later `import spss` can return the wrong string for a user-missing value. Copying the data back avoids that problem.
 - `cbinscatter` leaves the dataset unchanged; `savedata()` builds the bins in a temporary frame.
 
@@ -1484,15 +1487,31 @@ pushes run CI without creating releases or committing plugins.
 
 ## Shared ado helpers and error handling
 
+The helpers that several ado files share (`_ctools_load`, `_ctools_group`,
+`_ctools_hdfe_vce`, ...) live in `src/ado/`, not in the package: Stata's
+`net install` stops with r(640) "package file too long" above 100 files.
+`scripts/sync_release.py` (through `scripts/ado_helpers.py`) appends to each ado
+file in `build/` the helpers it calls, directly or through another helper,
+between `ctools-helpers:begin` and `ctools-helpers:end` markers. There they are
+the file's own subprograms, which Stata finds before any other program of the
+same name, also one left in PLUS by an older ctools. Edit the helper in
+`src/ado/` and run `scripts/sync_release.py`; CI's `sync_release.py --check`
+rejects a stale copy, and `scripts/package_contract.py` a package of more than
+100 files. A helper that only one ado file calls is written in that file.
+`_ctools_hdfe_boot.ado` stays a package file, so its Mata is compiled only when
+a bootstrap runs. Tests that call a helper directly find it in `src/ado`, which
+`validation/support/validate_setup.do` puts on the adopath.
+
 An ado wrapper prepares a Stata command's arguments, calls the plugin and
-returns its results. `_ctools_load.ado` selects the platform's plugin and checks
+returns its results. `_ctools_load` selects the platform's plugin and checks
 its identity. Each wrapper registers that plugin itself because Stata keeps
 registration local to the calling ado. If the platform file is missing, the
 helper may use `ctools.plugin`. A plugin that fails to load stops with the
 loader's own return code and message, after the plugin name, `c(os)`,
 `c(machine_type)` and the path `findfile` found. The plugin's `version` call
 returns its protocol, an integer that `scripts/sync_release.py` stamps from
-`config/release.json` into `src/ctools_version.h` and `_ctools_load.ado`. When
+`config/release.json` into `src/ctools_version.h` and `src/ado/_ctools_load.ado`,
+and so into every ado file's copy of the loader. When
 the plugin reports another protocol, or none, the loader stops with r(9) and asks
 the user to reinstall ctools and restart Stata, before the caller changes data or
 files. Change the protocol in `config/release.json` whenever an ado-to-plugin
@@ -1716,7 +1735,7 @@ section describes the code that maintainers change.
 | `src/<cmd>/<cmd>_boot.{h,c}` | Per command: the retained model, the replicate fit, the `boot_*` and `wild_*` subcommands |
 | `src/ctools_runtime.c` | Phase rules that keep the retained model between plugin calls |
 | `build/_ctools_hdfe_boot.ado` | Shared ado helper: `parse`, `seed`, `uniforms`, `run`, `savefinish`, `wildparse`, `wilddraw`, `wildweights`, `wildclear` |
-| `build/_ctools_wild_table.ado` | The wild table of cppmlhdfe and civreghdfe (creghdfe keeps `_creghdfe_wild_table`) |
+| `src/ado/_ctools_wild_table.ado` | The wild table of cppmlhdfe and civreghdfe, inlined into both (creghdfe keeps `_creghdfe_wild_table`) |
 
 `hdfe_boot.c`, `hdfe_wild.c` and `civreghdfe_wre.c` take arrays and callbacks
 and never call `SF_*`, so native tests compile them alone. All Stata reads and
@@ -2082,6 +2101,144 @@ For repeated timings, use `python3 validation/bench.py commands` and
 `python3 validation/bench.py summarize-commands`.
 They run saved baseline and candidate plugins in separate processes and use a
 clock that cannot jump backward.
+
+## Geodetic nearest neighbors and distances (cgeonear)
+
+`cgeonear` (`src/cgeonear/`) reproduces two of Robert Picard's commands:
+`geonear` when it is given a using file (or `neighbors()`), and `geodist`
+when it is given four coordinates. The wrapper picks the form with one
+`syntax` call before either form parses its own options. The files:
+
+| File | Purpose |
+|------|---------|
+| `cgeo_math.h/c` | The haversine and Vincenty formulas, and the math functions Stata uses |
+| `cgeonear_tree.h/c` | Balanced k-d tree over the neighbor locations in three dimensions |
+| `cgeonear_search.h/c` | The search of every base location; no SPI calls |
+| `cgeonear_locs.c` | Base and neighbor locations as `geonear_prep_locations` makes them |
+| `cgeonear_impl.c` | The plugin calls of the nearest-neighbor form |
+| `cgeonear_dist.c` | The distance form (`cgeonear dist vars` and `cgeonear dist scalar`) |
+
+`cgeonear` makes three or four plugin calls: `base` (in the master data:
+one location per identifier, in identifier order, and each observation's
+location), `using` (in a frame holding the three neighbor variables, or on
+Stata 14 and 15 in place of the preserved master), `compute` (wide form: the
+new variables are written for every observation and everything is freed;
+long form: the pairs are kept) and `store` (long form, into a dataset of that
+many observations that the ado has set up, sorted by baseid, distance and
+nborid on 0 observations so that `set obs` keeps the marker). `clear` frees
+what is held; the runtime refuses calls out of order. Base locations come
+first so that `geonear`'s errors come in its order (base data, then the file,
+then the neighbor data, then r(2001)). The distance form keeps nothing
+between calls; its scalars and macros are named `__cgeonear_d*` and
+`cgeonear_d*`.
+
+**Distances to the last digit.** The kernels repeat `geonear`'s and
+`geodist`'s Stata expressions operation by operation, which needs three facts
+about Stata, measured on StataNow 19.5 for Windows:
+
+- Division binds tighter than multiplication: `a*b/c` is `a*(b/c)`, `a*b*c/d`
+  is `(a*b)*(c/d)`, and `a*b/c/d` is `a*((b/c)/d)`. `x^2` is `x*x`.
+- `tan(x)` is `sin(x)/cos(x)` and `asin(y)` is `atan(y/sqrt(1-y*y))`.
+- `sin()`, `cos()` and `atan2()` are those of the Universal C Runtime
+  (`ucrtbase.dll`), whose results differ from MinGW's in the last bit for 3%
+  (sin, cos) to 33% (tan) of arguments; `atan()` is MinGW's (UCRT's differs in
+  0.1%). `cgeo_math_init()` resolves the UCRT functions at run time.
+  `atan2()` still differs from Stata's in 7 of 100,000 arguments.
+
+Elsewhere the plugin and Stata share the system math library. A missing
+coordinate, a division by zero and a Vincenty failure follow Stata's missing
+values: the kernels branch where Stata's expression would give missing and
+`geodist` would then replace it (both points on the equator), and report
+non-convergence through a status. `geodist` without variables counts its
+iterations one more than it runs them and reports a failure when it converges
+on its last pass; the distance form reproduces both.
+
+**The search.** Every point is placed on the unit sphere (great-circle
+distances) or at its earth-centred position in km (the ellipsoid). The chord
+between two positions is never longer than the shortest path along the
+surface, so the chord bound derived from the k-th nearest exact distance found
+so far (`chord_bound2()`, with margins for rounding and for Vincenty's
+sub-millimetre error; nothing is pruned beyond 15,000 km) keeps every neighbor
+that can still be nearer. Points that pass it get their exact distance, and
+the ranking uses the exact distance, then the location number (the rank of
+the identifier). The result is the one a comparison of every base with every
+neighbor gives, which is also `geonear`'s: its regions keep every neighbor
+that can be nearer than the ones they keep. Long form keeps the longer of two
+prefixes of the ranked candidates (the first `nearcount()`, and every one
+within `within()`; `within()` is 0 by default, so a neighbor at the same place
+is always included) and then cuts at `limit()`.
+
+Bases are searched in parallel in the order of a Morton curve (consecutive
+searches then share the tree's nodes in cache), each with its own heap and
+candidate list; results are written by base, so they do not depend on the
+thread count. The tree is built by median splits on the dimension of the
+largest extent (Hoare partitioning, so runs of co-located points split
+evenly), in OpenMP tasks above 65,536 points per node.
+
+**Tests.** `validation/native/cgeonear_paths.c` compares the search with
+brute force (the same exact distances, every neighbor) for both models and
+forms, `nearcount()`, `within()` (also 0), `limit()`, `ignoreself`,
+co-located points, grids with many equal distances, the poles and the date
+line, trees built in parallel and one or four threads, and pins the kernels
+to `geodist`'s results. `validation/stata/cgeonear.do` compares the two
+forms with `geonear` and `geodist` in its cases `cgeonear` and
+`cgeonear_dist` (results, metadata, sort order, return codes, `e(sample)`,
+messages); `validation/options.py` has a differential case for every option.
+
+## SQL through DuckDB (csql)
+
+`csql` (`src/csql/`) runs SQL in DuckDB. ctools does not link DuckDB: the
+plugin opens the official shared library by its full path at run time and
+resolves the C API functions listed in `csql_api.h` (`CSQL_API_FUNCTIONS`;
+optional ones may be missing in older releases). Types come from DuckDB's
+header, vendored as `src/vendor/duckdb/duckdb.h`. The plugin stays a C build,
+every other command works without DuckDB, and users can point `library()` at
+another release. `csql, install` downloads the release archive the ado pins
+(URL and SHA-256 in `_csql_release`), and `csql install` in the plugin checks
+the checksum, unpacks the library from the `.tar.gz` with libdeflate and moves
+it into place (`csql_install.c`).
+
+One plugin call does all the work and keeps nothing afterwards
+(`csql_impl.c`): it opens a database (in memory unless `database()`),
+registers the table functions, creates the views `stata` and `data`, splits the
+script with `duckdb_extract_statements`, runs every statement, sends the rows
+of the last one to their destination and closes the database, which joins
+DuckDB's threads. No DuckDB thread runs while Stata does.
+
+- **Execution.** Statements run as pending results: the Stata thread executes
+  DuckDB tasks one at a time and, between them, polls Break
+  (`ctools_cancel_requested`, then `duckdb_interrupt`) and serves strL reads.
+- **Tables.** `__csql_stata()` (the data in memory, `csql_stata_scan.c`) and
+  `read_dta()` with a replacement scan for `FROM 'file.dta'`
+  (`csql_dta_scan.c`, formats 113–119, either byte order, file mapped into
+  memory) share `csql_scan.c`. Both push projections down. The ado describes
+  the data in memory (types, formats, labels) in a file the plugin reads
+  (`csql_meta.c`), because the SPI does not report them. Worker threads read
+  numeric and `str#` values through the SPI; strL values are read on the Stata
+  thread, which serves the workers' requests.
+- **Row order.** With `preserve_insertion_order` (DuckDB's default), a plain
+  `SELECT`, filter or join reads a source that reports no batch order on one
+  thread, and the C API has no way to report one. When only one DuckDB thread
+  reads a scan, the scan decodes 32 chunks ahead on a private
+  `ctools_persistent_pool` (created by the call, destroyed after the database
+  closes); OpenMP is not used on DuckDB's threads, whose thread teams would
+  outlive the call. This made a filtered 20M-row `.dta` read 4–5 times faster.
+  Strings from a mapped `.dta` point into the mapping, which outlives the query.
+- **Results.** Loads and `.dta` files use a materialized result, read chunk by
+  chunk through `duckdb_result_get_chunk` so that DuckDB's copy is the only one;
+  listings stream and keep only the rows shown. One parallel pass measures each
+  column (integer range, longest string, NUL bytes) and fixes the Stata type,
+  then `ctools_dta_write`'s producer interface pulls row groups of chunks on its
+  worker threads (`csql_result.c`), and the ado runs `use`. Parquet, CSV and
+  JSON results go through `COPY (<last statement>) TO ...`. Columns of types
+  csql does not store are cast to `VARCHAR` by wrapping the last statement,
+  which `csql_sql_last_statement` finds with the parser's quoting rules.
+- **Metadata.** A result column takes the variable label, format and value
+  label of a source variable whose SQL name it has, from the first source the
+  statements bound.
+
+The suite is `validation/stata/csql.do`; it is skipped where no DuckDB library
+is found (set `CSQL_DUCKDB` to the library file to run it).
 
 ## Maintaining shared code
 

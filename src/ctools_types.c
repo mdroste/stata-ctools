@@ -73,6 +73,22 @@ void stata_data_free(stata_data *data)
     stata_data_init(data);
 }
 
+void stata_data_free_threaded(stata_data *data)
+{
+    if (!data) return;
+    if (data->vars) {
+        const long long n = (long long)data->nvars;
+        const int spread = n > 1 && data->nobs >= CTOOLS_FREE_THREADED_ROWS;
+        (void)spread;
+        /* The whole team, one variable at a time each: a team cut down to
+         * the number of variables would have libgomp end the other threads
+         * and start them again for the next region (0.4 to 2 ms). */
+        #pragma omp parallel for schedule(static, 1) if(spread)
+        for (long long i = 0; i < n; i++) stata_variable_free(&data->vars[i]);
+    }
+    stata_data_free(data);
+}
+
 /* ===========================================================================
    Type Conversion Utilities Implementation
    =========================================================================== */

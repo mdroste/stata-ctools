@@ -306,19 +306,33 @@ def package_stata_contract():
         "src/ctools_version.h": re.findall(
             r'#define CTOOLS_PROTOCOL "(\d+)"', (ROOT / "src/ctools_version.h").read_text()
         ),
-        "build/_ctools_load.ado": re.findall(
-            r'local __ado_protocol "(\d+)"', (ROOT / "build/_ctools_load.ado").read_text()
+        "src/ado/_ctools_load.ado": re.findall(
+            r'local __ado_protocol "(\d+)"', (ROOT / "src/ado/_ctools_load.ado").read_text()
         ),
     }
+    # The package's ado files carry the loader as a subprogram
+    # (scripts/ado_helpers.py): each copy has the same stamp.
+    carriers = 0
+    for path in sorted((ROOT / "build").glob("*.ado")):
+        text = path.read_text(errors="replace")
+        if re.search(r"(?m)^\s*program\s+define\s+_ctools_load\b", text):
+            carriers += 1
+            stamped[f"build/{path.name}"] = re.findall(r'local __ado_protocol "(\d+)"', text)
+    if carriers < len(public):
+        errors.append(f"only {carriers} package ado files carry _ctools_load")
     for name, values in stamped.items():
         if values != [protocol]:
             errors.append(f"{name}: protocol {values}, config/release.json has {protocol}")
     plugin = (ROOT / "src/ctools_plugin.c").read_text()
     if 'SF_macro_save("_ctools_plugin_protocol", CTOOLS_PROTOCOL)' not in plugin:
         errors.append("src/ctools_plugin.c: the version call does not report CTOOLS_PROTOCOL")
-    loader = (ROOT / "build/_ctools_load.ado").read_text()
+    loader = (ROOT / "src/ado/_ctools_load.ado").read_text()
     if '"`ctools_plugin_protocol\'" != "`__ado_protocol\'"' not in loader:
-        errors.append("build/_ctools_load.ado: the plugin protocol is not compared")
+        errors.append("src/ado/_ctools_load.ado: the plugin protocol is not compared")
+    shipped = {p.stem for p in (ROOT / "build").glob("*.ado")}
+    for helper in sorted(p.stem for p in (ROOT / "src/ado").glob("*.ado")):
+        if helper in shipped:
+            errors.append(f"build/{helper}.ado: src/ado helpers are inlined, not shipped")
     assert not errors, "\n".join(errors)
     print(f"PASS Stata 14.1 functions, {len(public)} observation guards, protocol {protocol}")
 
@@ -344,6 +358,47 @@ def package_licenses():
     manifest = (ROOT / "build/ctools.pkg").read_text().splitlines()
     assert "f ctools_licenses.sthlp" in manifest
     print(f"PASS {len(vendor)} vendor licenses in the notices and the installed help file")
+
+
+def package_helpers():
+    """scripts/ado_helpers.py inlines exactly the helpers a file needs, once."""
+    from scripts import ado_helpers
+
+    helpers = {
+        "_t_a": "*! version 9.9.9 x\n*! First helper\nprogram define _t_a\n    _t_b\nend\n",
+        "_t_b": "program define _t_b\n    di 1\nend\nprogram define _t_b_sub\nend\n",
+        "_t_c": "program define _t_c\nend\n",
+    }
+    host = "*! version 9.9.9 x\nprogram define t\n    _t_a\n    local __t_c 1\nend\n"
+    once = ado_helpers.inline("build/t.ado", host, helpers)
+    block = once[once.index(ado_helpers.BEGIN):]
+    # _t_b comes in through _t_a; __t_c is a local, not a call of _t_c
+    assert re.findall(r"program define (\w+)", block) == ["_t_a", "_t_b", "_t_b_sub"], block
+    assert "*! version" not in block and "* First helper" in block, block
+    assert ado_helpers.inline("build/t.ado", once, helpers) == once
+    assert ado_helpers.strip_block(once) == host
+    assert ado_helpers.inline("build/u.ado", "program define u\nend\n", helpers) == (
+        "program define u\nend\n"
+    )
+    clash = host + "program define _t_b_sub\nend\n"
+    package_must_reject_exit(lambda: ado_helpers.inline("build/t.ado", clash, helpers))
+    package_must_reject_exit(lambda: ado_helpers.inline("build/_t_a.ado", host, helpers))
+    # Shipped files: no helper file in build/, and every block is current.
+    files = {f"build/{p.name}": p.read_text() for p in (ROOT / "build").glob("*.ado")}
+    current = dict(files)
+    ado_helpers.inline_all(current)
+    stale = sorted(name for name in files if current[name] != files[name])
+    assert not stale, f"stale helper blocks (run scripts/sync_release.py): {stale}"
+    carried = sum(ado_helpers.BEGIN in text for text in files.values())
+    print(f"PASS helper inlining: closure, idempotence, clashes; {carried} files carry helpers")
+
+
+def package_must_reject_exit(call):
+    try:
+        call()
+    except SystemExit:
+        return
+    raise AssertionError("invalid helper layout was accepted")
 
 
 def package_description():
@@ -690,6 +745,7 @@ def run(out):
         ("package.stata", "validation.checks", "package_stata_contract"),
         ("package.description", "validation.checks", "package_description"),
         ("package.licenses", "validation.checks", "package_licenses"),
+        ("package.helpers", "validation.checks", "package_helpers"),
         ("runner", "validation.check_runner", "test_runner"),
         ("options", "validation.check_runner", "options_main"),
         ("benchmark.evidence", "validation.check_runner", "test_performance"),

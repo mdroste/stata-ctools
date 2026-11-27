@@ -723,6 +723,9 @@ cleanup:
         ctools_release_later(sing.affected[j].left);
     }
     free(sing.affected);
+    for (int j = 0; sing.rows_left && j < sing.G; j++)
+        ctools_release_later(sing.rows_left[j]);
+    free(sing.rows_left);
     free(slopes);
     free(levels);
     free(sizes);

@@ -41,18 +41,14 @@
  * Rows grouped by one effect
  * ======================================================================== */
 
-ST_retcode hdfe_coef_group_rows(ST_int N, const ST_int *levels, ST_int nlev, const ST_int *second,
-                                ST_int nsecond, ST_int **rowptr_out, ST_int **dest_out,
-                                int *sorted_out, int *increasing_out)
+/* The checks of hdfe_coef_group_rows(): 198 when a level (or a level of
+ * second) is out of range; otherwise *unsorted tells whether some level is
+ * below the one before it and *repeats whether, among rows in ascending
+ * order, a level of second fails to increase within a level. */
+static ST_retcode hcc_group_check(ST_int N, const ST_int *levels, ST_int nlev,
+                                  const ST_int *second, ST_int nsecond, int *unsorted_out,
+                                  int *repeats_out)
 {
-    *rowptr_out = NULL;
-    *dest_out = NULL;
-    *sorted_out = 0;
-    if (increasing_out)
-        *increasing_out = 0;
-    if (N < 1 || nlev < 1 || !levels)
-        return 198;
-
     int bad = 0, unsorted = 0, repeats = 0;
 #pragma omp parallel for schedule(static)                                                          \
     reduction(| : bad, unsorted, repeats) if (N > HDFE_COEF_PARALLEL_MIN)
@@ -71,48 +67,44 @@ ST_retcode hdfe_coef_group_rows(ST_int N, const ST_int *levels, ST_int nlev, con
                 repeats |= 1;
         }
     }
-    if (bad)
-        return 198;
+    *unsorted_out = unsorted;
+    *repeats_out = repeats;
+    return bad ? 198 : 0;
+}
 
-    ST_int *rowptr = (ST_int *)calloc((size_t)nlev + 1, sizeof(ST_int));
-    if (!rowptr)
-        return 920;
-
-    if (!unsorted)
-    {
-        /* The first row of every level; a level without rows starts where
-         * the next one does. */
+/* rowptr (nlev + 1) of rows that arrive grouped: the first row of every
+ * level; a level without rows starts where the next one does. */
+static void hcc_group_sorted(ST_int N, const ST_int *levels, ST_int nlev, ST_int *rowptr)
+{
 #pragma omp parallel for schedule(static) if (nlev > HDFE_COEF_PARALLEL_MIN)
-        for (ST_int l = 0; l < nlev; l++)
-            rowptr[l] = -1;
+    for (ST_int l = 0; l < nlev; l++)
+        rowptr[l] = -1;
 #pragma omp parallel for schedule(static) if (N > HDFE_COEF_PARALLEL_MIN)
-        for (ST_int i = 0; i < N; i++)
-        {
-            if (i == 0 || levels[i] != levels[i - 1])
-                rowptr[levels[i] - 1] = i;
-        }
-        rowptr[nlev] = N;
-        for (ST_int l = nlev - 1; l >= 0; l--)
-        {
-            if (rowptr[l] < 0)
-                rowptr[l] = rowptr[l + 1];
-        }
-        *rowptr_out = rowptr;
-        *sorted_out = 1;
-        if (increasing_out)
-            *increasing_out = second && !repeats;
-        return 0;
-    }
-
-    /* Stable counting sort: dest[i] is the position of row i among the rows
-     * ordered by level. Chunks of rows count and place in parallel; the
-     * positions are those of the serial sort whatever the number of chunks. */
-    ST_int *dest = (ST_int *)malloc((size_t)N * sizeof(ST_int));
-    if (!dest)
+    for (ST_int i = 0; i < N; i++)
     {
-        free(rowptr);
-        return 920;
+        if (i == 0 || levels[i] != levels[i - 1])
+            rowptr[levels[i] - 1] = i;
     }
+    rowptr[nlev] = N;
+    for (ST_int l = nlev - 1; l >= 0; l--)
+    {
+        if (rowptr[l] < 0)
+            rowptr[l] = rowptr[l + 1];
+    }
+}
+
+/* Stable counting sort of rows that do not arrive grouped: the position of
+ * every row among the rows ordered by level (*dest_out, N, the caller's to
+ * free) and rowptr (nlev + 1, zeroed by the caller). Chunks of rows count
+ * and place in parallel; the positions are those of the serial sort whatever
+ * the number of chunks. Returns 0 or 920. */
+static ST_retcode hcc_group_positions(ST_int N, const ST_int *levels, ST_int nlev, ST_int *rowptr,
+                                      ST_int **dest_out)
+{
+    ST_int *dest = (ST_int *)malloc((size_t)N * sizeof(ST_int));
+    *dest_out = NULL;
+    if (!dest)
+        return 920;
     int nc = hdfe_coef_threads();
     if (nc > 64)
         nc = 64;
@@ -178,8 +170,392 @@ ST_retcode hdfe_coef_group_rows(ST_int N, const ST_int *levels, ST_int nlev, con
             rowptr[l] = rowptr[l - 1];
         rowptr[0] = 0;
     }
-    *rowptr_out = rowptr;
     *dest_out = dest;
+    return 0;
+}
+
+ST_retcode hdfe_coef_group_rows(ST_int N, const ST_int *levels, ST_int nlev, const ST_int *second,
+                                ST_int nsecond, ST_int **rowptr_out, ST_int **dest_out,
+                                int *sorted_out, int *increasing_out)
+{
+    *rowptr_out = NULL;
+    *dest_out = NULL;
+    *sorted_out = 0;
+    if (increasing_out)
+        *increasing_out = 0;
+    if (N < 1 || nlev < 1 || !levels)
+        return 198;
+
+    int unsorted = 0, repeats = 0;
+    const ST_retcode check =
+        hcc_group_check(N, levels, nlev, second, nsecond, &unsorted, &repeats);
+    if (check)
+        return check;
+
+    ST_int *rowptr = (ST_int *)calloc((size_t)nlev + 1, sizeof(ST_int));
+    if (!rowptr)
+        return 920;
+
+    if (!unsorted)
+    {
+        hcc_group_sorted(N, levels, nlev, rowptr);
+        *rowptr_out = rowptr;
+        *sorted_out = 1;
+        if (increasing_out)
+            *increasing_out = second && !repeats;
+        return 0;
+    }
+
+    const ST_retcode placed = hcc_group_positions(N, levels, nlev, rowptr, dest_out);
+    if (placed)
+    {
+        free(rowptr);
+        return placed;
+    }
+    *rowptr_out = rowptr;
+    return 0;
+}
+
+/* ========================================================================
+ * Rows grouped by one effect, their fields moved along
+ * ======================================================================== */
+
+/* Ranges of levels that the rows are dealt into, at most, and the rows aimed
+ * for in one: a range is put in order within a window of that many rows,
+ * which should stay in the second-level cache, while every thread that deals
+ * keeps a line of each destination open per range. */
+#define HDFE_COEF_MOVE_PARTS 512
+#define HDFE_COEF_MOVE_PART_ROWS 16384
+
+/* Fewer rows than this are placed directly through their positions: the
+ * destinations then stay in the cache as they are, and dealing first only
+ * adds a pass (measured with 16 threads: the two even at 2 million rows,
+ * dealing ahead from 4 million; with a level for every ten rows it is ahead
+ * at 2 million already). */
+#define HDFE_COEF_MOVE_MIN_ROWS ((ST_int)1 << 21)
+
+/* The fields of row i to position at */
+HDFE_COEF_KERNEL void hcc_move_row(const hdfe_coef_fields *F, ST_int i, ST_int at)
+{
+    for (int a = 0; a < F->nint; a++)
+        F->idst[a][at] = F->isrc[a][i];
+    if (F->want_order)
+        F->order[at] = i;
+    if (F->dsrc)
+        F->ddst[at] = F->dsrc[i];
+}
+
+/*
+ * The first write to every page of a block that malloc() just returned, a
+ * stretch of the block per thread. The system maps a page at its first
+ * write, and where the threads that deal reach new pages of several hundred
+ * destinations in no order, those faults hold one another up: dealing ten
+ * million rows into two fresh arrays took 9.1 ms with 16 threads against 4.7
+ * ms into arrays written before, while this pass over them costs 1 ms
+ * (Windows 11). The values written are overwritten.
+ */
+static void hcc_first_touch(void *block, size_t bytes)
+{
+    char *RESTRICT p = (char *)block;
+    const long long pages = (long long)(bytes >> 12);
+    if (!p || !bytes)
+        return;
+#pragma omp parallel for schedule(static) if (bytes > ((size_t)4 << 20))
+    for (long long g = 0; g < pages; g++)
+        p[(size_t)g << 12] = 0;
+    p[bytes - 1] = 0;
+}
+
+/* x[0..n) rearranged: the value at j goes to at[j], a permutation of 0..n-1.
+ * scratch holds n values. */
+HDFE_COEF_KERNEL void hcc_move_ints(ST_int *RESTRICT x, const ST_int *RESTRICT at, ST_int n,
+                                    ST_int *RESTRICT scratch)
+{
+    memcpy(scratch, x, (size_t)n * sizeof(ST_int));
+    for (ST_int j = 0; j < n; j++)
+        x[at[j]] = scratch[j];
+}
+
+HDFE_COEF_KERNEL void hcc_move_doubles(ST_double *RESTRICT x, const ST_int *RESTRICT at, ST_int n,
+                                       ST_double *RESTRICT scratch)
+{
+    memcpy(scratch, x, (size_t)n * sizeof(ST_double));
+    for (ST_int j = 0; j < n; j++)
+        x[at[j]] = scratch[j];
+}
+
+static void hcc_move_free(hdfe_coef_fields *F)
+{
+    for (int a = 0; a < HDFE_COEF_MAX_EFFECTS; a++)
+    {
+        free(F->idst[a]);
+        F->idst[a] = NULL;
+    }
+    free(F->ddst);
+    free(F->order);
+    F->ddst = NULL;
+    F->order = NULL;
+}
+
+ST_retcode hdfe_coef_group_move(ST_int N, const ST_int *levels, ST_int nlev, const ST_int *second,
+                                ST_int nsecond, hdfe_coef_fields *F, ST_int **rowptr_out,
+                                int *sorted_out, int *increasing_out)
+{
+    *rowptr_out = NULL;
+    *sorted_out = 0;
+    if (increasing_out)
+        *increasing_out = 0;
+    for (int a = 0; a < HDFE_COEF_MAX_EFFECTS; a++)
+        F->idst[a] = NULL;
+    F->ddst = NULL;
+    F->order = NULL;
+    if (N < 1 || nlev < 1 || !levels || F->nint < 0 || F->nint > HDFE_COEF_MAX_EFFECTS)
+        return 198;
+
+    int unsorted = 0, repeats = 0;
+    const ST_retcode check =
+        hcc_group_check(N, levels, nlev, second, nsecond, &unsorted, &repeats);
+    if (check)
+        return check;
+
+    ST_int *rowptr = (ST_int *)calloc((size_t)nlev + 1, sizeof(ST_int));
+    if (!rowptr)
+        return 920;
+    if (!unsorted)
+    {
+        hcc_group_sorted(N, levels, nlev, rowptr);
+        *rowptr_out = rowptr;
+        *sorted_out = 1;
+        if (increasing_out)
+            *increasing_out = second && !repeats;
+        return 0;
+    }
+
+    const int nint = F->nint;
+    int ok = 1;
+    for (int a = 0; a < nint; a++)
+    {
+        F->idst[a] = (ST_int *)malloc((size_t)N * sizeof(ST_int));
+        ok &= F->idst[a] != NULL;
+    }
+    if (F->dsrc)
+    {
+        F->ddst = (ST_double *)malloc((size_t)N * sizeof(ST_double));
+        ok &= F->ddst != NULL;
+    }
+    if (F->want_order)
+    {
+        F->order = (ST_int *)malloc((size_t)N * sizeof(ST_int));
+        ok &= F->order != NULL;
+    }
+    if (!ok)
+    {
+        free(rowptr);
+        hcc_move_free(F);
+        return 920;
+    }
+    /* a copy that the loops below can keep in registers */
+    const hdfe_coef_fields L = *F;
+
+    if (N < HDFE_COEF_MOVE_MIN_ROWS)
+    {
+        ST_int *dest = NULL;
+        const ST_retcode placed = hcc_group_positions(N, levels, nlev, rowptr, &dest);
+        if (placed)
+        {
+            free(rowptr);
+            hcc_move_free(F);
+            return placed;
+        }
+#pragma omp parallel for schedule(static) if (N > HDFE_COEF_PARALLEL_MIN)
+        for (ST_int i = 0; i < N; i++)
+            hcc_move_row(&L, i, dest[i]);
+        free(dest);
+        *rowptr_out = rowptr;
+        return 0;
+    }
+
+    int nc = hdfe_coef_threads();
+    if (nc > 64)
+        nc = 64;
+
+    /* The ranges: the levels l with the same (l - 1) >> shift */
+    ST_int want = N / HDFE_COEF_MOVE_PART_ROWS;
+    if (want > HDFE_COEF_MOVE_PARTS)
+        want = HDFE_COEF_MOVE_PARTS;
+    if (want < 1)
+        want = 1;
+    int shift = 0;
+    while (((nlev - 1) >> shift) + 1 > want)
+        shift++;
+    const ST_int P = ((nlev - 1) >> shift) + 1;
+    const ST_int span = (ST_int)1 << shift;
+    /* per chunk of rows, its rows of every range; the chunks' a few lines apart */
+    const size_t stride = (size_t)P + 32;
+    ST_int *cnt = (ST_int *)calloc((size_t)nc * stride, sizeof(ST_int));
+    ST_int *tstart = (ST_int *)malloc(((size_t)P + 1) * sizeof(ST_int));
+    /* the level of every dealt row, unless a range is one level */
+    ST_int *tlev = shift > 0 ? (ST_int *)malloc((size_t)N * sizeof(ST_int)) : NULL;
+    if (!cnt || !tstart || (shift > 0 && !tlev))
+    {
+        /* No memory to deal with: a counting sort that places every row
+         * directly, in row order. */
+        free(cnt);
+        free(tstart);
+        free(tlev);
+        for (ST_int i = 0; i < N; i++)
+            rowptr[levels[i]]++;
+        for (ST_int l = 0; l < nlev; l++)
+            rowptr[l + 1] += rowptr[l];
+        /* rowptr[l] walks through level l's positions, then is restored */
+        for (ST_int i = 0; i < N; i++)
+            hcc_move_row(&L, i, rowptr[levels[i] - 1]++);
+        for (ST_int l = nlev - 1; l > 0; l--)
+            rowptr[l] = rowptr[l - 1];
+        rowptr[0] = 0;
+        *rowptr_out = rowptr;
+        return 0;
+    }
+
+    for (int a = 0; a < nint; a++)
+        hcc_first_touch(L.idst[a], (size_t)N * sizeof(ST_int));
+    hcc_first_touch(L.order, (size_t)N * sizeof(ST_int));
+    hcc_first_touch(L.ddst, (size_t)N * sizeof(ST_double));
+    hcc_first_touch(tlev, (size_t)N * sizeof(ST_int));
+#pragma omp parallel for schedule(static, 1)
+    for (int c = 0; c < nc; c++)
+    {
+        ST_int *RESTRICT h = cnt + (size_t)c * stride;
+        const ST_int i0 = (ST_int)((long long)N * c / nc);
+        const ST_int i1 = (ST_int)((long long)N * (c + 1) / nc);
+        for (ST_int i = i0; i < i1; i++)
+            h[(levels[i] - 1) >> shift]++;
+    }
+    /* A range's rows lie together, chunk after chunk: in row order, and
+     * where they will stay, since the ranges follow one another by level */
+    {
+        ST_int run = 0;
+        for (ST_int p = 0; p < P; p++)
+        {
+            tstart[p] = run;
+            for (int c = 0; c < nc; c++)
+            {
+                ST_int *cell = &cnt[(size_t)c * stride + (size_t)p];
+                const ST_int count = *cell;
+                *cell = run;
+                run += count;
+            }
+        }
+        tstart[P] = N;
+    }
+#pragma omp parallel for schedule(static, 1)
+    for (int c = 0; c < nc; c++)
+    {
+        ST_int *RESTRICT cur = cnt + (size_t)c * stride;
+        const ST_int i0 = (ST_int)((long long)N * c / nc);
+        const ST_int i1 = (ST_int)((long long)N * (c + 1) / nc);
+        if (tlev)
+        {
+            for (ST_int i = i0; i < i1; i++)
+            {
+                const ST_int l = levels[i];
+                const ST_int at = cur[(l - 1) >> shift]++;
+                tlev[at] = l;
+                hcc_move_row(&L, i, at);
+            }
+        }
+        else
+        {
+            for (ST_int i = i0; i < i1; i++)
+                hcc_move_row(&L, i, cur[levels[i] - 1]++);
+        }
+    }
+    /* Every range by itself: the rows of each of its levels counted, then
+     * every field rearranged within the range's window, a row going behind
+     * the rows of its level dealt before it, which are the rows before it.
+     * A range's window and its levels' entries of rowptr are its own. */
+    int failed = 0;
+    if (!tlev)
+    {
+        for (ST_int l = 0; l < nlev; l++)
+            rowptr[l] = tstart[l];
+    }
+    else
+    {
+#pragma omp parallel reduction(| : failed)
+        {
+            ST_int *RESTRICT cur = (ST_int *)malloc((size_t)span * sizeof(ST_int));
+            ST_int *RESTRICT at = NULL;
+            ST_double *RESTRICT scratch = NULL;
+            ST_int room = 0;
+            if (!cur)
+                failed |= 1;
+#pragma omp for schedule(dynamic, 1)
+            for (ST_int p = 0; p < P; p++)
+            {
+                if (failed)
+                    continue;
+                const ST_int l0 = (ST_int)((long long)p << shift);
+                const ST_int nl = nlev - l0 < span ? nlev - l0 : span;
+                const ST_int r0 = tstart[p], n = tstart[p + 1] - r0;
+                if (nl == 1)
+                {
+                    rowptr[l0] = r0;
+                    continue;
+                }
+                if (n > room)
+                {
+                    /* a window larger than any before (levels of very
+                     * unequal size make some far larger than aimed for) */
+                    free(at);
+                    free(scratch);
+                    at = (ST_int *)malloc((size_t)n * sizeof(ST_int));
+                    scratch = (ST_double *)malloc((size_t)n * sizeof(ST_double));
+                    room = n;
+                    if (!at || !scratch)
+                    {
+                        room = 0;
+                        failed |= 1;
+                        continue;
+                    }
+                }
+                const ST_int *RESTRICT lv = tlev + r0;
+                memset(cur, 0, (size_t)nl * sizeof(ST_int));
+                for (ST_int j = 0; j < n; j++)
+                    cur[lv[j] - 1 - l0]++;
+                ST_int pos = 0;
+                for (ST_int j = 0; j < nl; j++)
+                {
+                    const ST_int count = cur[j];
+                    rowptr[l0 + j] = r0 + pos;
+                    cur[j] = pos;
+                    pos += count;
+                }
+                for (ST_int j = 0; j < n; j++)
+                    at[j] = cur[lv[j] - 1 - l0]++;
+                for (int a = 0; a < nint; a++)
+                    hcc_move_ints(L.idst[a] + r0, at, n, (ST_int *)scratch);
+                if (L.order)
+                    hcc_move_ints(L.order + r0, at, n, (ST_int *)scratch);
+                if (L.ddst)
+                    hcc_move_doubles(L.ddst + r0, at, n, scratch);
+            }
+            free(cur);
+            free(at);
+            free(scratch);
+        }
+    }
+    rowptr[nlev] = N;
+    free(cnt);
+    free(tstart);
+    free(tlev);
+    if (failed)
+    {
+        free(rowptr);
+        hcc_move_free(F);
+        return 920;
+    }
+    *rowptr_out = rowptr;
     return 0;
 }
 
@@ -216,39 +592,28 @@ ST_retcode hdfe_crosstab_build(hdfe_crosstab *C, ST_int N, const ST_int *row_lev
     if (!col_levels || ncol < 1)
         return 198;
 
-    ST_int *dest = NULL, *len = NULL, *newptr = NULL, *mcol = NULL;
+    ST_int *len = NULL, *newptr = NULL, *mcol = NULL;
     ST_double *mval = NULL;
     int sorted = 0, increasing = 0;
-    ST_retcode rc = hdfe_coef_group_rows(N, row_levels, nrow, col_levels, ncol, &C->rowptr, &dest,
-                                         &sorted, &increasing);
+    /* The rows in the order of the row effect */
+    hdfe_coef_fields moved;
+    memset(&moved, 0, sizeof(moved));
+    moved.nint = 1;
+    moved.isrc[0] = col_levels;
+    moved.dsrc = w;
+    ST_retcode rc = hdfe_coef_group_move(N, row_levels, nrow, col_levels, ncol, &moved,
+                                         &C->rowptr, &sorted, &increasing);
     if (rc)
         return rc;
     C->sorted = sorted;
     const int par = N > HDFE_COEF_PARALLEL_MIN;
 
-    /* The rows in the order of the row effect */
     const ST_int *src_col = col_levels;
     const ST_double *src_val = w;
     if (!sorted)
     {
-        C->col_own = (ST_int *)malloc((size_t)N * sizeof(ST_int));
-        C->val_own = w ? (ST_double *)malloc((size_t)N * sizeof(ST_double)) : NULL;
-        if (!C->col_own || (w && !C->val_own))
-        {
-            rc = 920;
-            goto fail;
-        }
-        ST_int *col_own = C->col_own;
-        ST_double *val_own = C->val_own;
-#pragma omp parallel for schedule(static) if (par)
-        for (ST_int i = 0; i < N; i++)
-        {
-            col_own[dest[i]] = col_levels[i];
-            if (w)
-                val_own[dest[i]] = w[i];
-        }
-        free(dest);
-        dest = NULL;
+        C->col_own = moved.idst[0];
+        C->val_own = moved.ddst;
         src_col = C->col_own;
         src_val = C->val_own;
     }
@@ -376,7 +741,6 @@ ST_retcode hdfe_crosstab_build(hdfe_crosstab *C, ST_int N, const ST_int *row_lev
     return 0;
 
 fail:
-    free(dest);
     free(len);
     free(newptr);
     free(mcol);
@@ -446,35 +810,26 @@ ST_retcode hdfe_crossplan_build(hdfe_crossplan *P, ST_int N, const ST_int *row_l
     if (!col_levels || ncol < 1)
         return 198;
 
-    ST_int *dest = NULL, *len = NULL;
+    ST_int *len = NULL;
     int sorted = 0, increasing = 0;
-    ST_retcode rc = hdfe_coef_group_rows(N, row_levels, nrow, col_levels, ncol, &P->grouprow,
-                                         &dest, &sorted, &increasing);
+    /* the rows in the order of the row effect, and where each came from */
+    hdfe_coef_fields moved;
+    memset(&moved, 0, sizeof(moved));
+    moved.nint = 1;
+    moved.isrc[0] = col_levels;
+    moved.want_order = 1;
+    ST_retcode rc = hdfe_coef_group_move(N, row_levels, nrow, col_levels, ncol, &moved,
+                                         &P->grouprow, &sorted, &increasing);
     if (rc)
         return rc;
     C->sorted = sorted;
     const int par = N > HDFE_COEF_PARALLEL_MIN;
 
-    /* the rows in the order of the row effect, and where each came from */
     const ST_int *src_col = col_levels;
     if (!sorted)
     {
-        P->order = (ST_int *)malloc((size_t)N * sizeof(ST_int));
-        P->col = (ST_int *)malloc((size_t)N * sizeof(ST_int));
-        if (!P->order || !P->col)
-        {
-            rc = 920;
-            goto fail;
-        }
-        ST_int *order = P->order, *col_own = P->col;
-#pragma omp parallel for schedule(static) if (par)
-        for (ST_int i = 0; i < N; i++)
-        {
-            order[dest[i]] = i;
-            col_own[dest[i]] = col_levels[i];
-        }
-        free(dest);
-        dest = NULL;
+        P->order = moved.order;
+        P->col = moved.idst[0];
         src_col = P->col;
     }
     C->rowptr = P->grouprow;
@@ -628,7 +983,6 @@ ST_retcode hdfe_crossplan_build(hdfe_crossplan *P, ST_int N, const ST_int *row_l
     return 0;
 
 fail:
-    free(dest);
     free(len);
     hdfe_crossplan_free(P);
     return rc;

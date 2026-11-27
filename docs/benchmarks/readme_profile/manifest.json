@@ -18,7 +18,8 @@
   ],
   "observation_limits": {
     "qreg": 10000000,
-    "ppmlhdfe": 10000000
+    "ppmlhdfe": 10000000,
+    "geonear": 10000000
   },
   "variables": 20,
   "warmups": 0,
@@ -753,10 +754,10 @@
   "basic_check_failures": 0,
   "result_files": {
     "timings.csv": {
-      "sha256": "a3acb4ca626e6e12becdfa558068c560bec283da81b96bc6e20eba789bc90b05"
+      "sha256": "98497aa44b69eea171dbc342f60a2d8d9b6c3995e46dcae9c6ca08de98aa0fa7"
     },
     "results.md": {
-      "sha256": "8b4a1af0442a5d45aafab89dab2e2c48a3ad8fb964b0aa0c91cd811594f3adb6"
+      "sha256": "deb2502d44dbdfad535b5cacc89f46d5cbc238633cfb095014d6b1921da93814"
     }
   },
   "ctools_threads_note": "ctools commands ran without threads(); the thread policy resolved to 16 (automatic: usable CPUs, at most 16). Stata references used set processors 4, the license limit; fereg and feppml used their own default thread count.",
@@ -1449,6 +1450,227 @@
         }
       },
       "completed_calls": 12,
+      "command_failures": 0,
+      "basic_check_failures": 0
+    },
+    "geonear": {
+      "note": "geonear was added to the profile after the shared run and measured on its own, with geodist (see docs/performance/README.md, single-command refresh); these values override the shared fields for this comparison.",
+      "date": "2026-11-26",
+      "cpu": "AMD Ryzen 9 9950X 16-Core Processor",
+      "os": "Windows 11 Pro 10.0.26200",
+      "stata": "StataNow/MP 19.5 for Windows (64-bit x86-64), revision 14 Oct 2026",
+      "stata_processors": 4,
+      "ctools_threads": 16,
+      "observations": [
+        1000000,
+        10000000
+      ],
+      "variables": 20,
+      "workload": "geonear id z noise using a file of N/200 places (one per firm, at the coordinates z and noise of its first observation), neighbors(firm place_lat place_lon): the nearest place of every observation, in wide form on the sphere; coordinates are degrees within a few of 0.",
+      "repetitions": 3,
+      "repetition_note": "3 passes over the sizes, each a separate set of sessions that ran only geonear and geodist; a published time is the smallest of the passes",
+      "git_head_context": "fdcbc70d4670ba3ceee529d1220650b177dff503",
+      "source_identity": "git archive of fdcbc70d4670ba3ceee529d1220650b177dff503 plus the uncommitted cgeonear sources (src/cgeonear and its registration lines) and build/cgeonear.ado; the measured plugin and wrapper are identified by the hashes below",
+      "build_note": "Windows x86-64 OpenMP plugin built locally from that tree with MSYS2 MINGW64 gcc using the `make windows` flags; Stata loaded it through CTOOLS_TEST_PLUGIN_DIR, ahead of the repository's build/.",
+      "execution_note": "Each size ran in one batch Stata session: the test data was made once, then geonear, cgeonear, geodist and cgeonear again (distance form) ran in turn, each on a fresh copy of the data. The run did not wait for an idle machine: other processes (Stata sessions and compilations) used 1599% of one logical processor on average (per session below, sampled every 5 s; percentages are of one logical processor).",
+      "checks": "after each command: the observation count, 22 variables, and a nonmissing nid and km_to_nid in every observation",
+      "sessions": {
+        "geo6_1000000": {
+          "wall": 52.5,
+          "samples": 10,
+          "max_other_cpu_percent": 2039,
+          "mean_other_cpu_percent": 1390
+        },
+        "geo6_10000000": {
+          "wall": 535.8,
+          "samples": 106,
+          "max_other_cpu_percent": 3300,
+          "mean_other_cpu_percent": 1476
+        },
+        "geo6_25000000": {
+          "wall": 212.0,
+          "samples": 42,
+          "max_other_cpu_percent": 2991,
+          "mean_other_cpu_percent": 2447
+        },
+        "geo7_1000000": {
+          "wall": 58.8,
+          "samples": 11,
+          "max_other_cpu_percent": 2561,
+          "mean_other_cpu_percent": 1911
+        },
+        "geo7_10000000": {
+          "wall": 609.2,
+          "samples": 121,
+          "max_other_cpu_percent": 3106,
+          "mean_other_cpu_percent": 2358
+        },
+        "geo7_25000000": {
+          "wall": 126.9,
+          "samples": 25,
+          "max_other_cpu_percent": 1727,
+          "mean_other_cpu_percent": 684
+        },
+        "geo8_1000000": {
+          "wall": 43.8,
+          "samples": 8,
+          "max_other_cpu_percent": 990,
+          "mean_other_cpu_percent": 722
+        },
+        "geo8_10000000": {
+          "wall": 410.3,
+          "samples": 81,
+          "max_other_cpu_percent": 958,
+          "mean_other_cpu_percent": 610
+        },
+        "geo8_25000000": {
+          "wall": 144.2,
+          "samples": 28,
+          "max_other_cpu_percent": 2951,
+          "mean_other_cpu_percent": 1393
+        }
+      },
+      "files": {
+        "measured-build/ctools_windows.plugin": {
+          "sha256": "e0a4b7ce0d78dc55b1a2699a7a1176f2b1a298f469b2c91892153680d923d5ec"
+        },
+        "measured-build/cgeonear.ado": {
+          "sha256": "2dd771459b17de8f506da6175f560b4843e2f2643d6e317b05ceeb00b510b89e",
+          "version_comments": [
+            "*! version 1.3.2 20261124 github.com/mdroste/stata-ctools",
+            "*! C-accelerated nearest neighbors and geodetic distances (ctools)",
+            "*! original: geonear 2.0.3 (September 4, 2019) by Robert Picard",
+            "*! original: geodist 1.1.0 (June 18, 2019) by Robert Picard",
+            "*! original: see help cgeonear for details"
+          ]
+        },
+        "validation/performance/profiles.do": {
+          "sha256": "9e07a928a2415e242cb0b25cd5c51fa6babe3af663f938b67f7a0bb5580ca6b0"
+        },
+        "generated-workload": {
+          "sha256": "54460a1e9c98dec64df7faea95cf4a44b3f91d38503d755f3f0e219949ae7bbc"
+        }
+      },
+      "reference_files": {
+        "C:/Users/Mike/ado/plus/g/geonear.ado": {
+          "sha256": "70aa47f8d5ba1833a6920a07a257242d0acfb720a213cd92f0a27a19dce53990",
+          "version_comments": [
+            "*! version 2.0.3  04sep2019 Robert Picard, robertpicard@gmail.com"
+          ]
+        }
+      },
+      "completed_calls": 12,
+      "command_failures": 0,
+      "basic_check_failures": 0
+    },
+    "geodist": {
+      "note": "geodist was added to the profile after the shared run and measured on its own, with geonear (see docs/performance/README.md, single-command refresh); these values override the shared fields for this comparison.",
+      "date": "2026-11-26",
+      "cpu": "AMD Ryzen 9 9950X 16-Core Processor",
+      "os": "Windows 11 Pro 10.0.26200",
+      "stata": "StataNow/MP 19.5 for Windows (64-bit x86-64), revision 14 Oct 2026",
+      "stata_processors": 4,
+      "ctools_threads": 16,
+      "observations": [
+        1000000,
+        10000000,
+        25000000
+      ],
+      "variables": 20,
+      "workload": "geodist z noise x2 x3, gen(result): one distance per observation on the WGS 1984 ellipsoid (Vincenty), coordinates in degrees within a few of 0.",
+      "repetitions": 3,
+      "repetition_note": "3 passes over the sizes, each a separate set of sessions that ran only geonear and geodist; a published time is the smallest of the passes",
+      "git_head_context": "fdcbc70d4670ba3ceee529d1220650b177dff503",
+      "source_identity": "git archive of fdcbc70d4670ba3ceee529d1220650b177dff503 plus the uncommitted cgeonear sources (src/cgeonear and its registration lines) and build/cgeonear.ado; the measured plugin and wrapper are identified by the hashes below",
+      "build_note": "Windows x86-64 OpenMP plugin built locally from that tree with MSYS2 MINGW64 gcc using the `make windows` flags; Stata loaded it through CTOOLS_TEST_PLUGIN_DIR, ahead of the repository's build/.",
+      "execution_note": "Each size ran in one batch Stata session: the test data was made once, then geonear, cgeonear, geodist and cgeonear again (distance form) ran in turn, each on a fresh copy of the data. The run did not wait for an idle machine: other processes (Stata sessions and compilations) used 1599% of one logical processor on average (per session below, sampled every 5 s; percentages are of one logical processor).",
+      "checks": "after each command: the observation count, 21 variables, and a nonmissing result in every observation",
+      "sessions": {
+        "geo6_1000000": {
+          "wall": 52.5,
+          "samples": 10,
+          "max_other_cpu_percent": 2039,
+          "mean_other_cpu_percent": 1390
+        },
+        "geo6_10000000": {
+          "wall": 535.8,
+          "samples": 106,
+          "max_other_cpu_percent": 3300,
+          "mean_other_cpu_percent": 1476
+        },
+        "geo6_25000000": {
+          "wall": 212.0,
+          "samples": 42,
+          "max_other_cpu_percent": 2991,
+          "mean_other_cpu_percent": 2447
+        },
+        "geo7_1000000": {
+          "wall": 58.8,
+          "samples": 11,
+          "max_other_cpu_percent": 2561,
+          "mean_other_cpu_percent": 1911
+        },
+        "geo7_10000000": {
+          "wall": 609.2,
+          "samples": 121,
+          "max_other_cpu_percent": 3106,
+          "mean_other_cpu_percent": 2358
+        },
+        "geo7_25000000": {
+          "wall": 126.9,
+          "samples": 25,
+          "max_other_cpu_percent": 1727,
+          "mean_other_cpu_percent": 684
+        },
+        "geo8_1000000": {
+          "wall": 43.8,
+          "samples": 8,
+          "max_other_cpu_percent": 990,
+          "mean_other_cpu_percent": 722
+        },
+        "geo8_10000000": {
+          "wall": 410.3,
+          "samples": 81,
+          "max_other_cpu_percent": 958,
+          "mean_other_cpu_percent": 610
+        },
+        "geo8_25000000": {
+          "wall": 144.2,
+          "samples": 28,
+          "max_other_cpu_percent": 2951,
+          "mean_other_cpu_percent": 1393
+        }
+      },
+      "files": {
+        "measured-build/ctools_windows.plugin": {
+          "sha256": "e0a4b7ce0d78dc55b1a2699a7a1176f2b1a298f469b2c91892153680d923d5ec"
+        },
+        "measured-build/cgeonear.ado": {
+          "sha256": "2dd771459b17de8f506da6175f560b4843e2f2643d6e317b05ceeb00b510b89e",
+          "version_comments": [
+            "*! version 1.3.2 20261124 github.com/mdroste/stata-ctools",
+            "*! C-accelerated nearest neighbors and geodetic distances (ctools)",
+            "*! original: geonear 2.0.3 (September 4, 2019) by Robert Picard",
+            "*! original: geodist 1.1.0 (June 18, 2019) by Robert Picard",
+            "*! original: see help cgeonear for details"
+          ]
+        },
+        "validation/performance/profiles.do": {
+          "sha256": "9e07a928a2415e242cb0b25cd5c51fa6babe3af663f938b67f7a0bb5580ca6b0"
+        },
+        "generated-workload": {
+          "sha256": "54460a1e9c98dec64df7faea95cf4a44b3f91d38503d755f3f0e219949ae7bbc"
+        }
+      },
+      "reference_files": {
+        "C:/Users/Mike/ado/plus/g/geodist.ado": {
+          "sha256": "8e7fb2c90692c3b49ee21489331853cd631537e64019f1d5ef92957cdb03c402",
+          "version_comments": [
+            "*! version 1.1.0  18jun2019 Robert Picard, picard@netbox.com"
+          ]
+        }
+      },
+      "completed_calls": 18,
       "command_failures": 0,
       "basic_check_failures": 0
     }

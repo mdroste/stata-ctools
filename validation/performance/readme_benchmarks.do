@@ -13,9 +13,9 @@
 *     pairs(names)    comparisons to run, named by the Stata command; default all:
 *                     export import sort merge joinby sample bsample encode
 *                     decode destring distinct ipolate cipolate split rangejoin
-*                     winsor winsor2 rangestat binscatter binscatter2 binsreg
-*                     reghdfe fereg ivreghdfe ppmlhdfe feppml hdfe psmatch2 qreg
-*                     (winsor is gstats winsor). A ctools command with several
+*                     geonear geodist winsor winsor2 rangestat binscatter
+*                     binscatter2 binsreg reghdfe fereg ivreghdfe ppmlhdfe
+*                     feppml hdfe psmatch2 qreg (winsor is gstats winsor). A ctools command with several
 *                     Stata counterparts has one comparison for each: cwinsor
 *                     (winsor, winsor2), cbinscatter (binscatter, binscatter2,
 *                     binsreg), creghdfe (reghdfe, fereg), cppmlhdfe (ppmlhdfe,
@@ -28,8 +28,8 @@
 * The timed workloads are the profile_readme block of profiles.do, which
 * produced the published numbers; this file adds checks and a report.
 *
-* qreg and ppmlhdfe take minutes per run at 25M observations, so those two
-* comparisons are not run above 10M observations.
+* qreg, ppmlhdfe and geonear take minutes per run at 25M observations, so
+* those comparisons are not run above 10M observations.
 *
 * Run time: a comparison times only the command itself. Making the test data
 * for each size, reloading it before each command and checking each result are
@@ -54,10 +54,11 @@
 
 * Messages print with noisily; quietly blocks keep the code out of the output.
 quietly {
-    local allpairs "export import sort merge joinby sample bsample encode decode destring distinct ipolate cipolate split rangejoin winsor winsor2 rangestat binscatter binscatter2 binsreg reghdfe fereg ivreghdfe ppmlhdfe feppml hdfe psmatch2 qreg"
+    local allpairs "export import sort merge joinby sample bsample encode decode destring distinct ipolate cipolate split rangejoin geonear geodist winsor winsor2 rangestat binscatter binscatter2 binsreg reghdfe fereg ivreghdfe ppmlhdfe feppml hdfe psmatch2 qreg"
     * Largest size at which these comparisons run, as in profiles.do.
     local limit_qreg 10000000
     local limit_ppmlhdfe 10000000
+    local limit_geonear 10000000
 
     capture confirm file "validation/performance/profiles.do"
     if _rc {
@@ -144,6 +145,8 @@ quietly {
     local need_distinct    distinct
     local need_cipolate    cipolate
     local need_rangejoin   rangejoin rangestat
+    local need_geonear     geonear
+    local need_geodist     geodist
     local need_winsor      gstats
     local need_winsor2     winsor2
     local need_rangestat   rangestat

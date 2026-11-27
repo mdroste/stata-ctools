@@ -7,6 +7,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include <math.h>
 #include <stdio.h>
 #include "stplugin.h"
@@ -27,15 +28,6 @@ static int resid_threads(void)
     return nt > 1 ? nt : 1;
 #else
     return 1;
-#endif
-}
-
-static int resid_thread_id(void)
-{
-#ifdef _OPENMP
-    return omp_get_thread_num();
-#else
-    return 0;
 #endif
 }
 
@@ -132,21 +124,32 @@ static ST_retcode compute_xtx_weighted(
     memset(XtX, 0, (size_t)K * (size_t)K * sizeof(ST_double));
 
     /* Compute X'WX: element (j, k) sums (w_i x_ij) x_ik over the
-     * observations in order; the rows of the upper triangle are independent */
-    #pragma omp parallel for schedule(dynamic) private(i, k, w, xj) if (K > 1 && (size_t)N * (size_t)K > 200000)
-    for (j = 0; j < K; j++) {
-        const ST_double *col_j = X + (size_t)j * N;
-        for (k = j; k < K; k++) {
-            const ST_double *col_k = X + (size_t)k * N;
-            ST_double acc = 0.0;
-            for (i = 0; i < N; i++) {
-                w = (weights != NULL) ? weights[i] : 1.0;
-                xj = col_j[i];
-                ST_double wxj = w * xj;
-                acc += wxj * col_k[i];
-            }
-            XtX[(size_t)j * K + k] = acc;
+     * observations in order. Each element of the upper triangle is one such
+     * chain of additions, independent of the others: the elements run in
+     * parallel (K (K + 1) / 2 of them; by row of the triangle, the first row
+     * alone was K chains on one thread). */
+    const long long pairs = (long long)K * ((long long)K + 1) / 2;
+    long long pair;
+    #pragma omp parallel for schedule(dynamic) private(i, j, k, w, xj) if (K > 1 && (size_t)N * (size_t)K > 200000)
+    for (pair = 0; pair < pairs; pair++) {
+        /* the pair-th element (j, k), k >= j, counting along the rows */
+        long long left = pair;
+        j = 0;
+        while (left >= (long long)(K - j)) {
+            left -= (long long)(K - j);
+            j++;
         }
+        k = j + (ST_int)left;
+        const ST_double *col_j = X + (size_t)j * N;
+        const ST_double *col_k = X + (size_t)k * N;
+        ST_double acc = 0.0;
+        for (i = 0; i < N; i++) {
+            w = (weights != NULL) ? weights[i] : 1.0;
+            xj = col_j[i];
+            ST_double wxj = w * xj;
+            acc += wxj * col_k[i];
+        }
+        XtX[(size_t)j * K + k] = acc;
     }
 
     /* Mirror to lower triangle */
@@ -250,15 +253,26 @@ ST_retcode ols_residualize(
         goto cleanup;
     }
 
-    /* Build design matrix: [constant | controls] */
-    /* Column 0: constant (all 1s) */
-    for (i = 0; i < N; i++) {
-        X_full[0 * N + i] = 1.0;
-    }
-    /* Columns 1 to K: controls */
-    for (j = 0; j < K; j++) {
-        for (i = 0; i < N; i++) {
-            X_full[(size_t)(j + 1) * N + i] = controls[(size_t)j * N + i];
+    /* Build design matrix: [constant | controls], blocks of rows of every
+     * column in parallel */
+    {
+        const ST_int nblk = cbs_num_blocks(N);
+        const long long tasks = (long long)nblk * K_full;
+        long long t;
+        #pragma omp parallel for schedule(static) if ((size_t)N * (size_t)K_full > 200000)
+        for (t = 0; t < tasks; t++) {
+            ST_int i0, i1;
+            const ST_int col = (ST_int)(t / nblk);
+            cbs_block_range((ST_int)(t % nblk), N, &i0, &i1);
+            ST_double *dst = X_full + (size_t)col * N;
+            if (col == 0) {
+                /* Column 0: constant (all 1s) */
+                for (ST_int r = i0; r < i1; r++) dst[r] = 1.0;
+            } else {
+                /* Columns 1 to K: controls */
+                memcpy(dst + i0, controls + (size_t)(col - 1) * N + i0,
+                       (size_t)(i1 - i0) * sizeof(ST_double));
+            }
         }
     }
 
@@ -343,47 +357,97 @@ cleanup:
  * HDFE Residualization
  *
  * One absorbed factor is a single exact projection (blocks of rows in
- * parallel); several use the shared conjugate-gradient solver of src/hdfe.
+ * parallel); several, or one with too many levels for that, use the shared
+ * projection of src/hdfe (partial_out_columns).
  * ======================================================================== */
 
 /* Structure for FE factor */
 typedef struct {
     ST_int num_levels;
     ST_int *levels;      /* Level for each observation (0-based) */
-    ST_double *counts;   /* Count per level */
-    ST_double *weighted_counts;  /* Weighted count per level */
+    ST_double *weighted_counts;  /* Weighted count per level (the rows without weights) */
 } FE_Factor_Simple;
 
-/* Initialize factor from FE variable */
+/* The largest level of an FE variable (levels are 1..L) */
+static ST_int factor_levels(const ST_int *fe_var, ST_int N)
+{
+    ST_int i, max_level = 0;
+    #pragma omp parallel for schedule(static) reduction(max : max_level) if (N > 200000)
+    for (i = 0; i < N; i++) {
+        if (fe_var[i] > max_level) max_level = fe_var[i];
+    }
+    return max_level;
+}
+
+/* Row counts that the threads of init_factor() may hold between them */
+#define CBS_COUNT_BYTES ((size_t)64 << 20)
+
+/* Initialize factor from FE variable with max_level levels */
 static ST_retcode init_factor(
     FE_Factor_Simple *f,
     const ST_int *fe_var,
     const ST_double *weights,
-    ST_int N
+    ST_int N,
+    ST_int max_level
 ) {
-    ST_int i, level, max_level = 0;
+    ST_int i;
 
-    /* Find max level */
-    for (i = 0; i < N; i++) {
-        if (fe_var[i] > max_level) max_level = fe_var[i];
-    }
     f->num_levels = max_level;
 
     /* Allocate arrays */
     f->levels = (ST_int *)malloc(N * sizeof(ST_int));
-    f->counts = (ST_double *)calloc(max_level, sizeof(ST_double));
     f->weighted_counts = (ST_double *)calloc(max_level, sizeof(ST_double));
 
-    if (!f->levels || !f->counts || !f->weighted_counts) {
+    if (!f->levels || !f->weighted_counts) {
         return CBINSCATTER_ERR_MEMORY;
     }
 
-    /* Copy levels (convert to 0-based) and compute counts */
+    /* Copy levels (convert to 0-based) */
+    #pragma omp parallel for schedule(static) if (N > 200000)
     for (i = 0; i < N; i++) {
-        level = fe_var[i] - 1;  /* Convert to 0-based */
-        f->levels[i] = level;
-        f->counts[level] += 1.0;
-        f->weighted_counts[level] += (weights != NULL) ? weights[i] : 1.0;
+        f->levels[i] = fe_var[i] - 1;
+    }
+
+    if (weights != NULL) {
+        /* each level's weights, added in row order */
+        for (i = 0; i < N; i++) {
+            f->weighted_counts[fe_var[i] - 1] += weights[i];
+        }
+        return CBINSCATTER_OK;
+    }
+
+    /* Without weights a level's count is its number of rows, the same whole
+     * number in whatever order the rows are counted: each thread counts its
+     * rows and the counts are added up. (Counting 10M rows on one thread
+     * took 20 ms of a 90 ms residualization.) */
+    {
+        const int team = omp_get_max_threads();
+        ST_int *part = NULL;
+        if (N > 200000 && team > 1 &&
+            (size_t)team * (size_t)max_level <= CBS_COUNT_BYTES / sizeof(ST_int))
+            part = (ST_int *)calloc((size_t)team * (size_t)max_level, sizeof(ST_int));
+        if (part) {
+            ST_int lev;
+            #pragma omp parallel
+            {
+                ST_int *mine = part + (size_t)omp_get_thread_num() * (size_t)max_level;
+                #pragma omp for schedule(static)
+                for (i = 0; i < N; i++) {
+                    mine[fe_var[i] - 1]++;
+                }
+            }
+            #pragma omp parallel for schedule(static) if ((size_t)team * (size_t)max_level > 1000000)
+            for (lev = 0; lev < max_level; lev++) {
+                ST_int total = 0;
+                for (int t = 0; t < team; t++) total += part[(size_t)t * (size_t)max_level + lev];
+                f->weighted_counts[lev] = (ST_double)total;
+            }
+            free(part);
+        } else {
+            for (i = 0; i < N; i++) {
+                f->weighted_counts[fe_var[i] - 1] += 1.0;
+            }
+        }
     }
 
     return CBINSCATTER_OK;
@@ -392,7 +456,6 @@ static ST_retcode init_factor(
 /* Free factor */
 static void free_factor(FE_Factor_Simple *f) {
     free(f->levels);
-    free(f->counts);
     free(f->weighted_counts);
 }
 
@@ -417,7 +480,8 @@ static ST_retcode build_factors(
     *max_levels = 0;
     if (!factors) return CBINSCATTER_ERR_MEMORY;
     for (ST_int g = 0; g < G; g++) {
-        ST_retcode rc = init_factor(&factors[g], &fe_vars[(size_t)g * N], weights, N);
+        const ST_int *fe_var = &fe_vars[(size_t)g * N];
+        ST_retcode rc = init_factor(&factors[g], fe_var, weights, N, factor_levels(fe_var, N));
         if (rc != CBINSCATTER_OK) {
             free_factors(factors, G);
             return rc;
@@ -430,6 +494,16 @@ static ST_retcode build_factors(
 
 /* Per-block level sums of demean_one_factor() may use at most this much memory */
 #define CBS_BLOCKED_DEMEAN_MAX_BYTES ((size_t)256 << 20)
+
+/* Whether the per-block level sums of demean_one_factor() for L levels stay
+ * within CBS_BLOCKED_DEMEAN_MAX_BYTES */
+static int demean_one_factor_fits(ST_int ncols, ST_int L, ST_int N)
+{
+    size_t cells;
+    if (ncols < 1 || L < 1) return 1;
+    return ctools_safe_mul_size((size_t)cbs_num_blocks(N), (size_t)ncols * (size_t)L, &cells) == 0 &&
+           cells <= CBS_BLOCKED_DEMEAN_MAX_BYTES / sizeof(ST_double);
+}
 
 /*
  * Demean ncols columns within the levels of one factor: a single exact
@@ -450,10 +524,8 @@ static ST_retcode demean_one_factor(
     const size_t per_block = (size_t)ncols * (size_t)L;
     size_t cells;
     if (ncols < 1 || L < 1) return CBINSCATTER_OK;
-    if (ctools_safe_mul_size((size_t)num_blocks, per_block, &cells) != 0 ||
-        cells > CBS_BLOCKED_DEMEAN_MAX_BYTES / sizeof(ST_double)) {
-        return -1;
-    }
+    if (!demean_one_factor_fits(ncols, L, N)) return -1;
+    cells = (size_t)num_blocks * per_block;
     ST_double *block_sums = (ST_double *)malloc(cells * sizeof(ST_double));
     ST_double *means = (ST_double *)malloc(per_block * sizeof(ST_double));
     if (!block_sums || !means) {
@@ -513,13 +585,20 @@ static ST_retcode demean_one_factor(
 #define CBS_CG_BUFFER_MAX_BYTES ((size_t)1 << 30)
 
 /*
- * Partial G >= 2 absorbed factors out of ncols columns with the shared
- * conjugate-gradient solver (symmetric Kaczmarz preconditioning) that
- * creghdfe uses. Columns run in parallel and each is solved serially, so
- * results do not depend on the thread count. fe_vars is G x N column-major
- * with levels 1..L. Returns CBINSCATTER_OK, CBINSCATTER_ERR_HDFE when a
- * column does not converge within maxiter iterations, or
- * CBINSCATTER_ERR_MEMORY.
+ * Partial the absorbed factors out of ncols columns with the projection
+ * creghdfe and chdfe use, partial_out_columns() (hdfe_solver.h): two or more
+ * factors are solved for their coefficients on every thread (hdfe_coef.h),
+ * one factor is a single exact projection, and the iteration on the rows
+ * remains for what that solver declines. Until this was the entry point, the
+ * columns went one per thread through the iteration on the rows, which with
+ * the two columns of a plot left all but two threads idle: the
+ * residualization of 10M rows on two factors took 540 ms, and takes 110. The
+ * residuals agree with that iteration's to its tolerance, not to the last
+ * bit (bin means moved by 1e-16 to 1e-12 of their size). Results do not
+ * depend on the thread
+ * count. fe_vars is G x N column-major with levels 1..L. Returns
+ * CBINSCATTER_OK, CBINSCATTER_ERR_HDFE when a column does not converge
+ * within maxiter iterations, or CBINSCATTER_ERR_MEMORY.
  */
 static ST_retcode partial_out_shared(
     ST_double **cols,
@@ -535,6 +614,7 @@ static ST_retcode partial_out_shared(
     HDFE_State S;
     ST_retcode rc = CBINSCATTER_OK;
     ST_int **levels = NULL, *level_max = NULL;
+    ST_double *block = NULL;
 
     memset(&S, 0, sizeof(S));
     if (ncols < 1 || G < 1) return CBINSCATTER_OK;
@@ -548,8 +628,9 @@ static ST_retcode partial_out_shared(
     }
     for (ST_int g = 0; g < G; g++) {
         const ST_int *col = &fe_vars[(size_t)g * N];
-        ST_int mx = 0;
-        for (ST_int i = 0; i < N; i++) if (col[i] > mx) mx = col[i];
+        ST_int mx = 0, i;
+        #pragma omp parallel for schedule(static) reduction(max : mx) if (N > 200000)
+        for (i = 0; i < N; i++) if (col[i] > mx) mx = col[i];
         levels[g] = (ST_int *)col;
         level_max[g] = mx;
     }
@@ -578,29 +659,63 @@ static ST_retcode partial_out_shared(
         goto done;
     }
 
-    int failed = 0;
-    ST_int max_iters = 0, c;
-    #pragma omp parallel for num_threads(S.num_threads) schedule(dynamic) \
-        reduction(| : failed) reduction(max : max_iters) if (S.num_threads > 1)
-    for (c = 0; c < ncols; c++) {
-        ST_int iters = cg_solve_column_threaded(&S, cols[c], resid_thread_id());
-        if (iters < 0) {
-            failed |= 1;
-            iters = iters == HDFE_CG_BREAKDOWN ? 0 : -iters;
+    /* partial_out_columns() takes the columns as one N x ncols block: the
+     * caller's when they already lie one after the other (the controls of a
+     * batch), otherwise a copy that goes back when the projection is done.
+     * Copying 160 MB each way at 10M rows and two columns is a few
+     * milliseconds on every thread. */
+    {
+        int contiguous = 1;
+        ST_int c;
+        for (c = 1; c < ncols; c++) {
+            if ((uintptr_t)cols[c] != (uintptr_t)cols[0] + (uintptr_t)c * (uintptr_t)N * sizeof(ST_double))
+                contiguous = 0;
         }
-        if (iters > max_iters) max_iters = iters;
+        const ST_int nblk = cbs_num_blocks(N);
+        const ST_int tasks = nblk * ncols;
+        ST_double *data = cols[0];
+        if (!contiguous) {
+            block = (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)ncols, sizeof(ST_double));
+            if (!block) {
+                rc = CBINSCATTER_ERR_MEMORY;
+                goto done;
+            }
+            ST_int t;
+            #pragma omp parallel for schedule(static) if ((size_t)N * (size_t)ncols > 200000)
+            for (t = 0; t < tasks; t++) {
+                ST_int i0, i1;
+                const ST_int k = t / nblk;
+                cbs_block_range(t % nblk, N, &i0, &i1);
+                memcpy(block + (size_t)k * N + i0, cols[k] + i0, (size_t)(i1 - i0) * sizeof(ST_double));
+            }
+            data = block;
+        }
+        const HDFE_SolveResult solved = partial_out_columns(&S, data, N, ncols, S.num_threads);
+        if (!contiguous && (solved.status == 0 || solved.status == 430)) {
+            ST_int t;
+            #pragma omp parallel for schedule(static) if ((size_t)N * (size_t)ncols > 200000)
+            for (t = 0; t < tasks; t++) {
+                ST_int i0, i1;
+                const ST_int k = t / nblk;
+                cbs_block_range(t % nblk, N, &i0, &i1);
+                memcpy(cols[k] + i0, block + (size_t)k * N + i0, (size_t)(i1 - i0) * sizeof(ST_double));
+            }
+        }
+        if (verbose) {
+            char msg[256];
+            if (solved.status) snprintf(msg, sizeof(msg), "cbinscatter HDFE: max iterations reached\n");
+            else snprintf(msg, sizeof(msg), "cbinscatter HDFE converged in %d iterations\n",
+                          (int)solved.iterations);
+            SF_display(msg);
+        }
+        if (solved.status == 920) rc = CBINSCATTER_ERR_MEMORY;
+        else if (solved.status) rc = CBINSCATTER_ERR_HDFE;
     }
-    if (verbose) {
-        char msg[256];
-        if (failed) snprintf(msg, sizeof(msg), "cbinscatter HDFE: max iterations reached\n");
-        else snprintf(msg, sizeof(msg), "cbinscatter HDFE converged in %d iterations\n", max_iters);
-        SF_display(msg);
-    }
-    if (failed) rc = CBINSCATTER_ERR_HDFE;
 
 done:
     S.weights = NULL;  /* owned by the caller */
     ctools_hdfe_state_cleanup(&S);
+    free(block);
     free(levels);
     free(level_max);
     return rc;
@@ -623,7 +738,9 @@ static ST_retcode partial_out_factors(
     ST_int verbose
 ) {
     if (ncols < 1 || G < 1) return CBINSCATTER_OK;
-    if (G == 1) {
+    /* the levels are counted first: a factor too large for the per-block
+     * sums need not be built */
+    if (G == 1 && demean_one_factor_fits(ncols, factor_levels(fe_vars, N), N)) {
         FE_Factor_Simple *factors = NULL;
         ST_int max_levels = 0;
         ST_retcode rc = build_factors(&factors, fe_vars, weights, N, 1, &max_levels);

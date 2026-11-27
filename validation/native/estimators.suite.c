@@ -440,6 +440,13 @@ stata_retcode ctools_data_load(ctools_filtered_data *d, int *v, size_t n, size_t
 }
 /* No release session in these tests: production frees at once too. */
 void ctools_filtered_data_release(ctools_filtered_data *d) { ctools_filtered_data_free(d); }
+/* creghdfe returns the loaded variables several at a time, and some of them
+ * before the others (creghdfe_regress.c, STEP 5-7) */
+void stata_variable_free(stata_variable *v) {
+    free(v->data.dbl);
+    memset(v, 0, sizeof(*v));
+}
+void stata_data_free_threaded(stata_data *d) { stata_data_free(d); }
 #include "creghdfe/creghdfe_hdfe.c"
 #include "creghdfe/creghdfe_regress.c"
 #include "hdfe/hdfe_missing.c"
@@ -460,12 +467,18 @@ void ctools_filtered_data_release(ctools_filtered_data *d) { ctools_filtered_dat
 #include "ctools_matrix.c"
 #include "ctools_ols.c"
 #include "ctools_spi.c"
-/* No helper pool: creghdfe runs its count jobs inline, as it does when the
+/* No helper pool: creghdfe runs its count jobs and its columns inline, and
+ * prepares nothing for the projection ahead of them, as it does when the
  * pool cannot start. */
 ctools_persistent_pool *ctools_get_global_pool(void) { return NULL; }
 int ctools_persistent_pool_submit_batch(ctools_persistent_pool *pool, ctools_thread_func func,
                                         void *args, size_t count, size_t arg_size) {
     (void)pool; (void)func; (void)args; (void)count; (void)arg_size;
+    return -1;
+}
+int ctools_persistent_pool_submit(ctools_persistent_pool *pool, ctools_thread_func func,
+                                  void *arg) {
+    (void)pool; (void)func; (void)arg;
     return -1;
 }
 int ctools_persistent_pool_wait(ctools_persistent_pool *pool) { (void)pool; return 0; }
@@ -825,6 +838,36 @@ stata_retcode ctools_store_filtered_rowpar(double *values, size_t n_filtered, in
     (void)var_idx;
     (void)obs_map;
     return STATA_ERR_STATA_WRITE;
+}
+
+/* civreghdfe hands the loaded variables back one at a time when it can, and
+ * runs its columns beside the projection's preparation on the helper pool */
+void stata_variable_free(stata_variable *v)
+{
+    free(v->data.dbl);
+    memset(v, 0, sizeof(*v));
+}
+#include "ctools_threads.h"
+/* No helper pool: the loaded variables go back at once, and the columns run
+ * inline with nothing prepared ahead of them, as when the pool cannot start. */
+ctools_persistent_pool *ctools_get_global_pool(void)
+{
+    return NULL;
+}
+int ctools_persistent_pool_submit_batch(ctools_persistent_pool *pool, ctools_thread_func func,
+                                        void *args, size_t count, size_t arg_size)
+{
+    (void)pool;
+    (void)func;
+    (void)args;
+    (void)count;
+    (void)arg_size;
+    return -1;
+}
+int ctools_persistent_pool_wait(ctools_persistent_pool *pool)
+{
+    (void)pool;
+    return 0;
 }
 
 #include "civreghdfe/civreghdfe_impl.c"

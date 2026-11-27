@@ -285,6 +285,32 @@ int ctools_command_begin(const ctools_command_descriptor *cmd, const char *args)
         else if (!strcmp(op, "store")) { required = 2; next_phase = 3; }
         else if (!strcmp(op, "restore")) preserve = 1;
         break;
+    case CTOOLS_CMD_CGEONEAR:
+        /* base and using keep the locations for compute; a long-form
+         * compute keeps the pairs for store */
+        if (!strcmp(op, "base")) next_phase = 1;
+        else if (!strcmp(op, "using")) { required = 1; next_phase = 2; }
+        else if (!strcmp(op, "compute")) {
+            required = 2;
+            if (args && strstr(args, " long")) next_phase = 3;
+        }
+        else if (!strcmp(op, "store")) required = 3;
+        break;
+    case CTOOLS_CMD_CFUZZYJOIN:
+        /* a weights file stays for the master or column call after it; the
+         * master data for the using call; the results for the store */
+        if (!strcmp(op, "match_weights")) next_phase = 10;
+        else if (!strcmp(op, "match_master")) { preserve = 1; next_phase = 1; }
+        else if (!strcmp(op, "match_mweights")) { required = 1; next_phase = 1; }
+        else if (!strcmp(op, "match_using")) { required = 1; next_phase = 2; }
+        else if (!strcmp(op, "match_store")) required = 2;
+        else if (!strcmp(op, "match_columns")) preserve = 1;
+        else if (!strcmp(op, "link_master")) next_phase = 11;
+        else if (!strcmp(op, "link_exclude")) { required = 11; next_phase = 11; }
+        else if (!strcmp(op, "link_using")) { required = 11; next_phase = 12; }
+        else if (!strcmp(op, "link_layout")) { required = 12; next_phase = 13; }
+        else if (!strcmp(op, "link_store")) required = 13;
+        break;
     case CTOOLS_CMD_CPARQUET:
         /* scan keeps the decoded columns for load and blobfile */
         if (!strcmp(op, "scan")) next_phase = 1;

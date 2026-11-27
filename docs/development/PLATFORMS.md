@@ -33,6 +33,10 @@ Windows branch and release builds also require Azure Authenticode signing before
 validation and packaging; see [Windows signing](WINDOWS_SIGNING.md) for the Azure
 and GitHub environment configuration. Pull-request candidates remain unsigned.
 
+## DuckDB for csql
+
+`csql` loads the official DuckDB shared library at run time (`csql, install` downloads it); ctools does not link it. DuckDB 2.0.1's libraries need, on Linux, glibc 2.25 and `libstdc++` with `GLIBCXX_3.4.22` (GCC 6) or newer, which is above the plugin's glibc 2.17 baseline; on macOS, macOS 11 (the same as the plugins); on Windows, only system DLLs. A newer or older DuckDB (1.1 or later) can be used with `library()`.
+
 ## Worker and scratch limits
 
 `threads(0)` uses the configured default; positive requests accept 1–256 workers and are clamped to the available CPUs and runtime limits. Without an override, the default cap is 16. See the [thread policy](README.md#thread-count-management). Sampling limits workers to available groups; range statistics allocate sorting scratch only for percentiles, the median, and the interquartile range. Both commands reduce concurrent sorting/shuffle work to a 256 MiB scratch target. One worker remains available when a single group needs more than that target; this is not a limit on total command memory.

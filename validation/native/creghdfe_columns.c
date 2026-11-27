@@ -259,6 +259,110 @@ static void run(const char *what, spec s)
             assert(0);
         }
     }
+    /* ---- a single absorbed effect, projected as the column is written ----
+     * (creghdfe_column_scale and creghdfe_column_absorb) against the matrix
+     * above with the projection of hdfe_solver.c written out: the level sums
+     * of every column in row order, times the inverse counts or divided by
+     * the counts, subtracted. Levels in runs and in no order; a few levels
+     * have no row. */
+    for (int pattern = 0; pattern < 2 && !s.quad; pattern++)
+    {
+        int *lev = malloc((size_t)N * sizeof(int));
+        assert(lev);
+        int nlev;
+        if (pattern == 0)
+        {
+            int l = 0, i = 0;
+            while (i < N)
+            {
+                /* now and then a run longer than the blocks a column is read in */
+                int len = 1 + (int)(uniform() * 40) + (uniform() < 0.002 ? 3000 : 0);
+                l += 1 + (uniform() < 0.05);
+                for (; len > 0 && i < N; len--)
+                    lev[i++] = l;
+            }
+            nlev = l + 2;
+        }
+        else
+        {
+            nlev = N / 5 + 3;
+            for (int i = 0; i < N; i++)
+                lev[i] = 1 + (int)(uniform() * (nlev - 2));
+        }
+        double *cnt = calloc((size_t)nlev, sizeof(double));
+        double *inv = malloc((size_t)nlev * sizeof(double));
+        double *lmean = malloc((size_t)nlev * sizeof(double));
+        double *ref = malloc((cells + 1) * sizeof(double));
+        assert(cnt && inv && lmean && ref);
+        for (int i = 0; i < N; i++)
+            cnt[lev[i] - 1] += w_ref ? w_ref[i] : 1.0;
+        for (int l = 0; l < nlev; l++)
+            inv[l] = cnt[l] > 0 ? 1.0 / cnt[l] : 0.0;
+        for (int use_inv = 1; use_inv >= 0; use_inv--)
+        {
+            for (int k = 0; k < K; k++)
+            {
+                const double *col = want + (size_t)k * N;
+                memset(lmean, 0, (size_t)nlev * sizeof(double));
+                for (int i = 0; i < N; i++)
+                    lmean[lev[i] - 1] += w_ref ? col[i] * w_ref[i] : col[i];
+                for (int l = 0; l < nlev; l++)
+                {
+                    if (use_inv)
+                        lmean[l] *= inv[l];
+                    else if (cnt[l] > 0)
+                        lmean[l] /= cnt[l];
+                }
+                for (int i = 0; i < N; i++)
+                    ref[(size_t)k * N + i] = col[i] - lmean[lev[i] - 1];
+            }
+            for (int threads = 1; threads <= 4; threads += 3)
+            {
+                set_threads(threads);
+                double tss2[16], sd2[16], norm22[16];
+                got[-1] = got[cells] = fence;
+                for (size_t x = 0; x < cells; x++)
+                    got[x] = -7.0;
+                const creghdfe_columns C = {
+                    .cols = (const double *const *)cols, .level = level, .rows = rows, .N = N,
+                    .K = K, .weights = w_ref,
+                };
+                const creghdfe_columns_opts opts = {
+                    .means = means, .weight_type = s.weight_type, .sum_weights = w_raw ? sum_w : 0.0,
+                    .standardize = s.standardize, .use_quad = 0, .uncentered = s.uncentered,
+                };
+                const creghdfe_absorbed E = {
+                    .levels = lev, .num_levels = nlev, .inv = use_inv ? inv : NULL, .counts = cnt,
+                };
+                int k;
+#pragma omp parallel for schedule(static)
+                for (k = 0; k < K; k++)
+                {
+                    double *scratch = malloc((size_t)nlev * sizeof(double));
+                    assert(scratch);
+                    creghdfe_column_scale(&C, &opts, k, tss2, sd2);
+                    creghdfe_column_absorb(&C, &opts, k, &E, sd2, norm22, scratch, got);
+                    free(scratch);
+                }
+                const int same = !memcmp(got, ref, cells * sizeof(double)) &&
+                                 !memcmp(tss2, tss, (size_t)K * sizeof(double)) &&
+                                 !memcmp(sd2, sd, (size_t)K * sizeof(double)) &&
+                                 !memcmp(norm22, norm2, (size_t)K * sizeof(double));
+                if (!same || got[-1] != fence || got[cells] != fence)
+                {
+                    fprintf(stderr, "%s, one effect (pattern %d, %s), %d threads: %s\n", what,
+                            pattern, use_inv ? "inverse counts" : "counts", threads,
+                            same ? "wrote outside the matrix" : "results differ");
+                    assert(0);
+                }
+            }
+        }
+        free(lev);
+        free(cnt);
+        free(inv);
+        free(lmean);
+        free(ref);
+    }
     free(block);
     free(got_raw);
     free(w_got);

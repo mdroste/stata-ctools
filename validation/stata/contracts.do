@@ -19,7 +19,8 @@ foreach args in "1 0 count=18446744073709551616" "1 0 percent=nan" "2147483648 0
     assert result == 17
 }
 foreach cmd in "csplit write" "crangejoin prepare 1" "crangejoin write" "cmerge execute" "cio column 1" ///
-    "cjoinby plan 1 0 0" "cjoinby write 1 0" "creshape schema" "creshape store" {
+    "cjoinby plan 1 0 0" "cjoinby write 1 0" "creshape schema" "creshape store" "cfuzzyjoin match_using" "cfuzzyjoin link_store" ///
+    "cgeonear using" "cgeonear compute wide sphere nearcount=1" "cgeonear compute long sphere nearcount=1" "cgeonear store" {
     capture plugin call p1_contracts_plugin result, "`cmd'"
     local rc = _rc
     if `rc' == 198 test_pass "rejected stale command phase"
@@ -28,7 +29,7 @@ foreach cmd in "csplit write" "crangejoin prepare 1" "crangejoin write" "cmerge 
 }
 * Failure recovery and repeated cleanup remain safe in the real dispatcher.
 foreach cmd in "cimport clear" "cio clear" "cmerge clear" "csplit clear" "crangejoin clear" ///
-    "cjoinby clear" "cjoinby rollback" "creshape clear" {
+    "cjoinby clear" "cjoinby rollback" "creshape clear" "cfuzzyjoin clear" "cgeonear clear" {
     plugin call p1_contracts_plugin, "`cmd'"
     plugin call p1_contracts_plugin, "`cmd'"
     test_pass "repeated cleanup"
@@ -798,18 +799,25 @@ if "`__case'" == "loader" {
    another protocol, or that reads no protocol, stands in for a plugin from
    another release; a file that is not a plugin stands in for a damaged one. */
 do validation/support/validate_setup.do
-findfile _ctools_load.ado
-local loader `"`r(fn)'"'
 tempfile scratch
 local root "`scratch'_loader"
 foreach sub in "" /mismatch /none /damaged {
     capture mkdir "`root'`sub'"
 }
-filefilter `"`loader'"' "`root'/mismatch/_ctools_load.ado", from("__ado_protocol \Q") to("__ado_protocol \Q0")
-local mocked = r(occurrences) == 1
-filefilter `"`loader'"' "`root'/none/_ctools_load.ado", from("ctools_plugin, \Qversion\Q") to("ctools_plugin, \Qclock\Q")
-local mocked = `mocked' & r(occurrences) == 1
-if `mocked' test_pass "loader mocks built from the installed _ctools_load"
+* Each command carries _ctools_load as its own subprogram
+* (scripts/ado_helpers.py), so the mocks are copies of the commands tested,
+* edited in their own loader.
+local mocked 1
+local mocked_cmds csort cexport cimport
+foreach cmd of local mocked_cmds {
+    findfile `cmd'.ado
+    local source `"`r(fn)'"'
+    filefilter `"`source'"' "`root'/mismatch/`cmd'.ado", from("__ado_protocol \Q") to("__ado_protocol \Q0")
+    local mocked = `mocked' & r(occurrences) == 1
+    filefilter `"`source'"' "`root'/none/`cmd'.ado", from("ctools_plugin, \Qversion\Q") to("ctools_plugin, \Qclock\Q")
+    local mocked = `mocked' & r(occurrences) == 1
+}
+if `mocked' test_pass "loader mocks built from the commands' own _ctools_load"
 else test_fail "loader mocks" "the protocol stamp or the identity call was not found"
 
 _ctools_load
@@ -830,7 +838,8 @@ if c(stata_version) >= 16 quietly export sasxport5 * using "`root'/in.xpt", repl
 
 foreach mock in mismatch none {
     adopath ++ "`root'/`mock'"
-    capture program drop _ctools_load
+    * the next call of each command loads its mock from the adopath
+    discard
     capture csort x
     local rc_sort = _rc
     capture cf _all using "`original'"
@@ -853,7 +862,7 @@ foreach mock in mismatch none {
         local same_xpt = !_rc
     }
     adopath - "`root'/`mock'"
-    capture program drop _ctools_load
+    discard
     use "`original'", clear
     if `rc_sort' == 9 & `same_sort' test_pass "`mock' protocol: csort stops before changing data"
     else test_fail "`mock' protocol: csort" "rc=`rc_sort' unchanged=`same_sort'"
@@ -957,7 +966,9 @@ file close `fh'
 findfile ctools.ado
 filefilter `"`r(fn)'"' "`fwd'/step.ado", from("https://api.github.com/repos/mdroste/stata-ctools/releases/latest") to("`fwd'/release.json") replace
 local mocked = r(occurrences) == 1
-filefilter "`fwd'/step.ado" "`fwd'/records/ctools.ado", from("https://raw.githubusercontent.com/mdroste/stata-ctools") to("`site'") replace
+* the update's site only: the loader that ctools.ado carries names the same
+* repository in its reinstall hint
+filefilter "`fwd'/step.ado" "`fwd'/records/ctools.ado", from("local __site \Qhttps://raw.githubusercontent.com/mdroste/stata-ctools\Q") to("local __site \Q`site'\Q") replace
 local mocked = `mocked' & r(occurrences) == 1
 local plus_saved "`c(sysdir_plus)'"
 local counts
@@ -1012,7 +1023,11 @@ if `mocked' & !`rc_same' & "`: word 9 of `counts''`: word 10 of `counts''`: word
 else test_fail "ctools update without a new record" "mocked=`mocked' rc=`rc_same' counts=`counts'"
 capture program drop update_fixture
 
-foreach file in mismatch/_ctools_load.ado none/_ctools_load.ado damaged/`plugin' update/ctools.ado records/ctools.ado step.ado trk.txt release.json in.csv in.xpt out.csv {
+foreach cmd of local mocked_cmds {
+    capture erase "`root'/mismatch/`cmd'.ado"
+    capture erase "`root'/none/`cmd'.ado"
+}
+foreach file in damaged/`plugin' update/ctools.ado records/ctools.ado step.ado trk.txt release.json in.csv in.xpt out.csv {
     capture erase "`root'/`file'"
 }
 print_summary "loader"

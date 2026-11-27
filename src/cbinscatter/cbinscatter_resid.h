@@ -137,8 +137,8 @@ ST_retcode combined_residualize(
 
 /*
  * Residualize multiple variables with the same absorbed effects. One factor
- * is a single exact projection; several use the shared conjugate-gradient
- * solver (src/hdfe), each column converging to tolerance as in creghdfe.
+ * is a single exact projection; several use the shared projection of
+ * src/hdfe (partial_out_columns), converging to tolerance as in creghdfe.
  * Returns CBINSCATTER_ERR_HDFE if a column does not converge within maxiter
  * iterations. Failure leaves working columns modified; callers must not
  * publish them.

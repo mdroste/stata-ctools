@@ -1,10 +1,17 @@
-"""Generate release identity from config/release.json; --check rejects stale copies."""
+"""Generate release identity from config/release.json; --check rejects stale copies.
+
+Also regenerates the src/ado helpers inlined into the package's ado files
+(scripts/ado_helpers.py).
+"""
 import argparse
 import json
 from pathlib import Path
 import re
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from scripts import ado_helpers  # noqa: E402
 
 
 def generated():
@@ -33,6 +40,7 @@ def generated():
     package_files = [
         "README.md",
         *sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "build").glob("*.ado")),
+        *sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / ado_helpers.HELPER_DIR).glob("*.ado")),
         *sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "build").glob("*.sthlp")),
         "build/ctools.pkg",
         "build/stata.toc",
@@ -64,8 +72,11 @@ def generated():
             text = re.sub(r"(?m)^d Requires: .*$", f"d Requires: Stata {minimum} or later", text)
             text = re.sub(r"(?m)^d Distribution-Date: .*$", f"d Distribution-Date: {date}", text)
         files[filename] = text
-    if files["build/_ctools_load.ado"].count(f'local __ado_protocol "{protocol}"') != 1:
-        raise SystemExit("build/_ctools_load.ado must define __ado_protocol exactly once")
+    loader = f"{ado_helpers.HELPER_DIR}/_ctools_load.ado"
+    if files[loader].count(f'local __ado_protocol "{protocol}"') != 1:
+        raise SystemExit(f"{loader} must define __ado_protocol exactly once")
+    # After the stamps: each package ado file carries the stamped helpers it calls.
+    ado_helpers.inline_all(files)
     for source in ("LICENSE", "docs/licenses/THIRD_PARTY_NOTICES"):
         files[f"build/{Path(source).name}"] = (ROOT / source).read_text()
     # net install leaves LICENSE and THIRD_PARTY_NOTICES behind as ancillary

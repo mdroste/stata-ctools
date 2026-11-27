@@ -14,6 +14,8 @@
 #ifndef CTOOLS_HDFE_UTILS_H
 #define CTOOLS_HDFE_UTILS_H
 
+#include <stdint.h>
+#include <string.h>
 #include "stplugin.h"
 #ifdef _OPENMP
 #include <omp.h>
@@ -388,6 +390,48 @@ static inline void ctools_hdfe_block_range(ST_int N, int B, int b, ST_int *i0, S
     *i0 = (ST_int)(((long long)N * b) / B);
     *i1 = (ST_int)(((long long)N * (b + 1)) / B);
 }
+
+/*
+    Per-level work over many levels in rows of no order, in T ranges of levels
+    with a thread each: every thread goes down the rows and takes those whose
+    level is in its range, so that no two threads write near each other, none
+    waits alone for the whole table, and each level meets its rows in row
+    order. ctools_hdfe_level_range() gives the first level of range t of T
+    over levels 1..L and the number of levels in it;
+    CTOOLS_HDFE_ROWS_IN_RANGE runs ROW, with `row` set, for the rows from
+    `start` on whose level is one of the `width` levels from `lo`. The rows
+    are screened 64 at a time (a byte per row, read as eight words: byte j of
+    a word is bits 8j and up, as on every platform the plugin is built for).
+*/
+static inline void ctools_hdfe_level_range(ST_int L, int T, int t, uint32_t *lo, uint32_t *width)
+{
+    *lo = 1 + (uint32_t)(((uint64_t)L * (uint64_t)t) / (uint64_t)T);
+    *width = 1 + (uint32_t)(((uint64_t)L * ((uint64_t)t + 1)) / (uint64_t)T) - *lo;
+}
+
+#define CTOOLS_HDFE_ROWS_IN_RANGE(lev, N, lo, width, start, ROW) \
+    do { \
+        unsigned char in_[64]; \
+        ST_int i_ = (start); \
+        for (; i_ <= (N) - 64; i_ += 64) { \
+            for (int j_ = 0; j_ < 64; j_++) \
+                in_[j_] = (uint32_t)(lev)[i_ + j_] - (lo) < (width); \
+            for (int q_ = 0; q_ < 8; q_++) { \
+                uint64_t word_; \
+                memcpy(&word_, in_ + 8 * q_, 8); \
+                while (word_) { \
+                    const ST_int row = i_ + 8 * q_ + (ST_int)(__builtin_ctzll(word_) >> 3); \
+                    word_ &= word_ - 1; \
+                    ROW; \
+                } \
+            } \
+        } \
+        for (; i_ < (N); i_++) \
+            if ((uint32_t)(lev)[i_] - (lo) < (width)) { \
+                const ST_int row = i_; \
+                ROW; \
+            } \
+    } while (0)
 
 /* Relaxed atomic access to the int tables these passes share (GCC and
    Clang builtins; plain loads and stores on x86-64 and ARM64) */

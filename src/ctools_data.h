@@ -160,4 +160,13 @@ void stata_data_init(stata_data *data);
 void stata_data_free(stata_data *data);
 void stata_variable_free(stata_variable *var);
 
+// The same releases with several variables returned at a time, each by a
+// thread of the caller's OpenMP team. Returning a large block to the system
+// takes about 2 ms per 80 MB on Windows, and blocks returned by different
+// threads go back side by side: six columns of 10 million doubles take 11 ms
+// in turn and 3.5 ms this way. For the thread that runs a command only: a
+// helper thread would raise a team of its own for it.
+#define CTOOLS_FREE_THREADED_ROWS 100000
+void stata_data_free_threaded(stata_data *data);
+
 #endif /* CTOOLS_DATA_H */

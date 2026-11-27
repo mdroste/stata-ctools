@@ -222,6 +222,8 @@ profile_COMMANDS = {
     "cipolate": "cipolate",
     "split": "split",
     "rangejoin": "rangejoin",
+    "geonear": "geonear",
+    "geodist": "geodist",
     "qreg": "qreg",
     "winsor2": "winsor2",
     "winsor": "gstats winsor",
@@ -247,11 +249,12 @@ profile_CTOOLS = {
     "binsreg": "cbinscatter",
     "fereg": "creghdfe",
     "feppml": "cppmlhdfe",
+    "geodist": "cgeonear",
 }
 profile_SIZES = (1_000_000, 10_000_000, 25_000_000)
 # These Stata commands take minutes per run at 25M observations, so their pairs
 # are not run above this size (profiles.do holds the same limits).
-profile_LIMITS = {"qreg": 10_000_000, "ppmlhdfe": 10_000_000}
+profile_LIMITS = {"qreg": 10_000_000, "ppmlhdfe": 10_000_000, "geonear": 10_000_000}
 
 
 def profile_sizes(command, sizes):

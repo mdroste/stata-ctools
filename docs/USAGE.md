@@ -89,6 +89,33 @@ crangejoin date . . using history.dta, by(person) suffix(_history)
 
 There is no `if`/`in` syntax: filter the master dataset beforehand. The result replaces the dataset in memory. The command does not store command-specific results in `r()` or `e()`. See `help crangejoin` or the [full help file](../build/crangejoin.sthlp).
 
+### Nearest neighbors and distances: `cgeonear`
+
+`cgeonear` finds the nearest neighbors of each location by geodetic distance, with the syntax of Robert Picard's SSC `geonear` 2.0.3, and computes the distance between two points, with the syntax of his `geodist` 1.1.0: a `using` file selects the first form, four coordinates the second. Coordinates are signed decimal degrees. Neither `geonear` nor `geodist` needs to be installed.
+
+```stata
+cgeonear baseid baselat baselon using nborfile, neighbors(nborid nborlat nborlon) ///
+    [wide long nearcount(#) ignoreself genstub(str) within(#) limit(#) ///
+    miles radius(#) ellipsoid a(#) f(#) threads(#) verbose]
+cgeonear lat1 lon1 lat2 lon2 [if] [in], generate(newvar) [miles sphere radius(#) ellipsoid(#1,#2)]
+```
+
+- Wide form (the default) adds the nearest neighbor's identifier and distance (`nid`, `km_to_nid`, or `nid1 km_to_nid1 ...` with `nearcount()`) to every observation of the data in memory. Long form (`long`) replaces the data with one observation per base location and neighbor; `within()` adds every neighbor within a distance and `limit()` caps the count.
+- The nearest-neighbor form measures great-circle (haversine) distances by default and on the WGS 1984 ellipsoid (Vincenty) with `ellipsoid`; the distance form defaults to the ellipsoid, as `geodist` does. Distances agree with `geonear`'s and `geodist`'s to the last digit, except where noted in the [guide](commands/cgeonear.md#accuracy).
+- Neighbors at the same distance are ranked by ascending identifier. Each identifier is one location; observations with missing coordinates of a located identifier get its neighbors.
+
+```stata
+* The nearest other cell tower of each tower, and every tower within 50 km
+cgeonear ctid ctlat ctlon using cell.dta, neighbors(ctid ctlat ctlon) ignoreself
+cgeonear ctid0 ctlat ctlon using cell.dta, n(ctid ctlat ctlon) ignoreself long within(50) near(0)
+
+* Distances from each park to a stadium, on the ellipsoid and on a sphere
+cgeonear 42.265837 -83.748696 lat lon, generate(d)
+cgeonear 42.265837 -83.748696 lat lon, generate(d_sphere) sphere
+```
+
+See `help cgeonear` or the [guide](commands/cgeonear.md).
+
 ### Pairwise joins: `cjoinby`
 
 `cjoinby` forms all pairwise combinations within groups, with the syntax of Stata's `joinby`. Each observation in memory is paired with every observation of the using file that has the same values of the key variables.
@@ -117,6 +144,32 @@ cjoinby using deals.dta
 
 Each master observation is followed by its pairings in the using file's order, and a sorted master stays sorted, as after `joinby`. Where `joinby`'s order within ties depends on `set sortseed`, `cjoinby`'s does not vary. The result replaces the dataset in memory; `r(N)`, `r(N_1)`, `r(N_2)` and `r(N_3)` hold the observation counts. See `help cjoinby` or the [guide](commands/cjoinby.md).
 
+### Fuzzy joins: `cfuzzyjoin`
+
+`cfuzzyjoin` joins records whose keys are similar rather than equal. Its three subcommands follow three community commands: `link` is `reclink` (record linkage from several variables), `match` is `matchit` (every pair of similar strings of two datasets, or the similarity of two columns) and `group` is `strgroup` (groups of similar strings by Levenshtein distance).
+
+```stata
+cfuzzyjoin link varlist using filename, idmaster(varname) idusing(varname) gen(newvar) [options]
+cfuzzyjoin match idmaster txtmaster using filename, idusing(varname) txtusing(varname) [options]
+cfuzzyjoin match varname1 varname2 [, options]
+[by varlist:] cfuzzyjoin group varname [if] [in], generate(newvar) threshold(#) [options]
+```
+
+```stata
+* The best match of each firm on name, address and ZIP code.
+use firms_a, clear
+cfuzzyjoin link name address zip using firms_b, idmaster(id) idusing(rid) gen(score)
+
+* Every pair of names with a bigram similarity of at least 0.7.
+use names_a, clear
+cfuzzyjoin match id name using names_b, idusing(rid) txtusing(rname) threshold(0.7)
+
+* Group the spellings of firm names within each state.
+bysort state: cfuzzyjoin group name, generate(firm) threshold(0.2)
+```
+
+`link` adds the score, the matched identifier, the using variables and `_merge` to the data in memory; `match` with `using` replaces the data with the pairs; `group` adds a group number. See `help cfuzzyjoin` or the [guide](commands/cfuzzyjoin.md).
+
 ### Reshaping: `creshape`
 
 `creshape` converts data from wide to long form and back, with the syntax of Stata's `reshape`. In wide form each `i` has one observation and one variable per value of `j` (`inc80`, `inc81`, …); in long form each `i` and `j` has one observation.
@@ -144,6 +197,18 @@ creshape long inc@r ue, i(id) j(year)
 ```
 
 The result is `reshape`'s: the same observations, sorted by `i` (and `j`), and the same variables with their storage types, formats, labels, notes and characteristics. The settings are the dataset characteristics `reshape` uses, so the two commands can be mixed, and `creshape i`, `j`, `xij`, `xi`, `query`, `clear` and `error` work as in `reshape`. A request that would lose information (a repeated `j` within `i`, a variable that varies within `i`) is refused before the data change. Data with `strL` variables are reshaped by `reshape` itself. See `help creshape` or the [guide](commands/creshape.md).
+
+### SQL queries: `csql`
+
+`csql` runs SQL in DuckDB, inside Stata, on the data in memory (table `stata`), on Stata datasets read in place, and on Parquet, CSV and JSON files. It filters, joins and aggregates files larger than memory and loads (`clear`), saves (`saving()`) or lists the result. Install DuckDB once with `csql, install`.
+
+```stata
+csql using "transactions.parquet", query("SELECT firm_id, year, SUM(sales) AS sales FROM data GROUP BY ALL") clear
+csql, query("SELECT s.*, f.industry FROM stata s JOIN 'firms.dta' f USING (firm_id)") clear
+csql, query("SELECT * FROM read_csv('raw/*.csv')") saving("all.parquet", replace)
+```
+
+Results take the narrowest Stata types and keep the labels and formats of the variables they pass through. See `help csql` or the [guide](commands/csql.md).
 
 ## Numerical precision
 

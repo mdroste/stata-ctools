@@ -21,6 +21,8 @@
     - crangestat: C-accelerated range statistics (replaces rangestat)
     - cegen: C-accelerated extensions to generate (replaces egen)
     - creshape: C-accelerated reshape between wide and long form (replaces reshape)
+    - cfuzzyjoin: C-accelerated fuzzy joins (replaces reclink, matchit and strgroup)
+    - csql: SQL queries on Stata data and on Parquet, CSV, JSON and .dta files (DuckDB)
 
     Usage from Stata:
         plugin call ctools_plugin ..., "csort <args>"
@@ -278,6 +280,9 @@ static ST_retcode thread_settings_call(const char *args)
 #include "ccollapse/ccollapse_impl.h"
 #include "cegen/cegen_impl.h"
 #include "creshape/creshape_impl.h"
+#include "cfuzzyjoin/cfuzzyjoin_impl.h"
+#include "csql/csql_impl.h"
+#include "cgeonear/cgeonear_impl.h"
 #include "formats/ctools_dta.h"
 #include "hdfe/hdfe_missing.h"
 

@@ -55,6 +55,10 @@ and C implementations of its default encoding detectors. See the
 for regenerating the tables. Building and using ctools requires neither Java
 nor the ICU libraries.
 
+## DuckDB C API header
+
+`duckdb/duckdb.h` is the C API header of [DuckDB 2.0.1](https://github.com/duckdb/duckdb/tree/v2.0.1) (MIT), from the release's `libduckdb-src.zip` (SHA-256 `22627d9f8fb1c49c3374db8b8c4d8e2ffd186720057ba58aad1a7aaaf78c98f4`), unchanged. `csql` uses its types only: it defines `DUCKDB_STATIC_BUILD` so that no function is declared `dllimport`, and resolves the functions from the library it loads at run time. DuckDB itself is not compiled into the plugin.
+
 ## Compiler settings
 
 `scripts/build_plugin.py` applies library-specific compiler options only to the

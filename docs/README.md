@@ -4,7 +4,8 @@
 
 - [Installation](INSTALLATION.md): install ctools or build it from source.
 - [Usage](USAGE.md): command examples.
-- [Interpolation](USAGE.md#interpolation-cinterpolate), [string splitting](USAGE.md#string-fields-csplit), [interval joins](USAGE.md#interval-joins-crangejoin), [pairwise joins](USAGE.md#pairwise-joins-cjoinby), and [reshaping](USAGE.md#reshaping-creshape).
+- [Interpolation](USAGE.md#interpolation-cinterpolate), [string splitting](USAGE.md#string-fields-csplit), [interval joins](USAGE.md#interval-joins-crangejoin), [nearest neighbors and geodetic distances](USAGE.md#nearest-neighbors-and-distances-cgeonear), [pairwise joins](USAGE.md#pairwise-joins-cjoinby), [fuzzy joins](USAGE.md#fuzzy-joins-cfuzzyjoin), and [reshaping](USAGE.md#reshaping-creshape).
+- [SQL queries](USAGE.md#sql-queries-csql) on data and on Parquet, CSV, JSON and .dta files, through DuckDB.
 - [Features](FEATURES.md): additional features provided by ctools.
 - [Compatibility](COMPATIBILITY.md): supported syntax and differences from the commands ctools replaces.
 - [Attribution](ATTRIBUTION.md): the original command behind each ctools command, its authors, and the pinned version.
@@ -22,7 +23,10 @@ detail about individual commands:
 | [cimport](commands/cimport.md) | [creghdfe](commands/creghdfe.md) |
 | [cexport](commands/cexport.md) | [civreghdfe](commands/civreghdfe.md) |
 | [cjoinby](commands/cjoinby.md) | |
+| [cgeonear](commands/cgeonear.md) | |
 | [creshape](commands/creshape.md) | |
+| [cfuzzyjoin](commands/cfuzzyjoin.md) | |
+| [csql](commands/csql.md) | |
 | [cdistinct](commands/cdistinct.md) | |
 | [cegen](commands/cegen.md) | |
 | [chdfe](commands/chdfe.md) | [cppmlhdfe](commands/cppmlhdfe.md) |

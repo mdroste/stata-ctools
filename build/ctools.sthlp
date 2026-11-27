@@ -149,6 +149,7 @@ it is cleared.
 {p2colset 5 20 22 2}{...}
 {p2col:{help cimport}}Import text, Excel, dBase, SAS, SPSS, and shapefiles{p_end}
 {p2col:{help cexport}}Export text, Excel, dBase, SAS, SPSS, and shapefiles{p_end}
+{p2col:{help csql}}Query data and Parquet, CSV, JSON and .dta files with SQL (DuckDB){p_end}
 {p2col:{help cdistinct}}Report distinct values{p_end}
 {p2col:{help cegen}}Extensions to generate{p_end}
 {p2col:{help ccollapse}}Make dataset of summary statistics{p_end}
@@ -157,6 +158,7 @@ it is cleared.
 {p2col:{help cmerge}}Merge (join) datasets{p_end}
 {p2col:{help cjoinby}}Form all pairwise combinations within groups{p_end}
 {p2col:{help creshape}}Convert data from wide to long form and vice versa{p_end}
+{p2col:{help cfuzzyjoin}}Fuzzy record linkage, similarity joins and groups of similar strings{p_end}
 {p2col:{help csample}}Resampling without replacement{p_end}
 {p2col:{help cbsample}}Resampling with replacement{p_end}
 {p2col:{help cencode}}Recast string as labeled numeric{p_end}
@@ -168,6 +170,7 @@ it is cleared.
 {p2col:{help cinterpolate}}Linear and cubic interpolation{p_end}
 {p2col:{help csplit}}Split strings into fields{p_end}
 {p2col:{help crangejoin}}Inclusive interval joins{p_end}
+{p2col:{help cgeonear}}Find nearest neighbors and calculate geodetic distances{p_end}
 
 {pstd}
 {ul:Estimation}
@@ -233,6 +236,9 @@ each command's help file has details and references.
 (May 9, 2017) by Robert Picard, Nicholas J. Cox, and Roberto Ferrer{p_end}
 {p2col:{help crangejoin##acknowledgments:crangejoin}}{cmd:rangejoin} 1.1.3
 (April 13, 2021) by Robert Picard{p_end}
+{p2col:{help cgeonear##acknowledgments:cgeonear}}{cmd:geonear} 2.0.3
+(September 4, 2019) by Robert Picard; {cmd:geodist} 1.1.0 (June 18, 2019) by
+Robert Picard{p_end}
 {p2col:{help cinterpolate##acknowledgments:cinterpolate}}Stata's {cmd:ipolate}
 ({cmd:ipolate.ado} 1.3.5, April 23, 2020); {cmd:cipolate} 1.0.0 (July 4, 2002)
 by Nicholas J. Cox{p_end}
@@ -254,6 +260,9 @@ by Christopher F Baum, Mark E Schaffer, and Steven Stillman{p_end}
 Zylkin{p_end}
 {p2col:{help chdfe##acknowledgments:chdfe}}{cmd:hdfe} 3.2.9 (February 21,
 2016; SSC distribution of August 6, 2016) by Sergio Correia{p_end}
+{p2col:{help cfuzzyjoin##acknowledgments:cfuzzyjoin}}{cmd:reclink} 1.7
+(January 14, 2010) by Michael Blasnik; {cmd:matchit} 1.5.2 (May 2020) by Julio
+D. Raffo; {cmd:strgroup} 1.0.4 (December 17, 2021) by Julian Reif{p_end}
 
 {pstd}
 {ul:Official Stata commands} (StataNow 19.5, revision 14 Oct 2026)
@@ -339,12 +348,12 @@ and Mauricio Caceres Bravo for
 {title:Also see}
 
 {psee}
-Online: {help cimport}, {help cexport}, {help csort}, {help cmerge}, {help cencode},
+Online: {help cimport}, {help cexport}, {help csql}, {help csort}, {help cmerge}, {help cencode},
 {help cdecode}, {help cdestring}, {help csample}, {help cbsample}, {help cwinsor},
 {help cegen},
 {help crangestat}, {help creghdfe}, {help civreghdfe}, {help cqreg}, {help cpsmatch},
 {help cbinscatter}, {help cppmlhdfe}, {help cinterpolate}, {help csplit},
-{help crangejoin}, {help cjoinby}, {help creshape}, {help cdistinct}, {help chdfe}
+{help crangejoin}, {help cgeonear}, {help cjoinby}, {help creshape}, {help cfuzzyjoin}, {help cdistinct}, {help chdfe}
 {p_end}{help cdistinct}, {help chdfe}, {help ccollapse}
 {p_end}
 

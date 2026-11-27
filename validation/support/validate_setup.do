@@ -21,6 +21,11 @@ set trace off
 
 * Add build directory with ctools to adopath (use ++ for highest priority)
 * Works from both project root and validation directory
+* src/ado holds the shared helpers that the package's ado files carry as
+* subprograms; tests that call a helper directly find it there, ahead of
+* any older ctools in PLUS.
+capture adopath ++ "src/ado"
+capture adopath ++ "../src/ado"
 capture adopath ++ "build"
 capture adopath ++ "../build"
 local candidate : environment CTOOLS_TEST_PLUGIN_DIR

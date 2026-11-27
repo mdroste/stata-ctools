@@ -364,6 +364,30 @@ int main(void)
 #endif
     static const int team[] = {4, 3, 7};
     for (int cs = 0; cs < 18; cs++) run_case(cs, team[cs % 3]);
+    /* Components of two effects of few levels: every block joins them all
+     * within its first rows, and the count stops there. Then the same joined
+     * by the last row alone (nothing can stop early), and not joined. */
+    {
+        const ST_int N = 400000;
+        ST_int *a = malloc((size_t)N * sizeof(ST_int)), *b = malloc((size_t)N * sizeof(ST_int));
+        assert(a && b);
+        for (int T = 1; T <= 4; T += 3) {
+            threads(T);
+            for (ST_int i = 0; i < N; i++) a[i] = 1 + i % 7, b[i] = 1 + (i / 7) % 5;
+            assert(ref_components(a, b, N, 7, 5) == 1);
+            assert(ctools_count_connected_components(a, b, N, 7, 5) == 1);
+            for (ST_int i = 0; i < N; i++) a[i] = b[i] = 1 + (i >= N / 2);
+            assert(ctools_count_connected_components(a, b, N, 2, 2) == 2);
+            b[N - 1] = 1;
+            assert(ref_components(a, b, N, 2, 2) == 1);
+            assert(ctools_count_connected_components(a, b, N, 2, 2) == 1);
+            /* a level without rows is a component of its own in neither
+             * count, and keeps the links below the number that stops */
+            assert(ctools_count_connected_components(a, b, N, 2, 3) == ref_components(a, b, N, 2, 3));
+        }
+        free(a);
+        free(b);
+    }
     puts("hdfe sample parallel: ok");
     return 0;
 }

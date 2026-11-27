@@ -786,6 +786,19 @@ program define coverage_merge_preserved
     drop `original_order'
 end
 
+/* coverage_fuzzy <varlist> : <command> runs a command, then sorts its result
+   by varlist: variables the command creates, which coverage_data's sortby()
+   cannot name because it checks them before the command runs. cfuzzyjoin's
+   comparisons with matchit and reclink, whose pairs within one master
+   observation come in another order, use it. */
+capture program drop coverage_fuzzy
+program define coverage_fuzzy
+    gettoken vars 0 : 0, parse(":")
+    gettoken colon 0 : 0, parse(":")
+    `0'
+    sort `vars', stable
+end
+
 /* joinby leaves observations that tie in an order that depends on the sort
    seed: order the result of either command by the master and using
    observation numbers. coverage_joinby <joinby|cjoinby> <its arguments> */

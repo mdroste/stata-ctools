@@ -22,8 +22,11 @@ d   crangestat      - Range statistics
 d   cinterpolate    - Linear and cubic interpolation
 d   csplit          - String splitting
 d   crangejoin      - Interval joins
+d   cgeonear        - Nearest neighbors and geodetic distances
 d   cjoinby         - All pairwise combinations within groups
 d   creshape        - Reshape between wide and long form
+d   cfuzzyjoin      - Fuzzy record linkage, similarity joins, string groups
+d   csql            - SQL queries on data and files, through DuckDB
 d   cdistinct       - Distinct value counts
 d   cegen           - Extensions to generate (egen functions)
 d   ccollapse       - Summary statistics by group
@@ -59,11 +62,6 @@ f cqreg.ado
 f cqreg.sthlp
 f cbinscatter.ado
 f cbinscatter.sthlp
-f _ctools_load.ado
-f _ctools_newvars.ado
-f _ctools_weight.ado
-f _ctools_strw.ado
-f _ctools_group.ado
 f cbsample.ado
 f cbsample.sthlp
 f cdecode.ado
@@ -94,30 +92,19 @@ f cjoinby.ado
 f cjoinby.sthlp
 f creshape.ado
 f creshape.sthlp
+f cfuzzyjoin.ado
+f cfuzzyjoin.sthlp
+f csql.ado
+f csql.sthlp
+f cgeonear.ado
+f cgeonear.sthlp
 f ctools_mac_arm.plugin
 f ctools_mac_x86.plugin
 f ctools_windows.plugin
 f ctools_linux.plugin
 f LICENSE
 f THIRD_PARTY_NOTICES
-f _ctools_clock.ado
-f _ctools_cleanup.ado
-f _ctools_home.ado
-f _ctools_ebv.ado
-f _ctools_fvsplit.ado
-f _ctools_fvnative.ado
-f _ctools_lap.ado
-f _ctools_vce.ado
-f _ctools_mode.ado
-f _ctools_undo.ado
-f _ctools_hdfe_absorb.ado
-f _ctools_hdfe_screen.ado
-f _ctools_hdfe_dof.ado
-f _ctools_hdfe_vce.ado
-f _ctools_hdfe_post.ado
 f _ctools_hdfe_boot.ado
-f _ctools_wild_table.ado
-f _ctools_strlkey.ado
 f _cppmlhdfe_estat.ado
 f _cppmlhdfe_footnote.ado
 f cdistinct.ado

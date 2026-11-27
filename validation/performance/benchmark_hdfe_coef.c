@@ -12,11 +12,14 @@
  *
  * design   one effect: one onefirm onefew (rows grouped by it) onecyc onernd;
  *          two: readme fy panel wy rr sparse akmchain akmrand akmreg akmhard
- *          akmsmall school; three: wfy rry fgy trade
+ *          akmsmall school; three: wfy rry fgy pyg trade
  * weights  0 none, 1 uniform(0.5, 1.5), 2 lognormal, 3 one or 2^26, 4 a
  *          third of the rows weigh nothing
  * methods  comma-separated: map (the rows), default (partial_out_columns),
- *          auto dense pcg lap (hdfe_coef_method; two or more effects)
+ *          prepared (partial_out_prepare, then partial_out_columns_prepared:
+ *          the same residuals as default; a second line gives the fastest
+ *          time of each step), auto dense pcg lap (hdfe_coef_method; two or
+ *          more effects)
  *
  * Every third column has level means a thousand times its noise. Each line
  * reports the status, the fastest and the median time, the iterations, the
@@ -332,6 +335,18 @@ static int design_make(design *P, const char *name, int N)
         }
         P->G = 3;
     }
+    else if (!strcmp(name, "pyg"))
+    {
+        /* a panel of ten years per unit, and a group drawn for every row:
+         * a level of the eliminated effect meets a few levels of the others */
+        for (int i = 0; i < N; i++)
+        {
+            a[i] = i / 10;
+            b[i] = i % 10;
+            c[i] = below(100);
+        }
+        P->G = 3;
+    }
     else if (!strncmp(name, "one", 3))
     {
         /* one effect: units of ten rows (one) or 200 (onefirm) in sorted
@@ -625,6 +640,7 @@ int main(int argc, char **argv)
     for (char *m = strtok(methods, ","); m; m = strtok(NULL, ","))
     {
         double times[64];
+        double ahead = 1e30, columns = 1e30;
         HDFE_SolveResult r = {0, 0, 0};
         for (int rep = 0; rep < repeats; rep++)
         {
@@ -634,6 +650,18 @@ int main(int argc, char **argv)
                 r = partial_out_columns_options(&S, X, N, K, 0, 1);
             else if (!strcmp(m, "default"))
                 r = partial_out_columns(&S, X, N, K, threads);
+            else if (!strcmp(m, "prepared"))
+            {
+                struct hdfe_coef_prepared *prepared = partial_out_prepare(&S, K);
+                const double t1 = now();
+                r = partial_out_columns_prepared(&S, X, N, K, threads, prepared);
+                const double t2 = now();
+                partial_out_prepared_free(prepared);
+                if (t1 - t0 < ahead)
+                    ahead = t1 - t0;
+                if (t2 - t1 < columns)
+                    columns = t2 - t1;
+            }
             else if (!strcmp(m, "auto"))
                 r = hdfe_coef_partial_out(&S, X, N, K, HDFE_COEF_AUTO);
             else if (!strcmp(m, "dense"))
@@ -668,6 +696,8 @@ int main(int argc, char **argv)
         printf("%-7s rc=%-3d min=%8.4f med=%8.4f iters=%-6d orth=%.1e err=%.1e hash=%016llx\n", m,
                (int)r.status, fastest, times[repeats / 2], (int)r.iterations, orth, err,
                (unsigned long long)hash);
+        if (ahead < 1e30)
+            printf("        ahead=%8.4f columns=%8.4f\n", ahead, columns);
         fflush(stdout);
     }
     state_close(&S);

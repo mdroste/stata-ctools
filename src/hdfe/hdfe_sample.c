@@ -497,7 +497,36 @@ void hdfe_singletons_free(HDFE_Singletons *sing)
             free(sing->affected[g].left);
         }
     free(sing->affected);
+    if (sing->rows_left)
+        for (ST_int g = 0; g < sing->G; g++)
+            free(sing->rows_left[g]);
+    free(sing->rows_left);
     memset(sing, 0, sizeof(*sing));
+}
+
+static inline int level_bit(const uint64_t *bits, ST_int level)
+{
+    return (int)((bits[(size_t)level >> 6] >> (level & 63)) & 1);
+}
+
+static inline void level_bit_set(uint64_t *bits, ST_int level)
+{
+    bits[(size_t)level >> 6] |= (uint64_t)1 << (level & 63);
+}
+
+/* Entries of the ascending array a[0..n) that are below x */
+static ST_int ordered_below(const ST_int *a, ST_int n, ST_int x)
+{
+    ST_int lo = 0, hi = n;
+    while (lo < hi)
+    {
+        ST_int mid = lo + (hi - lo) / 2;
+        if (a[mid] < x)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return lo;
 }
 
 /* The levels of one factor that singleton removal follows: those of the
@@ -623,6 +652,11 @@ static int sing_drop(ST_int row, uint64_t *gone, const ST_double *fweights, ST_i
 /* Most private count entries (levels x blocks) of one counting pass, and the
  * first rows looked at before counting */
 #define HDFE_SINGLETON_PASS_ENTRIES ((size_t)1 << 22)
+/* The removal lists what it drops while the rows alone in a level are at
+ * most one row in 128, or this many */
+#ifndef HDFE_LISTED_MIN_SEEDS /* tests set a small one */
+#define HDFE_LISTED_MIN_SEEDS 4096
+#endif
 /* Dropped rows are listed (and the levels shifted over them) while they are
  * at most one row in 64, or this many */
 #ifndef HDFE_LISTED_MIN_DROPPED /* tests set a small one */
@@ -640,7 +674,7 @@ static int sing_drop(ST_int row, uint64_t *gone, const ST_double *fweights, ST_i
  * Singleton removal from the rows alone in their level: only the levels of
  * dropped rows are followed. Returns 0 when done (out filled in), 1 when the
  * removals are too many or spread too widely for this to pay, or an allocation
- * failed: the caller then counts every level.
+ * failed: the caller then starts again with singletons_seeded().
  */
 static int singletons_listed(HDFE_Singletons *out, ST_int *const *levels, const ST_int *num_levels,
                              const HDFE_FactorOrder *order, ST_int G, ST_int N,
@@ -649,8 +683,8 @@ static int singletons_listed(HDFE_Singletons *out, ST_int *const *levels, const 
     int result = 1;
     ST_int g, passes = 0;
     size_t seeds = 0, most_seeds = (size_t)N / 128, most_dropped = (size_t)N / 64;
-    if (most_seeds < 4096)
-        most_seeds = 4096;
+    if (most_seeds < HDFE_LISTED_MIN_SEEDS)
+        most_seeds = HDFE_LISTED_MIN_SEEDS;
     if (most_dropped < HDFE_LISTED_MIN_DROPPED)
         most_dropped = HDFE_LISTED_MIN_DROPPED;
     for (g = 0; g < G; g++)
@@ -838,6 +872,337 @@ done:
     return result;
 }
 
+/* ------------------------------------------------------------------------
+ * The same from any number of rows alone in their level
+ * ------------------------------------------------------------------------ */
+
+/* Every level of a factor is counted in row blocks, each with a table of its
+ * own, while the tables hold this many entries at most */
+#ifndef HDFE_SEEDED_TABLE_ENTRIES /* tests set a small one */
+#define HDFE_SEEDED_TABLE_ENTRIES ((size_t)1 << 22)
+#endif
+
+/*
+ * The counts of a factor in the removal below: cx[2 * l] and cx[2 * l + 1]
+ * are the rows level l has left and the XOR of their numbers, so that a
+ * level left with one row names it. Three ways to fill them from the rows
+ * still in the sample (keep), each over all the threads; cx is zero on entry.
+ */
+
+/* Few levels: B row blocks with a table each. Returns 1 when the tables
+ * cannot be allocated. */
+static int seed_count_tables(const ST_int *lev, const ST_int *keep, ST_int N, ST_int L, int B,
+                             ST_int *cx)
+{
+    const size_t entries = 2 * ((size_t)L + 1);
+    /* tables at least four cache lines apart */
+    const size_t stride = entries < 64 ? 64 : entries;
+    ST_int *priv = (ST_int *)calloc((size_t)B * stride, sizeof(ST_int));
+    int b;
+    long long l;
+    if (!priv)
+        return 1;
+#pragma omp parallel for schedule(static)
+    for (b = 0; b < B; b++)
+    {
+        ST_int *p = priv + (size_t)b * stride;
+        ST_int i0, i1;
+        ctools_hdfe_block_range(N, B, b, &i0, &i1);
+        for (ST_int i = i0; i < i1; i++)
+        {
+            const ST_int in = keep[i] != 0;
+            ST_int *slot = &p[2 * (size_t)lev[i]];
+            slot[0] += in;
+            slot[1] ^= i & -in;
+        }
+    }
+#pragma omp parallel for schedule(static) if (L >= 65536)
+    for (l = 0; l <= (long long)L; l++)
+    {
+        ST_int n = 0, x = 0;
+        for (int t = 0; t < B; t++)
+        {
+            n += priv[(size_t)t * stride + 2 * (size_t)l];
+            x ^= priv[(size_t)t * stride + 2 * (size_t)l + 1];
+        }
+        cx[2 * (size_t)l] = n;
+        cx[2 * (size_t)l + 1] = x;
+    }
+    free(priv);
+    return 0;
+}
+
+/* Rows in level order, the levels numbered in order of first appearance:
+ * the levels first met in a block are that block's alone, which counts them
+ * in place, and its rows of earlier levels are set aside and counted at the
+ * end. Returns 1, with cx zero again, when a block has too many of the
+ * latter or memory runs out. */
+static int seed_count_local(const ST_int *lev, const ST_int *keep, ST_int N, ST_int L,
+                            const ST_int *first_row, int B, ST_int *cx)
+{
+    ST_int **aside = (ST_int **)calloc((size_t)B, sizeof(ST_int *));
+    /* each block's number of rows set aside, a cache line apart */
+    ST_int *n_aside = (ST_int *)calloc((size_t)B * 16, sizeof(ST_int));
+    int b, failed = 0;
+    if (!aside || !n_aside)
+    {
+        free(aside);
+        free(n_aside);
+        return 1;
+    }
+#pragma omp parallel for schedule(static) reduction(| : failed)
+    for (b = 0; b < B; b++)
+    {
+        ST_int i0, i1, n = 0;
+        ctools_hdfe_block_range(N, B, b, &i0, &i1);
+        /* the levels first met before this block */
+        const ST_int earlier = ordered_below(first_row, L, i0);
+        const ST_int cap = (i1 - i0) / 8 + 16;
+        ST_int *list = (ST_int *)malloc((size_t)cap * sizeof(ST_int));
+        aside[b] = list;
+        if (!list)
+        {
+            failed = 1;
+            continue;
+        }
+        for (ST_int i = i0; i < i1; i++)
+        {
+            const ST_int l = lev[i], in = keep[i] != 0;
+            if (l > earlier)
+            {
+                ST_int *slot = &cx[2 * (size_t)l];
+                slot[0] += in;
+                slot[1] ^= i & -in;
+            }
+            else if (in)
+            {
+                if (n == cap)
+                {
+                    failed = 1;
+                    break;
+                }
+                list[n++] = i;
+            }
+        }
+        n_aside[(size_t)b * 16] = n;
+    }
+    if (failed)
+    {
+        long long k;
+        const long long entries = 2 * ((long long)L + 1);
+#pragma omp parallel for schedule(static)
+        for (k = 0; k < entries; k++)
+            cx[k] = 0;
+    }
+    else
+    {
+        for (b = 0; b < B; b++)
+            for (ST_int k = 0; k < n_aside[(size_t)b * 16]; k++)
+            {
+                const ST_int i = aside[b][k];
+                ST_int *slot = &cx[2 * (size_t)lev[i]];
+                slot[0]++;
+                slot[1] ^= i;
+            }
+    }
+    for (b = 0; b < B; b++)
+        free(aside[b]);
+    free(aside);
+    free(n_aside);
+    return failed;
+}
+
+/* A row of a level, if it is still in the sample */
+static inline void seed_count_row(ST_int *cx, ST_int level, ST_int in, ST_int row)
+{
+    if (in)
+    {
+        ST_int *slot = &cx[2 * (size_t)level];
+        slot[0]++;
+        slot[1] ^= row;
+    }
+}
+
+/* Many levels in rows of no order: in T ranges of levels with a thread each
+ * (CTOOLS_HDFE_ROWS_IN_RANGE). With the levels numbered in order of first
+ * appearance (first_row given), a range has no row before the first row of
+ * its lowest level. */
+static void seed_count_ranges(const ST_int *lev, const ST_int *keep, ST_int N, ST_int L,
+                              const ST_int *first_row, int T, ST_int *cx)
+{
+    int t;
+#pragma omp parallel for schedule(static)
+    for (t = 0; t < T; t++)
+    {
+        uint32_t lo, width;
+        ctools_hdfe_level_range(L, T, t, &lo, &width);
+        const ST_int start = (first_row && width > 0) ? first_row[lo - 1] : 0;
+        CTOOLS_HDFE_ROWS_IN_RANGE(lev, N, lo, width, start, seed_count_row(cx, lev[row], keep[row], row));
+    }
+}
+
+/*
+ * Singleton removal from the rows alone in their level, which the load
+ * lists, however many they are. Those rows go first. A factor in which every
+ * row dropped so far was alone in its level has lost nothing else by it and
+ * is left uncounted; once a row goes for another factor's sake, every level
+ * of the factor is counted on the rows left, once, and from then on its
+ * levels lose the rows of each round as they come. A level left with one row
+ * drops that row in the next round; the rows a round drops stay in the
+ * counts (flag 2) until that next round takes them out. The sample is the
+ * fixed point, the same in whatever order the rows go. Returns 0 (out filled
+ * in), or 1 when memory runs out: the caller then counts every level of
+ * every factor.
+ */
+static int singletons_seeded(HDFE_Singletons *out, ST_int *const *levels, const ST_int *num_levels,
+                             const HDFE_FactorOrder *order, ST_int G, ST_int N,
+                             const ST_double *fweights, int B)
+{
+    int result = 1;
+    ST_int g, i, seeds = 0;
+    ST_int **cx = (ST_int **)calloc((size_t)G, sizeof(ST_int *));
+    /* droppable rows alone in a level of each factor */
+    ST_int *alone = (ST_int *)calloc((size_t)G, sizeof(ST_int));
+    ST_int *keep = (ST_int *)malloc((size_t)N * sizeof(ST_int));
+    ST_int *rows = NULL; /* the rows dropped after the first round, as they are found */
+    size_t n_rows = 0, cap_rows = 0;
+    if (!cx || !alone || !keep)
+        goto done;
+
+#pragma omp parallel for schedule(static)
+    for (i = 0; i < N; i++)
+        keep[i] = 1;
+
+    /* The rows alone in a level (with fweights, those of weight 1). A
+     * factor's are distinct rows; one alone in two factors is dropped once */
+    for (g = 0; g < G; g++)
+    {
+        const ST_int *single = order[g].rows.single_rows;
+        const long long n = order[g].rows.num_single;
+        long long k;
+        ST_int mine = 0, fresh = 0;
+#pragma omp parallel for schedule(static) reduction(+ : mine, fresh) if (n >= 65536)
+        for (k = 0; k < n; k++)
+        {
+            const ST_int row = single[k];
+            if (fweights && fweights[row] != 1.0)
+                continue;
+            mine++;
+            if (keep[row])
+            {
+                keep[row] = 0;
+                fresh++;
+            }
+        }
+        alone[g] = mine;
+        seeds += fresh;
+    }
+
+/* Drops a row at the end of the round unless it is dropped already or, with
+ * fweights, its weight is not 1 */
+#define SEED_DROP(row) \
+    do \
+    { \
+        const ST_int row_ = (row); \
+        if (keep[row_] == 1 && (!fweights || fweights[row_] == 1.0)) \
+        { \
+            if (n_rows == cap_rows) \
+            { \
+                const size_t cap_ = cap_rows ? 2 * cap_rows : 1024; \
+                ST_int *grown_ = (ST_int *)realloc(rows, cap_ * sizeof(ST_int)); \
+                if (!grown_) \
+                    goto done; \
+                rows = grown_; \
+                cap_rows = cap_; \
+            } \
+            keep[row_] = 2; \
+            rows[n_rows++] = row_; \
+        } \
+    } while (0)
+
+    /* Rounds: the first drops the rows above, each later one rows[f0..f1) */
+    size_t f0 = 0, f1 = 0;
+    for (int first = 1; first || f0 < f1; first = 0)
+    {
+        for (g = 0; g < G; g++)
+        {
+            const ST_int *lev = levels[g];
+            const ST_int L = num_levels[g];
+            if (cx[g])
+            {
+                /* counted: its levels lose this round's rows */
+                ST_int *c = cx[g];
+                for (size_t k = f0; k < f1; k++)
+                {
+                    const ST_int row = rows[k];
+                    ST_int *slot = &c[2 * (size_t)lev[row]];
+                    slot[0]--;
+                    slot[1] ^= row;
+                    if (slot[0] == 1)
+                        SEED_DROP(slot[1]);
+                }
+                continue;
+            }
+            /* Not counted. In the first round the rows alone in a level of
+             * this factor take nothing from its other levels; after it,
+             * every row dropped comes from a counted factor */
+            if (first && seeds == alone[g])
+                continue;
+            ST_int *c = (ST_int *)calloc(2 * ((size_t)L + 1), sizeof(ST_int));
+            if (!c)
+                goto done;
+            cx[g] = c;
+            /* on the rows left: this round's are out (flag 0) */
+            const int tables = ((size_t)L + 1) * (size_t)B <= HDFE_SEEDED_TABLE_ENTRIES;
+            const ST_int *first_row = order[g].ordered ? order[g].rows.first_row : NULL;
+            if (!(tables && seed_count_tables(lev, keep, N, L, B, c) == 0) &&
+                !(first_row && order[g].rows.local &&
+                  seed_count_local(lev, keep, N, L, first_row, B, c) == 0))
+                seed_count_ranges(lev, keep, N, L, first_row, B, c);
+            for (ST_int l = 1; l <= L; l++)
+                if (c[2 * (size_t)l] == 1)
+                    SEED_DROP(c[2 * (size_t)l + 1]);
+        }
+        for (size_t k = f1; k < n_rows; k++)
+            keep[rows[k]] = 0;
+        f0 = f1;
+        f1 = n_rows;
+    }
+#undef SEED_DROP
+
+    out->G = G;
+    out->num_dropped = seeds + (ST_int)n_rows;
+    if (out->num_dropped == 0)
+    {
+        out->affected = (HDFE_AffectedLevels *)calloc((size_t)G, sizeof(HDFE_AffectedLevels));
+        if (!out->affected)
+        {
+            memset(out, 0, sizeof(*out));
+            goto done;
+        }
+        out->listed = 1;
+    }
+    else
+    {
+        out->counted = 1;
+        out->rows_left = cx;
+        cx = NULL;
+        out->keep = keep;
+        keep = NULL;
+    }
+    result = 0;
+
+done:
+    if (cx)
+        for (g = 0; g < G; g++)
+            free(cx[g]);
+    free(cx);
+    free(alone);
+    free(keep);
+    free(rows);
+    return result;
+}
+
 ST_retcode hdfe_drop_singletons(HDFE_Singletons *out, ST_int *const *levels,
                                 const ST_int *num_levels, const HDFE_FactorOrder *order, ST_int G,
                                 ST_int N, const ST_double *fweights, ST_int verbose)
@@ -857,7 +1222,15 @@ ST_retcode hdfe_drop_singletons(HDFE_Singletons *out, ST_int *const *levels,
     for (ST_int g = 0; g < G && known; g++)
         known = order[g].rows.num_single >= 0 &&
                 (order[g].rows.num_single == 0 || order[g].rows.single_rows);
-    if (known && singletons_listed(out, levels, num_levels, order, G, N, fweights, B) == 0)
+    int done = known && singletons_listed(out, levels, num_levels, order, G, N, fweights, B) == 0;
+    if (known && !done)
+    {
+        /* Too many rows alone in a level, or removals that spread, for the
+         * list: the same start, with whole factors counted where need be */
+        memset(out, 0, sizeof(*out));
+        done = singletons_seeded(out, levels, num_levels, order, G, N, fweights, B) == 0;
+    }
+    if (done)
     {
         if (verbose && out->num_dropped > 0)
         {
@@ -868,7 +1241,7 @@ ST_retcode hdfe_drop_singletons(HDFE_Singletons *out, ST_int *const *levels,
         return 0;
     }
 
-    /* Every level counted */
+    /* Every level of every factor counted */
     memset(out, 0, sizeof(*out));
     ST_int *keep = (ST_int *)malloc((size_t)N * sizeof(ST_int));
     if (!keep)
@@ -1056,6 +1429,22 @@ done:
     return rc;
 }
 
+void hdfe_singletons_counted(HDFE_Singletons *out, ST_int **rows_left, ST_int G)
+{
+    if (!rows_left)
+        return;
+    if (!out || out->listed || out->num_dropped == 0 || out->rows_left)
+    {
+        for (ST_int g = 0; g < G; g++)
+            free(rows_left[g]);
+        free(rows_left);
+        return;
+    }
+    out->rows_left = rows_left;
+    out->counted = 1;
+    out->G = G;
+}
+
 /* A factor's rows per level are counted in row blocks, each with a table of
  * its own, while the tables hold this many entries at most */
 #ifndef HDFE_COUNT_BLOCK_ENTRIES /* tests set a small one */
@@ -1067,8 +1456,18 @@ done:
 #define HDFE_COUNT_FAR_SLOTS 8192
 #endif
 
+/* Whether a factor's rows are counted already (the build takes them from
+ * singleton removal when that counted every level): its first level has rows
+ * in any sample, and the counts are zero until they are filled */
+static int rows_counted(const FE_Factor *f)
+{
+    return f->num_levels > 0 && f->counts && f->counts[0] != 0.0;
+}
+
 int hdfe_count_rows_parallel(const HDFE_State *S, ST_int g, ST_int local)
 {
+    if (rows_counted(&S->factors[g]))
+        return 1; /* nothing left for hdfe_count_rows() to do */
     const int B = ctools_hdfe_row_blocks(S->N);
     if (B <= 1)
         return 0;
@@ -1222,11 +1621,30 @@ static int count_rows_own_levels(FE_Factor *f, ST_int N, int B)
     return failed;
 }
 
+/* Many levels in rows of no order, in T ranges of levels with a thread each
+ * (whole numbers add up exactly in any grouping) */
+static void count_rows_ranges(FE_Factor *f, ST_int N, int T)
+{
+    const ST_int *lev = f->levels;
+    ST_double *counts = f->counts;
+    const ST_int L = f->num_levels;
+    int t;
+#pragma omp parallel for schedule(static)
+    for (t = 0; t < T; t++)
+    {
+        uint32_t lo, width;
+        ctools_hdfe_level_range(L, T, t, &lo, &width);
+        CTOOLS_HDFE_ROWS_IN_RANGE(lev, N, lo, width, 0, counts[lev[row] - 1] += 1.0);
+    }
+}
+
 void hdfe_count_rows(HDFE_State *S, ST_int g, ST_int local)
 {
     FE_Factor *f = &S->factors[g];
     const ST_int N = S->N;
     const int B = ctools_hdfe_row_blocks(N);
+    if (rows_counted(f))
+        return;
     if (B > 1 && (size_t)f->num_levels * (size_t)B <= HDFE_COUNT_BLOCK_ENTRIES)
     {
         if (count_rows_tables(f, N, B) == 0)
@@ -1242,7 +1660,8 @@ void hdfe_count_rows(HDFE_State *S, ST_int g, ST_int local)
 
 void hdfe_count_rows_serial(HDFE_State *S, ST_int g)
 {
-    count_rows_serial(&S->factors[g], S->N);
+    if (!rows_counted(&S->factors[g]))
+        count_rows_serial(&S->factors[g], S->N);
 }
 
 void hdfe_count_weights(HDFE_State *S, ST_int g, ST_int N_in, const ST_int *keep,
@@ -1282,6 +1701,15 @@ void hdfe_count_factors(HDFE_State *S, const HDFE_FactorOrder *order, ST_int N_i
             blocks[g] = (unsigned char)hdfe_count_rows_parallel(S, g, order ? order[g].rows.local : 0);
         serial_jobs += !(blocks && blocks[g]);
     }
+    if (B > 1 && serial_jobs == 1 && !weights)
+    {
+        /* One factor with many levels in rows of no order, and nothing to
+         * run beside it: all the threads count it, by ranges of levels */
+        for (g = 0; g < G; g++)
+            if (!(blocks && blocks[g]) && !rows_counted(&S->factors[g]))
+                count_rows_ranges(&S->factors[g], S->N, B);
+        jobs = 0;
+    }
     /* The serial passes side by side: rows of the factors with many
      * levels in no order, and the weights of every factor */
 #pragma omp parallel for schedule(dynamic) if (B > 1 && serial_jobs > 1)
@@ -1296,21 +1724,6 @@ void hdfe_count_factors(HDFE_State *S, const HDFE_FactorOrder *order, ST_int N_i
         if (blocks && blocks[g])
             hdfe_count_rows(S, g, order ? order[g].rows.local : 0);
     free(blocks);
-}
-
-/* Entries of the ascending array a[0..n) that are below x */
-static ST_int ordered_below(const ST_int *a, ST_int n, ST_int x)
-{
-    ST_int lo = 0, hi = n;
-    while (lo < hi)
-    {
-        ST_int mid = lo + (hi - lo) / 2;
-        if (a[mid] < x)
-            lo = mid + 1;
-        else
-            hi = mid;
-    }
-    return lo;
 }
 
 /* A level whose first row was dropped but which has rows left: its first
@@ -1570,6 +1983,379 @@ done:
     return rc;
 }
 
+/* One factor in build_factors_ranked() */
+typedef struct
+{
+    const ST_int *lev;       /* loaded levels, 1..L in order of first appearance */
+    const ST_int *first_row; /* first row of each */
+    const ST_int *left;      /* rows left per level (entry 2 * l), or NULL */
+    ST_int L;
+    size_t words, stride;      /* of a set of marks (a bit per level); of a block's */
+    uint64_t *gone, *moved;    /* levels without a row left; with rows but not the first */
+    uint64_t *marks;           /* per row block: its moved levels, then those it has first */
+    ST_int *unmoved;           /* [c]: levels keeping their first row in the ranges before c */
+    ST_int *found;             /* [b]: moved levels first met in the blocks before b */
+    ST_int *key, *moved_level; /* the moved levels by first kept row, and those rows */
+    ST_int *newid;             /* new number of each loaded level with a row left */
+    ST_int nm, L_new;
+    int C; /* ranges of levels that hold whole words of the marks */
+} rank_factor;
+
+/* Levels [*from, *stop) of range c of f */
+static inline void rank_range(const rank_factor *f, int c, ST_int *from, ST_int *stop)
+{
+    const size_t w0 = f->words * (size_t)c / (size_t)f->C;
+    const size_t w1 = f->words * ((size_t)c + 1) / (size_t)f->C;
+    *from = w0 == 0 ? 1 : (ST_int)(64 * w0);
+    *stop = 64 * w1 > (size_t)f->L ? f->L + 1 : (ST_int)(64 * w1);
+}
+
+static void rank_factor_free(rank_factor *f)
+{
+    free(f->gone);
+    free(f->moved);
+    free(f->marks);
+    free(f->unmoved);
+    free(f->found);
+    free(f->key);
+    free(f->moved_level);
+    free(f->newid);
+}
+
+/*
+ * hdfe_build_factors() for levels loaded in order of first appearance, when
+ * the rows dropped are many and counted (sing->counted), with the same
+ * result. The new numbers follow the first kept rows. A level whose first
+ * row is kept comes where it came among such levels. One that lost its
+ * first row but has rows left comes where its first kept row puts it, and
+ * only those are looked for among the rows: each block of rows marks the
+ * ones it has, a level stays marked in the first block that has it, and that
+ * block notes the level's first kept row there. Taken block after block
+ * those rows are ascending, and the numbers follow from merging them into
+ * the first rows of the other levels, in ranges of levels. The kept rows
+ * then read their levels through the new numbers, and the rows per level are
+ * taken from sing where it counted them (the other counts are left zero for
+ * the caller). Three passes over the rows, for all factors at once. Returns
+ * 0, 198, 920, or 1 with S untouched when the general build must do it (the
+ * marks would exceed their budget, or sing does not add up).
+ */
+static ST_retcode build_factors_ranked(HDFE_State *S, ST_int G, const HDFE_LoadedFactor *factors,
+                                       const HDFE_FactorOrder *order, const HDFE_Singletons *sing,
+                                       ST_int N_in, ST_int N, const ST_double *weights,
+                                       ST_int weighted, int B)
+{
+    ST_retcode rc = 0;
+    const ST_int *keep = sing->keep;
+    ST_int g, any_moved = 0;
+    int b, c;
+    rank_factor *rf = (rank_factor *)calloc((size_t)G, sizeof(rank_factor));
+    ST_int *kept = (ST_int *)calloc((size_t)B + 1, sizeof(ST_int));
+    ST_int **out = (ST_int **)calloc((size_t)G, sizeof(ST_int *));
+    FE_Factor *built = NULL;
+    if (!rf || !kept || !out)
+    {
+        rc = 920;
+        goto done;
+    }
+
+    /* The levels with a row left: first row kept, or moved */
+    for (g = 0; g < G && !rc; g++)
+    {
+        rank_factor *f = &rf[g];
+        long long gone_levels = 0, rows_left = 0;
+        f->lev = factors[g].levels;
+        f->first_row = order[g].rows.first_row;
+        f->left = sing->rows_left ? sing->rows_left[g] : NULL;
+        f->L = factors[g].num_levels;
+        f->words = (size_t)f->L / 64 + 1;
+        /* a block's marks at least two cache lines from the next block's */
+        f->stride = f->words < 16 ? 16 : f->words;
+        f->C = (B > 1 && f->L >= HDFE_ORDER_RANGE_LEVELS) ? B : 1;
+        if ((size_t)f->C > f->words)
+            f->C = (int)f->words;
+        f->gone = (uint64_t *)calloc(f->words, sizeof(uint64_t));
+        f->moved = (uint64_t *)calloc(f->words, sizeof(uint64_t));
+        f->unmoved = (ST_int *)calloc((size_t)f->C + 1, sizeof(ST_int));
+        f->newid = (ST_int *)malloc(((size_t)f->L + 1) * sizeof(ST_int));
+        ST_int *moved_in = (ST_int *)calloc((size_t)f->C + 1, sizeof(ST_int));
+        if (!f->gone || !f->moved || !f->unmoved || !f->newid || !moved_in)
+        {
+            free(moved_in);
+            rc = 920;
+            break;
+        }
+#pragma omp parallel for schedule(static) reduction(+ : gone_levels, rows_left) if (f->C > 1)
+        for (c = 0; c < f->C; c++)
+        {
+            ST_int a, end, u = 0, m = 0;
+            rank_range(f, c, &a, &end);
+            for (ST_int o = a; o < end; o++)
+            {
+                const int first_kept = keep[f->first_row[o - 1]] != 0;
+                /* without counts every dropped row was alone in its level */
+                const ST_int left = f->left ? f->left[2 * (size_t)o] : first_kept;
+                rows_left += left;
+                if (left == 0)
+                {
+                    level_bit_set(f->gone, o);
+                    gone_levels++;
+                }
+                else if (first_kept)
+                    u++;
+                else
+                {
+                    level_bit_set(f->moved, o);
+                    m++;
+                }
+            }
+            f->unmoved[c + 1] = u;
+            moved_in[c + 1] = m;
+        }
+        for (c = 0; c < f->C; c++)
+        {
+            f->unmoved[c + 1] += f->unmoved[c];
+            f->nm += moved_in[c + 1];
+        }
+        free(moved_in);
+        f->L_new = f->unmoved[f->C] + f->nm;
+        /* What sing says must add up: the kept rows, or one level gone for
+         * every row dropped */
+        if (f->left ? rows_left != (long long)N : gone_levels != (long long)(N_in - N))
+            rc = 1;
+        if (f->nm > 0 && !rc)
+        {
+            if (f->words > HDFE_BUILD_BITSET_BUDGET / 8 / (size_t)B)
+            {
+                rc = 1;
+                break;
+            }
+            any_moved = 1;
+            f->marks = (uint64_t *)calloc((size_t)B * f->stride, sizeof(uint64_t));
+            f->found = (ST_int *)calloc((size_t)B + 1, sizeof(ST_int));
+            f->key = (ST_int *)malloc((size_t)f->nm * sizeof(ST_int));
+            f->moved_level = (ST_int *)malloc((size_t)f->nm * sizeof(ST_int));
+            if (!f->marks || !f->found || !f->key || !f->moved_level)
+                rc = 920;
+        }
+    }
+    if (rc)
+        goto done;
+
+    /* First pass: the kept rows of each block, and the moved levels among
+     * them */
+#pragma omp parallel for schedule(static) if (B > 1)
+    for (b = 0; b < B; b++)
+    {
+        ST_int i0, i1, n = 0;
+        ctools_hdfe_block_range(N_in, B, b, &i0, &i1);
+        for (ST_int i = i0; i < i1; i++)
+            n += keep[i] != 0;
+        kept[b + 1] = n;
+        for (ST_int h = 0; h < G; h++)
+        {
+            const rank_factor *f = &rf[h];
+            if (f->nm == 0)
+                continue;
+            uint64_t *m = f->marks + (size_t)b * f->stride;
+            const uint64_t *moved = f->moved;
+            const ST_int *lev = f->lev;
+            for (ST_int i = i0; i < i1; i++)
+            {
+                const ST_int l = lev[i];
+                if (level_bit(moved, l) && keep[i] && !level_bit(m, l))
+                    level_bit_set(m, l);
+            }
+        }
+    }
+    for (b = 0; b < B; b++)
+        kept[b + 1] += kept[b];
+    if (kept[B] != N)
+    {
+        rc = 198;
+        goto done;
+    }
+
+    if (any_moved)
+    {
+        /* Each moved level in its first block only */
+        for (g = 0; g < G; g++)
+        {
+            rank_factor *f = &rf[g];
+            long long w;
+            int bad = 0;
+            if (f->nm == 0)
+                continue;
+#pragma omp parallel for schedule(static) reduction(| : bad) if (B > 1 && f->words >= 4096)
+            for (w = 0; w < (long long)f->words; w++)
+            {
+                uint64_t seen = 0;
+                for (int t = 0; t < B; t++)
+                {
+                    uint64_t *slot = &f->marks[(size_t)t * f->stride + (size_t)w];
+                    const uint64_t v = *slot;
+                    *slot = v & ~seen;
+                    seen |= v;
+                }
+                bad |= seen != f->moved[w];
+            }
+#pragma omp parallel for schedule(static) if (B > 1 && f->words >= 4096)
+            for (b = 0; b < B; b++)
+            {
+                const uint64_t *m = f->marks + (size_t)b * f->stride;
+                ST_int n = 0;
+                for (size_t k = 0; k < f->words; k++)
+                    n += __builtin_popcountll(m[k]);
+                f->found[b + 1] = n;
+            }
+            for (b = 0; b < B; b++)
+                f->found[b + 1] += f->found[b];
+            if (bad || f->found[B] != f->nm)
+            {
+                /* a level counted with rows left has no kept row */
+                rc = 1;
+                goto done;
+            }
+        }
+        /* Second pass: their first kept rows, ascending block after block */
+#pragma omp parallel for schedule(static) if (B > 1)
+        for (b = 0; b < B; b++)
+        {
+            ST_int i0, i1;
+            ctools_hdfe_block_range(N_in, B, b, &i0, &i1);
+            for (ST_int h = 0; h < G; h++)
+            {
+                rank_factor *f = &rf[h];
+                if (f->nm == 0)
+                    continue;
+                uint64_t *m = f->marks + (size_t)b * f->stride;
+                const ST_int *lev = f->lev;
+                const ST_int stop = f->found[b + 1];
+                ST_int j = f->found[b];
+                for (ST_int i = i0; i < i1 && j < stop; i++)
+                {
+                    const ST_int l = lev[i];
+                    uint64_t *word = &m[(size_t)l >> 6];
+                    const uint64_t bit = (uint64_t)1 << (l & 63);
+                    if ((*word & bit) && keep[i])
+                    {
+                        *word &= ~bit;
+                        f->key[j] = i;
+                        f->moved_level[j++] = l;
+                    }
+                }
+            }
+        }
+    }
+
+    /* New numbers: before an unmoved level come the unmoved levels below it
+     * and the moved levels whose first kept row is before its first row;
+     * each range ends with the moved levels up to the next range's first row */
+    for (g = 0; g < G; g++)
+    {
+        rank_factor *f = &rf[g];
+#pragma omp parallel for schedule(static) if (f->C > 1)
+        for (c = 0; c < f->C; c++)
+        {
+            ST_int a, end;
+            rank_range(f, c, &a, &end);
+            ST_int j = a <= f->L ? ordered_below(f->key, f->nm, f->first_row[a - 1]) : f->nm;
+            ST_int next = f->unmoved[c] + j;
+            for (ST_int o = a; o < end; o++)
+            {
+                if (level_bit(f->gone, o) || level_bit(f->moved, o))
+                    continue;
+                while (j < f->nm && f->key[j] < f->first_row[o - 1])
+                    f->newid[f->moved_level[j++]] = ++next;
+                f->newid[o] = ++next;
+            }
+            const ST_int j_end =
+                end <= f->L ? ordered_below(f->key, f->nm, f->first_row[end - 1]) : f->nm;
+            while (j < j_end)
+                f->newid[f->moved_level[j++]] = ++next;
+        }
+    }
+
+    built = (FE_Factor *)calloc((size_t)G, sizeof(FE_Factor));
+    if (!built)
+    {
+        rc = 920;
+        goto done;
+    }
+    for (g = 0; g < G; g++)
+    {
+        const size_t L = (size_t)(rf[g].L_new > 0 ? rf[g].L_new : 1);
+        out[g] = (ST_int *)malloc((size_t)N * sizeof(ST_int));
+        built[g].counts = (ST_double *)calloc(L, sizeof(ST_double));
+        if (weights || weighted)
+            built[g].weighted_counts = (ST_double *)calloc(L, sizeof(ST_double));
+        if (!out[g] || !built[g].counts || ((weights || weighted) && !built[g].weighted_counts))
+            rc = 920;
+    }
+    if (rc)
+        goto done;
+
+    /* Third pass: the kept rows' levels */
+#pragma omp parallel for schedule(static) if (B > 1)
+    for (b = 0; b < B; b++)
+    {
+        ST_int i0, i1, idx = kept[b];
+        ctools_hdfe_block_range(N_in, B, b, &i0, &i1);
+        for (ST_int i = i0; i < i1; i++)
+        {
+            if (!keep[i])
+                continue;
+            for (ST_int h = 0; h < G; h++)
+                out[h][idx] = rf[h].newid[rf[h].lev[i]];
+            idx++;
+        }
+    }
+
+    for (g = 0; g < G; g++)
+    {
+        FE_Factor *f = &built[g];
+        f->levels = out[g];
+        out[g] = NULL;
+        f->num_levels = rf[g].L_new;
+        f->max_level = rf[g].L_new;
+        f->has_intercept = 1;
+        if (rf[g].left)
+        {
+            /* every level was counted by the removal */
+            const ST_int *left = rf[g].left, *id = rf[g].newid;
+            const uint64_t *gone = rf[g].gone;
+            const long long L = rf[g].L;
+            long long l;
+#pragma omp parallel for schedule(static) if (B > 1 && L >= HDFE_ORDER_RANGE_LEVELS)
+            for (l = 1; l <= L; l++)
+                if (!level_bit(gone, (ST_int)l))
+                    f->counts[id[l] - 1] = (ST_double)left[2 * (size_t)l];
+        }
+    }
+    S->G = G;
+    S->N = N;
+    S->factors = built;
+    built = NULL;
+
+done:
+    if (built)
+        for (g = 0; g < G; g++)
+        {
+            free(built[g].counts);
+            free(built[g].weighted_counts);
+        }
+    free(built);
+    if (rf)
+        for (g = 0; g < G; g++)
+            rank_factor_free(&rf[g]);
+    if (out)
+        for (g = 0; g < G; g++)
+            free(out[g]);
+    free(rf);
+    free(out);
+    free(kept);
+    return rc;
+}
+
 ST_retcode hdfe_build_factors_ordered(HDFE_State *S, ST_int G, HDFE_LoadedFactor *factors,
                                       const HDFE_FactorOrder *order, const HDFE_Singletons *sing,
                                       ST_int N_in, const ST_double *weights, ST_int weighted,
@@ -1594,6 +2380,27 @@ ST_retcode hdfe_build_factors_ordered(HDFE_State *S, ST_int G, HDFE_LoadedFactor
         direct = order[g].ordered && factors[g].levels && (n_dropped == 0 || order[g].rows.first_row);
     if (!direct)
     {
+        /* Many rows dropped, and counted, from levels in order of first
+         * appearance */
+        int ranked = G > 0 && N > 0 && n_dropped > 0 && keep && sing->counted;
+        for (g = 0; g < G && ranked; g++)
+            ranked = order[g].ordered && factors[g].levels && order[g].rows.first_row;
+        if (ranked)
+        {
+            rc = build_factors_ranked(S, G, factors, order, sing, N_in, N, weights, weighted,
+                                      ctools_hdfe_row_blocks(N_in));
+            if (rc == 0)
+            {
+                if (counts_pending)
+                    *counts_pending = 1;
+                else
+                    hdfe_count_factors(S, order, N_in, keep, weights);
+                return 0;
+            }
+            if (rc != 1)
+                return rc;
+            rc = 0;
+        }
         ST_int *level_ptrs[64], level_max[64];
         if (G > 64)
             return 198;

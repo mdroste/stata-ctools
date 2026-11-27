@@ -17,7 +17,7 @@
 
 **ctools** provides really fast drop-in replacements for common Stata programs. The syntax of ctools is largely unchanged from the commands they replace, sometimes with additional features; see the [compatibility table](docs/COMPATIBILITY.md).
 
-Each ctools command reimplements an existing Stata command and is pinned to one version of it. [Attribution](docs/ATTRIBUTION.md) lists each original command, its authors, and the pinned version. The same information appears in each command's help file.
+Except for `csql`, each ctools command reimplements an existing Stata command and is pinned to one version of it. [Attribution](docs/ATTRIBUTION.md) lists each original command, its authors, and the pinned version. The same information appears in each command's help file.
 
 ### Stata built-in commands
 
@@ -49,6 +49,7 @@ See [Attribution](docs/ATTRIBUTION.md#community-contributed-commands) for the au
 | `distinct` | [`cdistinct`](docs/commands/cdistinct.md) | Report distinct values | 10–40× |
 | `cipolate` | [`cinterpolate, cubic`](docs/USAGE.md#interpolation-cinterpolate) | Local cubic interpolation | 40–80× |
 | `rangejoin` | [`crangejoin`](docs/USAGE.md#interval-joins-crangejoin) | Join observations within inclusive intervals | 10–30× |
+| `geonear`<br>`geodist` | [`cgeonear`](docs/commands/cgeonear.md) | Nearest neighbors and distances by geodetic distance | 430–460×<br>40–70× |
 | `winsor2`<br>`gstats winsor` | `cwinsor` | Winsorize variables | 20–60×<br>1.9–4× |
 | `rangestat` | `crangestat` | Range statistics of variables | 30–70× |
 | `binscatter`<br>`binscatter2`<br>`binsreg` | `cbinscatter` | Binned scatter plots | 7–40×<br>3–20×<br>3–30× |
@@ -57,8 +58,17 @@ See [Attribution](docs/ATTRIBUTION.md#community-contributed-commands) for the au
 | `ivreghdfe` | `civreghdfe` | 2SLS/GMM with multi-way fixed effects | 20–40× |
 | `ppmlhdfe`<br>`feppml` | `cppmlhdfe` | PPML with multi-way fixed effects | 30–50×<br>1.9–3× |
 | `hdfe` | [`chdfe`](docs/commands/chdfe.md) | Remove fixed effects from variables | 5–20× |
+| `reclink`<br>`matchit`<br>`strgroup` | [`cfuzzyjoin`](docs/commands/cfuzzyjoin.md) | Fuzzy record linkage, similarity joins, and groups of similar strings | 480–780×<br>2,800–16,000×<br>84–450×² |
+
+### New commands
+
+| Command | Description |
+| --- | --- |
+| [`csql`](docs/commands/csql.md) | SQL on the data in memory and on Parquet, CSV, JSON and `.dta` files, through DuckDB: filter, join and aggregate files larger than memory |
 
 ¹ Approximate speedups from a small number of benchmarks on data with 1M, 10M, and 25M observations and 20 mixed-type variables; `collapse`, `egen` and `reshape` were timed on their own workloads, shown on their command pages. Where a ctools command replaces several commands, the speedups are in the same order. Below 1× means ctools was slower. Your mileage may vary. See [benchmark details and results](docs/performance/README.md).
+
+² `reclink`, `matchit` and `strgroup` compare every pair of strings, so they were timed at 1,000 to 5,000 observations on their own workload; see the [cfuzzyjoin guide](docs/commands/cfuzzyjoin.md#performance).
 
 ## Installation
 
@@ -113,7 +123,7 @@ ctools reimplements commands written by the people below. [Attribution](docs/ATT
 - Gary Longton and Nicholas J. Cox for [distinct](https://ideas.repec.org/c/boc/bocode/s424201.html)
 - Robert Picard, Nicholas J. Cox, and Roberto Ferrer for [rangestat](https://ideas.repec.org/c/boc/bocode/s458161.html)
 - Nicholas J. Cox for [cipolate](https://ideas.repec.org/c/boc/bocode/s426202.html), and for Stata's official `split` and `destring`, which the Stata manual credits to him
-- Robert Picard for [rangejoin](https://ideas.repec.org/c/boc/bocode/s458162.html)
+- Robert Picard for [rangejoin](https://ideas.repec.org/c/boc/bocode/s458162.html), [geonear](https://ideas.repec.org/c/boc/bocode/s457146.html) and [geodist](https://ideas.repec.org/c/boc/bocode/s457147.html)
 - Edwin Leuven and Barbara Sianesi for [psmatch2](https://ideas.repec.org/c/boc/bocode/s432001.html)
 - Yujun Lian for [winsor2](https://ideas.repec.org/c/boc/bocode/s457765.html)
 - Michael Stepner and Jessica Laird for [binscatter](https://michaelstepner.com/binscatter/)

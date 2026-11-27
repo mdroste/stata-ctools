@@ -343,6 +343,10 @@ file open `target_file' using "`update_copy'", write text replace
 file read `source_file' line
 local substitutions=0
 while r(eof)==0 {
+    * Only ctools' own programs: run as a do-file, the helpers it carries
+    * (scripts/ado_helpers.py) would become global programs. The copy calls
+    * the same helpers from src/ado, which validate_setup.do puts on the adopath.
+    if strpos(`"`macval(line)'"',"* ctools-helpers:begin")==1 continue, break
     if strpos(`"`macval(line)'"',"program define ctools,") {
         local line : subinstr local line "program define ctools," "program define coverage_ctools,"
         local ++substitutions

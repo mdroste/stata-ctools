@@ -1215,6 +1215,10 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
      * the steps after them (hdfe_sample.h) */
     HDFE_FactorOrder fe_order[10];
     HDFE_Singletons fe_sing;
+    /* The selection's count of the rows every level has left, from which
+     * the factors are built when many rows are dropped: this function's
+     * until fe_sing takes them */
+    ST_int **selection_left = NULL;
     memset(fe_order, 0, sizeof(fe_order));
     memset(&fe_sing, 0, sizeof(fe_sing));
     char scalar_name[64];
@@ -1507,9 +1511,9 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
         if (!ppml_fe_sample_is_whole(data, selection_levels, selection_nlevels, single_rows, G,
                                      N_orig, slope_only, keep_singletons,
                                      check_fe && !keep_singletons)) {
-            selection_rc = ppml_select_fe_sample_ex(data, selection_levels,
+            selection_rc = ppml_select_fe_sample_counted(data, selection_levels,
                 selection_nlevels, G, N_orig, mask, &num_singletons, &num_separated,
-                slope_only, keep_singletons, check_fe && !keep_singletons);
+                slope_only, keep_singletons, check_fe && !keep_singletons, &selection_left);
             N = 0;
             #pragma omp parallel for schedule(static) reduction(+ : N) if (N_orig > 200000)
             for (i = 0; i < N_orig; i++) N += mask[i] != 0;
@@ -1579,12 +1583,16 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
      * zeroed weighted counts for the IRLS weights set later. The loaded
      * levels are already in order of first appearance: with no row dropped
      * they are the factors' as they are (factors[g].levels is then NULL),
-     * and with a few dropped they are shifted in place, from the list of
-     * those rows made here out of the mask */
+     * with a few dropped they are shifted in place, from the list of those
+     * rows made here out of the mask, and with many dropped the new numbers
+     * and the rows per level follow from the selection's counts */
     ST_retcode factor_rc = 0;
     if (N < N_orig)
         factor_rc = hdfe_singletons_from_keep(&fe_sing, selection_levels, selection_nlevels, G,
                                               N_orig, mask, N_orig - N);
+    /* fe_sing takes the counts, or frees them when it has no use for them */
+    hdfe_singletons_counted(factor_rc ? NULL : &fe_sing, selection_left, G);
+    selection_left = NULL;
     if (!factor_rc)
         factor_rc = hdfe_build_factors_ordered(g_ppml_state, G, factors, fe_order,
                                                N < N_orig ? &fe_sing : NULL, N_orig, NULL, 1, NULL);
@@ -2691,12 +2699,15 @@ ppml_cleanup:
         ctools_release_later(fe_order[g].rows.first_row);
         ctools_release_later(fe_order[g].rows.single_rows);
     }
+    if (selection_left) hdfe_singletons_counted(NULL, selection_left, G);  /* frees them */
     ctools_release_later(fe_sing.dropped);
     for (g = 0; fe_sing.affected && g < fe_sing.G; g++) {
         ctools_release_later(fe_sing.affected[g].level);
         ctools_release_later(fe_sing.affected[g].left);
     }
     ctools_release_later(fe_sing.affected);
+    for (g = 0; fe_sing.rows_left && g < fe_sing.G; g++) ctools_release_later(fe_sing.rows_left[g]);
+    ctools_release_later(fe_sing.rows_left);
     ctools_release_later(V_ext);
     ctools_release_later(separation_certificate);
     ctools_release_later(previous_working);

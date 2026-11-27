@@ -486,7 +486,7 @@ def campaign_prepare(args):
         )
     if set(flags) - {v["name"] for v in variants}:
         raise ValueError("--cflag references an unknown variant")
-    helper = ROOT / "build/_ctools_strw.ado"
+    helper = ROOT / "src/ado/_ctools_strw.ado"
     (out / "_ctools_strw.ado").write_bytes(helper.read_bytes())
     runs = []
     for block in range(args.blocks):

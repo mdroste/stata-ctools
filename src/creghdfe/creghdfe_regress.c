@@ -61,6 +61,74 @@ static void *creghdfe_count_job_run(void *arg)
     return NULL;
 }
 
+/* Values of the regression's matrix (rows times columns) from which the
+ * columns are built on the helper threads while the projection is prepared
+ * (STEP 5-7). Below it the two take well under a millisecond together, less
+ * than handing work to the helper threads can cost when they have to be
+ * started for it (the loader starts them only for larger data). */
+#define CREGHDFE_AHEAD_MIN_VALUES ((size_t)1000000)
+
+/* One column of the regression's matrix (creghdfe_core.h) as a task: its
+ * mean first, from its sum in row order, when the caller has not taken the
+ * sums (take_mean), then its sum of squares, its scale and the column
+ * itself. Every pass is the column's own, in row order on one thread, so
+ * the tasks give the same numbers on helper threads, as iterations of an
+ * OpenMP loop or one after another. */
+typedef struct {
+    const creghdfe_columns *columns;
+    const creghdfe_columns_opts *opts;
+    ST_int k, take_mean;
+    ST_double mean_divisor;
+    ST_double *means; /* the array behind opts->means */
+    ST_double *data, *raw, *tss, *stdevs, *norm2;
+} creghdfe_column_job;
+
+static void *creghdfe_column_job_run(void *arg)
+{
+    const creghdfe_column_job *job = (const creghdfe_column_job *)arg;
+    if (job->take_mean)
+        job->means[job->k] = creghdfe_column_sum(job->columns, job->k) / job->mean_divisor;
+    creghdfe_column_build(job->columns, job->opts, job->k, job->data, job->raw, job->tss,
+                          job->stdevs, job->norm2);
+    return NULL;
+}
+
+/* The same column when a single effect is absorbed and the projection on it
+ * is done as the column is written (creghdfe_core.h): the mean and the scale
+ * first, which do not need the effect's counts ... */
+static void creghdfe_column_job_scale(const creghdfe_column_job *job)
+{
+    if (job->take_mean)
+        job->means[job->k] = creghdfe_column_sum(job->columns, job->k) / job->mean_divisor;
+    creghdfe_column_scale(job->columns, job->opts, job->k, job->tss, job->stdevs);
+}
+
+/* ... then, with the counts in effect, the column itself, less its level
+ * means. sums: scratch of the calling thread for the level sums. */
+static void creghdfe_column_job_absorb(const creghdfe_column_job *job, const creghdfe_absorbed *effect,
+                                       ST_double *sums)
+{
+    creghdfe_column_absorb(job->columns, job->opts, job->k, effect, job->stdevs, job->norm2, sums,
+                           job->data);
+}
+
+/* Memory returned on a helper thread while the command works on: a loaded
+ * variable that is no longer read, and what the projection had prepared.
+ * Returning a block of 80 MB takes about 2 ms on Windows. Unlike
+ * ctools_release_later() these do not keep the memory until the command
+ * returns: the task starts at once. */
+static void *creghdfe_variable_free_run(void *arg)
+{
+    stata_variable_free((stata_variable *)arg);
+    return NULL;
+}
+
+static void *creghdfe_prepared_free_run(void *arg)
+{
+    partial_out_prepared_free((struct hdfe_coef_prepared *)arg);
+    return NULL;
+}
+
 /* Recover the fixed effects from the FE component d = y - Xb - _cons -
  * residual (not the already orthogonal regression residual) with
  * hdfe_fe_recover (reghdfe's store_alphas normalization), reading y and X
@@ -225,6 +293,16 @@ ST_retcode creghdfe_full_regression(int retain)
     creghdfe_count_job count_jobs[20];
     ST_int n_count_jobs = 0, buffers_ready = 0;
     ctools_persistent_pool *count_pool = NULL;
+    /* The columns' tasks of STEP 5-7, and what the projection had prepared
+     * for it while they ran */
+    creghdfe_column_job *column_jobs = NULL;
+    struct hdfe_coef_prepared *prepared = NULL;
+    /* non-NULL once a task that returns memory may be running on it */
+    ctools_persistent_pool *release_pool = NULL;
+    /* 1 when the columns were written with a single effect projected out;
+     * the threads' level sums while they are */
+    ST_int absorbed = 0;
+    ST_double *level_sums = NULL;
     char scalar_name[64];
     double t_start, t_load, t_copy, t_remap, t_singleton, t_dof, t_partial, t_ols, t_vce;
     ST_int mobility_groups = 1;
@@ -863,16 +941,18 @@ ST_retcode creghdfe_full_regression(int retain)
         .weights = has_weights ? weights_compact : NULL,
     };
 
-    /* Means (weighted if using weights): each column's sum in row order,
-     * and with weights their sum */
-    creghdfe_column_sums(&columns, means_compact, &sum_w);
+    /* Means (weighted if using weights): each column's sum in row order.
+     * With weights the sums are taken here, with the sum of the weights
+     * that their normalization below needs; without, every column's task
+     * takes its own (creghdfe_column_job) */
+    if (has_weights) creghdfe_column_sums(&columns, means_compact, &sum_w);
 
     /* Divide by sum of weights (or N if unweighted) */
     ST_double mean_divisor = (has_weights) ? sum_w : (ST_double)N;
     if (!isfinite(mean_divisor) || mean_divisor <= 0.0) {
         output_rc = 498; goto cleanup;
     }
-    for (k = 0; k < K; k++) {
+    for (k = 0; k < K && has_weights; k++) {
         means_compact[k] /= mean_divisor;
     }
     free(means);
@@ -933,7 +1013,106 @@ ST_retcode creghdfe_full_regression(int retain)
             .sum_weights = has_weights ? g_state->sum_weights : 0.0,
             .standardize = standardize, .use_quad = use_quad, .uncentered = no_intercept,
         };
-        creghdfe_columns_build(&columns, &column_opts, data_compact, bs_raw, tss, stdevs, norm2);
+        column_jobs = (creghdfe_column_job *)malloc((size_t)K * sizeof(*column_jobs));
+        if (!column_jobs) { output_rc = 920; goto cleanup; }
+        for (k = 0; k < K; k++) {
+            column_jobs[k] = (creghdfe_column_job){
+                .columns = &columns, .opts = &column_opts, .k = k, .take_mean = !has_weights,
+                .mean_divisor = mean_divisor, .means = means, .data = data_compact, .raw = bs_raw,
+                .tss = tss, .stdevs = stdevs, .norm2 = norm2,
+            };
+        }
+        /* A column is one thread's work, so the columns keep K threads busy
+         * and leave the others idle. When the projection will be solved for
+         * the effects' coefficients, what that solve can do before it sees a
+         * column (hdfe_solver.h: about half of it) is done meanwhile: the
+         * columns run on the helper threads, and this thread prepares the
+         * solve with the OpenMP team. Neither reads what the other writes. */
+        const int ahead = G >= 2 && !input.indiv && !input.num_slopes && !input.map &&
+                          input.transform == 0 && input.acceleration == 1 &&
+                          (size_t)N * (size_t)K >= CREGHDFE_AHEAD_MIN_VALUES;
+        ctools_persistent_pool *column_pool = ahead ? ctools_get_global_pool() : NULL;
+        if (column_pool &&
+            ctools_persistent_pool_submit_batch(column_pool, creghdfe_column_job_run, column_jobs,
+                                                (size_t)K, sizeof(column_jobs[0])) == 0) {
+            /* The tasks read the K regression columns. The other loaded
+             * variables (effects, clusters, weight, slopes) were copied or
+             * turned into levels above and go back now, each as a task of
+             * its own, so that the preparation's memory does not come on
+             * top of theirs. If they cannot be queued they go back with
+             * the rest below. */
+            weights = NULL;
+            if (filtered.data.nvars > (size_t)K)
+                (void)ctools_persistent_pool_submit_batch(column_pool, creghdfe_variable_free_run,
+                                                          &filtered.data.vars[K],
+                                                          filtered.data.nvars - (size_t)K,
+                                                          sizeof(filtered.data.vars[0]));
+            prepared = partial_out_prepare(g_state, K);
+            /* the columns, and with them the count passes still running */
+            ctools_persistent_pool_wait(column_pool);
+            count_pool = NULL;
+        } else if (G == 1 && !input.indiv && !input.num_slopes && !input.map &&
+                   input.transform == 0 && input.acceleration == 1 && !use_quad && !bs_raw &&
+                   maxiter >= 1 && isfinite(tolerance) && tolerance > 0 &&
+                   !fe_order[0].rows.local &&
+                   !hdfe_levels_grouped(g_state->factors[0].levels, N)) {
+            /* A single absorbed effect, projected by partial_out_columns()
+             * as it stands, in rows that are not grouped by it: the
+             * projection is each value less the mean of its level, and
+             * the columns are written with it done (creghdfe_core.h),
+             * which saves the matrix a reading. (The load noted whether
+             * the levels keep to their own stretch of rows, as in a
+             * panel sorted by its unit: such rows, and any others that
+             * the scan finds grouped, go to partial_out_columns().)
+             * First what does not need the effect's counts ... */
+            #pragma omp parallel for schedule(static) if(K > 1 && (size_t)N * (size_t)K > 200000)
+            for (k = 0; k < K; k++) creghdfe_column_job_scale(&column_jobs[k]);
+            /* ... then, with the counts complete and their inverses made,
+             * the columns */
+            if (count_pool) {
+                ctools_persistent_pool_wait(count_pool);
+                count_pool = NULL;
+            }
+            if (!buffers_ready) {
+                if (ctools_hdfe_alloc_buffers(g_state, 0, K) != 0) {
+                    output_rc = 920;
+                    goto cleanup;
+                }
+                buffers_ready = 1;
+            }
+            {
+                /* the counts and the weights that the projection on the
+                 * rows uses (hdfe_solver.c) */
+                const FE_Factor *f = &g_state->factors[0];
+                const int weighted = g_state->weights != NULL;
+                const creghdfe_absorbed effect = {
+                    .levels = f->levels, .num_levels = f->num_levels,
+                    .inv = (weighted && f->inv_weighted_counts) ? f->inv_weighted_counts
+                                                                : f->inv_counts,
+                    .counts = (weighted && f->weighted_counts) ? f->weighted_counts : f->counts,
+                };
+                /* The level sums of a column are its thread's scratch.
+                 * The whole team runs the loop, a column per thread: a
+                 * team of K threads would cost the next region its other
+                 * threads. */
+                const int team = omp_get_max_threads();
+                const size_t lanes = (size_t)(K < team ? K : team);
+                level_sums = (ST_double *)ctools_safe_malloc3(lanes, (size_t)f->num_levels,
+                                                              sizeof(ST_double));
+                if (!level_sums) { output_rc = 920; goto cleanup; }
+                #pragma omp parallel for schedule(static) if(K > 1 && (size_t)N * (size_t)K > 200000)
+                for (k = 0; k < K; k++) {
+                    creghdfe_column_job_absorb(&column_jobs[k], &effect,
+                        level_sums + (size_t)omp_get_thread_num() * (size_t)f->num_levels);
+                }
+                free(level_sums); level_sums = NULL;
+            }
+            absorbed = 1;
+        } else {
+            #pragma omp parallel for schedule(static) if(K > 1 && (size_t)N * (size_t)K > 200000)
+            for (k = 0; k < K; k++) creghdfe_column_job_run(&column_jobs[k]);
+        }
+        free(column_jobs); column_jobs = NULL;
     }
 
     /* The loaded columns are no longer needed; use the matrix */
@@ -941,7 +1120,7 @@ ST_retcode creghdfe_full_regression(int retain)
     free(compact_map); compact_map = NULL;
     free((void *)loaded_cols); loaded_cols = NULL;
     weights = NULL;
-    stata_data_free(&filtered.data);
+    stata_data_free_threaded(&filtered.data);
     data = data_compact; data_compact = NULL;
 
     /* The counts of every level are complete from here on (see STEP 3-4) */
@@ -959,7 +1138,12 @@ ST_retcode creghdfe_full_regression(int retain)
 
     /* Partial out via CG solver using shared helper */
     HDFE_SolveResult projection = {0, 1, 0};
-    if (input.indiv) {
+    if (absorbed) {
+        /* done as the columns were written: what partial_out_columns()
+         * reports for a single effect */
+        projection = ctools_cancel_requested() ? (HDFE_SolveResult){1, 0, 1}
+                                               : (HDFE_SolveResult){0, 1, 1};
+    } else if (input.indiv) {
         /* reghdfe projects on the individual effect with LSMR; solved here
          * a hundred times tighter than tolerance(), its atol and btol */
         projection.status = hdfe_indiv_partial_out(g_state, &indiv, data, N, K, tolerance / 100.0,
@@ -970,7 +1154,17 @@ ST_retcode creghdfe_full_regression(int retain)
         projection = partial_out_columns_options(g_state, data, N, K, input.transform,
                                                  input.acceleration);
     } else {
-        projection = partial_out_columns(g_state, data, N, K, num_threads);
+        /* with what was prepared while the columns were built, if anything */
+        projection = partial_out_columns_prepared(g_state, data, N, K, num_threads, prepared);
+    }
+    if (prepared) {
+        /* its memory goes back while the regression is fitted */
+        ctools_persistent_pool *pool = ctools_get_global_pool();
+        if (pool && ctools_persistent_pool_submit(pool, creghdfe_prepared_free_run, prepared) == 0)
+            release_pool = pool;
+        else
+            partial_out_prepared_free(prepared);
+        prepared = NULL;
     }
     if (projection.status == 920) {
         SF_error("creghdfe: memory allocation failed in the fixed-effect projection\n");
@@ -1653,6 +1847,14 @@ cleanup:
         ctools_persistent_pool_wait(count_pool);
         count_pool = NULL;
     }
+    /* ... and no task that returns memory may outlive the command */
+    if (release_pool) {
+        ctools_persistent_pool_wait(release_pool);
+        release_pool = NULL;
+    }
+    free(column_jobs);
+    free(level_sums);
+    partial_out_prepared_free(prepared);
     /* Everything below is returned by a helper thread after the plugin
      * call (ctools_release.h): at 10M rows that is 1-2 GB, 40 ms or more
      * on Windows */
@@ -1675,6 +1877,8 @@ cleanup:
         ctools_release_later(fe_sing.affected[g].left);
     }
     ctools_release_later(fe_sing.affected);
+    for (g = 0; fe_sing.rows_left && g < fe_sing.G; g++) ctools_release_later(fe_sing.rows_left[g]);
+    ctools_release_later(fe_sing.rows_left);
     if (data_keep == data) data_keep = NULL;  /* shared when nothing was omitted */
     ctools_release_later(data); ctools_release_later(means);
     ctools_release_later(stdevs); ctools_release_later(tss);

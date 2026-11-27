@@ -26,6 +26,10 @@
 /* Private per-chunk buffers of level sums may use this much memory. */
 #define HDFE_COEF_BUFFER_BYTES ((size_t)32 << 20)
 
+/* Doubles between the private scratch of two chunks that different threads
+ * work on at once: two cache lines. */
+#define HDFE_COEF_PAD 16
+
 /* Loops shorter than this many element operations run on one thread. */
 #define HDFE_COEF_PARALLEL_MIN 100000
 
@@ -76,6 +80,37 @@
     break;                                                                                         \
     }
 
+/*
+ * y[j] += v * u[j] for j < n, eight entries at a time: up to seven entries
+ * past n, though none at or past cap, get the same update. For the rows of
+ * a lower triangle whose entries beyond the diagonal are never read: the
+ * rows are as short as one entry, and a loop over exactly n of them spends
+ * most of a short row in the remainder of its vectorized form. Every entry
+ * below n gets the one product and the one sum it would get singly.
+ * (y[j] -= v * u[j] is this with -v, to the bit.)
+ */
+HDFE_COEF_KERNEL void hdfe_coef_row_add(ST_double *RESTRICT y, const ST_double *RESTRICT u,
+                                        const ST_double v, const ST_int n, const ST_int cap)
+{
+    ST_int lim = (n + 7) & ~(ST_int)7;
+    if (lim > cap)
+        lim = cap;
+    ST_int j = 0;
+    for (; j + 8 <= lim; j += 8)
+    {
+        y[j] += v * u[j];
+        y[j + 1] += v * u[j + 1];
+        y[j + 2] += v * u[j + 2];
+        y[j + 3] += v * u[j + 3];
+        y[j + 4] += v * u[j + 4];
+        y[j + 5] += v * u[j + 5];
+        y[j + 6] += v * u[j + 6];
+        y[j + 7] += v * u[j + 7];
+    }
+    for (; j < lim; j++)
+        y[j] += v * u[j];
+}
+
 /* Threads a parallel region opened here would get */
 static inline int hdfe_coef_threads(void)
 {
@@ -105,6 +140,41 @@ static inline int hdfe_coef_threads(void)
  */
 ST_retcode hdfe_coef_group_rows(ST_int N, const ST_int *levels, ST_int nlev, const ST_int *second,
                                 ST_int nsecond, ST_int **rowptr, ST_int **dest, int *sorted,
+                                int *increasing);
+
+/*
+ * Fields of the rows that hdfe_coef_group_move() carries to the grouped
+ * order: nint integer columns, optionally one of doubles and the number of
+ * the row itself. The destinations are allocated there when the rows have to
+ * be moved, and are the caller's to free.
+ */
+typedef struct
+{
+    int nint;                                  /* integer columns, 0..HDFE_COEF_MAX_EFFECTS */
+    const ST_int *isrc[HDFE_COEF_MAX_EFFECTS]; /* N each */
+    const ST_double *dsrc;                     /* N, or NULL */
+    int want_order;
+    ST_int *idst[HDFE_COEF_MAX_EFFECTS]; /* out: idst[a][position] = isrc[a][row] */
+    ST_double *ddst;                     /* out: ddst[position] = dsrc[row] */
+    ST_int *order;                       /* out: order[position] = row (want_order) */
+} hdfe_coef_fields;
+
+/*
+ * hdfe_coef_group_rows() for callers that want the rows' fields in the
+ * grouped order rather than the positions: the same rowptr, *sorted and
+ * *increasing, and, when the rows do not arrive grouped, F's destinations
+ * filled as F.idst[a][dest[i]] = F.isrc[a][i] would with the positions dest
+ * of that function (rows grouped: every destination stays NULL).
+ *
+ * From a few million rows on, the rows are first dealt into ranges of
+ * consecutive levels, a few hundred of them, and each range is then put in
+ * order by itself, within the cache: a direct scatter by level writes to as
+ * many places at once as there are levels, most of them out of the cache.
+ *
+ * Returns 0, 198 or 920; on failure nothing is allocated.
+ */
+ST_retcode hdfe_coef_group_move(ST_int N, const ST_int *levels, ST_int nlev, const ST_int *second,
+                                ST_int nsecond, hdfe_coef_fields *F, ST_int **rowptr, int *sorted,
                                 int *increasing);
 
 /* ------------------------------------------------------------------------
@@ -402,5 +472,14 @@ ST_int hdfe_lap_sample_star(hdfe_lap_leaf *cs, ST_double *cum, ST_int len, uint6
 HDFE_SolveResult hdfe_coef_multi_partial_out(const HDFE_State *S, hdfe_coef_plan *plan,
                                              ST_double *data, ST_int N, ST_int K,
                                              hdfe_coef_method method);
+
+/* The same projection in two steps (hdfe_coef_prepare()): what does not read
+ * the columns, for K of them, then the columns. NULL with *rc set (1, 198 or
+ * 920) when the first step fails. */
+void *hdfe_coef_multi_prepare(const HDFE_State *S, ST_int K, hdfe_coef_method method,
+                              ST_retcode *rc);
+HDFE_SolveResult hdfe_coef_multi_solve(void *prepared, const HDFE_State *S, ST_double *data,
+                                       ST_int N, ST_int K);
+void hdfe_coef_multi_free(void *prepared);
 
 #endif /* CTOOLS_HDFE_COEF_INTERNAL_H */

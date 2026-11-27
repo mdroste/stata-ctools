@@ -689,7 +689,8 @@ static inline ST_int cc_find(ST_int *parent, ST_int x)
     return cur;
 }
 
-static inline void cc_unite(ST_int *parent, ST_int a, ST_int b)
+/* Links the trees of a and b; returns 1 when they were two */
+static inline int cc_unite(ST_int *parent, ST_int a, ST_int b)
 {
     ST_int ra = cc_find(parent, a), rb = cc_find(parent, b);
     while (ra != rb) {
@@ -701,10 +702,11 @@ static inline void cc_unite(ST_int *parent, ST_int a, ST_int b)
         /* link the larger root below the smaller one, unless another
            thread linked it first */
         ST_int seen = ra;
-        if (CTOOLS_HDFE_CAS(&parent[ra], &seen, rb)) return;
+        if (CTOOLS_HDFE_CAS(&parent[ra], &seen, rb)) return 1;
         ra = cc_find(parent, seen);
         rb = cc_find(parent, rb);
     }
+    return 0;
 }
 
 ST_int ctools_count_connected_components(
@@ -729,19 +731,42 @@ ST_int ctools_count_connected_components(
     #pragma omp parallel for schedule(static) if (B > 1)
     for (x = 0; x < nodes; x++) parent[x] = x;
 
+    /* Every link joins two components, so nodes - 1 links leave one, and
+       the rows not yet read cannot change that: two effects of few levels
+       are joined within the first rows of a block. Each block counts its
+       links (the counts a cache line apart) and adds them all up every 8192
+       rows. Without the counts every row is read. */
+    ST_int *links = (ST_int *)calloc((size_t)B * 16, sizeof(ST_int));
+    int joined = 0;
     #pragma omp parallel for schedule(static) if (B > 1)
     for (b = 0; b < B; b++) {
-        ST_int i0, i1;
+        ST_int i0, i1, mine = 0;
         ctools_hdfe_block_range(N, B, b, &i0, &i1);
-        for (ST_int i = i0; i < i1; i++)
-            cc_unite(parent, fe1_levels[i] - 1, num_levels1 + fe2_levels[i] - 1);
+        for (ST_int i = i0; i < i1; i++) {
+            if (links && ((i - i0) & 8191) == 8191) {
+                long long all = 0;
+                CTOOLS_HDFE_STORE(&links[(size_t)b * 16], mine);
+                if (CTOOLS_HDFE_LOAD(&joined)) break;
+                for (int t = 0; t < B; t++) all += CTOOLS_HDFE_LOAD(&links[(size_t)t * 16]);
+                if (all >= (long long)nodes - 1) {
+                    CTOOLS_HDFE_STORE(&joined, 1);
+                    break;
+                }
+            }
+            mine += cc_unite(parent, fe1_levels[i] - 1, num_levels1 + fe2_levels[i] - 1);
+        }
     }
+    free(links);
 
     /* The components holding an FE1 level, as before: each has its
        smallest node, an FE1 level, as its root */
     ST_int num_components = 0;
-    #pragma omp parallel for schedule(static) reduction(+ : num_components) if (B > 1)
-    for (x = 0; x < num_levels1; x++) num_components += parent[x] == x;
+    if (joined) {
+        num_components = 1;
+    } else {
+        #pragma omp parallel for schedule(static) reduction(+ : num_components) if (B > 1)
+        for (x = 0; x < num_levels1; x++) num_components += parent[x] == x;
+    }
 
     free(parent);
     return num_components;

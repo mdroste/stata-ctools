@@ -35,8 +35,8 @@ comparison asks for the 20 quantile bins the others use (`nbins(20)`).
 [`fereg`](https://github.com/johannes-schmieder/fereg) (which includes
 `feppml`) are not on SSC. `binscatter2` needs `gtools`.
 
-`qreg` and `ppmlhdfe` take minutes per run at 25M observations, so those two
-comparisons run at 1M and 10M only. The limits are in `profiles.do`,
+`qreg`, `ppmlhdfe` and `geonear` take minutes per run at 25M observations, so
+those comparisons run at 1M and 10M only. The limits are in `profiles.do`,
 `readme_benchmarks.do` and `profile_LIMITS` in `validation/bench_profiles.py`.
 
 Each comparison times only the command. Making the test data, reloading it
@@ -96,7 +96,7 @@ python3 validation/bench.py summarize-profile temp/timings-distinct --pairs dist
 
 `--pairs` limits the summary and README update to the selected comparisons.
 The summarizer requires every size a comparison runs at (all three, or 1M and
-10M for `qreg` and `ppmlhdfe`) before updating the README. In the README, the
+10M for `qreg`, `ppmlhdfe` and `geonear`) before updating the README. In the README, the
 row of a ctools command lists its Stata commands one per line of the first
 cell and their speedups in the same order in the last cell. The update changes
 only the line of the named command and keeps a footnote marker that follows
@@ -118,6 +118,43 @@ To run only this pair:
 python3 validation/bench.py do profile_readme --output temp/timings-joinby temp/timings-joinby "1000000 10000000 25000000" 4 joinby
 python3 validation/bench.py summarize-profile temp/timings-joinby --pairs joinby --update-readme README.md
 ```
+
+## Compare nearest neighbors and distances
+
+The `geonear` comparison finds, for every observation of the 20-variable
+datasets, the nearest of `N`/200 places: the base coordinates are the
+profile's normal variables `z` and `noise` (degrees, within a few of 0), and
+the places are one per firm, at the coordinates of its first observation. It
+runs at 1M and 10M rows (`geonear` takes several minutes at 10M). The
+`geodist` comparison computes one ellipsoid distance per observation,
+`geodist z noise x2 x3, gen(result)` against `cgeonear`'s distance form with
+the same arguments, at all three sizes. The checks outside
+the timed region are the observation count, the 22 (or 21) variables and a
+nonmissing neighbor and distance (or distance) in every observation.
+
+```sh
+python3 validation/bench.py do profile_readme --output temp/timings-geo temp/timings-geo "1000000 10000000 25000000" 4 "geonear geodist"
+python3 validation/bench.py summarize-profile temp/timings-geo --pairs geonear geodist --update-readme README.md
+```
+
+## Compare fuzzy joins
+
+`reclink`, `matchit` and `strgroup` compare every pair of records or strings in
+Stata or Mata (`strgroup` also keeps a matrix of all pairs), so they cannot run
+at the sizes of the README profile. `validation/performance/cfuzzyjoin.do`
+times each against its `cfuzzyjoin` subcommand on generated firm names with
+typos (with a city and a ZIP code for the record linkage), at 1,000, 2,000 and
+5,000 observations in each dataset, and `cfuzzyjoin` alone at a larger size.
+Outside the timed region it checks that both commands give the same result:
+reclink's pairs and scores, matchit's pairs and scores, strgroup's group
+numbers. The original commands run once, `cfuzzyjoin` best of ten (three
+at the larger size).
+
+```sh
+python3 validation/bench.py do cfuzzyjoin_performance --output temp/timings-fuzzy "1000 2000 5000" "50000"
+```
+
+The results are on the [cfuzzyjoin page](../commands/cfuzzyjoin.md#performance).
 
 ## Compare fixed-effects regressions
 

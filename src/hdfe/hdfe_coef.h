@@ -114,6 +114,31 @@ HDFE_SolveResult hdfe_coef_partial_out(const HDFE_State *S, ST_double *data, ST_
                                        hdfe_coef_method method);
 
 /*
+ * The projection in two steps. Much of hdfe_coef_partial_out() never reads
+ * the columns: which rows share a level, the cells of the effects, the
+ * choice of method, the factor of S or the preconditioner. A caller that
+ * has the effects before it has the columns (creghdfe still builds them
+ * from the loaded variables, a few threads' work) does that part meanwhile
+ * with hdfe_coef_prepare() and projects with
+ * hdfe_coef_partial_out_prepared(): the residuals are those of
+ * hdfe_coef_partial_out(S, data, N, K, method), to the last bit.
+ *
+ * hdfe_coef_prepare() returns NULL when it has nothing to hand over: S is
+ * not for this module (hdfe_coef_applies() is 0), the arguments are invalid,
+ * memory ran out or Break was pressed. The caller then calls
+ * hdfe_coef_partial_out(), which reports whichever it was. S's factors,
+ * weights, tolerance and iteration limit must not change between the two
+ * steps, K must be the same, and the result is freed with
+ * hdfe_coef_prepared_free() (NULL is allowed). It holds what
+ * hdfe_coef_partial_out() allocates for its own use, no more.
+ */
+typedef struct hdfe_coef_prepared hdfe_coef_prepared;
+hdfe_coef_prepared *hdfe_coef_prepare(const HDFE_State *S, ST_int K, hdfe_coef_method method);
+HDFE_SolveResult hdfe_coef_partial_out_prepared(const HDFE_State *S, hdfe_coef_prepared *prepared,
+                                                ST_double *data, ST_int N, ST_int K);
+void hdfe_coef_prepared_free(hdfe_coef_prepared *prepared);
+
+/*
  * Repeated projections on the same effects with changing weights (the
  * iterations of a weighted fit). Which rows share a level, the cells of the
  * effects and the plan of the sweeps depend on the levels alone; a call of

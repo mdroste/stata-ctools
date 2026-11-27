@@ -2876,5 +2876,635 @@
         }
       ]
     }
+  },
+  "cfuzzyjoin": {
+    "generate": {
+      "kind": "differential",
+      "reason": "The command suite compares the results and return codes with strgroup and matchit for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "group equals strgroup: `o'"
+        },
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "\"generate(sim)\""
+        }
+      ]
+    },
+    "threshold": {
+      "kind": "differential",
+      "reason": "The command suite compares the results and return codes with strgroup and matchit for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "group equals strgroup: "
+        },
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "\"threshold(0.7)\""
+        },
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "group boundary threshold"
+        }
+      ]
+    },
+    "first": {
+      "kind": "differential",
+      "reason": "The command suite compares the results and return codes with strgroup for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "\"threshold(0.3) first\""
+        }
+      ]
+    },
+    "normalize": {
+      "kind": "differential",
+      "reason": "The command suite compares the results and return codes with strgroup for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "\"threshold(0.35) normalize(longer)\""
+        },
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "\"threshold(2) normalize(none)\""
+        }
+      ]
+    },
+    "noclean": {
+      "kind": "contract",
+      "reason": "Without noclean the strings are trimmed (strgroup's documented behavior, which strgroup 1.0.4 does not carry out); with noclean the groups equal strgroup's.",
+      "evidence": [
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "\"threshold(0.5) noclean\""
+        },
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "group trims blanks unless noclean"
+        }
+      ]
+    },
+    "force": {
+      "kind": "contract",
+      "reason": "Accepted for compatibility with strgroup; the groups equal those without it.",
+      "evidence": [
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "group force is accepted"
+        }
+      ]
+    },
+    "byvars": {
+      "kind": "contract",
+      "reason": "Internal: carries the by-variables of the by prefix to the group subcommand; by-group results equal strgroup's under by.",
+      "evidence": [
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "group equals strgroup: by"
+        }
+      ]
+    },
+    "idusing": {
+      "kind": "differential",
+      "reason": "The command suite compares the results and return codes with matchit and reclink for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "match equals matchit: "
+        },
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "link equals reclink: "
+        }
+      ]
+    },
+    "txtusing": {
+      "kind": "differential",
+      "reason": "The command suite compares the results and return codes with matchit for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "match equals matchit: "
+        }
+      ]
+    },
+    "similmethod": {
+      "kind": "differential",
+      "reason": "The command suite compares the results and return codes with matchit for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "match columns equal matchit: "
+        },
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "match odd strings: "
+        }
+      ]
+    },
+    "weights": {
+      "kind": "differential",
+      "reason": "The command suite compares the results and return codes with matchit for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "match columns weights equal matchit: "
+        },
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "\"weights(log)\""
+        }
+      ]
+    },
+    "wgtfile": {
+      "kind": "differential",
+      "reason": "The command suite compares the results and return codes with matchit for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "match columns wgtfile"
+        },
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "wgtfile(`wfile') stopwordsauto"
+        }
+      ]
+    },
+    "score": {
+      "kind": "differential",
+      "reason": "The command suite compares the results and return codes with matchit for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "match columns equal matchit: "
+        },
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "\"score(minsimple)\""
+        }
+      ]
+    },
+    "flag": {
+      "kind": "contract",
+      "reason": "matchit's progress-report interval; accepted, and the results equal matchit's.",
+      "evidence": [
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "\"time flag(10) keepmata\""
+        }
+      ]
+    },
+    "diagnose": {
+      "kind": "contract",
+      "reason": "Prints the gram report; the pairs equal matchit's.",
+      "evidence": [
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "\"generate(sim)\" \"diagnose\""
+        }
+      ]
+    },
+    "stopwordsauto": {
+      "kind": "differential",
+      "reason": "The command suite compares the results and return codes with matchit for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "\"stopwordsauto swthreshold(0.05)\""
+        }
+      ]
+    },
+    "swthreshold": {
+      "kind": "differential",
+      "reason": "The command suite compares the results and return codes with matchit for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "\"stopwordsauto swthreshold(0.05)\""
+        }
+      ]
+    },
+    "override": {
+      "kind": "contract",
+      "reason": "Without override, changed data are not replaced (r(4), as matchit); with it the result replaces them.",
+      "evidence": [
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "match refuses to replace changed data"
+        }
+      ]
+    },
+    "keepmata": {
+      "kind": "contract",
+      "reason": "matchit keeps its Mata objects; there are none to keep, and the results equal matchit's.",
+      "evidence": [
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "\"time flag(10) keepmata\""
+        }
+      ]
+    },
+    "time": {
+      "kind": "contract",
+      "reason": "Displays the date and time at the start and end; the results equal matchit's.",
+      "evidence": [
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "\"time flag(10) keepmata\""
+        }
+      ]
+    },
+    "verbose": {
+      "kind": "contract",
+      "reason": "Displays timings; the results equal those without it.",
+      "evidence": [
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "match threads(1) equals threads(4)"
+        },
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "group verbose"
+        }
+      ]
+    },
+    "threads": {
+      "kind": "contract",
+      "reason": "The results with one thread equal those with four; values outside 0-256 are refused.",
+      "evidence": [
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "group threads(1) equals threads(4)"
+        },
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "link threads(1) equals threads(4)"
+        },
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "threads() out of range refused"
+        }
+      ]
+    },
+    "idmaster": {
+      "kind": "differential",
+      "reason": "The command suite compares the results and return codes with reclink for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "link equals reclink: "
+        }
+      ]
+    },
+    "gen": {
+      "kind": "differential",
+      "reason": "The command suite compares the results and return codes with reclink for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "link equals reclink: "
+        }
+      ]
+    },
+    "wmatch": {
+      "kind": "differential",
+      "reason": "The command suite compares the results and return codes with reclink for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "\"name city zip|wmatch(10 2 4) wnomatch(8 1 2)\""
+        },
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "link error equals reclink"
+        }
+      ]
+    },
+    "wnomatch": {
+      "kind": "differential",
+      "reason": "The command suite compares the results and return codes with reclink for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "\"name city zip|wmatch(10 2 4) wnomatch(8 1 2)\""
+        }
+      ]
+    },
+    "exclude": {
+      "kind": "differential",
+      "reason": "The command suite compares the results and return codes with reclink for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "link equals reclink: exclude"
+        }
+      ]
+    },
+    "uvarlist": {
+      "kind": "differential",
+      "reason": "The command suite compares the results and return codes with reclink for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "link equals reclink: uvarlist"
+        }
+      ]
+    },
+    "minscore": {
+      "kind": "differential",
+      "reason": "The command suite compares the results and return codes with reclink for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "\"name city zip|minscore(0.8) minbigram(0.7)\""
+        }
+      ]
+    },
+    "minbigram": {
+      "kind": "differential",
+      "reason": "The command suite compares the results and return codes with reclink for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "\"name city zip|minscore(0.8) minbigram(0.7)\""
+        }
+      ]
+    },
+    "orblock": {
+      "kind": "differential",
+      "reason": "The command suite compares the results and return codes with reclink for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "\"name city zip year|orblock(city zip)\""
+        },
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "\"name city zip year|orblock(none)\""
+        }
+      ]
+    },
+    "required": {
+      "kind": "differential",
+      "reason": "The command suite compares the results and return codes with reclink for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "\"name city zip|required(city)\""
+        }
+      ]
+    },
+    "_merge": {
+      "kind": "differential",
+      "reason": "The command suite compares the results and return codes with reclink for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "\"name city|_merge(how)\""
+        }
+      ]
+    },
+    "uprefix": {
+      "kind": "differential",
+      "reason": "The command suite compares the results and return codes with reclink for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "\"name zip|uprefix(V_)\""
+        }
+      ]
+    },
+    "exactstr": {
+      "kind": "differential",
+      "reason": "The command suite compares the results and return codes with reclink for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "\"name city|exactstr(city)\""
+        }
+      ]
+    },
+    "debug": {
+      "kind": "differential",
+      "reason": "The command suite compares the results and return codes with reclink for this option.",
+      "evidence": [
+        {
+          "path": "validation/stata/cfuzzyjoin.do",
+          "anchor": "link debug file equals reclink's"
+        }
+      ]
+    }
+  },
+  "csql": {
+    "query": {
+      "kind": "contract",
+      "reason": "The SQL runs in DuckDB and its rows are listed; the data in memory keep their values and description, and r(N) counts the rows.",
+      "evidence": [
+        {
+          "path": "validation/stata/csql.do",
+          "anchor": "csql [query] lists rows and leaves the data in memory alone"
+        }
+      ]
+    },
+    "file": {
+      "kind": "contract",
+      "reason": "A script file with comments, several statements and a semicolon inside a string runs like query(); the last statement's rows are the result.",
+      "evidence": [
+        {
+          "path": "validation/stata/csql.do",
+          "anchor": "csql [file] runs an SQL script from a file"
+        }
+      ]
+    },
+    "clear": {
+      "kind": "contract",
+      "reason": "Every storage type, missing values, formats and labels of the data in memory come back unchanged through SELECT * ... clear; extended missing values come back as .",
+      "evidence": [
+        {
+          "path": "validation/stata/csql.do",
+          "anchor": "csql [clear] every storage type, missing values and labels from memory"
+        },
+        {
+          "path": "validation/stata/csql.do",
+          "anchor": "csql extended missing values read as NULL and come back as ."
+        }
+      ]
+    },
+    "saving": {
+      "kind": "contract",
+      "reason": "saving() writes .dta (equal to the data read), Parquet, CSV and JSON files that read back with the same values; an existing file needs replace; with clear the saved .dta is loaded.",
+      "evidence": [
+        {
+          "path": "validation/stata/csql.do",
+          "anchor": "csql [saving] [replace] writes a .dta file"
+        },
+        {
+          "path": "validation/stata/csql.do",
+          "anchor": "csql saving() parquet round trip"
+        },
+        {
+          "path": "validation/stata/csql.do",
+          "anchor": "csql saving() csv and json round trip"
+        },
+        {
+          "path": "validation/stata/csql.do",
+          "anchor": "csql saving() with clear loads the saved file"
+        }
+      ]
+    },
+    "rows": {
+      "kind": "contract",
+      "reason": "rows() limits the listing; all rows are still counted in r(N).",
+      "evidence": [
+        {
+          "path": "validation/stata/csql.do",
+          "anchor": "FROM stata\") rows(5)"
+        }
+      ]
+    },
+    "nolabel": {
+      "kind": "contract",
+      "reason": "Variable and value labels follow a column's name into the result, and nolabel drops them.",
+      "evidence": [
+        {
+          "path": "validation/stata/csql.do",
+          "anchor": "csql [nolabel] labels follow names unless nolabel"
+        }
+      ]
+    },
+    "nodatetime": {
+      "kind": "contract",
+      "reason": "%td and %tc variables read as DATE and TIMESTAMP (date arithmetic and formats round-trip); with nodatetime they read as numbers.",
+      "evidence": [
+        {
+          "path": "validation/stata/csql.do",
+          "anchor": "csql [nodatetime] %td and %tc read as DATE and TIMESTAMP unless nodatetime"
+        }
+      ]
+    },
+    "strl": {
+      "kind": "contract",
+      "reason": "Strings become str# of their longest value, and strL past strl() bytes.",
+      "evidence": [
+        {
+          "path": "validation/stata/csql.do",
+          "anchor": "csql [strl] strings past strl() bytes are strL"
+        }
+      ]
+    },
+    "database": {
+      "kind": "contract",
+      "reason": "Tables created in a database file remain for the next call.",
+      "evidence": [
+        {
+          "path": "validation/stata/csql.do",
+          "anchor": "csql [database] keeps tables between calls"
+        }
+      ]
+    },
+    "readonly": {
+      "kind": "contract",
+      "reason": "A read-only database refuses DROP TABLE and still answers queries.",
+      "evidence": [
+        {
+          "path": "validation/stata/csql.do",
+          "anchor": "csql [readonly] opens the database for reading only"
+        }
+      ]
+    },
+    "memory": {
+      "kind": "contract",
+      "reason": "A 2-million-group aggregation under memory(64MB) spills to tempdir() and gives the same counts as threads(1) without a limit.",
+      "evidence": [
+        {
+          "path": "validation/stata/csql.do",
+          "anchor": "csql [memory] [tempdir] [threads] large aggregations under a memory limit"
+        }
+      ]
+    },
+    "tempdir": {
+      "kind": "contract",
+      "reason": "The spilling aggregation writes to the tempdir() given.",
+      "evidence": [
+        {
+          "path": "validation/stata/csql.do",
+          "anchor": "csql [memory] [tempdir] [threads] large aggregations under a memory limit"
+        }
+      ]
+    },
+    "threads": {
+      "kind": "contract",
+      "reason": "threads(1) gives the same result as the default thread count.",
+      "evidence": [
+        {
+          "path": "validation/stata/csql.do",
+          "anchor": "csql [memory] [tempdir] [threads] large aggregations under a memory limit"
+        }
+      ]
+    },
+    "library": {
+      "kind": "contract",
+      "reason": "library() loads the named DuckDB library for a query and for version.",
+      "evidence": [
+        {
+          "path": "validation/stata/csql.do",
+          "anchor": "csql [version] [library] [verbose] report the library and timings"
+        }
+      ]
+    },
+    "verbose": {
+      "kind": "contract",
+      "reason": "verbose prints the timing line.",
+      "evidence": [
+        {
+          "path": "validation/stata/csql.do",
+          "anchor": "csql [version] [library] [verbose] report the library and timings"
+        }
+      ]
+    },
+    "version": {
+      "kind": "contract",
+      "reason": "version reports the DuckDB version of the library in use.",
+      "evidence": [
+        {
+          "path": "validation/stata/csql.do",
+          "anchor": "csql [version] [library] [verbose] report the library and timings"
+        }
+      ]
+    },
+    "install": {
+      "kind": "contract",
+      "reason": "install refuses an archive whose SHA-256 checksum differs from the pinned one and leaves no file; a library given to from() is copied and loads.",
+      "evidence": [
+        {
+          "path": "validation/stata/csql.do",
+          "anchor": "csql [install] [from] [replace] checks the archive and copies a library"
+        }
+      ]
+    },
+    "from": {
+      "kind": "contract",
+      "reason": "from() takes a folder holding the release archive, or a library file.",
+      "evidence": [
+        {
+          "path": "validation/stata/csql.do",
+          "anchor": "csql [install] [from] [replace] checks the archive and copies a library"
+        }
+      ]
+    },
+    "replace": {
+      "kind": "contract",
+      "reason": "install replace overwrites an installed library.",
+      "evidence": [
+        {
+          "path": "validation/stata/csql.do",
+          "anchor": "csql [install] [from] [replace] checks the archive and copies a library"
+        }
+      ]
+    }
   }
 }

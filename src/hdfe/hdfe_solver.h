@@ -28,6 +28,12 @@ ST_int cg_solve_column_threaded(HDFE_State *S, ST_double *y, ST_int thread_id);
  * solver's (cppmlhdfe) applies the same test to them. */
 int hdfe_weight_span_too_wide(const ST_double *weights, ST_int N);
 
+/* 1 when levels[0..N-1] never decreases: the rows of every level are
+ * consecutive (a panel sorted by its unit), and the projection on a single
+ * effect takes them run by run. A caller with another way to project rows
+ * in no order asks first. */
+int hdfe_levels_grouped(const ST_int *levels, ST_int N);
+
 /* ========================================================================
  * Partial Out Multiple Columns (Shared Helper)
  *
@@ -76,6 +82,28 @@ struct hdfe_coef_plan;
 HDFE_SolveResult partial_out_columns_plan(HDFE_State *S, ST_double *data, ST_int N, ST_int K,
                                           ST_int num_threads, struct hdfe_coef_plan *plan,
                                           void (*before_rows)(void *ctx), void *ctx);
+
+/* partial_out_columns() in two steps, for a caller that has S before it has
+ * the columns and builds them meanwhile. partial_out_prepare() does what
+ * partial_out_columns() would do before reading a column (the structure the
+ * solve for the coefficients needs, hdfe_coef.h) for K columns;
+ * partial_out_columns_prepared() projects them, with the residuals of
+ * partial_out_columns(), to the last bit.
+ *
+ * partial_out_prepare() reads S->factors' levels, S->weights, S->tolerance
+ * and S->maxiter, which must stay as they are until the projection; it reads
+ * neither the level counts nor the thread buffers, which may be completed
+ * while it runs. It returns NULL when there is nothing to do ahead (one
+ * effect, slopes, an iteration limit below HDFE_COEF_MIN_MAXITER, weights
+ * the coefficients are not solved with) or when it failed:
+ * partial_out_columns_prepared() with NULL is partial_out_columns(), which
+ * then reports a failure itself. Free with partial_out_prepared_free(). */
+struct hdfe_coef_prepared;
+struct hdfe_coef_prepared *partial_out_prepare(const HDFE_State *S, ST_int K);
+HDFE_SolveResult partial_out_columns_prepared(HDFE_State *S, ST_double *data, ST_int N, ST_int K,
+                                              ST_int num_threads,
+                                              struct hdfe_coef_prepared *prepared);
+void partial_out_prepared_free(struct hdfe_coef_prepared *prepared);
 
 /* Optional transforms: 0 symmetric Kaczmarz, 1 Kaczmarz, 2 Cimmino, 3 random
  * (symmetric) Kaczmarz, hdfe's experimental transform: a new factor order

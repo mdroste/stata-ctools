@@ -4,6 +4,10 @@ args baseline candidate
 if `"`baseline'"' == "" | `"`candidate'"' == "" error 198
 clear all
 set more off
+* The direct helper calls below: a build that carries its helpers as
+* subprograms (scripts/ado_helpers.py) ships no helper files, so src/ado is
+* the fallback, ahead of PLUS; a variant folder that has them wins.
+capture adopath ++ "src/ado"
 set seed 20261128
 set obs 1200
 generate long g = ceil(_n/12)

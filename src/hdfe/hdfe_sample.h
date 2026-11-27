@@ -111,17 +111,28 @@ typedef struct
     ST_int *dropped;               /* The rows dropped, ascending */
     HDFE_AffectedLevels *affected; /* Per factor */
     ST_int G;
+    /* When the rows dropped are many they are not listed: counted is set
+     * instead, and per factor rows_left[g] is either NULL, when every row
+     * dropped was alone in its level of factor g (the levels whose first row
+     * went are gone, the others untouched), or the counts of every loaded
+     * level: rows_left[g][2 * l] is the number of rows level l has left
+     * (the odd entries are the removal's own) */
+    ST_int counted;
+    ST_int **rows_left;
 } HDFE_Singletons;
 
 /*
  * Singleton removal to the fixed point, the sample of
  * ctools_remove_singletons() (same fweights rule). levels[g] are 1-based
  * with num_levels[g] the largest; order is hdfe_load_factors_ordered()'s, or
- * NULL. When the load recorded the rows alone in their level and they are
- * few, only the levels those rows touch are counted (one parallel pass per
- * factor and round); otherwise, or when the removals spread, every level is
- * counted as before. out is zero-filled on entry; release it with
- * hdfe_singletons_free(). Returns 0, or 920.
+ * NULL. When the load recorded the rows alone in their level, the removal
+ * starts from them: while they are few it counts only the levels that lose
+ * a row (one parallel pass per factor and round); when they are many it
+ * counts, once and in parallel, every level of the factors that lose other
+ * rows than their own single ones. Otherwise every level of every factor is
+ * counted as before.
+ * out is zero-filled on entry; release it with hdfe_singletons_free().
+ * Returns 0, or 920.
  */
 ST_retcode hdfe_drop_singletons(HDFE_Singletons *out, ST_int *const *levels,
                                 const ST_int *num_levels, const HDFE_FactorOrder *order, ST_int G,
@@ -143,15 +154,31 @@ ST_retcode hdfe_singletons_from_keep(HDFE_Singletons *out, ST_int *const *levels
                                      ST_int num_dropped);
 
 /*
+ * The rows every loaded level has left, counted by the caller's selection:
+ * rows_left[g][2 * l] for level l of factor g, G arrays (and the array of
+ * them), which out owns from here on. When hdfe_singletons_from_keep() did
+ * not list the dropped rows (they are many), the counts take the list's
+ * place (out->counted) and the build works from the loaded order as it does
+ * after hdfe_drop_singletons(); when it did, or no row was dropped, or out
+ * is NULL, they are not needed and are freed.
+ */
+void hdfe_singletons_counted(HDFE_Singletons *out, ST_int **rows_left, ST_int G);
+
+/*
  * hdfe_build_factors() from the loaded factors, with the same result. When
  * every factor is ordered and no row was dropped, the loaded level arrays
  * become the factors' (factors[g].levels is then NULL on return); when the
  * dropped rows are listed, the levels are shifted in one pass instead of
- * renumbered from scratch. sing may be NULL (no row dropped).
+ * renumbered from scratch; when they are many and counted (sing->counted),
+ * the new numbers are worked out from the loaded order (only the levels
+ * that lost their first row are looked for among the rows), and the rows
+ * per level are taken from sing where it has them. sing may be NULL (no row
+ * dropped).
  *
  * With counts_pending non-NULL the per-level counts may be left for the
  * caller: *counts_pending is then nonzero, the count arrays are allocated
- * and zero, and the caller fills them before they are read, either with
+ * and zero (but for the rows of a factor that the build took from sing), and
+ * the caller fills them before they are read, either with
  * hdfe_count_factors() or job by job (below), at the same time as other
  * work if it likes. keep and weights of those calls are sing->keep and the
  * weights given here.
@@ -175,7 +202,10 @@ void hdfe_count_factors(HDFE_State *S, const HDFE_FactorOrder *order, ST_int N_i
  * and hdfe_count_rows_serial() does the same on any thread.
  * hdfe_count_weights() sums the weights of factor g's levels in row order,
  * serially, on any thread; it does nothing without weights. Each count
- * array is filled by one of these once.
+ * array is filled by one of these once. A factor whose rows the build
+ * counted itself (from the counts of singleton removal) is left alone by
+ * the three row functions: hdfe_count_rows_parallel() then returns 1 and
+ * hdfe_count_rows() has nothing to do.
  */
 int hdfe_count_rows_parallel(const HDFE_State *S, ST_int g, ST_int local);
 void hdfe_count_rows(HDFE_State *S, ST_int g, ST_int local);

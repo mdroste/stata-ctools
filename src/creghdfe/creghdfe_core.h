@@ -69,6 +69,63 @@ void creghdfe_columns_build(const creghdfe_columns *C, const creghdfe_columns_op
                             ST_double *norm2);
 
 /*
+ * Column k alone: its entry of creghdfe_column_sums(), and its part of
+ * creghdfe_columns_build() (column k of data and raw, entry k of the other
+ * arrays; opts->means[k] must hold its mean). For a caller that runs the
+ * columns as tasks of its own, any number of them at once: a column's passes
+ * read the loaded variables and write nothing but what is its own, on the
+ * calling thread.
+ */
+ST_double creghdfe_column_sum(const creghdfe_columns *C, ST_int k);
+void creghdfe_column_build(const creghdfe_columns *C, const creghdfe_columns_opts *opts, ST_int k,
+                           ST_double *data, ST_double *raw, ST_double *tss, ST_double *stdevs,
+                           ST_double *norm2);
+
+/*
+ * A regression with a single absorbed effect (no slope): the projection on
+ * it done while the column is written.
+ *
+ * The projection subtracts from every value the (weighted) mean of its
+ * level. Done on the finished matrix it reads every column twice more (the
+ * level sums, then the subtraction) after the pass that wrote it. Here the
+ * values pass through once less: the level sums are taken from the scaled
+ * values as they are computed, and the column is written already projected.
+ * At 10M rows in no order that takes creghdfe's partial-out phase from 52
+ * to 39 ms with three columns and from 124 to 86 ms with nine. (Rows grouped
+ * by the effect are better left to partial_out_columns(), which takes them
+ * run by run on every thread: the phase was 44 ms that way and 46 ms with
+ * the runs handled here, a column per thread.)
+ * Every number is the one creghdfe_column_build() followed by
+ * partial_out_columns() gives, to the last bit: norm2[k] is the sum of
+ * squares of the column before the projection, added in the same eight
+ * chains, and each level's sum adds the same scaled values in row order.
+ *
+ * Two calls per column, since the effect's counts may still be on their way
+ * while the first runs (it does not read them):
+ *
+ *   creghdfe_column_scale()   opts->means[k] must hold the column's mean.
+ *       Sets tss[k] and stdevs[k], as creghdfe_column_build() does.
+ *   creghdfe_column_absorb()  sets norm2[k] and writes column k of data.
+ *       sums (E->num_levels entries) is scratch for the level sums.
+ *
+ * Not for the double-double sums (use_quad) nor for a caller that wants the
+ * unscaled rows as well: those take creghdfe_column_build().
+ */
+typedef struct
+{
+    const ST_int *levels;    /* the 1-based level of every kept row */
+    ST_int num_levels;
+    const ST_double *inv;    /* 1 / the (weighted) count of each level; NULL: divide by counts */
+    const ST_double *counts; /* the (weighted) counts, read when inv is NULL */
+} creghdfe_absorbed;
+
+void creghdfe_column_scale(const creghdfe_columns *C, const creghdfe_columns_opts *opts, ST_int k,
+                           ST_double *tss, ST_double *stdevs);
+void creghdfe_column_absorb(const creghdfe_columns *C, const creghdfe_columns_opts *opts, ST_int k,
+                            const creghdfe_absorbed *E, const ST_double *stdevs, ST_double *norm2,
+                            ST_double *sums, ST_double *data);
+
+/*
  * Collinearity of the partialled regressors, as reghdfe judges it.
  *
  * data: N x K column-major, y then the K - 1 regressors, partialled, in the

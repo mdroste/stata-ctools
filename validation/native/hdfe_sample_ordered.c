@@ -6,7 +6,9 @@
  * level and the weights per level summed in row order must match bit for
  * bit. The thresholds are small, so that a few hundred rows reach the row
  * blocks, the ranges of codes and levels, the counting pass of the singleton
- * step, its fallback, and both parallel counts. */
+ * step, its start from many single rows with each way of counting a factor,
+ * the factors built from those counts, both parallel counts, and each way
+ * the PPML selection counts a factor. */
 #undef NDEBUG
 #ifndef CTOOLS_HDFE_BLOCK_ROWS
 #define CTOOLS_HDFE_BLOCK_ROWS 16
@@ -28,6 +30,12 @@
 #endif
 #ifndef HDFE_COUNT_BLOCK_ENTRIES
 #define HDFE_COUNT_BLOCK_ENTRIES 64
+#endif
+#ifndef HDFE_SEEDED_TABLE_ENTRIES
+#define HDFE_SEEDED_TABLE_ENTRIES 256
+#endif
+#ifndef PPML_COUNT_TABLE_LEVELS
+#define PPML_COUNT_TABLE_LEVELS 256
 #endif
 #include <assert.h>
 #include <stdint.h>
@@ -202,7 +210,7 @@ static int separate_steps(sample *s, int G, const double *const *v, ST_int N, co
     return none;
 }
 
-static int shared_listed, shared_dropped;
+static int shared_listed, shared_dropped, shared_counted;
 
 /* the counts either inside the build or left to the caller, job by job */
 static int shared_steps(sample *s, int G, const double *const *v, ST_int N, const double *fw,
@@ -241,6 +249,27 @@ static int shared_steps(sample *s, int G, const double *const *v, ST_int N, cons
     assert(!sing.keep == !sing.num_dropped);
     shared_listed = sing.listed;
     shared_dropped = sing.num_dropped;
+    shared_counted = sing.counted;
+    /* the dropped rows are listed, or counted, or neither (every level of
+     * every factor counted the old way), never both */
+    assert(!(sing.listed && sing.counted) && (!sing.counted || sing.num_dropped > 0));
+    if (sing.counted) {
+        /* a factor is counted in full, or every dropped row was alone in
+         * its level of it */
+        assert(sing.rows_left && sing.keep);
+        for (int g = 0; g < G; g++) {
+            ST_int *c = calloc((size_t)lmax[g] + 1, sizeof(ST_int));
+            ST_int *all = calloc((size_t)lmax[g] + 1, sizeof(ST_int));
+            assert(c && all);
+            for (ST_int i = 0; i < N; i++) c[lv[g][i]] += sing.keep[i] != 0, all[lv[g][i]]++;
+            for (ST_int l = 1; l <= lmax[g]; l++) {
+                if (sing.rows_left[g]) assert(sing.rows_left[g][2 * (size_t)l] == c[l]);
+                else assert(c[l] == all[l] || (all[l] == 1 && c[l] == 0));
+            }
+            free(c);
+            free(all);
+        }
+    }
     int none = sing.num_dropped == N;
     if (!none) {
         assert(hdfe_build_factors_ordered(&S, G, fac, ord, &sing, N, w, 0, jobs ? &pending : NULL) == 0);
@@ -269,7 +298,7 @@ static int shared_steps(sample *s, int G, const double *const *v, ST_int N, cons
 
 static void same(const sample *a, const sample *b, int G, ST_int N, int weighted);
 
-static int keep_listed;
+static int keep_listed, keep_counted;
 
 /* Keep flags made elsewhere (any rows, not only singletons): the factors
  * hdfe_build_factors() makes of them against those made from the list of
@@ -294,6 +323,24 @@ static void keep_steps(int G, const double *const *v, ST_int N, const double *w,
     assert(hdfe_singletons_from_keep(&sing, lv, lmax, G, N, keep, dropped) == 0);
     assert(sing.keep == keep && sing.num_dropped == dropped);
     keep_listed = sing.listed;
+    /* A selection that counted the rows every level has left hands the
+     * counts over (as cppmlhdfe's does): they are used when the dropped
+     * rows are not listed, and freed otherwise */
+    keep_counted = 0;
+    if (below(2)) {
+        ST_int **left = calloc((size_t)G, sizeof(ST_int *));
+        assert(left);
+        for (int g = 0; g < G; g++) {
+            assert((left[g] = calloc(2 * ((size_t)lmax[g] + 1), sizeof(ST_int))));
+            for (ST_int i = 0; i < N; i++) {
+                left[g][2 * (size_t)lv[g][i]] += keep[i] != 0;
+                left[g][2 * (size_t)lv[g][i] + 1] ^= i; /* the odd entries are not read */
+            }
+        }
+        hdfe_singletons_counted(&sing, left, G);
+        assert(!sing.counted == (sing.listed || !dropped));
+        keep_counted = sing.counted;
+    }
     if (sing.listed && dropped) {
         ST_int k = 0;
         for (ST_int i = 0; i < N; i++)
@@ -346,7 +393,20 @@ static void whole_steps(int G, const double *const *v, ST_int N)
     const ST_int keep_singletons = below(4) == 0, check = below(4) != 0;
     const ST_int *so = below(2) ? slope_only : NULL;
     const int whole = ppml_fe_sample_is_whole(y, lv, lmax, single, G, N, so, keep_singletons, check);
-    assert(ppml_select_fe_sample_ex(y, lv, lmax, G, N, mask, &ns, &nz, so, keep_singletons, check) == 0);
+    /* the selection hands out the rows every level has left */
+    ST_int **left = NULL;
+    assert(ppml_select_fe_sample_counted(y, lv, lmax, G, N, mask, &ns, &nz, so, keep_singletons, check,
+                                         &left) == 0);
+    assert(left);
+    for (int g = 0; g < G; g++) {
+        ST_int *c = calloc((size_t)lmax[g] + 1, sizeof(ST_int));
+        assert(c);
+        for (ST_int i = 0; i < N; i++) c[lv[g][i]] += mask[i] != 0;
+        for (ST_int l = 1; l <= lmax[g]; l++) assert(left[g][2 * (size_t)l] == c[l]);
+        free(c);
+        free(left[g]);
+    }
+    free(left);
     if (whole) assert(ns + nz == 0);
     if (known) assert(whole == (ns + nz == 0));
     free(y);
@@ -392,6 +452,7 @@ int main(void)
     mock.ismissing = mock_missing;
     mock.spoutsml = mock_out;
     int listed = 0, with_drops = 0, listed_drops = 0, fallback = 0, kept_listed = 0, kept_renumbered = 0;
+    int counted = 0, kept_counted = 0;
     for (int c = 0; c < 2500; c++) {
         const ST_int N = 1 + (ST_int)below(below(4) == 0 ? 40 : 1200);
         const int G = 1 + (int)below(MAXG);
@@ -437,6 +498,7 @@ int main(void)
                 listed += shared_listed;
                 if (shared_dropped) with_drops++, listed_drops += shared_listed;
                 if (shared_dropped && !shared_listed) fallback++;
+                counted += shared_counted;
             }
             /* any rows dropped: none, one, a few, many */
             {
@@ -450,7 +512,8 @@ int main(void)
                 }
                 if (dropped < N) {
                     keep_steps(G, vals, N, w, keep, dropped);
-                    if (dropped && t == 2) keep_listed ? kept_listed++ : kept_renumbered++;
+                    if (dropped && t == 2)
+                        keep_listed ? kept_listed++ : keep_counted ? kept_counted++ : kept_renumbered++;
                 }
                 free(keep);
             }
@@ -466,9 +529,12 @@ int main(void)
      * the factors from keep flags */
     assert(listed_drops > 100 && fallback > 100);
     assert(kept_listed > 100 && kept_renumbered > 100);
+    /* and dropped rows were counted rather than listed, by singleton
+     * removal and by a selection of the caller's */
+    assert(counted > 100 && kept_counted > 100);
 #endif
-    printf("hdfe_sample_ordered: listed %d, with drops %d (listed %d, every level counted %d); "
-           "keep flags listed %d, renumbered %d\n",
-           listed, with_drops, listed_drops, fallback, kept_listed, kept_renumbered);
+    printf("hdfe_sample_ordered: listed %d, with drops %d (listed %d, not listed %d of which counted %d); "
+           "keep flags listed %d, counted %d, renumbered %d\n",
+           listed, with_drops, listed_drops, fallback, counted, kept_listed, kept_counted, kept_renumbered);
     return 0;
 }

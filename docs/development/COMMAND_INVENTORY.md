@@ -41,4 +41,7 @@ by the package and validation inventories.
 | `ccollapse` | `CTOOLS_CMD_CCOLLAPSE` | `ccollapse_main` | `ccollapse_cleanup_state` |
 | `cegen` | `CTOOLS_CMD_CEGEN` | `cegen_main` | `cegen_cleanup_state` |
 | `creshape` | `CTOOLS_CMD_CRESHAPE` | `creshape_main` | `creshape_cleanup_state` |
+| `cfuzzyjoin` | `CTOOLS_CMD_CFUZZYJOIN` | `cfuzzyjoin_main` | `cfuzzyjoin_cleanup_state` |
+| `csql` | `CTOOLS_CMD_CSQL` | `csql_main` | `NULL` |
+| `cgeonear` | `CTOOLS_CMD_CGEONEAR` | `cgeonear_main` | `cgeonear_cleanup_state` |
 | `dta` | `CTOOLS_CMD_OTHER` | `ctools_dta_main` | `NULL` |

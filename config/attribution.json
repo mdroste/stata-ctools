@@ -98,6 +98,46 @@
       ]
     },
     {
+      "command": "cgeonear",
+      "intro": "`cgeonear` reimplements two commands written by Robert Picard. Given a using file it follows `geonear`, and given four coordinates it follows `geodist`: their syntax, options, distance formulas, messages, and results.",
+      "originals": [
+        {
+          "name": "geonear",
+          "kind": "community",
+          "authors": "Robert Picard",
+          "version": "2.0.3",
+          "date": "September 4, 2019",
+          "header": "*! version 2.0.3  04sep2019 Robert Picard, robertpicard@gmail.com",
+          "url": "https://ideas.repec.org/c/boc/bocode/s457146.html",
+          "file": "geonear.ado",
+          "sha256": "70aa47f8d5ba1833a6920a07a257242d0acfb720a213cd92f0a27a19dce53990",
+          "current": true,
+          "channel": "SSC",
+          "install": "ssc install geonear",
+          "distributed": "September 14, 2019"
+        },
+        {
+          "name": "geodist",
+          "kind": "community",
+          "authors": "Robert Picard",
+          "version": "1.1.0",
+          "date": "June 18, 2019",
+          "header": "*! version 1.1.0  18jun2019 Robert Picard, picard@netbox.com",
+          "url": "https://ideas.repec.org/c/boc/bocode/s457147.html",
+          "file": "geodist.ado",
+          "sha256": "8e7fb2c90692c3b49ee21489331853cd631537e64019f1d5ef92957cdb03c402",
+          "current": true,
+          "channel": "SSC",
+          "install": "ssc install geodist",
+          "distributed": "June 24, 2019"
+        }
+      ],
+      "references": [
+        "Picard, R. 2010. GEONEAR: Stata module to find nearest neighbors using geodetic distances. Statistical Software Components S457146, Boston College Department of Economics. Revised September 14, 2019.",
+        "Picard, R. 2010. GEODIST: Stata module to compute geographical distances. Statistical Software Components S457147, Boston College Department of Economics. Revised June 24, 2019."
+      ]
+    },
+    {
       "command": "cinterpolate",
       "intro": "`cinterpolate` reimplements two commands. By default it follows `ipolate`, an official Stata command. With the `cubic` option it follows `cipolate`, written by Nicholas J. Cox (Durham University).",
       "originals": [
@@ -490,6 +530,73 @@
       ],
       "references": [
         "Weesie, J. 1997. dm48: An enhancement of reshape. *Stata Technical Bulletin* 38: 2-4. Reprinted in *Stata Technical Bulletin Reprints*, vol. 7, pp. 40-43. College Station, TX: Stata Press."
+      ]
+    },
+    {
+      "command": "cfuzzyjoin",
+      "intro": "`cfuzzyjoin` reimplements three community commands: `reclink`, written by Michael Blasnik, as `cfuzzyjoin link`; `matchit`, written by Julio D. Raffo (World Intellectual Property Organization), as `cfuzzyjoin match`; and `strgroup`, written by Julian Reif (University of Illinois), as `cfuzzyjoin group`. The syntax, options, scores, results, and messages of each subcommand follow its original.",
+      "originals": [
+        {
+          "name": "reclink",
+          "kind": "community",
+          "authors": "Michael Blasnik",
+          "version": "1.7",
+          "date": "January 14, 2010",
+          "header": "*! v 1.7 14-Jan-2010 M. Blasnik:  Record Linkage",
+          "url": "https://ideas.repec.org/c/boc/bocode/s456876.html",
+          "file": "reclink.ado",
+          "sha256": "2b20363477ad680ef0d6f6a5cce744ad4ecdddddbf92e8e74894e90fbed3299d",
+          "current": true,
+          "channel": "SSC",
+          "install": "ssc install reclink",
+          "distributed": "January 18, 2010"
+        },
+        {
+          "name": "matchit",
+          "kind": "community",
+          "authors": "Julio D. Raffo",
+          "version": "1.5.2",
+          "date": "May 2020",
+          "header": "*! 1.5.2 J.D. Raffo May 2020",
+          "url": "https://ideas.repec.org/c/boc/bocode/s457992.html",
+          "file": "matchit.ado",
+          "sha256": "1d9e82074a70f3094b704c063facb23a7ad3752feb900204f6af0060b0e64acd",
+          "current": true,
+          "channel": "SSC",
+          "install": "ssc install matchit",
+          "distributed": "May 20, 2020"
+        },
+        {
+          "name": "strgroup",
+          "kind": "community",
+          "authors": "Julian Reif",
+          "version": "1.0.4",
+          "date": "December 17, 2021",
+          "header": "*! strgroup 1.0.4 17dec2021 by Julian Reif",
+          "url": "https://ideas.repec.org/c/boc/bocode/s457151.html",
+          "file": "strgroup.ado",
+          "sha256": "3f99d7ea62ea48b5ec35124d7f40d0169943087f0e184f354e95973f1f6c046e",
+          "current": true,
+          "channel": "SSC",
+          "install": "ssc install strgroup",
+          "distributed": "August 22, 2023"
+        }
+      ],
+      "later": [
+        "Julian Reif's GitHub repository (github.com/reifjulian/strgroup) has a newer `strgroup`, 1.0.5 (January 2026), with a faster plugin; SSC distributes 1.0.4, which `cfuzzyjoin group` follows."
+      ],
+      "credits": [
+        "`matchit` computes gram frequencies with `freqindex` 1.3.1 (April 2019), also by Julio D. Raffo and distributed on SSC (`ssc install freqindex`); `cfuzzyjoin match` follows its similarity functions too.",
+        "`strgroup`'s plugin computes the Levenshtein distance with code adapted from David Necas's python-Levenshtein module. `cfuzzyjoin group` computes the same distance with the bit-parallel algorithm of Myers (1999), in the form Hyyrö (2003) gives for the distance between whole strings, and a banded dynamic program (Ukkonen 1985) beyond 64 bytes."
+      ],
+      "references": [
+        "Blasnik, M. 2007. RECLINK: Stata module to probabilistically match records. Statistical Software Components S456876, Boston College Department of Economics. Revised January 18, 2010.",
+        "Raffo, J. 2015. MATCHIT: Stata module to match two datasets based on similar text patterns. Statistical Software Components S457992, Boston College Department of Economics. Revised May 20, 2020.",
+        "Raffo, J., and S. Lhuillery. 2009. How to play the \"Names Game\": Patent retrieval comparing different heuristics. *Research Policy* 38(10): 1617-1627.",
+        "Reif, J. 2010. STRGROUP: Stata module to match strings based on their Levenshtein edit distance. Statistical Software Components S457151, Boston College Department of Economics. Revised August 22, 2023.",
+        "Myers, G. 1999. A fast bit-vector algorithm for approximate string matching based on dynamic programming. *Journal of the ACM* 46(3): 395-415.",
+        "Hyyrö, H. 2003. A bit-vector algorithm for computing Levenshtein and Damerau edit distances. *Nordic Journal of Computing* 10(1): 29-39.",
+        "Ukkonen, E. 1985. Algorithms for approximate string matching. *Information and Control* 64(1-3): 100-118."
       ]
     },
     {
