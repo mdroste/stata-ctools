@@ -263,6 +263,77 @@ void ppml_irls_step_eta(const ST_double *X_part, ST_int N, ST_int K, const ST_do
     *mu_overflow |= over;
 }
 
+/* The row loop of ppml_irls_step_means is a function of its own that starts
+ * on a 4 KB page boundary. Measured on a Ryzen 9 9950X (2026-11-26): where
+ * this loop sits within its page decides whether a hardware thread running
+ * it slows the other hardware thread of its core. At one position in eight
+ * of the loop as it was (inlined in the parallel region, with a call of fmax
+ * and a branch on the outcome after the sum), rows that call log1p cost the
+ * sibling thread 30% more; one thread per core, or rows without log1p,
+ * showed nothing. The loop sat wherever the link put it, after all the code
+ * before it, so the step's speed changed with any build of unrelated code.
+ * Aligned to a page it is at the same place in every build. In this form
+ * the loop is also less exposed: of 64 places tried, the worst two cost the
+ * sibling thread 8%. The once-per-fit passes in this file were timed the
+ * same way and are left where the link puts them: they have at most a few
+ * places that cost 5 to 9%, and aligning them showed no gain in a plugin. */
+#if defined(__GNUC__) && !defined(__clang__)
+#define PPML_ONE_PAGE __attribute__((noinline, noclone, aligned(4096)))
+#elif defined(__clang__)
+#define PPML_ONE_PAGE __attribute__((noinline, aligned(4096)))
+#else
+#define PPML_ONE_PAGE
+#endif
+
+#define PPML_ROWS_NOT_FINITE 1
+#define PPML_ROWS_OVERFLOW 2
+#define PPML_ROWS_FLOORED 4
+
+/* Rows lo..hi-1 of ppml_irls_step_means: returns their deviance sum (before
+ * the factor 2), the largest change of eta in *change and PPML_ROWS_* bits
+ * in *flags. */
+PPML_ONE_PAGE
+static dd_real ppml_step_means_rows(const ST_double *y, const ST_double *eta_new,
+                                    const ST_double *offset, const ST_double *w_user,
+                                    ST_int lo, ST_int hi, ST_double *eta, ST_double *mu,
+                                    ST_double *change, int *flags)
+{
+    dd_real dev = {0.0, 0.0};
+    ST_double max_change = 0.0;
+    int bad = 0, over = 0, floored = 0;
+    for (ST_int i = lo; i < hi; i++) {
+        const ST_double z_hat = eta_new[i];
+        const ST_double off = (offset != NULL) ? offset[i] : 0.0;
+        if (!isfinite(z_hat)) { bad = 1; continue; }
+        const ST_double yi = y[i];
+        /* Zero outcomes with negligible means may have no finite FE
+         * coefficient after a tolerance-limited separation check. They
+         * must not prevent convergence of the identified parameters.
+         * Compares instead of a call of fmax and of branches on the
+         * outcome: the largest change is the same number (a NaN difference
+         * is skipped as fmax skips it, and no change is below +0). */
+        const ST_double moved = ((yi > 0) | (mu[i] > 1e-12)) ? fabs(z_hat - eta[i]) : 0.0;
+        if (moved > max_change) max_change = moved;
+        eta[i] = z_hat;
+        const ST_double eta_total = z_hat + off;
+        ST_double m = exp(eta_total);
+        /* the deviance takes the mean before the floor */
+        const ST_double w = (w_user != NULL) ? w_user[i] : 1.0;
+        dev = dd_add_d(dev, w * ppml_unit_deviance_mu(yi, m, eta_total));
+        /* As ppmlhdfe: floor mu for the weights only, never cap it (a
+           capped mean no longer agrees with eta and can stall the
+           deviance at a wrong point); an overflowing mean stops the fit */
+        over |= !isfinite(m);
+        if (m < PPML_MU_FLOOR) m = PPML_MU_FLOOR;
+        mu[i] = m;
+        floored |= (yi > 0) & (m <= PPML_MU_FLOOR);
+    }
+    *change = max_change;
+    *flags = (bad ? PPML_ROWS_NOT_FINITE : 0) | (over ? PPML_ROWS_OVERFLOW : 0) |
+             (floored ? PPML_ROWS_FLOORED : 0);
+    return dev;
+}
+
 ST_retcode ppml_irls_step_means(const ST_double *y, const ST_double *eta_new,
                                 const ST_double *offset, const ST_double *w_user, ST_int N,
                                 ST_double *eta, ST_double *mu, ppml_step_means *out)
@@ -272,46 +343,27 @@ ST_retcode ppml_irls_step_means(const ST_double *y, const ST_double *eta_new,
     dd_real *part = nblocks > 1 ? (dd_real *)malloc((size_t)nblocks * sizeof(dd_real)) : &one;
     if (!part) return 920;
     ST_double max_change = 0.0;
-    int bad = 0, over = 0, floored = 0;
+    int flags = 0;
     ST_int b;
     #pragma omp parallel for schedule(static) reduction(max : max_change)                          \
-        reduction(| : bad, over, floored) if (N > 100000)
+        reduction(| : flags) if (N > 100000)
     for (b = 0; b < nblocks; b++) {
         const ST_int lo = b * PPML_SUM_BLOCK;
         const ST_int hi = lo + PPML_SUM_BLOCK < N ? lo + PPML_SUM_BLOCK : N;
-        dd_real dev = {0.0, 0.0};
-        for (ST_int i = lo; i < hi; i++) {
-            const ST_double z_hat = eta_new[i];
-            const ST_double off = (offset != NULL) ? offset[i] : 0.0;
-            if (!isfinite(z_hat)) { bad |= 1; continue; }
-            /* Zero outcomes with negligible means may have no finite FE
-             * coefficient after a tolerance-limited separation check. They
-             * must not prevent convergence of the identified parameters. */
-            if (y[i] > 0 || mu[i] > 1e-12)
-                max_change = fmax(max_change, fabs(z_hat - eta[i]));
-            eta[i] = z_hat;
-            const ST_double eta_total = z_hat + off;
-            ST_double m = exp(eta_total);
-            /* the deviance takes the mean before the floor */
-            const ST_double w = (w_user != NULL) ? w_user[i] : 1.0;
-            dev = dd_add_d(dev, w * ppml_unit_deviance_mu(y[i], m, eta_total));
-            /* As ppmlhdfe: floor mu for the weights only, never cap it (a
-               capped mean no longer agrees with eta and can stall the
-               deviance at a wrong point); an overflowing mean stops the fit */
-            if (!isfinite(m)) over |= 1;
-            if (m < PPML_MU_FLOOR) m = PPML_MU_FLOOR;
-            mu[i] = m;
-            floored |= y[i] > 0 && m <= PPML_MU_FLOOR;
-        }
-        part[b] = dev;
+        ST_double block_change = 0.0;
+        int block_flags = 0;
+        part[b] = ppml_step_means_rows(y, eta_new, offset, w_user, lo, hi, eta, mu,
+                                       &block_change, &block_flags);
+        if (block_change > max_change) max_change = block_change;
+        flags |= block_flags;
     }
     dd_real total = {0.0, 0.0};
     for (b = 0; b < nblocks; b++) total = ppml_dd_add_dd(total, part[b]);
     if (part != &one) free(part);
     out->max_eta_change = max_change;
-    out->eta_not_finite = bad;
-    out->mu_overflow = over;
-    out->floored_positive = floored;
+    out->eta_not_finite = (flags & PPML_ROWS_NOT_FINITE) != 0;
+    out->mu_overflow = (flags & PPML_ROWS_OVERFLOW) != 0;
+    out->floored_positive = (flags & PPML_ROWS_FLOORED) != 0;
     out->deviance = 2.0 * (total.hi + total.lo);
     return 0;
 }
