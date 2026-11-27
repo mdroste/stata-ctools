@@ -42,7 +42,7 @@ Except for `csql`, each ctools command reimplements an existing Stata command an
 
 ### User-written commands
 
-See [Attribution](docs/ATTRIBUTION.md#community-contributed-commands) for the authors of these commands and the versions ctools is pinned to.
+See [Attribution](docs/ATTRIBUTION.md#community-contributed-commands) for the authors of these commands and the versions ctools is pinned to. `binscatter2`, `fereg` and `feppml` are listed only as speed comparisons; ctools is not pinned to them.
 
 | Stata command | Replaced with | Description | Approx. speedup¹ |
 | --- | --- | --- | ---: |
@@ -61,6 +61,8 @@ See [Attribution](docs/ATTRIBUTION.md#community-contributed-commands) for the au
 | `reclink`<br>`matchit`<br>`strgroup` | [`cfuzzyjoin`](docs/commands/cfuzzyjoin.md) | Fuzzy record linkage, similarity joins, and groups of similar strings | 480–780×<br>2,800–16,000×<br>84–450×² |
 
 ### New commands
+
+`csql` runs its queries in [DuckDB](https://duckdb.org); see [Attribution](docs/ATTRIBUTION.md#new-commands) for its authors and how to cite it.
 
 | Command | Description |
 | --- | --- |
@@ -112,7 +114,7 @@ See the [documentation index](docs/README.md) for command guides, development an
 
 ## Thanks
 
-ctools reimplements commands written by the people below. [Attribution](docs/ATTRIBUTION.md) lists the version of each command that ctools is pinned to, along with references to cite.
+ctools reimplements commands written by the people below, and builds on their work. [Attribution](docs/ATTRIBUTION.md) lists the version of each command that ctools is pinned to, along with references to cite.
 
 - Sergio Correia for [ftools](https://github.com/sergiocorreia/ftools), [reghdfe](https://github.com/sergiocorreia/reghdfe) (with Noah Constantine), [ivreghdfe](https://github.com/sergiocorreia/ivreghdfe) (with Lars Vilhuber), and [hdfe](https://ideas.repec.org/c/boc/bocode/s457985.html), as well as tons of helpful comments and suggestions
 - Sergio Correia, Paulo Guimarães, and Thomas Zylkin for [ppmlhdfe](https://github.com/sergiocorreia/ppmlhdfe)
@@ -122,13 +124,20 @@ ctools reimplements commands written by the people below. [Attribution](docs/ATT
 - David Roodman for [boottest](https://ideas.repec.org/c/boc/bocode/s458121.html)
 - Gary Longton and Nicholas J. Cox for [distinct](https://ideas.repec.org/c/boc/bocode/s424201.html)
 - Robert Picard, Nicholas J. Cox, and Roberto Ferrer for [rangestat](https://ideas.repec.org/c/boc/bocode/s458161.html)
-- Nicholas J. Cox for [cipolate](https://ideas.repec.org/c/boc/bocode/s426202.html), and for Stata's official `split` and `destring`, which the Stata manual credits to him
+- Nicholas J. Cox for [cipolate](https://ideas.repec.org/c/boc/bocode/s426202.html), for Stata's official `split` and `destring`, which the Stata manual credits to him, and for many of the official `egen` functions
 - Robert Picard for [rangejoin](https://ideas.repec.org/c/boc/bocode/s458162.html), [geonear](https://ideas.repec.org/c/boc/bocode/s457146.html) and [geodist](https://ideas.repec.org/c/boc/bocode/s457147.html)
+- Michael Blasnik for [reclink](https://ideas.repec.org/c/boc/bocode/s456876.html)
+- Julio D. Raffo for [matchit](https://ideas.repec.org/c/boc/bocode/s457992.html) and freqindex
+- Julian Reif for [strgroup](https://ideas.repec.org/c/boc/bocode/s457151.html)
 - Edwin Leuven and Barbara Sianesi for [psmatch2](https://ideas.repec.org/c/boc/bocode/s432001.html)
 - Yujun Lian for [winsor2](https://ideas.repec.org/c/boc/bocode/s457765.html)
 - Michael Stepner and Jessica Laird for [binscatter](https://michaelstepner.com/binscatter/)
 - Matias D. Cattaneo, Richard K. Crump, Max H. Farrell, and Yingjie Feng for [binsreg](https://github.com/nppackages/binsreg)
+- StataCorp for the official Stata commands that ctools reimplements, including `sort`, `merge`, `joinby`, `reshape`, `collapse`, `egen`, `encode` and `decode`
+- Jeroen Weesie, whose enhancement of `reshape` (*Stata Technical Bulletin* dm48) Stata's `reshape` is based on in part, and David Clayton and Michael Hills for `egen`'s `cut()`, as the Stata manual credits them
+- Mark Raasveldt, Hannes Mühleisen, and the DuckDB contributors for [DuckDB](https://duckdb.org), which runs the queries of `csql`
 - Michael Axtmann, Sascha Witt, Daniel Ferizovic, and Peter Sanders for the [In-place Parallel Super Scalar Samplesort (IPS⁴o)](https://github.com/SaschaWitt/ips4o) sorting algorithm.
+- Gene Myers, Heikki Hyyrö, and Esko Ukkonen for the edit-distance algorithms used in `cfuzzyjoin group`.
 
 
 ## License

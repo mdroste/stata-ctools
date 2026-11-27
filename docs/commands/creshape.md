@@ -135,7 +135,8 @@ return code, before the data are changed:
 | A stub's wide variables mix strings and numbers | 198 |
 | A new variable would take an existing name | 110 |
 | A value of `j` makes an invalid variable name (a fraction, a negative number) | 198 |
-| `j` takes on more values than `c(maxvar)` has room for (`creshape wide`) | 134 |
+| `j` takes on more values than `c(maxvar)` (`creshape wide`) | 134 |
+| The result would have more variables than `c(maxvar)` | 900 |
 
 `creshape error` then lists the problem observations.
 
@@ -184,6 +185,13 @@ labels, characteristics, `c(changed)` and `c(filename)`.
   `creshape` leaves out only the values that have no observations.
 - **Refused requests.** `reshape` leaves the data sorted by `i`; `creshape`
   leaves them as they were.
+- **Data that are already wide.** `creshape wide` on data that are already
+  wide displays "(data are already wide)" and returns 0, as `reshape` with
+  `favor(memory)` does; `reshape` with `favor(speed)`, the default, stops with
+  r(111).
+- **`if`, `in` and weights.** `creshape` refuses them with r(101) before any
+  setting is recorded. `reshape` records them in `_dta[ReS_Xij]` as if they
+  were stubs and then stops with r(110) or r(101).
 - **Unattached value labels** are kept; `reshape` drops them.
 - **No observations.** `creshape` returns the empty dataset in the new form;
   `reshape` with `favor(speed)` stops with a Mata error.

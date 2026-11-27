@@ -134,9 +134,26 @@ program define _cegen_impl
 
     local numtypes byte int long float double
     local isnumtype : list type in numtypes
-    if !`isnumtype' & !regexm("`type'", "^str([0-9]+|L)$") {
-        di as error "`type' is not a storage type"
-        exit 198
+    local isstrtype = "`type'" == "strL"
+    if regexm("`type'", "^str([1-9][0-9]*)$") local isstrtype = real(regexs(1)) <= c(maxstrvarlen)
+    if !`isnumtype' & !`isstrtype' {
+        * Not a storage type: egen hands it to its function, whose parsing
+        * decides (most stop with r(103), some ignore the type)
+        _cegen_egen `cvers' "`byprefix'" `type' `name' = `fcn0'(`args') `0'
+        exit
+    }
+
+    * egen parses [if] [in] [, *] before its function sees anything, and the
+    * by prefix refuses an in range there (functions egen runs itself get
+    * this from egen)
+    if `: list fcn in f_all' {
+        local rest `"`0'"'
+        syntax [if] [in] [, *]
+        if "`byprefix'" != "" & `"`in'"' != "" {
+            di as error "'in' may not be combined with 'by'"
+            exit 190
+        }
+        local 0 `"`rest'"'
     }
 
     syntax [if/] [in] [, BY(varlist) THReads(integer 0) Verbose *]
@@ -170,6 +187,13 @@ program define _cegen_impl
             di as error "unknown {bf:egen} function {bf:`fcn'()}"
             exit 133
         }
+        _cegen_egen `cvers' "`byprefix'" `typeword' `name' = `fcn0'(`args') `ifword' `inrange', ///
+            `=cond("`byprefix'" == "" & "`byvars'" != "", "by(`byvars')", "")' `fopts'
+        exit
+    }
+    * With no arguments egen's functions stop with different codes, and a
+    * few create a variable: egen decides (seq() and group() take none)
+    if trim(`"`args'"') == "" & !inlist("`fcn'", "seq", "group") {
         _cegen_egen `cvers' "`byprefix'" `typeword' `name' = `fcn0'(`args') `ifword' `inrange', ///
             `=cond("`byprefix'" == "" & "`byvars'" != "", "by(`byvars')", "")' `fopts'
         exit
@@ -260,7 +284,12 @@ program define _cegen_impl
         }
         capture unab srcvar : `e', max(1)
         if _rc == 0 {
-            if "`fcn'" != "count" confirm numeric variable `srcvar'
+            * egen generates a double from the expression
+            capture confirm numeric variable `srcvar'
+            if _rc & "`fcn'" != "count" {
+                di as error "type mismatch"
+                exit 109
+            }
             local src `srcvar'
         }
         else {
@@ -555,6 +584,11 @@ program define _cegen_impl
                 di as error "group() must be an integer greater than or equal to 2"
                 exit 198
             }
+            * pctile's limit: _N + 1, whatever the size of the sample
+            if `group' > _N + 1 {
+                di as error "group() must be less than or equal to the number of observations plus one"
+                exit 198
+            }
             local icodes "icodes"
             local fnopts "nq=`group'"
         }
@@ -666,8 +700,10 @@ program define _cegen_impl
         local type0 "str"
     }
 
-    * mode(), seq(), tag(), anycount() and anymatch() choose their own type
-    if "`rule'" != "str" & !`isnumtype' & !inlist("`fcn'", "mode", "seq", "tag", "anycount", "anymatch") {
+    * mode(), seq(), tag(), anycount() and anymatch() choose their own type;
+    * what egen runs itself gets its own check there
+    if "`rule'" != "str" & !`isnumtype' & !`needs_egen' & ///
+        !inlist("`fcn'", "mode", "seq", "tag", "anycount", "anymatch") {
         di as error "type mismatch"
         exit 109
     }
@@ -788,6 +824,11 @@ program define _cegen_impl
     if "`fcn'" == "cut" & `cegen_badgroups' {
         di as error "group() must be less than or equal to the number of observations plus one"
         exit 198
+    }
+    if "`fcn'" == "cut" & `cegen_allmiss' {
+        * group() over a sample with no nonmissing values: pctile's error
+        di as error "no observations"
+        exit 2000
     }
     if "`fcn'" == "group" & `cegen_overflow' {
         di as error "too many values for {bf:label define}"

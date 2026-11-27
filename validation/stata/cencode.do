@@ -2463,6 +2463,113 @@ if `n_rich' == r(N) test_pass "ENC-01 if may name the caller's r()"
 else test_fail "ENC-01 if may name the caller's r()" "`n_rich' encoded"
 drop native_code make_code rich
 noisily _ct_same_output "ENC-01 numeric source message" "encode price, gen(bad)" "cencode price, gen(bad)"
+
+* SECTION: plugin protocol 3. A label too large for st_vlmodify() to install
+* quickly comes back as a dataset to append (the sort order is restored), an
+* existing label too long for a macro goes to the plugin in a file, strL
+* values the plugin cannot read go to encode, and the outputs are written
+* without initial values even with if or in.
+print_section "Large labels, strL hand-back, if/in"
+capture program drop _ce3_same
+program define _ce3_same
+    args a b what
+    capture assert `a' == `b' | (missing(`a') & missing(`b'))
+    local values = !_rc
+    local la : value label `a'
+    local lb : value label `b'
+    local labels = 0
+    if "`la'" != "" & "`lb'" != "" {
+        mata: st_vlload("`la'", __va = ., __ta = ""); st_vlload("`lb'", __vb = ., __tb = ""); ///
+            st_local("labels", strofreal(rows(__va) == rows(__vb) & all(__va :== __vb) & all(__ta :== __tb)))
+        capture mata: mata drop __va __vb __ta __tb
+    }
+    local formats = "`: format `a''" == "`: format `b''"
+    if `values' & `labels' & `formats' test_pass "`what'"
+    else test_fail "`what'" "values `values' labels `labels' formats `formats'"
+end
+clear
+set obs 60000
+generate long k = mod(_n * 7919, 20000)
+generate str24 s = "id_" + string(k, "%05.0f") + "_" + string(mod(k, 7))
+replace s = "" in 5/9
+generate byte g = mod(_n, 4)
+generate long pos = -_n
+sort g pos
+generate long at = _n
+local sorted_by : sortedby
+encode s, gen(n1)
+cencode s, gen(c1)
+_ce3_same n1 c1 "P3-01 20,000 categories (label dataset)"
+if "`: sortedby'" == "`sorted_by'" & "`sorted_by'" == "g pos" test_pass "P3-01 sort order kept"
+else test_fail "P3-01 sort order kept" "sortedby `: sortedby' (was `sorted_by')"
+capture assert at == _n
+if !_rc test_pass "P3-01 observations not moved"
+else test_fail "P3-01 observations not moved" "order changed"
+* An existing large label is extended in full
+encode s in 1/15000, gen(t1) label(LB_n)
+drop t1
+label copy LB_n LB_c
+label define LB_n 999999 "far away", add
+label define LB_c 999999 "far away", add
+encode s, gen(n2) label(LB_n)
+cencode s, gen(c2) label(LB_c)
+_ce3_same n2 c2 "P3-02 existing large label extended"
+* An existing label too long for a macro
+local L = max(12, ceil(c(macrolen) / 20000) + 8)
+generate str`L' long_s = s + (`L' - 14) * "x" if s != ""
+encode long_s in 1/40000, gen(t3) label(LM_n)
+drop t3
+label copy LM_n LM_c
+encode long_s, gen(n3) label(LM_n)
+cencode long_s, gen(c3) label(LM_c)
+_ce3_same n3 c3 "P3-03 existing label longer than a macro"
+* strL values the plugin cannot read
+generate strL sl = s
+replace sl = sl + 2100 * "z" in 11
+encode sl, gen(n4)
+cencode sl, gen(c4)
+_ce3_same n4 c4 "P3-04 strL value over 2,045 bytes (encode)"
+replace sl = s in 11
+mata: st_sstore(12, "sl", "a" + char(0) + "b")
+encode sl, gen(n5)
+cencode sl, gen(c5)
+_ce3_same n5 c5 "P3-05 binary strL value (encode)"
+cencode sl in 13/60000, gen(c5b)
+encode sl in 13/60000, gen(n5b)
+_ce3_same n5b c5b "P3-06 strL read by the plugin, in"
+* if / in: outputs created without initial values
+encode s if g == 1 in 100/50000, gen(n6)
+cencode s if g == 1 in 100/50000, gen(c6)
+_ce3_same n6 c6 "P3-07 if and in"
+encode s in 2/59990, gen(n7)
+cencode s in 2/59990, gen(c7)
+_ce3_same n7 c7 "P3-08 in"
+capture assert missing(c7) in 1
+local m1 = !_rc
+capture assert missing(c7) in 59991/l
+if `m1' & !_rc test_pass "P3-08 missing outside in"
+else test_fail "P3-08 missing outside in" "values outside the range"
+encode s if g == 9, gen(n8)
+cencode s if g == 9, gen(c8)
+capture assert missing(c8)
+if !_rc test_pass "P3-09 empty if: all missing"
+else test_fail "P3-09 empty if: all missing" "values written"
+* Several variables, encode taking the middle one: the outputs keep their order
+drop n* c*
+capture label drop _all
+generate strL bad = sl
+encode s if g < 3, gen(o_a)
+encode bad if g < 3, gen(o_b)
+encode long_s if g < 3, gen(o_c)
+unab before : _all
+drop o_a o_b o_c
+label drop o_a o_b o_c
+cencode s bad long_s if g < 3, gen(o_a o_b o_c)
+unab after : _all
+if "`before'" == "`after'" test_pass "P3-10 output order with an encode fallback"
+else test_fail "P3-10 output order with an encode fallback" "`after'"
+drop o_a o_b o_c
+label drop o_a o_b o_c
 * End of cencode validation
 do "validation/support/six_release_regressions.do" cencode
 noi print_summary "cencode"

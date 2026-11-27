@@ -43,7 +43,12 @@ static const char *snappy(const uint8_t *s, size_t n, uint8_t *d, size_t out)
             }
             if ((size_t)(end - s) < length || out - pos < length)
                 return "Corrupt snappy compressed data.";
-            memcpy(d + pos, s, length);
+            /* A short literal as one 16-byte copy when both sides have room
+               (the bytes past it are rewritten by what follows) */
+            if (length <= 16 && end - s >= 16 && out - pos >= 16)
+                memcpy(d + pos, s, 16);
+            else
+                memcpy(d + pos, s, length);
             s += length;
             pos += length;
             continue;
@@ -73,7 +78,18 @@ static const char *snappy(const uint8_t *s, size_t n, uint8_t *d, size_t out)
         }
         if (offset == 0 || offset > pos || out - pos < length)
             return "Corrupt snappy compressed data.";
-        /* Overlapping copies repeat the last offset bytes */
+        /* Overlapping copies repeat the last offset bytes. Eight bytes at a
+           time when the source lies at least eight back, so that every
+           block reads bytes already written, and when the last block's
+           overrun (rewritten by what follows) stays inside the output. */
+        if (offset >= 8 && out - pos >= length + 8)
+        {
+            uint8_t *q = d + pos;
+            for (size_t k = 0; k < length; k += 8)
+                memcpy(q + k, q + k - offset, 8);
+            pos += length;
+            continue;
+        }
         for (size_t k = 0; k < length; k++, pos++)
             d[pos] = d[pos - offset];
     }

@@ -433,6 +433,21 @@ ST_retcode cfj_group(const char *args)
     }
     const size_t n = fd.data.nobs;
     const double t1 = ctools_timer_seconds();
+    if (n == 0)
+    {
+        /* no observation selected: the new variable stays missing */
+        ctools_filtered_data_free(&fd);
+        ST_retcode zrc = 0;
+        static const char *const zero[] = {"_cfuzzyjoin_N",      "_cfuzzyjoin_ngroups",
+                                           "_cfuzzyjoin_nunique", "_cfuzzyjoin_nparts",
+                                           "_cfuzzyjoin_pairs",   "_cfuzzyjoin_t_compute",
+                                           "_cfuzzyjoin_t_store"};
+        for (size_t z = 0; z < sizeof(zero) / sizeof(zero[0]) && !zrc; z++)
+            zrc = ctools_scal_save(zero[z], 0.0);
+        zrc = zrc ? zrc : ctools_scal_save("_cfuzzyjoin_t_load", t1 - t0);
+        zrc = zrc ? zrc : ctools_scal_save("_cfuzzyjoin_threads", (double)threads);
+        return zrc;
+    }
 
     stata_retcode rc = STATA_OK;
     const unsigned char **str = (const unsigned char **)malloc((n ? n : 1) * sizeof(char *));

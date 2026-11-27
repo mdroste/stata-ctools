@@ -248,11 +248,20 @@ them in observation order, which is what {cmd:egen} gives on data sorted by
 the by-variables.
 
 {pstd}
+{bf:sd() of very large values by groups.} When the squares of the values
+overflow (beyond about 1e154 in absolute value), {cmd:egen}'s running
+{cmd:sum()} skips them as missing values and reports a wrong standard
+deviation within by-groups (0 for values near 1e306). {cmd:cegen} gives
+missing.
+
+{pstd}
 {bf:What egen still does.} {cmd:cegen} runs {cmd:egen} itself, with the same
 arguments, in these cases: {cmd:mtr()} (its tax tables belong to Stata and
 are not copied into ctools); functions that do not ship with Stata;
 {cmd:rowfirst()} and {cmd:rowlast()} of string variables; a result or key
-that needs a {cmd:strL} longer than 2,045 bytes. In {cmd:concat()}, numbers
+that needs a {cmd:strL} longer than 2,045 bytes; a word before {newvar} that
+is not a storage type; a function given no arguments (other than
+{cmd:seq()} and {cmd:group()}). In {cmd:concat()}, numbers
 other than integers of up to seven digits, and any number with {cmd:format()}
 or {opt decode}, are converted to text by Stata's {cmd:string()} and
 {cmd:decode} before the plugin joins them, so the text is always Stata's.

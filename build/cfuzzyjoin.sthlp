@@ -420,11 +420,14 @@ available; {cmd:matchit} also runs Mata functions a user adds. When
 {cmd:group}: blanks are trimmed unless {opt noclean} is given, as
 {cmd:strgroup}'s help file says; {cmd:strgroup} 1.0.4 never trims them (its
 {opt noclean} has no effect). There is no 10,000-observation limit and no
-warning about duplicate values.
+warning about duplicate values. When no observation is selected, the new
+variable is all missing ({cmd:strgroup} stops with r(198)). {cmd:strgroup}'s
+plugin reads only the first 244 bytes of each string; {cmd:cfuzzyjoin group}
+compares whole strings.
 
 {pstd}
-The data are limited to 2,147,483,647 observations; strings and {cmd:strL}
-values are compared up to 2,045 bytes.
+The data are limited to 2,147,483,647 observations; strings are compared up
+to 2,045 bytes, and longer {cmd:strL} values on their first 2,045 bytes.
 
 
 {marker examples}{...}

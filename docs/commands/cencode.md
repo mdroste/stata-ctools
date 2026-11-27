@@ -46,23 +46,27 @@ cencode make if foreign == 1, generate(foreign_make)
 
 ## Algorithm
 
-`cencode` uses a two-pass streaming algorithm for fixed-width string variables:
+`cencode` uses a two-pass streaming algorithm:
 
 ### Pass 1: Read and Code
-- Each thread reads its share of the observations directly from Stata
+- Each thread reads its share of the observations directly from Stata; `strL` values are read on Stata's own thread, the only one the plugin interface allows, chunk after chunk
 - A thread-local hash table gives each distinct string a provisional code; only those strings and a 4-byte code per observation are kept
 - The threads' distinct strings are merged and sorted bytewise; with an existing value label, labeled strings keep their (smallest) value and new ones are numbered after its largest value, as `encode` does
 
 ### Pass 2: Write Codes
 - Each thread writes the final codes for its observations to the output variable
-- Without `if`/`in`, the output variable is created without initial values and every observation is written
+- The output variable is created without initial values and every observation is written, missing outside `if` and `in`. The outputs are created before the `if` marker, so the marker is the last variable and Stata drops it without a pass over the data
 
-`encode` handles strL inputs. It also handles `noextend` with an unlabeled string, existing labels with extended missing values or text longer than 2,045 bytes, and codes beyond the `long` range.
+### Value labels
+- A label of up to a few thousand mappings is installed through Mata's `st_vlmodify()`. That function copies the whole label for each mapping it adds, so its time grows with the square of the label's size (40,000 mappings of 45 bytes take about 6 seconds). A larger label comes back from the plugin as a 0-observation dataset that `append` loads in milliseconds; a stable sort then restores the sort order, which `append` clears. The plugin chooses by an estimate of both costs
+- An existing label too long for a macro reaches the plugin in a file
+
+`encode` handles `strL` values longer than 2,045 bytes or holding binary data. It also handles `noextend` with an unlabeled string, existing labels with extended missing values or text longer than 2,045 bytes, and codes beyond the `long` range.
 
 ### Implementation details
 1. **Streaming two-pass design**: The C implementation stores each distinct string once and a four-byte code for each observation
-2. **Thread-local FNV-1a hash tables**: O(1) average lookup per observation without locks; tables are merged once at the end
-3. **Arena allocator**: Unique strings are bulk-allocated in a contiguous arena with O(1) bump-pointer allocation and a single bulk free, eliminating per-string `malloc`/`free` overhead
+2. **Thread-local hash tables**: open addressing over power-of-two capacities, with a word-at-a-time hash; O(1) average lookup per observation without locks; tables are merged once at the end
+3. **Arena allocator**: Unique strings are copied into a chain of large blocks with O(1) bump-pointer allocation and a bulk free, eliminating per-string `malloc`/`free` overhead
 4. **Alphabetical ordering**: Codes are assigned in alphabetical order (1, 2, 3, ...) after collecting the distinct strings, matching Stata's `encode` convention
 
 ## Performance

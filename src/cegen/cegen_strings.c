@@ -274,9 +274,12 @@ static stata_retcode strings_ends(const cegen_job *job, const stata_data *data,
                                   cegen_result *result, cegen_report *report)
 {
     const size_t n = data->nobs;
-    if (job->nsrc != 1 || data->vars[0].type != STATA_TYPE_STRING || !job->punct_len)
+    /* A sample with no observations comes back without column types (the
+     * ado has checked that the source is a string): the result is then an
+     * empty str1, as egen's */
+    if (job->nsrc != 1 || !job->punct_len || (n && data->vars[0].type != STATA_TYPE_STRING))
         return STATA_ERR_UNSUPPORTED_TYPE;
-    char *const *source = data->vars[0].data.str;
+    char *const *source = n ? data->vars[0].data.str : NULL;
 
     uint32_t *size = (uint32_t *)ctools_safe_malloc2(n ? n : 1, sizeof(uint32_t));
     if (!size)

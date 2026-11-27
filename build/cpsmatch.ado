@@ -289,11 +289,27 @@ program define cpsmatch, rclass sortpreserve
         markout `touse' _pscore
     }
 
-    quietly gen byte _treated = `depvar' if `touse'
-    label variable _treated "cpsmatch: Treatment assignment"
+    * The plugin makes _treated and _support itself (common support
+    * included) when nothing reads them before matching: no smoothing, no
+    * trim() and no Mata engine. They are then created without filling, as
+    * the plugin writes every observation; paths that stop with an error
+    * before matching keep generating them here.
+    local __fast = !`__mata' & !`willsmooth' & `trim' == 100
+    if ("`common'" != "" | `trim' < 100) & "`score'" == "" local __fast = 0
+    if `__fast' {
+        quietly count if `touse'
+        local nobs = r(N)
+        if `nobs' == 0 local __fast = 0
+    }
+    * (fast: _treated and _support are made with the outputs below, in one
+    * step, as each addition of variables rewrites the dataset)
     capture label drop _treated
     label define _treated 0 "Untreated" 1 "Treated"
-    label values _treated _treated
+    if !`__fast' {
+        quietly gen byte _treated = `depvar' if `touse'
+        label variable _treated "cpsmatch: Treatment assignment"
+        label values _treated _treated
+    }
 
     * =========================================================================
     * COMMON SUPPORT
@@ -304,12 +320,14 @@ program define cpsmatch, rclass sortpreserve
         di as error "with option 'pscore()' or estimate one. See the help file for more details."
         exit 198
     }
-    quietly gen byte _support = 1 if `touse'
-    label variable _support "cpsmatch: Common support"
     capture label drop _support
     label define _support 0 "Off support" 1 "On support"
-    label values _support _support
-    if "`common'" != "" | `trim' < 100 {
+    if !`__fast' {
+        quietly gen byte _support = 1 if `touse'
+        label variable _support "cpsmatch: Common support"
+        label values _support _support
+    }
+    if ("`common'" != "" | `trim' < 100) & !`__fast' {
         if !inrange(`trim', 0, 100) {
             di as error "Trim level out of range"
             exit 198
@@ -317,8 +335,10 @@ program define cpsmatch, rclass sortpreserve
         quietly _cpsmatch_support `score', level(`trim') `ate'
     }
 
-    quietly count if `touse'
-    local nobs = r(N)
+    if !`__fast' {
+        quietly count if `touse'
+        local nobs = r(N)
+    }
     if `nobs' == 0 {
         di as error "cpsmatch: no observations"
         exit 2000
@@ -400,7 +420,66 @@ program define cpsmatch, rclass sortpreserve
         di as error "cpsmatch: internal error (matching engine)"
         exit 197
     }
-    if `__plugin' quietly gen double _weight = .
+    * The plugin writes every observation of its outputs, so they are
+    * created in one step without filling, in psmatch2's order and with
+    * their final types: _id and _n# get the type compress gives _id, whose
+    * values are 1.._N.
+    if `__plugin' {
+        if `ai' > 0 {
+            foreach v of local outcome {
+                capture drop _self_`v'
+            }
+        }
+        local __idtype = cond(_N <= 100, "byte", cond(_N <= 32740, "int", "long"))
+        local __types double
+        local __names _weight
+        if `__fast' {
+            local __types byte byte `__types'
+            local __names _treated _support `__names'
+        }
+        foreach v of local outcome {
+            local __types `__types' double
+            local __names `__names' _`v'
+        }
+        if `nearest' {
+            local __types `__types' `__idtype'
+            local __names `__names' _id
+            forvalues n = 1/`neighbor' {
+                local __types `__types' `__idtype'
+                local __names `__names' _n`n'
+            }
+        }
+        local __types `__types' long
+        local __names `__names' _nn
+        if `nearest' {
+            local __types `__types' double
+            local __names `__names' _pdif
+        }
+        if `ai' > 0 {
+            foreach v of local outcome {
+                local __types `__types' double
+                local __names `__names' _self_`v'
+            }
+        }
+        * the same-arm means of the score model's columns, for the ai()
+        * correction (temporary, after the outputs)
+        local psselfx
+        if `pscorr' & "`outcome'" != "" & "`psx'" != "" {
+            foreach x of local psx {
+                tempvar xself
+                local psselfx `psselfx' `xself'
+                local __types `__types' double
+            }
+        }
+        mata: (void) st_addvar(tokens("`__types'"), tokens("`__names' `psselfx'"), 1)
+        if `nearest' & "`__idtype'" != "long" format _id _n1-_n`neighbor' %12.0g
+        if `__fast' {
+            label variable _treated "cpsmatch: Treatment assignment"
+            label values _treated _treated
+            label variable _support "cpsmatch: Common support"
+            label values _support _support
+        }
+    }
     else {
         quietly gen double _weight = _treated if _support == 1
         if "`ate'" != "" quietly replace _weight = 0 if _treated == 1 & _support == 1
@@ -408,13 +487,15 @@ program define cpsmatch, rclass sortpreserve
     char _weight[Type] "aweight"
     label variable _weight "cpsmatch: weight of matched controls"
     foreach v of local outcome {
-        if `__plugin' quietly gen double _`v' = .
-        else if "`ate'" == "" quietly gen double _`v' = 0 if _support == 1 & _treated == 1
-        else quietly gen double _`v' = 0 if _support == 1
+        if !`__plugin' {
+            if "`ate'" == "" quietly gen double _`v' = 0 if _support == 1 & _treated == 1
+            else quietly gen double _`v' = 0 if _support == 1
+        }
         label variable _`v' "cpsmatch: value of `v' of match(es)"
     }
 
-    if "`warnings'" != "" & "`metric'" == "pscore" {
+    * (the plugin checks the scores for ties itself)
+    if "`warnings'" != "" & "`metric'" == "pscore" & !`__plugin' {
         _cpsmatch_warn, method(`method') `work_ate'
     }
 
@@ -422,10 +503,10 @@ program define cpsmatch, rclass sortpreserve
     * order (support, _treated, score, observation); _n# hold the positions
     * of each row's matches.
     if `nearest' {
-        quietly gen long _id = .
+        if !`__plugin' quietly gen long _id = .
         label variable _id "cpsmatch: Identifier (ID)"
         forvalues n = 1/`neighbor' {
-            quietly gen long _n`n' = .
+            if !`__plugin' quietly gen long _n`n' = .
             label variable _n`n' "cpsmatch: ID of nearest neighbor nr. `n'"
         }
         local n1 _n1
@@ -434,18 +515,19 @@ program define cpsmatch, rclass sortpreserve
     * _nn: matches per row; for radius and kernel matching on the score,
     * the controls with a positive weight
     if `nearest' | `__plugin' {
-        if `__plugin' quietly gen long _nn = .
-        else quietly gen long _nn = 0 if _support == 1
+        if !`__plugin' quietly gen long _nn = 0 if _support == 1
         label variable _nn "cpsmatch: # matched neighbors"
     }
     if `nearest' & "`metric'" == "pscore" {
-        quietly gen double _pdif = .
+        if !`__plugin' quietly gen double _pdif = .
         label variable _pdif "cpsmatch: abs(pscore - pscore[nearest neighbor])"
     }
     if `ai' > 0 {
         foreach v of local outcome {
-            capture drop _self_`v'
-            quietly gen double _self_`v' = .
+            if !`__plugin' {
+                capture drop _self_`v'
+                quietly gen double _self_`v' = .
+            }
             label variable _self_`v' "cpsmatch: matched value of `v' (T-T & C-C)"
         }
     }
@@ -470,72 +552,114 @@ program define cpsmatch, rclass sortpreserve
         local with_replace = ("`noreplacement'" == "")
         local handle_ties = ("`ties'" != "")
         local desc_order = ("`descending'" != "")
-        * The support before matching is _support itself, which the plugin
-        * reads before it stores; without common or trim every row of the
-        * sample is on support and the plugin needs no such variable.
-        local __presup = cond("`common'" != "" | `trim' < 100, "presup=3", "")
-
-        * A plugin call replaces _support, so later calls (one per outcome)
-        * get the support before matching back from a copy. presupport
-        * marks the rows on support before matching.
-        local presupport `touse'
-        if "`__presup'" != "" {
-            tempvar presupport
-            quietly gen byte `presupport' = _support
-        }
+        * The support before matching: with trim() or smoothing, _support as
+        * Stata made it (the plugin reads it before it stores); otherwise the
+        * plugin makes it, imposing common support itself (with ate also on
+        * the controls).
+        local __presup = cond(!`__fast' & ("`common'" != "" | `trim' < 100), "presup=3", "")
+        local __common = 0
+        if `__fast' & "`common'" != "" local __common = cond("`ate'" != "", 2, 1)
         capture scalar drop _cpsmatch_ai_pass
 
-        * Several outcomes share one match (it depends on the score alone):
-        * the plugin matches once per outcome and stores its matched values.
-        local outcomes `outcome'
-        if "`outcomes'" == "" local outcomes _cpsmatch_no_outcome_
-        local k_outcome = 0
-        foreach cur_outcome of local outcomes {
-            if "`cur_outcome'" == "_cpsmatch_no_outcome_" local cur_outcome
-            local ++k_outcome
-            local cur_match : word `k_outcome' of `matchvars'
-            * Plugin variables: treatment _pscore _support _weight _nn
-            * [_id _n1.._nK _pdif] [outcome _<outcome> [_self_<outcome>]]
-            * _treated
-            local allvars "`depvar' _pscore _support _weight _nn"
-            local flags "`__presup' nnvar=5"
-            local id_idx = 0
-            local p = 5
-            if `nearest' {
-                local id_idx = 6
-                local allvars "`allvars' _id `n1'-`nk' _pdif"
-                local flags "`flags' ids=7 pdif=`=7 + `neighbor''"
-                local p = 7 + `neighbor'
+        * One call matches once for every outcome (the match depends on the
+        * score alone) and, for the ai() correction, for the score model's
+        * columns. Plugin variables: treatment _pscore _support _weight _nn
+        * [_id _n1.._nK _pdif] [the outcomes matched, _<outcome> [_self_<outcome>]
+        * [the outcomes, when smoothed ones are matched]] [the score model's
+        * columns and their same-arm means] [the support score] _treated,
+        * then the sample marker. The plugin writes every observation (fill)
+        * and _id outside the sample (outids), and with ai() an arm of one row
+        * on support takes the row after it in the matching order, whatever
+        * that row is, as psmatch2's pass does (single; with no row after it,
+        * psmatch2 stops with a Mata error, r(3301), and cpsmatch with r(2001)).
+        local ny : word count `outcome'
+        local allvars "`depvar' _pscore _support _weight _nn"
+        local flags "`__presup' nnvar=5 fill"
+        local id_idx = 0
+        local p = 5
+        if `nearest' {
+            local id_idx = 6
+            local allvars "`allvars' _id `n1'-`nk' _pdif"
+            local flags "`flags' ids=7 pdif=`=7 + `neighbor'' outids"
+            local p = 7 + `neighbor'
+        }
+        local outcome_idx = 0
+        if `ny' > 0 {
+            local outcome_idx = `p' + 1
+            local __mlist
+            local __slist
+            foreach v of local outcome {
+                local __mlist `__mlist' _`v'
+                local __slist `__slist' _self_`v'
             }
-            local outcome_idx = 0
-            if "`cur_outcome'" != "" {
-                local outcome_idx = `p' + 1
-                local allvars "`allvars' `cur_match' _`cur_outcome'"
-                local flags "`flags' matched=`=`p' + 2'"
-                local p = `p' + 2
-                if `ai' > 0 {
-                    local allvars "`allvars' _self_`cur_outcome'"
-                    local flags "`flags' self=`=`p' + 1' ai=`ai'"
-                    local p = `p' + 1
-                    if "`altvariance'" != "" local flags "`flags' altvar"
-                }
+            local allvars "`allvars' `matchvars' `__mlist'"
+            local flags "`flags' ny=`ny' matched=`=`p' + `ny' + 1'"
+            local p = `p' + 2*`ny'
+            if `ai' > 0 {
+                local allvars "`allvars' `__slist'"
+                local flags "`flags' self=`=`p' + 1'"
+                local p = `p' + `ny'
+                if "`altvariance'" != "" local flags "`flags' altvar"
             }
-            * (without an outcome, the support counts and missing moments)
-            if `plugin_stats' local flags "`flags' stats"
-            if "`work_ate'" != "" local flags "`flags' ate"
-            * The arms are the stored _treated (a code it cannot hold is
-            * missing there); the treatment itself marks the sample rows.
-            local allvars "`allvars' _treated"
-            local flags "`flags' arm=`=`p' + 1'"
-            * Format: treat_idx pscore_idx outcome_idx weight_idx id_idx
-            *         support_idx nobs method neighbor caliper common kernel
-            *         bwidth with_replace ties desc, then flags. The sample
-            *         marker goes last, in place of if `touse'.
-            local args "1 2 `outcome_idx' 4 `id_idx' 3"
-            local args "`args' `nobs' `method_code' `neighbor' `caliper' 0"
-            local args "`args' `kernelcode' `bwidth' `with_replace' `handle_ties' `desc_order'"
-            if `k_outcome' > 1 & "`__presup'" != "" quietly replace _support = `presupport'
-            plugin call ctools_plugin `allvars' `touse', "cpsmatch `threads_code' `args' `flags' touse"
+            if `smooth' {
+                local allvars "`allvars' `outcome'"
+                local flags "`flags' yeff=`=`p' + 1'"
+                local p = `p' + `ny'
+            }
+            * what _cpsmatch_effects summarizes, for each outcome
+            local flags "`flags' effects"
+            if "`samplevar'" != "" local flags "`flags' samplevar"
+        }
+        if `ai' > 0 local flags "`flags' ai=`ai' single"
+        * The correction also needs, for each column of the score model, the
+        * mean over a row's ai() same-arm matches: the same pass as
+        * _self_<outcome>, with the column in the outcome's place.
+        if "`psselfx'" != "" {
+            local __nx : word count `psx'
+            local allvars "`allvars' `psx' `psselfx'"
+            local flags "`flags' nx=`__nx' xcol=`=`p' + 1' xself=`=`p' + `__nx' + 1'"
+            local p = `p' + 2*`__nx'
+        }
+        if `__common' & "`score'" != "_pscore" {
+            local allvars "`allvars' `score'"
+            local flags "`flags' supscore=`=`p' + 1'"
+            local p = `p' + 1
+        }
+        * (without an outcome, the support counts and missing moments)
+        if `plugin_stats' local flags "`flags' stats"
+        if "`work_ate'" != "" local flags "`flags' ate"
+        if "`warnings'" != "" local flags "`flags' warn"
+        if `radius_all' local flags "`flags' radall"
+        * The arms are the stored _treated (a code it cannot hold is
+        * missing there; mkarm: the plugin makes it); the treatment itself
+        * marks the sample rows.
+        local allvars "`allvars' _treated"
+        local flags "`flags' arm=`=`p' + 1'"
+        if `__fast' local flags "`flags' mkarm"
+        * Format: treat_idx pscore_idx outcome_idx weight_idx id_idx
+        *         support_idx nobs method neighbor caliper common kernel
+        *         bwidth with_replace ties desc, then flags. The sample
+        *         marker goes last, in place of if `touse'.
+        local args "1 2 `outcome_idx' 4 `id_idx' 3"
+        local args "`args' `nobs' `method_code' `neighbor' `caliper' `__common'"
+        local args "`args' `kernelcode' `bwidth' `with_replace' `handle_ties' `desc_order'"
+        capture noisily plugin call ctools_plugin `allvars' `touse', "cpsmatch `threads_code' `args' `flags' touse"
+        local __rc = _rc
+        if `__rc' & `__rc' != 2001 {
+            * the state the generated variables had before the plugin's stores
+            foreach v of local __names {
+                quietly replace `v' = .
+            }
+            if `__fast' {
+                quietly replace _treated = cond(`touse', `depvar', .)
+                quietly replace _support = cond(`touse', 1, .)
+            }
+            exit `__rc'
+        }
+        if `__rc' {
+            * (r(2001): psmatch2's stop comes before _id is compressed)
+            if `nearest' & "`__idtype'" != "long" quietly recast long _id _n1-_n`neighbor'
+            exit `__rc'
         }
         * ai(#) above 1 with noreplacement: only a row's first same-arm match
         * is taken without replacement, the others are the rows around it
@@ -548,64 +672,12 @@ program define cpsmatch, rclass sortpreserve
                 exit 601
             }
         }
-        * The correction also needs, for each column of the score model, the
-        * mean over a row's ai() same-arm matches: the same pass as
-        * _self_<outcome>, with the column in the outcome's place. The other
-        * outputs of these calls repeat the ones above and go to scratch
-        * variables.
-        local psselfx
-        if `pscorr' & "`outcome'" != "" {
-            tempvar xsupport xweight xnn xmatched
-            quietly gen byte `xsupport' = .
-            quietly gen double `xweight' = .
-            quietly gen long `xnn' = .
-            quietly gen double `xmatched' = .
-            foreach x of local psx {
-                tempvar xself
-                quietly gen double `xself' = .
-                local psselfx `psselfx' `xself'
-                local allvars "`depvar' _pscore `xsupport' `xweight' `xnn' `x' `xmatched' `xself' _treated"
-                local flags "nnvar=5 matched=7 self=8 ai=`ai' ate arm=9"
-                local args "1 2 6 4 0 3 `nobs' `method_code' `neighbor' `caliper' 0"
-                local args "`args' `kernelcode' `bwidth' `with_replace' `handle_ties' `desc_order'"
-                plugin call ctools_plugin `allvars' `touse', "cpsmatch `threads_code' `args' `flags' touse"
-            }
-            drop `xsupport' `xweight' `xnn' `xmatched'
-        }
-        * Rows outside the sample follow it in psmatch2's order: by score
-        * (they have one when it was given with pscore()), then as they are
-        if `nearest' & `nobs' < _N {
-            mata: _cpsmatch_outside_ids("`touse'", `nobs', "`descending'" != "")
-        }
-        * psmatch2's same-arm pass on an arm with one row on support before
-        * matching reads the row after it in the matching order, whatever
-        * that row is (the first row of the other arm, a row with another
-        * treatment code, off support or outside the sample), and takes it as
-        * the row's match if it has a score within the caliper. cpsmatch
-        * does the same. When no row follows, psmatch2 stops with a Mata
-        * error (r(3301)); cpsmatch stops here.
-        if `nearest' & `ai' > 0 {
-            * the outcomes and, for the correction, the score model's columns
-            local self_from `outcome'
-            local self_to
-            foreach v of local outcome {
-                local self_to `self_to' _self_`v'
-            }
-            if "`psselfx'" != "" {
-                local self_from `self_from' `psx'
-                local self_to `self_to' `psselfx'
-            }
-            local self_cal = cond(`caliper' == 0, ., `caliper')
-            forvalues arm = 0/1 {
-                quietly count if `presupport' == 1 & _treated == `arm'
-                if r(N) != 1 continue
-                mata: _cpsmatch_self_single("`presupport'", `arm', `self_cal', ///
-                    "`altvariance'" != "", "`self_from'", "`self_to'")
-                if !`self_found' {
-                    di as error "cpsmatch: ai() has no same-arm match for the only " ///
-                        cond(`arm', "treated", "untreated") " observation on support"
-                    exit 2001
-                }
+        * psmatch2's warnings: controls (with ate, also treated) with equal scores
+        if "`warnings'" != "" & "`method'" == "neighbor" {
+            if scalar(_cpsmatch_dup) {
+                di as result "There are observations with identical propensity score values."
+                di as result "The sort order of the data could affect your results."
+                di as result "Make sure that the sort order is random before calling cpsmatch."
             }
         }
     }
@@ -615,8 +687,9 @@ program define cpsmatch, rclass sortpreserve
             outcome(`outcome') mahalanobis(`mahalanobis') w(`w') order(`order') ///
             touse(`touse') `ate' `altvariance'
     }
-    if `nearest' {
-        * psmatch2 compresses _id and gives _n# its type
+    if `nearest' & !`__plugin' {
+        * psmatch2 compresses _id and gives _n# its type (the plugin's
+        * outputs are made with that type)
         quietly compress _id
         local idtype : type _id
         if "`idtype'" != "long" {
@@ -631,7 +704,8 @@ program define cpsmatch, rclass sortpreserve
     * data, so each target spreads its weight equally over all _N of them
     * (the donors' mean is still their plain mean). On support, every
     * observation's _weight thus gains (number of targets) / _N.
-    if `radius_all' {
+    * (the plugin does this for its own matching)
+    if `radius_all' & !`__plugin' {
         quietly count if _support == 1 & (_treated == 1 | "`ate'" != "")
         local n_targets = r(N)
         quietly replace _weight = cond("`ate'" != "", 0, _treated) + `n_targets' / _N if _support == 1
@@ -701,8 +775,10 @@ program define cpsmatch, rclass sortpreserve
         else {
             local skipse = ""
             if `smooth' == 2 | ("`method'" == "llr" & "`kerneltype'" == "tricube") local skipse skipse
+            * the plugin summarized this outcome's matching results
+            local __from = cond(`__plugin', "from(`k_outcome')", "")
             _cpsmatch_effects `cur_outcome', neighbor(`neighbor') ai(`ai') `work_ate' ///
-                `samplevar' `altvariance' `skipse'
+                `samplevar' `altvariance' `skipse' `__from'
             local y1_bar = r(m1t)
             local y0_bar = r(m0t)
             local att = r(att)
@@ -727,9 +803,21 @@ program define cpsmatch, rclass sortpreserve
                 local fixed_att = `att_se'
                 local fixed_atu = `seatu'
                 local fixed_ate = `seate'
-                mata: st_matrix("`psq'", _cpsmatch_ai2016("`cur_outcome'", "`psx'", "`psselfx'", ///
-                    "`psdens'", "`psV'", "`pskeep'", `pscons' > 0, `ai', `neighbor', ///
-                    `n0_on', `n1_on', `att', `atu'))
+                * The plugin computes the terms over the observations on
+                * support; without ate it then clears the controls' matched
+                * outcome (and after the last outcome _n#, _nn and _weight),
+                * as psmatch2 leaves them when it matched the controls for
+                * the correction alone.
+                local __aiflags
+                if "`ate'" == "" {
+                    local __aiflags clear
+                    if `k_outcome' == `: word count `outcome'' local __aiflags clear final
+                }
+                plugin call ctools_plugin _pscore `psdens' `cur_outcome' _self_`cur_outcome' ///
+                    _`cur_outcome' _treated _id `n1'-`nk' `psx' `psselfx' _support _weight _nn ///
+                    `touse', "cpsmatch ai2016 `: word count `psx'' `neighbor' `ai' `=`pscons' > 0' `n0_on' `n1_on' `att' `atu' `psV' `pskeep' `__aiflags'"
+                matrix `psq' = (scalar(_cpsmatch_psq1), scalar(_cpsmatch_psq2), ///
+                    scalar(_cpsmatch_psq3), scalar(_cpsmatch_psq4), scalar(_cpsmatch_psq5))
                 local v_ate = `fixed_ate'^2 - `psq'[1, 1]
                 local v_att = `fixed_att'^2 - `psq'[1, 2] + `psq'[1, 3]
                 local v_atu = `fixed_atu'^2 - `psq'[1, 4] + `psq'[1, 5]
@@ -837,21 +925,13 @@ program define cpsmatch, rclass sortpreserve
     * psmatch2 matched the controls to the treated for the correction alone:
     * without ate it clears their matched outcomes, neighbors and _nn again
     * and gives the treated their weight of 1 (_pdif stays for the controls).
+    * (the plugin's correction calls did that above, outcome by outcome)
     if `pscorr' & "`ate'" == "" {
         * (psmatch2 loops over the outcomes here, and stops without any)
         if "`outcome'" == "" {
             di as error "varlist required"
             exit 100
         }
-        foreach v of local outcome {
-            quietly replace _`v' = . if _treated == 0
-        }
-        forvalues n = 1/`neighbor' {
-            quietly replace _n`n' = . if _treated == 0
-        }
-        quietly replace _nn = . if _treated == 0
-        quietly replace _weight = 1 if _treated == 1 & _support == 1
-        quietly replace _weight = . if _support == 0 | _weight == 0
     }
 
     if `__do_timing' {
@@ -1079,27 +1159,47 @@ end
 * psmatch2's formulas: the ATT (and ATU, ATE), their approximate standard
 * errors, or with ai(#) the Abadie-Imbens standard errors.
 program define _cpsmatch_effects, rclass
-    syntax varname, [neighbor(integer 1) ai(integer 0) ate samplevar altvariance skipse]
+    syntax varname, [neighbor(integer 1) ai(integer 0) ate samplevar altvariance skipse ///
+        from(integer 0)]
     local v `varlist'
     tempname att atu effect seatt seatu seate m1t m0t m1u m0u
+    * from(#): the plugin has summarized outcome # of its call. Its scalars
+    * _cpsmatch_e#_* are what the summarize and generate steps below give
+    * (Stata's sums are exact sums rounded once, which the plugin
+    * reproduces), and _cpsmatch_e_* the weight sums, which no outcome
+    * changes; the formulas on them stay as they are, locals included.
+    local E _cpsmatch_e`from'_
     quietly {
-        replace _`v' = . if _support == 0
-        capture replace _self_`v' = . if _support == 0
+        if `from' {
+            local u1u = scalar(`E'u1u)
+            local n1u = scalar(`E'n1u)
+            local var1u = scalar(`E'var1u)
+            local u0u = scalar(`E'u0u)
+            local n0u = scalar(`E'n0u)
+            local var0u = scalar(`E'var0u)
+            scalar `m1t' = scalar(`E'm1t)
+            local n1 = scalar(`E'n1)
+            scalar `m0t' = scalar(`E'm0t)
+        }
+        else {
+            replace _`v' = . if _support == 0
+            capture replace _self_`v' = . if _support == 0
 
-        summarize `v' if _treated == 1
-        local u1u = r(mean)
-        local n1u = r(N)
-        local var1u = r(Var)
-        summarize `v' if _treated == 0
-        local u0u = r(mean)
-        local n0u = r(N)
-        local var0u = r(Var)
+            summarize `v' if _treated == 1
+            local u1u = r(mean)
+            local n1u = r(N)
+            local var1u = r(Var)
+            summarize `v' if _treated == 0
+            local u0u = r(mean)
+            local n0u = r(N)
+            local var0u = r(Var)
 
-        summarize `v' if _treated == 1 & _support == 1, meanonly
-        scalar `m1t' = r(mean)
-        local n1 = r(N)
-        summarize _`v' if _treated == 1 & _support == 1, meanonly
-        scalar `m0t' = r(mean)
+            summarize `v' if _treated == 1 & _support == 1, meanonly
+            scalar `m1t' = r(mean)
+            local n1 = r(N)
+            summarize _`v' if _treated == 1 & _support == 1, meanonly
+            scalar `m0t' = r(mean)
+        }
         scalar `att' = `m1t' - `m0t'
         scalar `atu' = .
         scalar `effect' = .
@@ -1107,18 +1207,33 @@ program define _cpsmatch_effects, rclass
         scalar `m0u' = .
         local n0 = 0
         if "`ate'" != "" {
-            summarize _`v' if _treated == 0 & _support == 1, meanonly
-            scalar `m1u' = r(mean)
-            summarize `v' if _treated == 0 & _support == 1, meanonly
-            scalar `m0u' = r(mean)
-            local n0 = r(N)
+            if `from' {
+                scalar `m1u' = scalar(`E'm1u)
+                scalar `m0u' = scalar(`E'm0u)
+                local n0 = scalar(`E'n0)
+            }
+            else {
+                summarize _`v' if _treated == 0 & _support == 1, meanonly
+                scalar `m1u' = r(mean)
+                summarize `v' if _treated == 0 & _support == 1, meanonly
+                scalar `m0u' = r(mean)
+                local n0 = r(N)
+            }
             scalar `atu' = `m1u' - `m0u'
             scalar `effect' = `att'*`n1'/(`n0' + `n1') + `atu'*`n0'/(`n0' + `n1')
         }
 
         scalar `seatu' = .
         scalar `seate' = .
-        if `ai' != 0 {
+        if `ai' != 0 & `from' {
+            * (the plugin's sums of the terms generated below)
+            scalar `seatt' = sqrt(scalar(`E'sumvt))/`n1'
+            if "`ate'" != "" {
+                scalar `seatu' = sqrt(scalar(`E'sumvu))/`n0'
+                scalar `seate' = sqrt(scalar(`E'sumve))/(`n0' + `n1')
+            }
+        }
+        else if `ai' != 0 {
             * Abadie and Imbens (2006, eq. 14), or Abadie et al. (2004, p. 303)
             * with altvariance: the variance of the population effect
             * (their Theorem 7), or with samplevar that of the sample effect
@@ -1161,16 +1276,28 @@ program define _cpsmatch_effects, rclass
             * the weight, over the observations used as a match: an unused
             * one has a missing weight).
             tempvar w2
-            summarize `v' if _treated == 1 & _support == 1
-            local var1 = r(Var)
-            summarize `v' if _treated == 0 & _support == 1
-            local var0 = r(Var)
-            generate double `w2' = _weight^2 if _support == 1
-            summarize `w2' if _treated == 0, meanonly
-            local wtot = r(sum)
+            if `from' {
+                local var1 = scalar(`E'var1)
+                local var0 = scalar(`E'var0)
+                local wtot = scalar(_cpsmatch_e_w2c)
+            }
+            else {
+                summarize `v' if _treated == 1 & _support == 1
+                local var1 = r(Var)
+                summarize `v' if _treated == 0 & _support == 1
+                local var0 = r(Var)
+                generate double `w2' = _weight^2 if _support == 1
+                summarize `w2' if _treated == 0, meanonly
+                local wtot = r(sum)
+            }
             if "`skipse'" != "" scalar `seatt' = .
             else scalar `seatt' = sqrt(`var1'/`n1' + `var0'*`wtot'/`n1'^2)
-            if "`ate'" != "" & "`skipse'" == "" {
+            if "`ate'" != "" & "`skipse'" == "" & `from' {
+                scalar `seatu' = sqrt(`var0'/`n0' + `var1'*scalar(_cpsmatch_e_w2t)/`n0'^2)
+                local wtot = scalar(_cpsmatch_e_w1t)
+                scalar `seate' = sqrt((`var1'*`wtot' + `var0'*scalar(_cpsmatch_e_w1c))/(`n0' + `n1')^2)
+            }
+            else if "`ate'" != "" & "`skipse'" == "" {
                 summarize `w2' if _treated == 1, meanonly
                 scalar `seatu' = sqrt(`var0'/`n0' + `var1'*r(sum)/`n0'^2)
                 replace `w2' = (1 + _weight)^2 if _support == 1
@@ -1271,13 +1398,18 @@ program define _cpsmatch_mata
         forvalues n = 1/`neighbor' {
             local ids `ids' _n`n'
         }
+        * The plugin's matching loops, operation for operation as psmatch2's
+        * Mata code: targets, donors, neighbors, caliper, metric, self, ate,
+        * altvariance, then the counts of metric columns and outcomes
+        local nx : word count `xvars'
+        local nout : word count `outcome'
         if "`ate'" != "" {
-            mata: _cpsmatch_nn(`c0', `c1', `t0', `t1', `neighbor', `cal', "`xvars'", "`W'", ///
-                "`ids'", "`outcome'", "`matched'", 0, 1, 0)
+            plugin call ctools_plugin `xvars' _weight _support _nn `ids' `outcome' `matched', ///
+                "cpsmatch mnn `c0' `c1' `t0' `t1' `neighbor' `cal' `W' 0 1 0 `nx' `nout'"
             quietly replace _support = 0 if _n1 >= . & _treated == 0
         }
-        mata: _cpsmatch_nn(`t0', `t1', `c0', `c1', `neighbor', `cal', "`xvars'", "`W'", ///
-            "`ids'", "`outcome'", "`matched'", 0, "`ate'" != "", 0)
+        plugin call ctools_plugin `xvars' _weight _support _nn `ids' `outcome' `matched', ///
+            "cpsmatch mnn `t0' `t1' `c0' `c1' `neighbor' `cal' `W' 0 `=("`ate'" != "")' 0 `nx' `nout'"
         quietly replace _support = 0 if _n1 >= . & _treated == 1
         if `ai' > 0 {
             * An arm of one row has no same-arm match, and psmatch2 stops
@@ -1296,16 +1428,24 @@ program define _cpsmatch_mata
                 local self `self' _self_`v'
             }
             local alt = ("`altvariance'" != "")
-            mata: _cpsmatch_nn(`c0', `c1', `c0', `c1', `ai', `cal', "`xvars'", "`W'", ///
-                "`ids'", "`outcome'", "`self'", 1, "`ate'" != "", `alt')
-            mata: _cpsmatch_nn(`t0', `t1', `t0', `t1', `ai', `cal', "`xvars'", "`W'", ///
-                "`ids'", "`outcome'", "`self'", 1, "`ate'" != "", `alt')
+            local ate1 = ("`ate'" != "")
+            plugin call ctools_plugin `xvars' _weight _support `outcome' `self', ///
+                "cpsmatch mnn `c0' `c1' `c0' `c1' `ai' `cal' `W' 1 `ate1' `alt' `nx' `nout'"
+            plugin call ctools_plugin `xvars' _weight _support `outcome' `self', ///
+                "cpsmatch mnn `t0' `t1' `t0' `t1' `ai' `cal' `W' 1 `ate1' `alt' `nx' `nout'"
         }
     }
     else {
         local llr = ("`method'" == "llr")
-        mata: _cpsmatch_smooth(`c0', `c1', `t0', `t1', `llr', `is_mahal', "`xvars'", "`W'", ///
-            "`kerneltype'", `bwidth', "`outcome'", "`matched'", "`ate'" != "")
+        local kcode = 0
+        if "`kerneltype'" == "normal" local kcode = 1
+        else if "`kerneltype'" == "biweight" local kcode = 2
+        else if "`kerneltype'" == "uniform" local kcode = 3
+        else if "`kerneltype'" == "tricube" local kcode = 4
+        local nx : word count `xvars'
+        local nout : word count `outcome'
+        plugin call ctools_plugin `xvars' _weight _support _treated `outcome' `matched', ///
+            "cpsmatch msmooth `c0' `c1' `t0' `t1' `llr' `is_mahal' `W' `kcode' `bwidth' `=("`ate'" != "")' `nx' `nout'"
     }
     quietly replace _weight = . if _weight == 0 | _support == 0
 end
@@ -1331,345 +1471,6 @@ void _cpsmatch_center(string scalar name, string scalar sample,
     s = st_matrix(scales)
     s[j] = spread
     st_matrix(scales, s)
-}
-
-// The k smallest distances of a (distance, position) matrix, by Hoare's
-// selection (as psmatch2, whose list order this keeps); rows beyond k are
-// not ordered.
-real matrix _cpsmatch_select(real matrix a, real scalar k)
-{
-    real scalar lo, hi, i, j
-    real scalar pivot
-    real rowvector swap
-
-    lo = 1
-    hi = rows(a)
-    while (lo < hi) {
-        pivot = a[k, 1]
-        i = lo
-        j = hi
-        do {
-            while (a[i, 1] < pivot) i++
-            while (pivot < a[j, 1]) j--
-            if (i <= j) {
-                swap = a[i, .]
-                a[i, .] = a[j, .]
-                a[j, .] = swap
-                i++
-                j--
-            }
-        } while (i <= j)
-        if (j < k) lo = i
-        if (k < i) hi = j
-    }
-    return(a[|1, 1 \ k, 2|])
-}
-
-// Nearest-neighbor matching on the quadratic metric x'Wx of xvars: targets
-// t0..t1 to donors c0..c1 (positions of the sorted data). A match needs a
-// squared distance within caliper. Between arms (self = 0) it records _n#,
-// _nn, _weight (+1/neighbors per match) and the matched outcomes; with
-// self = 1 (ai) the targets skip themselves, controls unused without ate
-// are skipped, and the outcomes go to the _self_ variables, as conditional
-// variances with altvar.
-void _cpsmatch_nn(real scalar t0, real scalar t1, real scalar c0, real scalar c1,
-    real scalar neighbors, real scalar caliper, string scalar xvars, string scalar wname,
-    string scalar idvars, string scalar outvars, string scalar matchvars,
-    real scalar self, real scalar ate, real scalar altvar)
-{
-    real matrix X, W, IDS, Y, M, d, best, delta
-    real colvector q, weight, nn, support, pick
-    real rowvector mean
-    real scalar i, m, n, k, nout, first, last
-
-    if (t1 < t0 | c1 < c0) {
-        if (!self & t1 >= t0) {
-            st_view(support, ., "_support")
-            support[|t0 \ t1|] = J(t1 - t0 + 1, 1, 0)
-        }
-        return
-    }
-    st_view(X, ., tokens(xvars))
-    W = st_matrix(wname)
-    st_view(weight, ., "_weight")
-    st_view(support, ., "_support")
-    if (!self) {
-        st_view(IDS, ., tokens(idvars))
-        st_view(nn, ., "_nn")
-    }
-    nout = cols(tokens(outvars))
-    if (nout) {
-        st_view(Y, ., tokens(outvars))
-        st_view(M, ., tokens(matchvars))
-    }
-    first = min((t0, c0))
-    last = max((t1, c1))
-    for (i = t0; i <= t1; i++) {
-        if (self & !ate & weight[i] == 0) continue
-        delta = X[|c0, 1 \ c1, .|] :- X[i, .]
-        d = rowsum((delta * W) :* delta)
-        d = d, (c0::c1)
-        if (self) d = select(d, d[., 2] :!= i)
-        k = min((neighbors, rows(d)))
-        if (k < 1) pick = J(0, 1, .)
-        else {
-            best = _cpsmatch_select(d, k)
-            pick = select(best[., 2], best[., 1] :<= caliper)
-        }
-        n = rows(pick)
-        if (!self) nn[i] = n
-        for (m = 1; m <= n; m++) {
-            if (!self) {
-                IDS[i, m] = pick[m]
-                weight[pick[m]] = weight[pick[m]] + 1 / neighbors
-            }
-            if (nout) M[i, .] = M[i, .] + Y[pick[m], .] :/ n
-        }
-        if (altvar & self & nout) {
-            mean = (n :* M[i, .] + Y[i, .]) :/ (n + 1)
-            M[i, .] = (Y[i, .] - mean):^2
-            for (m = 1; m <= n; m++) M[i, .] = M[i, .] + (Y[pick[m], .] - mean):^2
-            M[i, .] = M[i, .] :/ n
-        }
-        if (n < 1 & !self) support[i] = 0
-    }
-}
-
-// psmatch2's _id outside the sample: after the sample's rows (first of
-// them), by score (by its negative with descending), then in the data's
-// order; rows without a score come last
-void _cpsmatch_outside_ids(string scalar touse, real scalar first, real scalar descending)
-{
-    real colvector at, key
-
-    at = selectindex(st_data(., touse) :== 0)
-    if (!rows(at)) return
-    key = st_data(at, "_pscore")
-    if (descending) key = -key
-    st_store(at[order((key, at), (1, 2))], "_id", first :+ (1::rows(at)))
-}
-
-// ai(#) on an arm with one row on support before matching (presup): the
-// row's same-arm match is the row after it in the matching order (_id), if
-// that row has a score within caliper, as psmatch2's pass has it. The row's
-// dstvars then get that row's srcvars (with altvar the conditional variance
-// of Abadie et al. 2004, p. 303, of the two rows), when the row is still on
-// support. The local self_found tells whether a row follows at all.
-void _cpsmatch_self_single(string scalar presup, real scalar arm, real scalar caliper,
-    real scalar altvar, string scalar srcvars, string scalar dstvars)
-{
-    real colvector id, row, next
-    real rowvector own, value, center
-    string rowvector src
-
-    row = selectindex(st_data(., presup) :== 1 :& st_data(., "_treated") :== arm)
-    id = st_data(., "_id")
-    next = selectindex(id :== id[row[1]] + 1)
-    st_local("self_found", strofreal(rows(next) > 0))
-    src = tokens(srcvars)
-    if (!rows(next) | !cols(src)) return
-    if (st_data(row[1], "_support") != 1) return
-    if (!(abs(st_data(row[1], "_pscore") - st_data(next[1], "_pscore")) < caliper)) return
-    value = st_data(next[1], src)
-    if (altvar) {
-        own = st_data(row[1], src)
-        center = (value + own) :/ 2
-        value = (own - center):^2 + (value - center):^2
-    }
-    st_store(row[1], tokens(dstvars), value)
-}
-
-// psmatch2's kernel weights of distances d with bandwidth bw, normalized to
-// sum to one; missing outside the kernel's support
-real colvector _cpsmatch_kernel(real colvector d, string scalar kernel, real scalar bw)
-{
-    real colvector u, w, inside
-
-    u = d :/ bw
-    inside = abs(d) :<= bw
-    if (kernel == "normal") w = normalden(u)
-    else if (kernel == "epan") w = 1 :- u:^2
-    else if (kernel == "biweight") w = (1 :- u:^2):^2
-    else if (kernel == "uniform") w = J(rows(d), 1, 1)
-    else w = (1 :- abs(u):^3):^3
-    if (kernel != "normal") w = w :/ inside
-    return(w :/ quadsum(w))
-}
-
-// Kernel and local linear regression matching: each target (the supported
-// treated, with ate first the supported controls) against the supported
-// rows of the other arm, on the score difference or the quadratic metric.
-void _cpsmatch_smooth(real scalar c0, real scalar c1, real scalar t0, real scalar t1,
-    real scalar llr, real scalar mahal, string scalar xvars, string scalar wname,
-    string scalar kernel, real scalar bw, string scalar outvars, string scalar matchvars,
-    real scalar ate)
-{
-    real matrix X, W, Y, M, delta
-    real colvector q, weight, support, treated, donors, d, w, ok, y, dd, ww, keep
-    real scalar i, j, n, s, v, mean, sw, b, nout, first, arm, cons, sxx, sxy, xbar, ybar
-
-    st_view(X, ., tokens(xvars))
-    W = st_matrix(wname)
-    st_view(weight, ., "_weight")
-    st_view(support, ., "_support")
-    st_view(treated, ., "_treated")
-    nout = cols(tokens(outvars))
-    if (nout) {
-        st_view(Y, ., tokens(outvars))
-        st_view(M, ., tokens(matchvars))
-    }
-    first = ate ? c0 : t0
-    for (i = first; i <= t1; i++) {
-        if (i > c1 & i < t0) continue
-        arm = (i <= c1)
-        donors = selectindex(support :== 1 :& treated :== arm)
-        if (rows(donors) == 0) {
-            // as psmatch2, llr leaves support to its regressions
-            if (!llr | nout) support[i] = 0
-            continue
-        }
-        if (mahal) {
-            delta = X[donors, .] :- X[i, .]
-            d = rowsum((delta * W) :* delta)
-        }
-        else d = X[donors, 1] :- X[i, 1]
-        w = _cpsmatch_kernel(d, kernel, bw)
-        ok = selectindex(w :< .)
-        if (!llr) {
-            if (rows(ok) == 0) {
-                support[i] = 0
-                continue
-            }
-            for (j = 1; j <= rows(ok); j++) {
-                weight[donors[ok[j]]] = weight[donors[ok[j]]] + w[ok[j]]
-            }
-            for (v = 1; v <= nout; v++) {
-                y = Y[donors[ok], v]
-                ww = w[ok]
-                ww = select(ww, y :< .)
-                y = select(y, y :< .)
-                if (rows(y)) {
-                    mean = quadsum(ww :* y) / quadsum(ww)
-                    if (mean < .) M[i, v] = mean
-                }
-            }
-            continue
-        }
-        // llr: the local linear weights (psmatch2's, from summarize with
-        // aweights, which drops zero weights) and the intercept of a
-        // weighted regression on d
-        dd = select(d[ok], w[ok] :> 0)
-        ww = select(w[ok], w[ok] :> 0)
-        n = rows(ww)
-        sw = quadsum(ww)
-        s = quadsum(ww :* dd)
-        mean = s / sw
-        b = n > 1 ? quadsum(ww :* (dd :- mean):^2) / sw : .
-        for (j = 1; j <= rows(ok); j++) {
-            weight[donors[ok[j]]] = weight[donors[ok[j]]] + w[ok[j]] * (b + s^2 - s * d[ok[j]]) / b
-        }
-        for (v = 1; v <= nout; v++) {
-            y = Y[donors[ok], v]
-            keep = (y :< .) :& (w[ok] :> 0)
-            ww = select(w[ok], keep)
-            dd = select(d[ok], keep)
-            y = select(y, keep)
-            if (rows(y) < 2) {
-                support[i] = 0
-                continue
-            }
-            sw = quadsum(ww)
-            xbar = quadsum(ww :* dd) / sw
-            ybar = quadsum(ww :* y) / sw
-            sxx = quadsum(ww :* (dd :- xbar):^2)
-            sxy = quadsum(ww :* (dd :- xbar) :* (y :- ybar))
-            cons = sxx > 0 ? ybar - (sxy / sxx) * xbar : ybar
-            M[i, v] = cons
-        }
-    }
-}
-
-// Abadie and Imbens (2016): what estimating the propensity score changes in
-// the variances of nearest-neighbor matching on it, as psmatch2 4.1.0
-// computes it. With c a row vector over the score model's coefficients and V
-// their variance, each returned term is c V c': (ATE, ATT minus, ATT plus,
-// ATU minus, ATU plus). The ATE variance loses its term; the ATT and ATU
-// variances lose the "minus" term and gain the "plus" term, the effect's
-// derivative with respect to the coefficients.
-//
-// Per observation on support: X is its row of the model's columns (the
-// constant last), f the derivative of its score p with respect to the index,
-// and C1, C0 estimates of the covariance of X with the outcome under
-// treatment and under control at its score. The covariance in the
-// observation's own arm is ai/(ai + 1) (X - mean X)(Y - mean Y) over its ai()
-// same-arm matches; in the other arm it is the average of that over its
-// matches there. mu1 - mu0 is the same-arm matched mean outcome against the
-// other arm's.
-real rowvector _cpsmatch_ai2016(string scalar yname, string scalar xnames,
-    string scalar selfnames, string scalar densname, string scalar vname,
-    string scalar keep, real scalar hascons, real scalar ai, real scalar neighbors,
-    real scalar n0, real scalar n1, real scalar att, real scalar atu)
-{
-    real matrix X, own, other, c1, c0, V
-    real colvector sel, y, sy, my, f, p, q, treated, id, rowof, count, donor, pick, pos, ok
-    real colvector delta, aT, aU
-    real rowvector idx, cA, cT, dT, cU, dU
-    real scalar n, m
-
-    idx = strtoreal(tokens(keep))
-    V = st_matrix(vname)[idx, idx]
-    sel = selectindex(st_data(., "_support") :== 1)
-    n = rows(sel)
-    if (n == 0) return(J(1, 5, .))
-    p = st_data(sel, "_pscore")
-    if (any(p :<= 0) | any(p :>= 1)) {
-        _error(3498, "cpsmatch: propensity score outside (0,1) in the ai() correction")
-    }
-    q = 1 :- p
-    y = st_data(sel, yname)
-    sy = st_data(sel, "_self_" + yname)
-    my = st_data(sel, "_" + yname)
-    f = st_data(sel, densname)
-    treated = st_data(sel, "_treated") :== 1
-    X = st_data(sel, tokens(xnames))
-    own = (ai / (ai + 1)) :* (X - st_data(sel, tokens(selfnames))) :* (y - sy)
-
-    // the other arm's covariance: the average over the matches, by their ids
-    id = st_data(sel, "_id")
-    rowof = J(st_nobs(), 1, .)
-    rowof[id] = 1::n
-    other = J(n, cols(X), 0)
-    count = J(n, 1, 0)
-    for (m = 1; m <= neighbors; m++) {
-        donor = st_data(sel, "_n" + strofreal(m))
-        pick = selectindex(donor :< .)
-        if (rows(pick) == 0) continue
-        count[pick] = count[pick] :+ 1
-        pos = rowof[donor[pick]]
-        ok = selectindex(pos :< .)
-        if (rows(ok)) other[pick[ok], .] = other[pick[ok], .] + own[pos[ok], .]
-    }
-    if (any(count :== 0)) {
-        _error(3498, "cpsmatch: an observation on support has no match in the ai() correction")
-    }
-    other = other :/ count
-
-    c1 = other + treated :* (own - other)
-    c0 = own + treated :* (other - own)
-    delta = (2 :* treated :- 1) :* (sy - my)
-    aT = delta :- att
-    aU = delta :- atu
-    if (hascons) {
-        X = X, J(n, 1, 1)
-        c1 = c1, J(n, 1, 0)
-        c0 = c0, J(n, 1, 0)
-    }
-    cA = colsum(f :* (c1 :/ p + c0 :/ q)) :/ (n0 + n1)
-    cT = colsum(f :* (X :* aT + c1 + (p :/ q) :* c0)) :/ n1
-    dT = colsum(f :* (X :* aT + c1 - c0)) :/ n1
-    cU = colsum(f :* (X :* aU - c0 - (q :/ p) :* c1)) :/ n0
-    dU = colsum(f :* (X :* aU + c1 - c0)) :/ n0
-    return((cA * V * cA', cT * V * cT', dT * V * dT', cU * V * cU', dU * V * dU'))
 }
 
 end

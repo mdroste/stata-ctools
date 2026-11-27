@@ -19,6 +19,7 @@
 #include "ctools_simd.h"
 #include "cexport_format.h"
 #include "cexport_context.h"
+#include "cexport_exp.h"
 
 /* ========================================================================
    Configuration Constants
@@ -112,6 +113,29 @@ static uint64_t cexport_decimal_integer(double value, int places)
     return (uint64_t)((product + ((__uint128_t)1 << (right - 1))) >> right);
 }
 
+/* 10^k for k = -5..19 as doubles: exact from 10^0 up; below, the nearest
+ * double, which for these k lies above 10^k, so that m >= it exactly when
+ * m >= 10^k */
+static const double cexport_pow10d[25] = {
+    1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9,
+    1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19
+};
+
+/* floor(log10(m)) for 1e-5 <= m < 1e19, exactly. From the binary exponent
+ * b, floor(b log10 2) is within one of it. */
+static inline int cexport_decimal_exponent(double m)
+{
+    uint64_t bits;
+    memcpy(&bits, &m, sizeof(bits));
+    int b = (int)((bits >> 52) & 0x7ff) - 1023;
+    int e = (b * 1233) >> 12;
+    if (e < -5) e = -5;
+    if (e > 18) e = 18;
+    while (e > -5 && m < cexport_pow10d[e + 5]) e--;
+    while (e < 18 && m >= cexport_pow10d[e + 6]) e++;
+    return e;
+}
+
 static int cexport_double_to_str(double val, char *buf, int buf_size,
                                  bool missing_as_dot, vartype_t vtype)
 {
@@ -176,15 +200,23 @@ static int cexport_double_to_str(double val, char *buf, int buf_size,
     const int digits = vtype == VARTYPE_FLOAT ? 8 : 16;
     const int width = vtype == VARTYPE_FLOAT ? 14 : 18;
     double magnitude = fabs(val);
-    int exponent = (int)floor(log10(magnitude));
-    /* log10 rounds to the nearest double, so just below a power of ten it
-     * can return that power: 99.99999999999999 gave 2 and was written "100"
-     * with a digit lost (native writes it in full). Powers of ten through
-     * 1e19 are exact, so the decimal exponent is checked against them. */
-    if (exponent >= 1 && exponent <= 19 && magnitude < (double)cexport_pow10[exponent])
-        exponent--;
-    else if (exponent >= -1 && exponent <= 18 && magnitude >= (double)cexport_pow10[exponent + 1])
-        exponent++;
+    int exponent;
+    if (magnitude >= 1e-5 && magnitude < 1e19) {
+        /* The exact decimal exponent, without log10 and floor (library
+         * calls in this build): what the corrected log10 below gives */
+        exponent = cexport_decimal_exponent(magnitude);
+    } else {
+        exponent = (int)floor(log10(magnitude));
+        /* log10 rounds to the nearest double, so just below a power of ten
+         * it can return that power: 99.99999999999999 gave 2 and was written
+         * "100" with a digit lost (native writes it in full). Powers of ten
+         * through 1e19 are exact, so the decimal exponent is checked against
+         * them. */
+        if (exponent >= 1 && exponent <= 19 && magnitude < (double)cexport_pow10[exponent])
+            exponent--;
+        else if (exponent >= -1 && exponent <= 18 && magnitude >= (double)cexport_pow10[exponent + 1])
+            exponent++;
+    }
     if (magnitude >= 1e-5 && exponent < digits) {
         int decimals = digits - 1 - exponent;
         if (decimals > 16) decimals = 16;
@@ -235,6 +267,12 @@ static int cexport_double_to_str(double val, char *buf, int buf_size,
         }
     }
     int decimals = width - 7 - (abs(exponent) >= 100);
+    /* printf's own result, computed here when it can be: MinGW's printf
+     * serializes threads on a lock (see cexport_exp.h) */
+    if (buf_size >= 32) {
+        int len = cexport_exp_format(val, decimals, exponent, buf);
+        if (len > 0) return len;
+    }
     int len = snprintf(buf, (size_t)buf_size, "%.*e", decimals, val);
     return len >= buf_size ? -1 : len;
 }

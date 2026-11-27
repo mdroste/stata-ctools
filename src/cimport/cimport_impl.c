@@ -48,6 +48,7 @@
 #include "cimport_mmap.h"
 #include "ctools_threads.h"
 #include "ctools_file.h"
+#include "ctools_release.h"
 #include "formats/ctools_dta.h"
 
 /* High-resolution timing */
@@ -586,7 +587,7 @@ static inline uint64_t cimport_accumulate_field(CImportContext *ctx, CImportColu
                         !isfinite(val) || val >= SV_missval)) {
         return cached;
     }
-    if (floor(val) != val) stats->num_nonint = true;
+    if (!cimport_integral(val)) stats->num_nonint = true;
     else {
         if (val < stats->int_min) stats->int_min = val;
         if (val > stats->int_max) stats->int_max = val;
@@ -719,6 +720,10 @@ static void cimport_free_context(CImportContext *ctx) {
     free(ctx);
 }
 
+static void cimport_free_context_later(void *arg) {
+    cimport_free_context(arg);
+}
+
 static void cimport_clear_cached_context(void) {
     if (g_cimport_ctx) {
         cimport_free_context(g_cimport_ctx);
@@ -748,15 +753,38 @@ typedef struct {
     const char *limit; /* end of the input */
 } CImportByteScan;
 
+/* A zero byte in w, any byte (exact for the yes/no answer) */
+#define CIMPORT_HAS_ZERO(w) (((w) - UINT64_C(0x0101010101010101)) & ~(w) & UINT64_C(0x8080808080808080))
+
 static void *cimport_byte_scan_task(void *arg) {
     CImportByteScan *scan = arg;
     const char *end = scan->start + scan->size;
+    /* One pass while the bytes are ASCII: NUL and a CR not followed by LF are
+     * noted on the way, eight bytes a word. The rest of the segment, from
+     * the first byte above 0x7f, takes the three scans below (an ASCII
+     * prefix adds nothing to the UTF-8 check). */
+    const char *p = scan->start;
+    bool nul = false, lone_cr = false;
+    while ((size_t)(end - p) >= 32) {
+        uint64_t w[4];
+        memcpy(w, p, 32);
+        if ((w[0] | w[1] | w[2] | w[3]) & UINT64_C(0x8080808080808080)) break;
+        for (int k = 0; k < 4; k++) {
+            if (CIMPORT_HAS_ZERO(w[k])) nul = true;
+            if (!lone_cr && CIMPORT_HAS_ZERO(w[k] ^ UINT64_C(0x0d0d0d0d0d0d0d0d))) {
+                for (const char *cr = p + 8 * k; cr < p + 8 * k + 8; cr++)
+                    if (*cr == '\r' && (cr + 1 == scan->limit || cr[1] != '\n')) { lone_cr = true; break; }
+            }
+        }
+        p += 32;
+    }
+    size_t rest = (size_t)(end - p);
     /* A segment starts invalid only after four continuation bytes. */
-    if (scan->valid) scan->valid = cimport_scan_utf8(scan->start, scan->size, &scan->high);
+    if (scan->valid) scan->valid = cimport_scan_utf8(p, rest, &scan->high);
     else scan->high = true;
-    scan->nul = scan->size && memchr(scan->start, 0, scan->size) != NULL;
-    scan->lone_cr = false;
-    for (const char *cr = scan->start; cr < end && (cr = memchr(cr, '\r', (size_t)(end - cr))); cr++)
+    scan->nul = nul || (rest && memchr(p, 0, rest) != NULL);
+    scan->lone_cr = lone_cr;
+    for (const char *cr = p; !scan->lone_cr && cr < end && (cr = memchr(cr, '\r', (size_t)(end - cr))); cr++)
         if (cr + 1 == scan->limit || cr[1] != '\n') { scan->lone_cr = true; break; }
     return NULL;
 }
@@ -2077,6 +2105,14 @@ static ST_retcode cimport_parse_col_lists(int **force_num, int *num_force_num,
 /* Headers must already be exported before releasing the source. Retain it if
  * any chunk needs a second pass, any text uses references, or final inference
  * requires recovering original spelling/precision from a numeric block. */
+/* Unmaps a source mapping moved into its own (otherwise empty) context */
+static void cimport_unmap_later(void *arg)
+{
+    CImportContext *mapping = arg;
+    cimport_munmap_file(mapping);
+    free(mapping);
+}
+
 static void cimport_release_cached_source(CImportContext *ctx)
 {
     if (!ctx->compact_rows || !ctx->file_data) return;
@@ -2095,10 +2131,30 @@ static void cimport_release_cached_source(CImportContext *ctx)
             }
         }
     }
-    free(ctx->converted_data);
+    /* Released on the release helper once the scan returns, while Stata goes
+     * on (unmapping a 600 MB view took about 55 ms on Windows); the next
+     * plugin call, the load, waits for it before it starts. The mapped pages
+     * are the file's own cached pages, so holding them a little longer adds
+     * no memory. */
+    ctools_release_later(ctx->converted_data);
     ctx->converted_data = NULL;
     ctx->converted_size = 0;
-    cimport_munmap_file(ctx);
+    CImportContext *mapping = calloc(1, sizeof(*mapping));
+    if (mapping) {
+        mapping->mmap_data = ctx->mmap_data;
+        mapping->mmap_size = ctx->mmap_size;
+        mapping->file_data = ctx->mmap_data;
+#ifdef CIMPORT_WINDOWS
+        mapping->file_handle = ctx->file_handle;
+        mapping->mapping_handle = ctx->mapping_handle;
+        ctx->file_handle = NULL;
+        ctx->mapping_handle = NULL;
+#endif
+        ctx->mmap_data = NULL;
+        ctools_release_later_call(cimport_unmap_later, mapping);
+    } else {
+        cimport_munmap_file(ctx);
+    }
     ctx->file_data = NULL;
 }
 
@@ -2784,7 +2840,13 @@ static ST_retcode cimport_do_load(const char *filename, char delimiter, bool has
     SF_scal_save("_cimport_time_total", (ctx->time_mmap + ctx->time_encoding + ctx->time_parse + ctx->time_type_infer + ctx->time_cache + time_spi) / 1000.0);
     CTOOLS_SAVE_THREAD_INFO("_cimport");
 
-    cimport_clear_cached_context();
+    /* The parsed file is released on the release helper once the load
+     * returns (its row cache is hundreds of blocks: freeing them took about
+     * 40 ms of a 5-million-row load on Windows); the next plugin call waits
+     * for it. */
+    CImportContext *done = g_cimport_ctx;
+    g_cimport_ctx = NULL;
+    ctools_release_later_call(cimport_free_context_later, done);
 
     return 0;
 }

@@ -22,6 +22,14 @@
     text are written; with fillall (a destination created without initial
     values, and no if or in) every observation is written.
 
+    Version 3 ("cdecode v3 ... [mapfile] [fillrows]") is version 2 with two
+    additions: with mapfile the maplen bytes are in the file local
+    __cd_mapfile names, for a mapping too long for a macro; with fillrows the
+    destination was created without initial values even with if or in, and
+    every observation of the dataset is written ("" outside the if and in).
+    A plugin that knows only version 2 rejects the call, and cdecode.ado then
+    lets decode do the work.
+
     Earlier wrappers sent label-save text, which cannot represent every label;
     their calls are rejected rather than decoded.
 */
@@ -36,6 +44,7 @@
 #include "ctools_runtime.h"
 #include "ctools_threads.h"
 #include "ctools_parse.h"
+#include "ctools_hash.h"
 #include "cdecode_impl.h"
 
 /* Values above this span are found by binary search instead of a table. */
@@ -258,8 +267,10 @@ ST_retcode cdecode_main(const char *args)
     double t_start = ctools_timer_seconds();
     while (args && (*args == ' ' || *args == '\t'))
         args++;
-    if (!args || strncmp(args, "v2", 2) != 0 || (args[2] != ' ' && args[2] != '\0'))
+    if (!args || (strncmp(args, "v2", 2) != 0 && strncmp(args, "v3", 2) != 0) ||
+        (args[2] != ' ' && args[2] != '\0'))
         return cdecode_reject_legacy();
+    int from_file = args[1] == '3' && ctools_parse_bool_option(args, "mapfile");
 
     int maplen = 0, width = 0;
     if (ctools_parse_int_option(args, "maplen", &maplen) <= 0 || maplen < 2 ||
@@ -271,6 +282,11 @@ ST_retcode cdecode_main(const char *args)
     int has_if = ctools_parse_bool_option(args, "ifcond");
     int touse = has_if && ctools_parse_bool_option(args, "touse");
     int fill_all = ctools_parse_bool_option(args, "fillall");
+    /* Version 3: a destination without initial values even with if or in;
+     * every observation of the dataset is written. */
+    int fill_rows = args[1] == '3' && ctools_parse_bool_option(args, "fillrows");
+    if (fill_rows)
+        fill_all = 1;
 
     if (SF_nvars() != 2 + touse || SF_var_is_string(1) || !SF_var_is_string(2) ||
         SF_var_is_strl(2) || (touse && SF_var_is_string(3)))
@@ -284,8 +300,13 @@ ST_retcode cdecode_main(const char *args)
     map.map = (char *)calloc((size_t)maplen + 2, 1);
     if (!map.map)
         return 920;
-    /* Local __cd_map of the calling program (SPI names locals with a leading _). */
-    if (SF_macro_use("___cd_map", map.map, maplen + 1) != 0 || strlen(map.map) != (size_t)maplen)
+    /* Local __cd_map (or the file local __cd_mapfile names) of the calling
+     * program (SPI names locals with a leading _). */
+    char path[4096] = "";
+    if (from_file ? SF_macro_use("___cd_mapfile", path, (ST_int)sizeof(path) - 1) != 0 ||
+                        ctools_label_map_read_file(path, (size_t)maplen, map.map) != 0
+                  : SF_macro_use("___cd_map", map.map, maplen + 1) != 0 ||
+                        strlen(map.map) != (size_t)maplen)
     {
         cdecode_map_free(&map);
         SF_error("cdecode: value-label mapping not available\n");
@@ -346,8 +367,18 @@ ST_retcode cdecode_main(const char *args)
         int failed;
 #pragma omp atomic read
         failed = error;
-        if (failed || (selected && !selected[i]))
+        if (failed)
             continue;
+        if (selected && !selected[i])
+        {
+            int skip_rc = fill_rows ? store_fn(2, obs1 + (ST_int)i, (char *)"") : 0;
+            if (skip_rc)
+            {
+#pragma omp atomic write
+                error = skip_rc;
+            }
+            continue;
+        }
         double value;
         int io_rc = read_fn(1, obs1 + (ST_int)i, &value);
         const char *text = io_rc ? NULL : cdecode_lookup(&map, value);
@@ -364,6 +395,30 @@ ST_retcode cdecode_main(const char *args)
         {
 #pragma omp atomic write
             error = io_rc;
+        }
+    }
+    /* The observations outside the in range. */
+    if (fill_rows)
+    {
+        ST_int nall = SF_nobs();
+        size_t before = obs1 > 1 ? (size_t)(obs1 - 1) : 0;
+        size_t after = obs2 < nall ? (size_t)(nall - obs2) : 0;
+        size_t outside = before + after;
+#pragma omp parallel for schedule(static) if (outside >= MIN_OBS_PER_THREAD * 2)
+        for (size_t k = 0; k < outside; k++)
+        {
+            int failed;
+#pragma omp atomic read
+            failed = error;
+            if (failed)
+                continue;
+            ST_int obs = k < before ? (ST_int)(k + 1) : obs2 + 1 + (ST_int)(k - before);
+            int io_rc = store_fn(2, obs, (char *)"");
+            if (io_rc)
+            {
+#pragma omp atomic write
+                error = io_rc;
+            }
         }
     }
 

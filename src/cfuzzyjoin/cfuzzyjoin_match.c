@@ -873,7 +873,9 @@ ST_retcode cfj_match_using(const char *args)
     }
     mt.phase = 2;
     ST_retcode src = 0;
-    const double saved = (nm && nu) ? 100 - trunc(space * (100.0 / (double)nu / (double)nm)) : 0;
+    /* matchit reports "." without master or using records */
+    const double saved =
+        (nm && nu) ? 100 - trunc(space * (100.0 / (double)nu / (double)nm)) : SV_missval;
     src = src ? src : ctools_scal_save("_cfuzzyjoin_npairs", (double)npairs);
     src = src ? src : ctools_scal_save("_cfuzzyjoin_type_idm", (double)numtype_code(&tim));
     src = src ? src : ctools_scal_save("_cfuzzyjoin_type_idu", (double)numtype_code(&tiu));

@@ -129,38 +129,189 @@ static void *creghdfe_prepared_free_run(void *arg)
     return NULL;
 }
 
+/* ========================================================================
+ * The loaded rows in blocks, for the passes that read or write Stata's
+ * variables at the observations of the kept rows. Block b covers loaded
+ * rows [b * CREGHDFE_ROW_BLOCK, ...); its first kept row is offset[b], the
+ * number of kept rows before it. The observations of distinct loaded rows
+ * are distinct (obs_map increases), so the checked SPI callbacks may run on
+ * every thread at once, as in ctools_data_store.c.
+ * ======================================================================== */
+#define CREGHDFE_ROW_BLOCK 65536
+
+typedef struct {
+    ST_int N_orig, B;
+    const ST_int *mask;   /* keep flags of the loaded rows, NULL when all are kept */
+    ST_int *offset;       /* B + 1 entries when mask is not NULL, else NULL */
+} creghdfe_kept_blocks;
+
+static ST_retcode creghdfe_kept_blocks_init(creghdfe_kept_blocks *kb, const ST_int *mask, ST_int N_orig)
+{
+    kb->N_orig = N_orig;
+    kb->mask = mask;
+    kb->offset = NULL;
+    kb->B = N_orig > 0 ? (ST_int)(((size_t)N_orig + CREGHDFE_ROW_BLOCK - 1) / CREGHDFE_ROW_BLOCK) : 0;
+    if (!mask || kb->B == 0) return 0;
+    kb->offset = (ST_int *)malloc(((size_t)kb->B + 1) * sizeof(ST_int));
+    if (!kb->offset) return 920;
+    ST_int b;
+    kb->offset[0] = 0;
+    #pragma omp parallel for schedule(static) if (kb->B > 2)
+    for (b = 0; b < kb->B; b++) {
+        const ST_int i0 = b * CREGHDFE_ROW_BLOCK;
+        const ST_int i1 = N_orig - i0 < CREGHDFE_ROW_BLOCK ? N_orig : i0 + CREGHDFE_ROW_BLOCK;
+        ST_int count = 0;
+        for (ST_int i = i0; i < i1; i++) count += mask[i] != 0;
+        kb->offset[b + 1] = count;
+    }
+    for (b = 0; b < kb->B; b++) kb->offset[b + 1] += kb->offset[b];
+    return 0;
+}
+
+static void creghdfe_kept_blocks_free(creghdfe_kept_blocks *kb)
+{
+    free(kb->offset);
+    kb->offset = NULL;
+}
+
+/* The value a parallel store writes for the kept row idx: dbl[idx],
+ * num[idx], table[levels[idx] - 1], or constant */
+typedef struct {
+    ST_int var;
+    const ST_double *dbl;
+    const ST_int *num;
+    const ST_double *table;
+    const ST_int *levels;
+    ST_double constant;
+} creghdfe_kept_store;
+
+static inline ST_double creghdfe_kept_value(const creghdfe_kept_store *s, ST_int idx)
+{
+    if (s->dbl) return s->dbl[idx];
+    if (s->num) return (ST_double)s->num[idx];
+    if (s->table) return s->table[s->levels[idx] - 1];
+    return s->constant;
+}
+
+/* Each kept row's values in variables stores[0..nv) at its observation, all
+ * of a row's variables together. Returns the first SPI error. */
+static ST_retcode creghdfe_store_kept(const creghdfe_kept_blocks *kb, const perm_idx_t *obs_map,
+                                      const creghdfe_kept_store *stores, ST_int nv)
+{
+    ST_retcode first_rc = 0;
+    ST_int b;
+    #pragma omp parallel for schedule(static) if (kb->B > 2)
+    for (b = 0; b < kb->B; b++) {
+        const ST_int i0 = b * CREGHDFE_ROW_BLOCK;
+        const ST_int i1 = kb->N_orig - i0 < CREGHDFE_ROW_BLOCK ? kb->N_orig : i0 + CREGHDFE_ROW_BLOCK;
+        ST_int idx = kb->mask ? kb->offset[b] : i0;
+        ST_retcode rc = 0;
+        for (ST_int i = i0; i < i1 && !rc; i++) {
+            if (kb->mask && !kb->mask[i]) continue;
+            for (ST_int v = 0; v < nv && !rc; v++)
+                rc = SF_vstore(stores[v].var, (ST_int)obs_map[i], creghdfe_kept_value(&stores[v], idx));
+            idx++;
+        }
+        if (rc) {
+            #pragma omp critical(creghdfe_store_rc)
+            if (!first_rc) first_rc = rc;
+        }
+    }
+    return first_rc;
+}
+
+static void *creghdfe_free_run(void *arg)
+{
+    free(arg);
+    return NULL;
+}
+
+/* A block no longer read returned on a helper thread at once (the command
+ * waits for *release_pool before it returns), or here when none takes it */
+static void creghdfe_free_soon(ctools_persistent_pool **release_pool, void *block)
+{
+    if (!block) return;
+    ctools_persistent_pool *pool = *release_pool ? *release_pool : ctools_get_global_pool();
+    if (pool && ctools_persistent_pool_submit(pool, creghdfe_free_run, block) == 0)
+        *release_pool = pool;
+    else
+        free(block);
+}
+
+/* The residual sum of squares, (weighted) squares added in row order, as
+ * a task for a helper thread while the VCE is computed */
+typedef struct {
+    const ST_double *resid, *weights;
+    ST_int N;
+    ST_double rss;
+} creghdfe_rss_job;
+
+static void *creghdfe_rss_job_run(void *arg)
+{
+    creghdfe_rss_job *job = (creghdfe_rss_job *)arg;
+    ST_double rss = 0.0;
+    if (job->weights) {
+        for (ST_int i = 0; i < job->N; i++) {
+            volatile ST_double sq = job->resid[i] * job->resid[i];
+            rss += job->weights[i] * sq;
+        }
+    } else {
+        for (ST_int i = 0; i < job->N; i++) {
+            volatile ST_double sq = job->resid[i] * job->resid[i];
+            rss += sq;
+        }
+    }
+    job->rss = rss;
+    return NULL;
+}
+
 /* Recover the fixed effects from the FE component d = y - Xb - _cons -
  * residual (not the already orthogonal regression residual) with
  * hdfe_fe_recover (reghdfe's store_alphas normalization), reading y and X
  * back from Stata and storing each observation's level effect in variables
- * first_var .. first_var + G - 1. */
+ * first_var .. first_var + G - 1. Rows are read and written in parallel
+ * blocks; each row's d is formed as before, so the values are the same. */
 static ST_retcode store_fixed_effects(HDFE_State *S, const perm_idx_t *obs_map,
     const ST_int *mask, ST_int N_orig, ST_int K_keep, const ST_int *keep_idx,
     const ST_double *beta, const ST_double *resid, ST_int first_var,
     const creghdfe_input *in)
 {
-    ST_int N = S->N, G = S->G, idx = 0;
+    ST_int N = S->N, G = S->G, b;
     ST_retcode rc = 0;
+    creghdfe_kept_blocks kb = {0};
+    creghdfe_kept_store stores[10];
     ST_double *error = malloc((size_t)N * sizeof(*error));
     ST_double **alpha = calloc((size_t)G, sizeof(*alpha));
-    if (!error || !alpha) { rc = 920; goto cleanup; }
+    if (!error || !alpha || creghdfe_kept_blocks_init(&kb, mask, N_orig)) { rc = 920; goto cleanup; }
     for (ST_int g = 0; g < G; g++) {
         alpha[g] = calloc((size_t)S->factors[g].num_levels, sizeof(**alpha));
         if (!alpha[g]) { rc = 920; goto cleanup; }
     }
-    for (ST_int row = 0; row < N_orig; row++) {
-        if (mask && !mask[row]) continue;
-        ST_double y, x;
-        rc = SF_vdata(1, (ST_int)obs_map[row], &y);
-        if (rc) goto cleanup;
-        error[idx] = y - beta[K_keep] - resid[idx];
-        for (ST_int k = 0; k < K_keep; k++) {
-            rc = SF_vdata(keep_idx[k] + 1, (ST_int)obs_map[row], &x);
-            if (rc) goto cleanup;
-            error[idx] -= beta[k] * x;
+    #pragma omp parallel for schedule(static) if (kb.B > 2)
+    for (b = 0; b < kb.B; b++) {
+        const ST_int i0 = b * CREGHDFE_ROW_BLOCK;
+        const ST_int i1 = N_orig - i0 < CREGHDFE_ROW_BLOCK ? N_orig : i0 + CREGHDFE_ROW_BLOCK;
+        ST_int idx = mask ? kb.offset[b] : i0;
+        ST_retcode row_rc = 0;
+        for (ST_int row = i0; row < i1 && !row_rc; row++) {
+            if (mask && !mask[row]) continue;
+            ST_double y, x;
+            row_rc = SF_vdata(1, (ST_int)obs_map[row], &y);
+            if (row_rc) break;
+            error[idx] = y - beta[K_keep] - resid[idx];
+            for (ST_int k = 0; k < K_keep; k++) {
+                row_rc = SF_vdata(keep_idx[k] + 1, (ST_int)obs_map[row], &x);
+                if (row_rc) break;
+                error[idx] -= beta[k] * x;
+            }
+            idx++;
         }
-        idx++;
+        if (row_rc) {
+            #pragma omp critical(creghdfe_savefe_rc)
+            if (!rc) rc = row_rc;
+        }
     }
+    if (rc) goto cleanup;
     /* With slopes, each absorbed effect's intercept and slopes are fitted
      * together (creghdfe_hdfe.c); a slope factor stores its coefficient */
     rc = in->num_slopes ? creghdfe_fe_recover_slopes(S, in, error, alpha)
@@ -168,15 +319,12 @@ static ST_retcode store_fixed_effects(HDFE_State *S, const perm_idx_t *obs_map,
     if (rc == 430)
         SF_error("creghdfe: the fixed effects for savefe did not converge; try a larger iterate()\n");
     if (rc) goto cleanup;
-    for (ST_int g = 0; g < G; g++) {
-        idx = 0;
-        for (ST_int row = 0; row < N_orig; row++) {
-            if (mask && !mask[row]) continue;
-            rc = SF_vstore(first_var + g, (ST_int)obs_map[row], alpha[g][S->factors[g].levels[idx++] - 1]);
-            if (rc) goto cleanup;
-        }
-    }
+    for (ST_int g = 0; g < G; g++)
+        stores[g] = (creghdfe_kept_store){.var = first_var + g, .table = alpha[g],
+                                          .levels = S->factors[g].levels};
+    rc = creghdfe_store_kept(&kb, obs_map, stores, G);
 cleanup:
+    creghdfe_kept_blocks_free(&kb);
     for (ST_int g = 0; alpha && g < G; g++) free(alpha[g]);
     free(alpha); free(error);
     return rc;
@@ -195,54 +343,136 @@ static int creghdfe_group_min_cmp(const void *a, const void *b)
     return (va > vb) - (va < vb);
 }
 
+/* The raw value of every level of an effect, for groupvar(): its loaded
+ * column at any kept row of the level (all of a level's rows hold the same
+ * value). levels: the effect's levels of the N kept rows (1-based); raw: the
+ * loaded column (N_orig rows, mask the keep flags or NULL). Rows in parallel
+ * blocks, each block's first kept row the number of kept rows before it.
+ * The rows of a level hold the same bits: a slot is written (atomically)
+ * only while it still holds the NaN it starts with, and only read after,
+ * so an effect of few levels does not have every thread write the same
+ * lines. */
+static ST_retcode creghdfe_level_values(const ST_int *levels, const ST_double *raw, const ST_int *mask,
+                                        ST_int N_orig, ST_double *value)
+{
+    const uint64_t unset = 0x7ff8000000000000ULL; /* a NaN: no raw value is one */
+    creghdfe_kept_blocks kb;
+    if (creghdfe_kept_blocks_init(&kb, mask, N_orig)) return 920;
+    ST_int b;
+    #pragma omp parallel for schedule(static) if (kb.B > 2)
+    for (b = 0; b < kb.B; b++) {
+        const ST_int r0 = b * CREGHDFE_ROW_BLOCK;
+        const ST_int r1 = N_orig - r0 < CREGHDFE_ROW_BLOCK ? N_orig : r0 + CREGHDFE_ROW_BLOCK;
+        ST_int idx = mask ? kb.offset[b] : r0;
+        for (ST_int r = r0; r < r1; r++) {
+            if (mask && !mask[r]) continue;
+            uint64_t bits;
+            memcpy(&bits, &raw[r], sizeof(bits));
+            uint64_t *slot = (uint64_t *)(void *)&value[levels[idx] - 1];
+            if (__atomic_load_n(slot, __ATOMIC_RELAXED) == unset)
+                __atomic_store_n(slot, bits, __ATOMIC_RELAXED);
+            idx++;
+        }
+    }
+    creghdfe_kept_blocks_free(&kb);
+    return 0;
+}
+
 /* groupvar(): the mobility groups of effects ga and gb (0-based), numbered
- * as reghdfe numbers them. Union-find over the levels of both effects;
- * reghdfe's zigzag search starts each new subgraph at the next unvisited
- * level of the first effect in sorted order, so groups are numbered by the
- * smallest raw value of the first effect they contain (the compact level
- * numbering follows first appearance instead). fea_values holds that
- * effect's raw values for the N_orig loaded rows. */
+ * as reghdfe numbers them. reghdfe's zigzag search starts each new subgraph
+ * at the next unvisited level of the first effect in sorted order, so groups
+ * are numbered by the smallest raw value of the first effect they contain
+ * (the compact level numbering follows first appearance instead): the
+ * numbering depends only on which levels are connected, found here with the
+ * parallel union-find of the component counts. level_value holds the raw
+ * value of each level of effect ga (distinct levels, distinct values). */
 static ST_retcode build_groupvar(const HDFE_State *S, ST_int ga, ST_int gb,
-    const ST_double *fea_values, const ST_int *mask, ST_int N_orig, ST_int N,
-    ST_int *group_assignments)
+    const ST_double *level_value, ST_int N, ST_int *group_assignments)
 {
     const ST_int *fe1_compact = S->factors[ga].levels;
     const ST_int *fe2_compact = S->factors[gb].levels;
     const ST_int n1 = S->factors[ga].num_levels;
     if (n1 > INT_MAX - S->factors[gb].num_levels) return 920;
-    ST_int total_nodes = n1 + S->factors[gb].num_levels;
-    ctools_UnionFind *uf = ctools_uf_create(total_nodes);
-    ST_int *root_to_group = (ST_int *)calloc(total_nodes, sizeof(ST_int));
+    ST_int *root = (ST_int *)malloc((size_t)(n1 > 0 ? n1 : 1) * sizeof(ST_int));
+    ST_double *comp_min = (ST_double *)malloc((size_t)(n1 > 0 ? n1 : 1) * sizeof(ST_double));
     creghdfe_group_min *group_min = (creghdfe_group_min *)malloc(
-        (size_t)total_nodes * sizeof(creghdfe_group_min));
-    if (!uf || !root_to_group || !group_min) {
-        ctools_uf_destroy(uf);
-        free(root_to_group);
+        (size_t)(n1 > 0 ? n1 : 1) * sizeof(creghdfe_group_min));
+    if (!root || !comp_min || !group_min ||
+        ctools_connected_component_roots(fe1_compact, fe2_compact, N, n1,
+                                         S->factors[gb].num_levels, root) != 0) {
+        free(root);
+        free(comp_min);
         free(group_min);
         return 920;
     }
-    for (ST_int idx = 0; idx < N; idx++)
-        ctools_uf_union(uf, fe1_compact[idx] - 1, n1 + fe2_compact[idx] - 1);
-    /* root_to_group temporarily holds 1 + the root's group_min slot */
-    ST_int num_roots = 0, idx = 0;
-    for (ST_int row = 0; row < N_orig; row++) {
-        if (mask && !mask[row]) continue;
-        ST_int root = ctools_uf_find(uf, fe1_compact[idx++] - 1);
-        if (root_to_group[root] == 0) {
-            group_min[num_roots].value = fea_values[row];
-            group_min[num_roots].root = root;
-            root_to_group[root] = ++num_roots;
-        } else if (fea_values[row] < group_min[root_to_group[root] - 1].value) {
-            group_min[root_to_group[root] - 1].value = fea_values[row];
+    /* A component's root is its smallest level, reached first in this pass:
+     * the smallest raw value of each component is kept at its root */
+    ST_int num_roots = 0;
+    for (ST_int l = 0; l < n1; l++) {
+        const ST_int r = root[l];
+        if (r == l) {
+            comp_min[l] = level_value[l];
+            num_roots++;
+        } else if (level_value[l] < comp_min[r]) {
+            comp_min[r] = level_value[l];
         }
     }
+    ST_int a = 0;
+    for (ST_int l = 0; l < n1; l++) {
+        if (root[l] != l) continue;
+        group_min[a].value = comp_min[l];
+        group_min[a].root = l;
+        a++;
+    }
     qsort(group_min, (size_t)num_roots, sizeof(creghdfe_group_min), creghdfe_group_min_cmp);
-    for (ST_int a = 0; a < num_roots; a++) root_to_group[group_min[a].root] = a + 1;
-    for (idx = 0; idx < N; idx++)
-        group_assignments[idx] = root_to_group[ctools_uf_find(uf, fe1_compact[idx] - 1)];
-    ctools_uf_destroy(uf);
+    free(comp_min);
+    ST_int *root_to_group = (ST_int *)malloc((size_t)(n1 > 0 ? n1 : 1) * sizeof(ST_int));
+    if (!root_to_group) {
+        free(root);
+        free(group_min);
+        return 920;
+    }
+    for (a = 0; a < num_roots; a++) root_to_group[group_min[a].root] = a + 1;
+    /* each level's group, then each row's */
+    ST_int l2;
+    #pragma omp parallel for schedule(static) if (n1 > 200000)
+    for (l2 = 0; l2 < n1; l2++) root[l2] = root_to_group[root[l2]];
+    ST_int idx;
+    #pragma omp parallel for schedule(static) if (N > 200000)
+    for (idx = 0; idx < N; idx++) group_assignments[idx] = root[fe1_compact[idx] - 1];
+    free(root);
     free(root_to_group);
     free(group_min);
+    return 0;
+}
+
+/* ctools_fe_nested_in_cluster(), without reading the rows when the effect
+ * has fewer levels than there are clusters: every cluster has rows, so an
+ * effect nested in them has at least as many levels as there are clusters */
+static ST_int creghdfe_fe_nested(const ST_int *levels, ST_int num_levels, const ST_int *cluster_ids,
+                                 ST_int N, ST_int num_clusters)
+{
+    if (num_levels < num_clusters) return 0;
+    return ctools_fe_nested_in_cluster(levels, num_levels, cluster_ids, N);
+}
+
+/* dst = the values of src at the kept loaded rows (mask), in row order, in
+ * parallel row blocks: each block's first kept row is the number before it.
+ * Returns 920 when its block counts cannot be allocated. */
+static ST_retcode creghdfe_gather_kept(double *dst, const double *src, const ST_int *mask, ST_int N_orig)
+{
+    creghdfe_kept_blocks kb;
+    if (creghdfe_kept_blocks_init(&kb, mask, N_orig)) return 920;
+    ST_int b;
+    #pragma omp parallel for schedule(static) if (kb.B > 2)
+    for (b = 0; b < kb.B; b++) {
+        const ST_int r0 = b * CREGHDFE_ROW_BLOCK;
+        const ST_int r1 = N_orig - r0 < CREGHDFE_ROW_BLOCK ? N_orig : r0 + CREGHDFE_ROW_BLOCK;
+        ST_int at = kb.offset[b];
+        for (ST_int r = r0; r < r1; r++)
+            if (mask[r]) dst[at++] = src[r];
+    }
+    creghdfe_kept_blocks_free(&kb);
     return 0;
 }
 
@@ -299,6 +529,9 @@ ST_retcode creghdfe_full_regression(int retain)
     struct hdfe_coef_prepared *prepared = NULL;
     /* non-NULL once a task that returns memory may be running on it */
     ctools_persistent_pool *release_pool = NULL;
+    /* non-NULL while the residual sum of squares is taken on a helper thread */
+    ctools_persistent_pool *rss_pool = NULL;
+    creghdfe_rss_job rss_job = {0};
     /* 1 when the columns were written with a single effect projected out;
      * the threads' level sums while they are */
     ST_int absorbed = 0;
@@ -325,6 +558,7 @@ ST_retcode creghdfe_full_regression(int retain)
     ST_double tss_within, rss;
     ST_double *means = NULL, *stdevs = NULL, *tss = NULL, *norm2 = NULL;
     ST_double *xty_all = NULL, *inv_rmcoll = NULL, *fe_raw = NULL;
+    size_t fe_level_off[10] = {0}; /* groupvar(): effect g's level values at fe_raw + this */
     ST_int maxiter, standardize;
     ST_int num_threads;
     ST_int *cluster_ids = NULL;
@@ -465,12 +699,33 @@ ST_retcode creghdfe_full_regression(int retain)
     /* the group number of each row, last */
     if (input.indiv) var_indices[i++] = input.indiv_gidx;
 
+    /* A cluster variable that is an absorbed effect's variable (the wrapper
+     * sets __creghdfe_cl_fe_d to that effect's position, 1-based, when the
+     * names are the same) is not loaded again: its column is the effect's */
+    ST_int cl_fe[10] = {0};
+    ST_int n_cl_fe = 0;
+    for (ST_int d = 0; d < ncl; d++) {
+        ST_double pos = 0;
+        snprintf(scalar_name, sizeof(scalar_name), "__creghdfe_cl_fe_%d", d + 1);
+        if (SF_scal_use(scalar_name, &pos) == 0 && pos >= 1 && pos <= G && pos == floor(pos)) {
+            cl_fe[d] = (ST_int)pos;
+            n_cl_fe++;
+        }
+    }
+    if (n_cl_fe) {
+        ST_int out = 0;
+        for (i = 0; i < total_vars; i++) {
+            const int dup = i >= K + G && i < K + G + ncl && cl_fe[i - K - G];
+            if (!dup) var_indices[out++] = var_indices[i];
+        }
+    }
+
     /* Load all variables in parallel with if/in filtering */
     ctools_filtered_data filtered;
     ctools_filtered_data_init(&filtered);
 
-    int load_flags = CTOOLS_LOAD_NO_SORT_ORDER | (input.touse ? CTOOLS_LOAD_MARKER : CTOOLS_LOAD_CHECK_IF);
-    stata_retcode load_rc = ctools_data_load(&filtered, var_indices, total_vars, 0, 0, load_flags);
+    int load_flags = CTOOLS_LOAD_NO_SORT_ORDER | CTOOLS_LOAD_ROW_TILES | (input.touse ? CTOOLS_LOAD_MARKER : CTOOLS_LOAD_CHECK_IF);
+    stata_retcode load_rc = ctools_data_load(&filtered, var_indices, total_vars - n_cl_fe, 0, 0, load_flags);
     free(var_indices);
 
     if (load_rc != STATA_OK) {
@@ -488,6 +743,32 @@ ST_retcode creghdfe_full_regression(int retain)
         ST_retcode screen_rc = hdfe_screen_missing(&filtered, SF_nvars());
         t_screen = get_time_sec() - start;
         if (screen_rc) { ctools_filtered_data_free(&filtered); return screen_rc; }
+    }
+
+    /* The loaded columns in the wrapper's layout again (after the screen,
+     * which compacts each loaded column once): a cluster dimension that is
+     * an effect borrows the effect's column */
+    if (n_cl_fe && filtered.data.vars) {
+        stata_variable *full = (stata_variable *)ctools_safe_cacheline_alloc2((size_t)total_vars, sizeof(stata_variable));
+        if (!full) {
+            ctools_filtered_data_free(&filtered);
+            SF_error("creghdfe: memory allocation failed\n");
+            return 920;
+        }
+        ST_int from = 0;
+        for (i = 0; i < total_vars; i++) {
+            const int dup = i >= K + G && i < K + G + ncl && cl_fe[i - K - G];
+            if (dup) {
+                full[i] = filtered.data.vars[K + cl_fe[i - K - G] - 1];
+                full[i].buffer_storage = CTOOLS_BUFFER_BORROWED;
+                full[i]._arena = NULL;
+            } else {
+                full[i] = filtered.data.vars[from++];
+            }
+        }
+        ctools_aligned_free(filtered.data.vars);
+        filtered.data.vars = full;
+        filtered.data.nvars = (size_t)total_vars;
     }
 
     /* Get filtered observation count and obs_map */
@@ -575,20 +856,16 @@ ST_retcode creghdfe_full_regression(int retain)
     ST_int cluster_matches_fe = -1;  /* -1 = no match, 0..G-1 = which FE it matches */
 
     if (vcetype >= 2) {
-        /* Cluster variables are at positions K+G.. in filtered.data */
-        cluster_raw_values = (double *)ctools_safe_malloc3((size_t)N_orig, (size_t)ncl, sizeof(double));
-        if (cluster_raw_values) {
-            /* Extract cluster values - direct copy since data is filtered */
-            for (ST_int d = 0; d < ncl; d++)
-                memcpy(cluster_raw_values + (size_t)d * N_orig, filtered.data.vars[K + G + d].data.dbl,
-                       N_orig * sizeof(double));
-
-            /* Check if cluster values match any FE variable (common case: vce(cluster i) with absorb(i t)).
-             * One-way clustering only: dkraay numbers its periods in time order. */
-            double *cluster_data = filtered.data.vars[K + G].data.dbl;
-            for (g = 0; g < G && vcetype == 2 && ncl == 1; g++) {
+        /* Check if cluster values match any FE variable (common case: vce(cluster i) with absorb(i t)).
+         * One-way clustering only: dkraay numbers its periods in time order.
+         * When the wrapper names the same variable, its values are the effect's. */
+        if (vcetype == 2 && ncl == 1 && cl_fe[0] && !input.slope_idx[cl_fe[0] - 1]) {
+            cluster_matches_fe = cl_fe[0] - 1;
+        } else if (vcetype == 2 && ncl == 1) {
+            const double *cluster_data = filtered.data.vars[K + G].data.dbl;
+            for (g = 0; g < G; g++) {
                 if (input.slope_idx[g]) continue;
-                double *fe_data = filtered.data.vars[K + g].data.dbl;
+                const double *fe_data = filtered.data.vars[K + g].data.dbl;
 
                 /* Quick rejection: check first, middle, and last values */
                 if (cluster_data[0] != fe_data[0] ||
@@ -597,17 +874,43 @@ ST_retcode creghdfe_full_regression(int retain)
                     continue;
                 }
 
-                /* Full comparison - data is already filtered, compare directly */
-                ST_int all_match = 1;
-                for (idx = 0; idx < N_orig && all_match; idx++) {
-                    if (cluster_data[idx] != fe_data[idx]) {
-                        all_match = 0;
-                    }
+                /* Full comparison in row blocks; a block that differs ends it */
+                const ST_int B = (ST_int)(((size_t)N_orig + CREGHDFE_ROW_BLOCK - 1) / CREGHDFE_ROW_BLOCK);
+                int differs = 0;
+                ST_int b;
+                #pragma omp parallel for schedule(static) if (B > 2)
+                for (b = 0; b < B; b++) {
+                    if (CTOOLS_HDFE_LOAD(&differs)) continue;
+                    const ST_int r0 = b * CREGHDFE_ROW_BLOCK;
+                    const ST_int r1 = N_orig - r0 < CREGHDFE_ROW_BLOCK ? N_orig : r0 + CREGHDFE_ROW_BLOCK;
+                    int mine = 0;
+                    for (ST_int r = r0; r < r1; r++) mine |= cluster_data[r] != fe_data[r];
+                    if (mine) CTOOLS_HDFE_STORE(&differs, 1);
                 }
 
-                if (all_match) {
+                if (!differs) {
                     cluster_matches_fe = g;
                     break;
+                }
+            }
+        }
+
+        /* The cluster values themselves, for the dimensions numbered in
+         * STEP 9 (not needed when an effect's levels number them) */
+        if (cluster_matches_fe < 0) {
+            /* Cluster variables are at positions K+G.. in filtered.data */
+            cluster_raw_values = (double *)ctools_safe_malloc3((size_t)N_orig, (size_t)ncl, sizeof(double));
+            if (cluster_raw_values) {
+                const ST_int B = (ST_int)(((size_t)N_orig + CREGHDFE_ROW_BLOCK - 1) / CREGHDFE_ROW_BLOCK);
+                ST_int b;
+                #pragma omp parallel for schedule(static) if (B > 2)
+                for (b = 0; b < B; b++) {
+                    const ST_int r0 = b * CREGHDFE_ROW_BLOCK;
+                    const ST_int r1 = N_orig - r0 < CREGHDFE_ROW_BLOCK ? N_orig : r0 + CREGHDFE_ROW_BLOCK;
+                    for (ST_int d = 0; d < ncl; d++)
+                        memcpy(cluster_raw_values + (size_t)d * N_orig + r0,
+                               filtered.data.vars[K + G + d].data.dbl + r0,
+                               (size_t)(r1 - r0) * sizeof(double));
                 }
             }
         }
@@ -829,13 +1132,39 @@ ST_retcode creghdfe_full_regression(int retain)
         if (dof_pairs) mobility_groups = 0;
     }
     /* groupvar() numbers the groups by the raw values of an effect, which
-     * are released with the loaded data in STEP 5 */
+     * are released with the loaded data in STEP 5: the value of each level
+     * of every effect that can be the first of the pair (not a slope) */
     if (group_assignments && G >= 2) {
-        fe_raw = (ST_double *)ctools_safe_malloc3((size_t)N_orig, (size_t)G, sizeof(ST_double));
-        if (!fe_raw) { output_rc = 920; goto cleanup; }
+        /* Without clusters no effect is nested: the first that is not a
+         * slope is groupvar's first; with them, any that is not the last */
+        ST_int want[10] = {0}, first_plain = -1, last_plain = -1;
+        for (g = 0; g < G; g++) {
+            if (input.slope_idx[g]) continue;
+            if (first_plain < 0) first_plain = g;
+            last_plain = g;
+        }
         for (g = 0; g < G; g++)
-            memcpy(fe_raw + (size_t)g * N_orig, filtered.data.vars[K + g].data.dbl,
-                   (size_t)N_orig * sizeof(ST_double));
+            want[g] = !input.slope_idx[g] && (vcetype >= 2 ? g != last_plain : g == first_plain);
+        size_t total = 0;
+        for (g = 0; g < G; g++) {
+            fe_level_off[g] = total;
+            if (want[g]) total += (size_t)g_state->factors[g].num_levels;
+        }
+        fe_raw = (ST_double *)ctools_safe_malloc2(total > 0 ? total : 1, sizeof(ST_double));
+        if (!fe_raw) { output_rc = 920; goto cleanup; }
+        {
+            const uint64_t unset = 0x7ff8000000000000ULL;
+            const long long n_slots = (long long)total;
+            long long q;
+            #pragma omp parallel for schedule(static) if (n_slots > 200000)
+            for (q = 0; q < n_slots; q++) memcpy(&fe_raw[q], &unset, sizeof(unset));
+        }
+        for (g = 0; g < G; g++) {
+            if (!want[g]) continue;
+            if ((output_rc = creghdfe_level_values(g_state->factors[g].levels,
+                                                   filtered.data.vars[K + g].data.dbl, mask, N_orig,
+                                                   fe_raw + fe_level_off[g]))) goto cleanup;
+        }
     }
     for (g = 0; g < G; g++) {
         snprintf(scalar_name, sizeof(scalar_name), "__creghdfe_fe_redundant_%d", g + 1);
@@ -857,16 +1186,11 @@ ST_retcode creghdfe_full_regression(int retain)
 
     t_dof = get_time_sec();
 
-    /* Allocate inv_counts, inv_weighted_counts, and thread buffers (from
-     * the counts: once they are complete) */
+    /* inv_counts, inv_weighted_counts, and the thread buffers of the
+     * projection on the rows are made once the counts are complete, by the
+     * paths below that use them (the solve for the effects' coefficients
+     * reads none of them) */
     g_state->num_threads = num_threads;
-    if (!count_pool) {
-        if (ctools_hdfe_alloc_buffers(g_state, 0, K) != 0) {
-            output_rc = 920;
-            goto cleanup;
-        }
-        buffers_ready = 1;
-    }
 
     /* ================================================================
      * STEP 5-7: The regression's columns from the loaded variables: the
@@ -891,13 +1215,22 @@ ST_retcode creghdfe_full_regression(int retain)
             output_rc = 920;
             goto cleanup;
         }
-        idx = 0;
-        for (i = 0; i < N_orig; i++) {
-            if (mask[i]) {
-                compact_map[idx] = i;
-                idx++;
-            }
+        /* in row blocks (creghdfe_kept_blocks) */
+        creghdfe_kept_blocks kb;
+        if (creghdfe_kept_blocks_init(&kb, mask, N_orig)) {
+            output_rc = 920;
+            goto cleanup;
         }
+        ST_int bb;
+        #pragma omp parallel for schedule(static) if (kb.B > 2)
+        for (bb = 0; bb < kb.B; bb++) {
+            const ST_int r0 = bb * CREGHDFE_ROW_BLOCK;
+            const ST_int r1 = N_orig - r0 < CREGHDFE_ROW_BLOCK ? N_orig : r0 + CREGHDFE_ROW_BLOCK;
+            ST_int at = kb.offset[bb];
+            for (ST_int r = r0; r < r1; r++)
+                if (mask[r]) compact_map[at++] = r;
+        }
+        creghdfe_kept_blocks_free(&kb);
     }
 
     /* The weights of the kept rows (rows in parallel) */
@@ -1120,7 +1453,17 @@ ST_retcode creghdfe_full_regression(int retain)
     free(compact_map); compact_map = NULL;
     free((void *)loaded_cols); loaded_cols = NULL;
     weights = NULL;
-    stata_data_free_threaded(&filtered.data);
+    /* returned on helper threads while the projection runs (each task
+     * clears its variable; the array of them goes at cleanup) */
+    {
+        ctools_persistent_pool *pool = release_pool ? release_pool : ctools_get_global_pool();
+        if (pool && filtered.data.vars && filtered.data.nvars > 0 &&
+            ctools_persistent_pool_submit_batch(pool, creghdfe_variable_free_run, filtered.data.vars,
+                                                filtered.data.nvars, sizeof(filtered.data.vars[0])) == 0)
+            release_pool = pool;
+        else
+            stata_data_free_threaded(&filtered.data);
+    }
     data = data_compact; data_compact = NULL;
 
     /* The counts of every level are complete from here on (see STEP 3-4) */
@@ -1128,7 +1471,7 @@ ST_retcode creghdfe_full_regression(int retain)
         ctools_persistent_pool_wait(count_pool);
         count_pool = NULL;
     }
-    if (!buffers_ready) {
+    if (!buffers_ready && !prepared) {
         if (ctools_hdfe_alloc_buffers(g_state, 0, K) != 0) {
             output_rc = 920;
             goto cleanup;
@@ -1236,9 +1579,12 @@ ST_retcode creghdfe_full_regression(int retain)
         output_rc = 920;
         goto cleanup;
     }
-    output_rc = creghdfe_collinear(data, N, K, norm2, NULL, has_weights ? g_state->weights : NULL,
-                                   weight_type, input.collinear_tol, fe_flagged, is_collinear,
-                                   &depvar_explained, xtx, xty_all, inv_rmcoll);
+    /* y's sum of squares (tss_within) is taken beside the columns' */
+    ST_double tss_pre = 0.0;
+    output_rc = creghdfe_collinear_tss(data, N, K, norm2, NULL, has_weights ? g_state->weights : NULL,
+                                       weight_type, input.collinear_tol, fe_flagged, is_collinear,
+                                       &depvar_explained, xtx, xty_all, inv_rmcoll,
+                                       use_quad ? NULL : &tss_pre);
     for (k = 1; k < K && !output_rc; k++) {
         snprintf(scalar_name, sizeof(scalar_name), "__creghdfe_fe_collinear_%d", k);
         output_rc = ctools_scal_save(scalar_name, (ST_double)fe_flagged[k - 1]);
@@ -1274,14 +1620,30 @@ ST_retcode creghdfe_full_regression(int retain)
     if (SF_scal_use("__creghdfe_sample_prefilled", &val) == 0)
         sample_prefilled = (val == 1.0);
     if (sample_var_idx > 0 && sample_prefilled) {
-        for (i = 0; i < N_orig && !output_rc && N < N_orig; i++) {
-            if (!mask[i]) output_rc = SF_vstore(sample_var_idx, (ST_int)obs_map[i], 0.0);
+        /* the dropped rows, in parallel blocks (distinct observations) */
+        if (N < N_orig) {
+            const ST_int B = (ST_int)(((size_t)N_orig + CREGHDFE_ROW_BLOCK - 1) / CREGHDFE_ROW_BLOCK);
+            ST_int b;
+            #pragma omp parallel for schedule(static) if (B > 2)
+            for (b = 0; b < B; b++) {
+                const ST_int i0 = b * CREGHDFE_ROW_BLOCK;
+                const ST_int i1 = N_orig - i0 < CREGHDFE_ROW_BLOCK ? N_orig : i0 + CREGHDFE_ROW_BLOCK;
+                ST_retcode rc_b = 0;
+                for (ST_int r = i0; r < i1 && !rc_b; r++)
+                    if (!mask[r]) rc_b = SF_vstore(sample_var_idx, (ST_int)obs_map[r], 0.0);
+                if (rc_b) {
+                    #pragma omp critical(creghdfe_store_rc)
+                    if (!output_rc) output_rc = rc_b;
+                }
+            }
         }
         if (!output_rc) output_rc = ctools_scal_save("__creghdfe_marked", 1.0);
     } else if (sample_var_idx > 0) {
-        for (i = 0; i < N_orig && !output_rc; i++) {
-            if (!mask || mask[i]) output_rc = SF_vstore(sample_var_idx, (ST_int)obs_map[i], 1.0);
-        }
+        creghdfe_kept_blocks kb;
+        if (creghdfe_kept_blocks_init(&kb, mask, N_orig)) { output_rc = 920; goto cleanup; }
+        const creghdfe_kept_store one = {.var = sample_var_idx, .constant = 1.0};
+        output_rc = creghdfe_store_kept(&kb, obs_map, &one, 1);
+        creghdfe_kept_blocks_free(&kb);
     }
 
     if (output_rc) goto cleanup;
@@ -1303,6 +1665,7 @@ ST_retcode creghdfe_full_regression(int retain)
             .sum_weights = has_weights ? g_state->sum_weights : 0.0,
             .means = no_intercept ? means_zero : means, .stdevs = stdevs,
             .standardize = standardize, .use_quad = use_quad,
+            .tss_given = !use_quad, .tss_within = tss_pre,
         };
         creghdfe_ols_out ols;
         ST_retcode ols_rc = creghdfe_ols(&ols_in, &ols);
@@ -1351,18 +1714,26 @@ ST_retcode creghdfe_full_regression(int retain)
             goto cleanup;
         }
 
-        /* y (partialled), X with the means added back, and the constant column */
+        /* X with the means added back, and the constant column, in row
+         * blocks (every thread writes its rows of every column, so the fresh
+         * pages are touched by all threads). The first column, where y
+         * would go, is not read by any VCE and is left unwritten. */
+        enum { DWC_BLOCK = 16384 };
+        const ST_int n_blocks = (ST_int)(((size_t)N + DWC_BLOCK - 1) / DWC_BLOCK);
+        ST_int blk;
         #pragma omp parallel for schedule(static) if((size_t)N * (size_t)K_with_cons > 200000)
-        for (k = 0; k <= K_with_cons; k++) {
-            ST_double *dst = data_with_cons + (size_t)k * N;
-            if (k == 0) {
-                memcpy(dst, data_keep, (size_t)N * sizeof(ST_double));
-            } else if (k == K_with_cons) {
-                for (ST_int row = 0; row < N; row++) dst[row] = 1.0;
-            } else {
-                const ST_double *src = data_keep + (size_t)k * N;
-                const ST_double mean_k = means_x[k - 1];
-                for (ST_int row = 0; row < N; row++) dst[row] = src[row] + mean_k;
+        for (blk = 0; blk < n_blocks; blk++) {
+            const ST_int r0 = blk * DWC_BLOCK;
+            const ST_int r1 = N - r0 < DWC_BLOCK ? N : r0 + DWC_BLOCK;
+            for (ST_int kk = 1; kk <= K_with_cons; kk++) {
+                ST_double *dst = data_with_cons + (size_t)kk * N;
+                if (kk == K_with_cons) {
+                    for (ST_int row = r0; row < r1; row++) dst[row] = 1.0;
+                } else {
+                    const ST_double *src = data_keep + (size_t)kk * N;
+                    const ST_double mean_k = means_x[kk - 1];
+                    for (ST_int row = r0; row < r1; row++) dst[row] = src[row] + mean_k;
+                }
             }
         }
     }
@@ -1379,17 +1750,23 @@ ST_retcode creghdfe_full_regression(int retain)
         /* Multi-way clustering: every dimension numbered in sorted order;
          * an effect is nested when it is nested in any of them */
         cluster_ids_all = (ST_int *)ctools_safe_malloc3((size_t)N, (size_t)ncl, sizeof(ST_int));
-        cluster_values_compact = (double *)malloc(N * sizeof(double));
-        if (!cluster_ids_all || !cluster_values_compact || !cluster_raw_values) {
+        cluster_values_compact = mask ? (double *)malloc(N * sizeof(double)) : NULL;
+        if (!cluster_ids_all || (mask && !cluster_values_compact) || !cluster_raw_values) {
             output_rc = 920;
             goto cleanup;
         }
         num_clusters = 0;
         for (ST_int d = 0; d < ncl; d++) {
-            idx = 0;
-            for (i = 0; i < N_orig; i++)
-                if (!mask || mask[i]) cluster_values_compact[idx++] = cluster_raw_values[(size_t)d * N_orig + i];
-            if (ctools_numeric_to_cluster_ids(cluster_values_compact, N, cluster_ids_all + (size_t)d * N,
+            /* the kept rows' values (all of them when none was dropped) */
+            const double *kept_values = cluster_raw_values + (size_t)d * N_orig;
+            if (mask) {
+                if (creghdfe_gather_kept(cluster_values_compact, kept_values, mask, N_orig)) {
+                    output_rc = 920;
+                    goto cleanup;
+                }
+                kept_values = cluster_values_compact;
+            }
+            if (ctools_numeric_to_cluster_ids(kept_values, N, cluster_ids_all + (size_t)d * N,
                                               &num_clusters_dim[d]) != 0) {
                 output_rc = 920;
                 goto cleanup;
@@ -1397,20 +1774,20 @@ ST_retcode creghdfe_full_regression(int retain)
             if (d == 0 || num_clusters_dim[d] < num_clusters) num_clusters = num_clusters_dim[d];
             for (g = 0; g < G && dof_clusters; g++) {
                 if (input.slope_idx[g] || nested[g]) continue;
-                ST_int is_nested = ctools_fe_nested_in_cluster(
+                ST_int is_nested = creghdfe_fe_nested(
                     g_state->factors[g].levels, g_state->factors[g].num_levels,
-                    cluster_ids_all + (size_t)d * N, N);
+                    cluster_ids_all + (size_t)d * N, N, num_clusters_dim[d]);
                 if (is_nested < 0) { output_rc = 920; goto cleanup; }
                 nested[g] = is_nested;
             }
         }
-        free(cluster_values_compact); cluster_values_compact = NULL;
+        creghdfe_free_soon(&release_pool, cluster_values_compact); cluster_values_compact = NULL;
         for (g = 0; g < G; g++) {
             if (nested[g]) df_a_nested_computed += g_state->factors[g].num_levels;
             snprintf(scalar_name, sizeof(scalar_name), "__creghdfe_fe_nested_%d", g + 1);
             if ((output_rc = ctools_scal_save(scalar_name, (ST_double)nested[g]))) goto cleanup;
         }
-        free(cluster_raw_values);
+        creghdfe_free_soon(&release_pool, cluster_raw_values);
         cluster_raw_values = NULL;
     } else if (vcetype >= 2) {
         cluster_ids = (ST_int *)malloc(N * sizeof(ST_int));
@@ -1426,6 +1803,7 @@ ST_retcode creghdfe_full_regression(int retain)
             ST_int *fe_levels_for_cluster = g_state->factors[cluster_matches_fe].levels;
             num_clusters = g_state->factors[cluster_matches_fe].num_levels;
 
+            #pragma omp parallel for schedule(static) if (N > 200000)
             for (idx = 0; idx < N; idx++) {
                 cluster_ids[idx] = fe_levels_for_cluster[idx] - 1;  /* Convert 1-based to 0-based */
             }
@@ -1438,9 +1816,9 @@ ST_retcode creghdfe_full_regression(int retain)
                 } else if (g == cluster_matches_fe) {
                     is_nested = 1;  /* FE is the cluster variable - trivially nested */
                 } else {
-                    is_nested = ctools_fe_nested_in_cluster(
+                    is_nested = creghdfe_fe_nested(
                         g_state->factors[g].levels, g_state->factors[g].num_levels,
-                        cluster_ids, N);
+                        cluster_ids, N, num_clusters);
                     if (is_nested < 0) { output_rc = 920; goto cleanup; }
                 }
                 nested[g] = is_nested;
@@ -1456,36 +1834,32 @@ ST_retcode creghdfe_full_regression(int retain)
                 goto cleanup;
             }
 
-            /* Extract cluster values for non-singleton observations and remap using sort */
-            cluster_values_compact = (double *)malloc(N * sizeof(double));
-
-            if (!cluster_values_compact) {
-                output_rc = 920;
-                goto cleanup;
-            }
-
-            /* Compact cluster values (remove singletons) */
-            idx = 0;
-            for (i = 0; i < N_orig; i++) {
-                if (!mask || mask[i]) {
-                    cluster_values_compact[idx] = cluster_raw_values[i];
-                    idx++;
+            /* Cluster values of the kept rows (all of them when none was
+             * dropped: then no copy), remapped using sort */
+            const double *kept_values = cluster_raw_values;
+            if (mask) {
+                cluster_values_compact = (double *)malloc(N * sizeof(double));
+                if (!cluster_values_compact ||
+                    creghdfe_gather_kept(cluster_values_compact, cluster_raw_values, mask, N_orig)) {
+                    output_rc = 920;
+                    goto cleanup;
                 }
+                kept_values = cluster_values_compact;
             }
 
             /* Dense 0-based ids in sorted value order */
-            if (ctools_numeric_to_cluster_ids(cluster_values_compact, N, cluster_ids, &num_clusters) != 0) {
+            if (ctools_numeric_to_cluster_ids(kept_values, N, cluster_ids, &num_clusters) != 0) {
                 output_rc = 920;
                 goto cleanup;
             }
 
-            free(cluster_values_compact); cluster_values_compact = NULL;
+            creghdfe_free_soon(&release_pool, cluster_values_compact); cluster_values_compact = NULL;
 
             /* Check if any FE is nested within cluster */
             for (g = 0; g < G; g++) {
-                ST_int is_nested = (!dof_clusters || input.slope_idx[g]) ? 0 : ctools_fe_nested_in_cluster(
+                ST_int is_nested = (!dof_clusters || input.slope_idx[g]) ? 0 : creghdfe_fe_nested(
                     g_state->factors[g].levels, g_state->factors[g].num_levels,
-                    cluster_ids, N);
+                    cluster_ids, N, num_clusters);
                 if (is_nested < 0) { output_rc = 920; goto cleanup; }
                 nested[g] = is_nested;
                 if (is_nested) df_a_nested_computed += g_state->factors[g].num_levels;
@@ -1495,7 +1869,7 @@ ST_retcode creghdfe_full_regression(int retain)
         }
 
         /* Free saved cluster raw values */
-        free(cluster_raw_values);
+        creghdfe_free_soon(&release_pool, cluster_raw_values);
         cluster_raw_values = NULL;
         num_clusters_dim[0] = num_clusters;
     } else {
@@ -1549,8 +1923,8 @@ ST_retcode creghdfe_full_regression(int retain)
                 else gb = g;
             }
             if (gb >= 0) {
-                if ((output_rc = build_groupvar(g_state, ga, gb, fe_raw + (size_t)ga * N_orig,
-                                                mask, N_orig, N, group_assignments))) goto cleanup;
+                if ((output_rc = build_groupvar(g_state, ga, gb, fe_raw + fe_level_off[ga], N,
+                                                group_assignments))) goto cleanup;
                 created = 1;
             }
         }
@@ -1559,7 +1933,7 @@ ST_retcode creghdfe_full_regression(int retain)
         if ((output_rc = ctools_scal_save("__creghdfe_groupvar_fe2", (ST_double)(gb + 1)))) goto cleanup;
         if (!created) { free(group_assignments); group_assignments = NULL; }
     }
-    free(fe_raw); fe_raw = NULL;
+    creghdfe_free_soon(&release_pool, fe_raw); fe_raw = NULL;
 
     /* Compute residuals (needed for robust/cluster VCE and optionally stored) */
     resid = (ST_double *)malloc(N * sizeof(ST_double));
@@ -1571,17 +1945,40 @@ ST_retcode creghdfe_full_regression(int retain)
     }
     if (resid) {
         /* y - X*beta: each fitted value accumulates the products over the
-         * regressors in order, in plain double arithmetic (no FMA, as Mata's
-         * matrix multiply) */
-        memset(resid, 0, (size_t)N * sizeof(ST_double));
-        ctools_matvec_add(data_keep + N, N, K_keep, beta_keep, resid);
-        #pragma omp parallel for schedule(static) if(N > 200000)
-        for (idx = 0; idx < N; idx++) {
-            resid[idx] = data_keep[idx] - resid[idx];
+         * regressors in order, from zero, in plain double arithmetic (no
+         * FMA, as Mata's matrix multiply), as ctools_matvec_add() adds them;
+         * here a block's fitted values stay on the stack and the residual is
+         * written once */
+        {
+            enum { FIT_BLOCK = 2048 };
+            const ST_int n_blocks = (ST_int)(((size_t)N + FIT_BLOCK - 1) / FIT_BLOCK);
+            ST_int blk;
+            #pragma omp parallel for schedule(static) if((size_t)N * (size_t)(K_keep + 1) > 400000)
+            for (blk = 0; blk < n_blocks; blk++) {
+                const ST_int r0 = blk * FIT_BLOCK;
+                const ST_int n = N - r0 < FIT_BLOCK ? N - r0 : FIT_BLOCK;
+                ST_double fit[FIT_BLOCK];
+                for (ST_int r = 0; r < n; r++) fit[r] = 0.0;
+                for (ST_int kk = 0; kk < K_keep; kk++) {
+                    const ST_double *x = data_keep + (size_t)(kk + 1) * N + r0;
+                    const ST_double bk = beta_keep[kk];
+                    for (ST_int r = 0; r < n; r++) fit[r] += x[r] * bk;
+                }
+                const ST_double *yv = data_keep + r0;
+                ST_double *e = resid + r0;
+                for (ST_int r = 0; r < n; r++) e[r] = yv[r] - fit[r];
+            }
         }
 
-        /* Recompute RSS from residuals: use quad-precision or Kahan. */
-        if (use_quad) {
+        /* Recompute RSS from residuals: use quad-precision or Kahan. With
+         * a robust, clustered or Driscoll-Kraay VCE the plain sum is taken
+         * on a helper thread while that VCE is computed (it does not read
+         * rss; the residuals are only read meanwhile) */
+        if (!use_quad && vcetype >= 1 && N > 200000 && (rss_pool = ctools_get_global_pool()) &&
+            (rss_job = (creghdfe_rss_job){resid, has_weights ? g_state->weights : NULL, N, 0.0},
+             ctools_persistent_pool_submit(rss_pool, creghdfe_rss_job_run, &rss_job) == 0)) {
+            rss = 0.0; /* below, from the task */
+        } else if (use_quad) {
             if (has_weights) {
                 rss = dd_sum_sq_weighted(resid, g_state->weights, N);
             } else {
@@ -1639,7 +2036,12 @@ ST_retcode creghdfe_full_regression(int retain)
         }
     }
 
-    free(data_with_cons); data_with_cons = NULL;
+    if (rss_pool) {
+        ctools_persistent_pool_wait(rss_pool);
+        rss_pool = NULL;
+        rss = rss_job.rss;
+    }
+    creghdfe_free_soon(&release_pool, data_with_cons); data_with_cons = NULL;
     if (output_rc) {
         SF_error("creghdfe: covariance calculation failed\n");
         free(resid); resid = NULL;
@@ -1690,8 +2092,10 @@ ST_retcode creghdfe_full_regression(int retain)
     if (standardize) {
         ST_double stdev_y = stdevs[0];
 
-        /* Destandardize residuals first */
-        if (resid) {
+        /* Destandardize residuals first: only read again when they are
+         * stored or the fixed effects are recovered from them */
+        if (resid && ((compute_resid && resid_var_idx > 0) || (savefe && savefe_var_idx > 0))) {
+            #pragma omp parallel for schedule(static) if (N > 200000)
             for (idx = 0; idx < N; idx++) {
                 resid[idx] *= stdev_y;
             }
@@ -1728,24 +2132,20 @@ ST_retcode creghdfe_full_regression(int retain)
 
     /* Store residuals back to Stata if requested.
      * Uses obs_map to write to correct Stata observations. */
-    if (compute_resid && resid_var_idx > 0 && resid) {
-        idx = 0;
-        for (i = 0; i < N_orig; i++) {
-            if (!mask || mask[i]) {
-                if (!output_rc) output_rc = SF_vstore(resid_var_idx, (ST_int)obs_map[i], resid[idx]);
-                idx++;
-            }
-        }
-    }
-
-    /* Store groupvar (mobility group assignments) back to Stata if requested */
-    if (compute_groupvar && groupvar_var_idx > 0 && group_assignments) {
-        idx = 0;
-        for (i = 0; i < N_orig; i++) {
-            if (!mask || mask[i]) {
-                if (!output_rc) output_rc = SF_vstore(groupvar_var_idx, (ST_int)obs_map[i], (ST_double)group_assignments[idx]);
-                idx++;
-            }
+    /* Store groupvar (mobility group assignments) back to Stata if requested,
+     * with the residuals in the same pass over the rows (creghdfe_store_kept) */
+    {
+        creghdfe_kept_store outs[2];
+        ST_int n_outs = 0;
+        if (compute_resid && resid_var_idx > 0 && resid)
+            outs[n_outs++] = (creghdfe_kept_store){.var = resid_var_idx, .dbl = resid};
+        if (compute_groupvar && groupvar_var_idx > 0 && group_assignments)
+            outs[n_outs++] = (creghdfe_kept_store){.var = groupvar_var_idx, .num = group_assignments};
+        if (n_outs > 0 && !output_rc) {
+            creghdfe_kept_blocks kb;
+            if (creghdfe_kept_blocks_init(&kb, mask, N_orig)) output_rc = 920;
+            else output_rc = creghdfe_store_kept(&kb, obs_map, outs, n_outs);
+            creghdfe_kept_blocks_free(&kb);
         }
     }
 
@@ -1755,9 +2155,9 @@ ST_retcode creghdfe_full_regression(int retain)
     }
 
     /* Free residuals and group assignments */
-    free(resid);
+    creghdfe_free_soon(&release_pool, resid);
     resid = NULL;
-    free(group_assignments);
+    creghdfe_free_soon(&release_pool, group_assignments);
     group_assignments = NULL;
 
     if (output_rc) goto cleanup;
@@ -1846,6 +2246,10 @@ cleanup:
     if (count_pool) {
         ctools_persistent_pool_wait(count_pool);
         count_pool = NULL;
+    }
+    if (rss_pool) {
+        ctools_persistent_pool_wait(rss_pool);
+        rss_pool = NULL;
     }
     /* ... and no task that returns memory may outlive the command */
     if (release_pool) {

@@ -1761,8 +1761,7 @@ program define _cio_import_load
         * fallback can require moving an earlier header to its own column letter.
         forvalues j=1/`nvar' {
             plugin call ctools_plugin, "cio column `j'"
-            mata: st_local("__cio_candidate_`j'",_cio_excel_name(st_global("CTOOLS_CIO_name"),st_global("CTOOLS_CIO_excel_column"),st_local("case")))
-            mata: st_local("__cio_fallback_`j'",st_global("CTOOLS_CIO_excel_column"))
+            mata: _cio_excel_candidate(`j',st_local("case"))
         }
         mata: _cio_excel_names(`nvar')
     }
@@ -1792,8 +1791,7 @@ program define _cio_import_load
             exit 198
         }
         mata: (void) st_addvar(st_local("type"),st_local("vname"))
-        mata: st_varlabel(st_local("vname"),st_global("CTOOLS_CIO_labelnumber")=="" ? st_global("CTOOLS_CIO_label") : strtrim(strofreal(strtoreal(st_global("CTOOLS_CIO_labelnumber")),"%18.0g")))
-        mata: st_varformat(st_local("vname"),st_global("CTOOLS_CIO_format"))
+        mata: _cio_label_format(st_local("vname"))
         if ("`novallabels'" == "" | "`kind'"=="sasxport5") & inlist("`kind'","spss","sasxport5") {
             * Label-set names come from the file and stay in Mata. Native
             * SPSS labels use their dictionary ordinal, beginning at 0.
@@ -2031,6 +2029,19 @@ string scalar _cio_labelset_name(string scalar kind, string scalar set, real sca
     if (add & set=="") return("")
     if (kind!="spss") return(ustrlower(ustrtoname(set)))
     return(set)
+}
+/* Column j's candidate name and its fallback (the column letter), from the
+   plugin's cio column results */
+void _cio_excel_candidate(real scalar j, string scalar casing) {
+    st_local(sprintf("__cio_candidate_%g",j),_cio_excel_name(st_global("CTOOLS_CIO_name"),st_global("CTOOLS_CIO_excel_column"),casing))
+    st_local(sprintf("__cio_fallback_%g",j),st_global("CTOOLS_CIO_excel_column"))
+}
+/* The new variable's label and display format, from the plugin's cio column
+   results (one Mata statement for both: each costs about as much as the
+   plugin call itself) */
+void _cio_label_format(string scalar vname) {
+    st_varlabel(vname,st_global("CTOOLS_CIO_labelnumber")=="" ? st_global("CTOOLS_CIO_label") : strtrim(strofreal(strtoreal(st_global("CTOOLS_CIO_labelnumber")),"%18.0g")))
+    st_varformat(vname,st_global("CTOOLS_CIO_format"))
 }
 void _cio_excel_names(real scalar n) {
     string rowvector names, fallback
@@ -2462,29 +2473,65 @@ void _cpq_labels(real scalar n)
 
 void _cpq_dict_labels(string scalar path, string scalar name, real scalar n)
 {
-    real scalar fh, i, length
+    real scalar fh, i, length, at
     real colvector io
     string colvector text
+    string scalar buf
     fh = fopen(path, "r")
     io = bufio()
     text = J(n, 1, "")
+    buf = ""
+    at = 0
     for (i = 1; i <= n; i++) {
-        length = fbufget(io, fh, "%4bu")
-        if (length) text[i] = fread(fh, length)
+        length = _cpq_blob_length(fh, io, buf, at)
+        if (length) text[i] = _cpq_blob_text(fh, buf, at, length)
     }
     fclose(fh)
     st_vlmodify(name, (0::n - 1), text)
 }
 
+/* A blob file (length-prefixed values) is read a block at a time: one read
+   of a value's prefix or bytes cost far more than storing the value. buf
+   holds the block, at the bytes of it already taken. */
+void _cpq_blob_fill(real scalar fh, string scalar buf, real scalar at, real scalar need)
+{
+    string matrix more
+    more = fread(fh, max((need, 16777216)))
+    buf = substr(buf, at + 1, .)
+    if (rows(more) & cols(more)) buf = buf + more
+    at = 0
+}
+
+real scalar _cpq_blob_length(real scalar fh, real colvector io, string scalar buf, real scalar at)
+{
+    real scalar length
+    if (strlen(buf) - at < 4) _cpq_blob_fill(fh, buf, at, 4)
+    length = bufget(io, buf, at, "%4bu")
+    at = at + 4
+    return(length)
+}
+
+string scalar _cpq_blob_text(real scalar fh, string scalar buf, real scalar at, real scalar length)
+{
+    string scalar value
+    if (strlen(buf) - at < length) _cpq_blob_fill(fh, buf, at, length)
+    value = substr(buf, at + 1, length)
+    at = at + length
+    return(value)
+}
+
 void _cpq_read_blobs(string scalar path, real scalar col, real scalar n)
 {
-    real scalar fh, i, length
+    real scalar fh, i, length, at
     real colvector io
+    string scalar buf
     fh = fopen(path, "r")
     io = bufio()
+    buf = ""
+    at = 0
     for (i = 1; i <= n; i++) {
-        length = fbufget(io, fh, "%4bu")
-        st_sstore(i, col, length ? fread(fh, length) : "")
+        length = _cpq_blob_length(fh, io, buf, at)
+        st_sstore(i, col, length ? _cpq_blob_text(fh, buf, at, length) : "")
     }
     fclose(fh)
 }

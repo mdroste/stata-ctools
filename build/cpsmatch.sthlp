@@ -93,11 +93,14 @@ treatment codes. Supply covariates for score estimation or specify
 ({help fvvarlist}).
 
 {pstd}
-Matching on the propensity score (nearest neighbor, radius and kernel) runs
-in a C plugin; Mahalanobis-metric matching and local linear regression
-matching with a kernel other than the Epanechnikov kernel run in Mata, as
-in {cmd:psmatch2}, and take time proportional to the product of the numbers
-of treated and controls.
+Matching, the treatment effects and their standard errors are computed in a
+C plugin. Kernel matching on the propensity score with the Epanechnikov,
+biweight, uniform or tricube kernel takes time proportional to the number
+of observations (times its logarithm); the normal kernel, Mahalanobis-metric
+matching and local linear regression matching with a kernel other than the
+Epanechnikov kernel take time proportional to the product of the numbers of
+treated and controls, as in {cmd:psmatch2}. The score model is fitted by
+{cmd:probit} or {cmd:logit}.
 
 {pstd}
 {cmd:cpsmatch} creates the variables {cmd:psmatch2} creates; see

@@ -391,6 +391,10 @@ static void variance(int N, int K, int G, int weight_type, int layout)
     {
         if (layout == 1)
             ids[i] = (int)((long long)i * G / N);
+        else if (layout == 3)
+            /* runs in order, then cluster 0 again and the last cluster
+             * without rows: as many runs as clusters, yet not grouped */
+            ids[i] = i < N - N / 10 ? (int)((long long)i * (G - 1) / (N - N / 10)) : 0;
         else
             ids[i] = (int)(uniform() * (layout == 2 && G > 2 ? G - 2 : G));
         if (weight_type == 2)
@@ -544,7 +548,16 @@ int main(void)
             variance(3000, 3, 37, weight_type, layout);
             variance(3000, 5, 2999, weight_type, layout);
             variance(60000, 4, 5000, weight_type, layout);
+            /* past the row counts at which the clustered meat splits grouped
+             * rows among the threads (fewer regressors than its four threads) and
+             * sums its elements side by side */
+            variance(300000, 3, 30000, weight_type, layout);
         }
+    for (int weight_type = 0; weight_type <= 3; weight_type++)
+    {
+        variance(3000, 3, 37, weight_type, 3);
+        variance(300000, 3, 30000, weight_type, 3);
+    }
     assert(!live);
     puts("cross products: ok");
     return 0;

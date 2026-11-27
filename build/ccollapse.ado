@@ -165,8 +165,12 @@ program define ccollapse
     * Storage types of the targets, and the plugin's list of them
     * ---------------------------------------------------------------------
     local srclist : list uniq sources
+    * The plugin reads the target list from the local ccollapse_targets: a
+    * long clist would not fit in the plugin's argument string, which Stata
+    * cuts off after a few thousand characters
     local types
-    local spec
+    local ccollapse_targets
+    local sep
     forvalues i = 1/`n' {
         local s `stat`i''
         local ty : type `src`i''
@@ -183,9 +187,10 @@ program define ccollapse
         }
         local types `types' `ty'
         if substr("`s'", 1, 2) == "p " local s p`=real(substr("`s'", 3, .))'
-        local spec `spec',`: list posof "`src`i''" in srclist':`s'
+        local ccollapse_targets `ccollapse_targets'`sep'`: list posof "`src`i''" in srclist':`s'
+        local sep ,
     }
-    local spec = substr("`spec'", 2, .)
+    local tlen : length local ccollapse_targets
 
     * A weight that is one numeric variable is read as it is; an expression
     * is evaluated once. The sample marker replaces an if condition: Stata
@@ -232,7 +237,7 @@ program define ccollapse
     * compute: every statistic, in the plugin; the dataset is not changed
     _ctools_strw `by' `srclist' `wvar' `touse'
     capture noisily plugin call ctools_plugin `by' `srclist' `wvar' `touse' `range', ///
-        "ccollapse `threadopt' compute nby=`nby' nsrc=`nsrc' wtype=`wtype' targets=`spec' `markeropt' `cw' `verbose'"
+        "ccollapse `threadopt' compute nby=`nby' nsrc=`nsrc' wtype=`wtype' tlen=`tlen' `markeropt' `cw' `verbose'"
     local rc = _rc
     * the sample errors are collapse's, with Stata's messages
     if inlist(`rc', 401, 402, 2000) error `rc'
@@ -250,12 +255,20 @@ program define ccollapse
     local bylist : list every & by
     local nbyvars 0
     local bytypes
+    local alias_chars fralias_from fralias_varname
     foreach v of local bylist {
         local ++nbyvars
         local bytypes `bytypes' `: type `v''
         local bfmt`nbyvars' : format `v'
         local bval`nbyvars' : value label `v'
         local bchars`nbyvars' : char `v'[]
+        * collapse makes an alias variable an ordinary one: the result has
+        * no characteristics that point to the linked frame
+        local alias 0
+        capture local alias : isalias `v'
+        if "`alias'" == "1" {
+            local bchars`nbyvars' : list bchars`nbyvars' - alias_chars
+        }
         mata: st_local("blab`nbyvars'", st_varlabel("`v'"))
         local j 0
         foreach c of local bchars`nbyvars' {

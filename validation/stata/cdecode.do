@@ -2390,6 +2390,45 @@ count if price > `mean'
 if `n_rich' == r(N) test_pass "DEC-02 if may name the caller's r()"
 else test_fail "DEC-02 if may name the caller's r()" "`n_rich' decoded"
 * SUMMARY
+* SECTION: plugin protocol 3. A label too long for a macro goes to the plugin
+* in a file; the outputs are written without initial values even with if or
+* in; decode's outputs keep their order among the plugin's.
+print_section "Large labels, if/in without fill"
+clear
+set obs 50000
+generate long k = mod(_n * 7919, 20000) + 1
+local L = max(12, ceil(c(macrolen) / 20000) + 8)
+generate str`L' t = "text " + string(k, "%05.0f") + (`L' - 12) * "y"
+replace t = "" in 3/4
+encode t, gen(x) label(XL)
+generate byte g = mod(_n, 5)
+generate int y = mod(_n, 3)
+label define YL 0 "ééé" 1 "plain" 2 "two words"
+label values y YL
+foreach spec in "" "if g == 2" "in 7/49990" "if g > 0 in 100/40000" "if g == 9" {
+    decode x `spec', gen(n_x)
+    cdecode x `spec', gen(c_x)
+    capture assert n_x == c_x
+    local same = !_rc
+    if `same' & "`: type n_x'" == "`: type c_x'" test_pass "P3-01 label longer than a macro `spec'"
+    else test_fail "P3-01 label longer than a macro `spec'" "values `same' types `: type n_x' `: type c_x'"
+    drop n_x c_x
+}
+* maxlength() cutting multibyte text leaves y to decode, between two plugin outputs
+clonevar x2 = x
+decode x if g < 4, gen(o_a) maxlength(3)
+decode y if g < 4, gen(o_b) maxlength(3)
+decode x2 if g < 4, gen(o_c) maxlength(3)
+unab before : _all
+rename (o_a o_b o_c) (n_a n_b n_c)
+cdecode x y x2 if g < 4, gen(o_a o_b o_c) maxlength(3)
+capture assert n_a == o_a & n_b == o_b & n_c == o_c
+local same = !_rc
+drop n_a n_b n_c
+unab after : _all
+if `same' & "`before'" == "`after'" test_pass "P3-02 decode fallback between plugin outputs"
+else test_fail "P3-02 decode fallback between plugin outputs" "values `same' order `after'"
+drop o_a o_b o_c
 * End of cdecode validation
 do "validation/support/six_release_regressions.do" cdecode
 noi print_summary "cdecode"

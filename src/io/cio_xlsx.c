@@ -69,6 +69,115 @@ int cio_xlsx_numeric(int type)
     return type == XLSX_CELL_NUMBER || type == XLSX_CELL_DATE || type == XLSX_CELL_DATETIME ||
            type == XLSX_CELL_BOOLEAN;
 }
+/* Column col's name, heading label, type and display format, from its
+ * heading (row r0, with firstrow) and its cells in rows start to r1 */
+static void xlsx_column_type(XLSXContext *x, cio_column *c, int col, int r0, int start, int r1,
+                             int allfmt)
+{
+    cio_xls_column_name(col, c->name);
+    cio_copy_text(c->excel_column, sizeof(c->excel_column), c->name);
+    c->width = 1;
+    cio_copy_text(c->format, sizeof(c->format), "%10.0g");
+    if (x->firstrow)
+    {
+        double value;
+        const char *text;
+        int type = cio_xlsx_raw(x, r0, col, &value, &text);
+        char number[100];
+        if (type == XLSX_CELL_DATE || type == XLSX_CELL_DATETIME)
+        {
+            /* A date-styled heading labels as its date text, as native. */
+            cio_excel_date_text(cio_excel_days(value, x->date1904),
+                                cio_xlsx_native_format(x, r0, col), number, sizeof(number));
+            text = number;
+        }
+        else if (cio_xlsx_numeric(type))
+        {
+            snprintf(number, sizeof(number), "%.16g", value);
+            text = number;
+            c->label_numeric = type == XLSX_CELL_NUMBER;
+            c->label_number = value;
+        }
+        if (*text)
+        {
+            cio_copy_text(c->label, sizeof(c->label), text);
+            if (!cio_xlsx_numeric(type))
+                cio_copy_text(c->name, sizeof(c->name), text);
+        }
+    }
+    cio_excel_column numeric = {0};
+    for (int r = start; r <= r1; r++)
+    {
+        double value;
+        const char *text;
+        int type = cio_xlsx_raw(x, r, col, &value, &text);
+        if (*text && !cio_xlsx_numeric(type))
+            c->is_string = 1;
+        if (cio_xlsx_numeric(type))
+            cio_excel_column_add(&numeric, cio_xlsx_native_format(x, r, col),
+                                 type == XLSX_CELL_BOOLEAN);
+    }
+    c->date_kind = numeric.kind;
+    cio_copy_text(c->format, sizeof(c->format), cio_excel_column_format(&numeric));
+    if (x->allstring)
+        c->is_string = 1;
+    /* Numbers in a string column take allstring()'s format, else native's
+       %18.0g text: the ado formats them from the raw values. */
+    c->format_numbers = c->is_string && (allfmt || numeric.count || numeric.booleans);
+}
+
+/* Column col's values, rows start to r1: 0, or 109 or 909 */
+static int xlsx_column_values(XLSXContext *x, cio_column *c, int col, int start, int r1)
+{
+    for (int r = start; r <= r1; r++)
+    {
+        size_t i = (size_t)(r - start);
+        double value;
+        const char *text;
+        int type = cio_xlsx_raw(x, r, col, &value, &text);
+        int date = type == XLSX_CELL_DATE ? 1 : type == XLSX_CELL_DATETIME ? 2 : 0;
+        if (c->is_string)
+        {
+            char number[100];
+            if (cio_xlsx_numeric(type))
+            {
+                if (c->format_numbers && !date)
+                    c->numbers[i] = value;
+                if (date)
+                {
+                    /* Text keeps each cell's own display format */
+                    cio_excel_date_text(cio_excel_days(value, x->date1904),
+                                        cio_xlsx_native_format(x, r, col), number, sizeof(number));
+                }
+                else
+                    snprintf(number, sizeof(number), "%.16g", value);
+                /* Native general-format text omits zero before a decimal point. */
+                if (!date && number[0] == '0' && number[1] == '.')
+                    memmove(number, number + 1, strlen(number));
+                else if (!date && number[0] == '-' && number[1] == '0' && number[2] == '.')
+                    memmove(number + 1, number + 2, strlen(number + 1));
+                text = number;
+            }
+            size_t n = strlen(text);
+            if (n > INT_MAX)
+                return 109;
+            c->strings[i] = strdup(text);
+            if (!c->strings[i])
+                return 909;
+            if ((int)n > c->width)
+                c->width = (int)n;
+        }
+        else if (cio_xlsx_numeric(type) && !(c->date_kind && type == XLSX_CELL_BOOLEAN))
+        {
+            /* One unit per column: General serials in a date column convert too;
+               TRUE/FALSE in a date column stay missing, as in native */
+            c->numbers[i] =
+                c->date_kind ? cio_excel_stata_value(value, x->date1904, c->date_kind) : value;
+        }
+    }
+    return 0;
+}
+
 int cio_scan_xlsx(cio_dataset *dataset, const char *path)
 {
     XLSXContext x;
@@ -168,121 +277,33 @@ int cio_scan_xlsx(cio_dataset *dataset, const char *path)
         goto done;
     }
     int start = r0 + x.firstrow;
-    for (int j = 0; j < dataset->nvar; j++)
-    {
-        cio_column *c = &dataset->cols[j];
-        cio_xls_column_name(c0 + j, c->name);
-        cio_copy_text(c->excel_column, sizeof(c->excel_column), c->name);
-        c->width = 1;
-        cio_copy_text(c->format, sizeof(c->format), "%10.0g");
-        if (x.firstrow)
-        {
-            double value;
-            const char *text;
-            int type = cio_xlsx_raw(&x, r0, c0 + j, &value, &text);
-            char number[100];
-            if (type == XLSX_CELL_DATE || type == XLSX_CELL_DATETIME)
-            {
-                /* A date-styled heading labels as its date text, as native. */
-                cio_excel_date_text(cio_excel_days(value, x.date1904),
-                                    cio_xlsx_native_format(&x, r0, c0 + j), number, sizeof(number));
-                text = number;
-            }
-            else if (cio_xlsx_numeric(type))
-            {
-                snprintf(number, sizeof(number), "%.16g", value);
-                text = number;
-                c->label_numeric = type == XLSX_CELL_NUMBER;
-                c->label_number = value;
-            }
-            if (*text)
-            {
-                cio_copy_text(c->label, sizeof(c->label), text);
-                if (!cio_xlsx_numeric(type))
-                    cio_copy_text(c->name, sizeof(c->name), text);
-            }
-        }
-        cio_excel_column numeric = {0};
-        for (int r = start; r <= r1; r++)
-        {
-            double value;
-            const char *text;
-            int type = cio_xlsx_raw(&x, r, c0 + j, &value, &text);
-            if (*text && !cio_xlsx_numeric(type))
-                c->is_string = 1;
-            if (cio_xlsx_numeric(type))
-                cio_excel_column_add(&numeric, cio_xlsx_native_format(&x, r, c0 + j),
-                                     type == XLSX_CELL_BOOLEAN);
-        }
-        c->date_kind = numeric.kind;
-        cio_copy_text(c->format, sizeof(c->format), cio_excel_column_format(&numeric));
-        if (x.allstring)
-            c->is_string = 1;
-        /* Numbers in a string column take allstring()'s format, else native's
-           %18.0g text: the ado formats them from the raw values. */
-        c->format_numbers = c->is_string && (*allfmt || numeric.count || numeric.booleans);
-    }
+    /* Columns are independent: each is typed, then filled, on its own */
+    const int ncol = dataset->nvar;
+    const int split = ncol > 1 && (size_t)(r1 - start + 1) * (size_t)ncol >= 65536;
+#pragma omp parallel for schedule(dynamic, 1) if (split)
+    for (int j = 0; j < ncol; j++)
+        xlsx_column_type(&x, &dataset->cols[j], c0 + j, r0, start, r1, *allfmt != 0);
     if (r1 >= start)
     {
         if ((rc = cio_reserve_rows(dataset, (size_t)(r1 - start + 1))))
             goto done;
         dataset->nobs = (size_t)(r1 - start + 1);
     }
-    for (int j = 0; j < dataset->nvar; j++)
-        for (int r = start; r <= r1; r++)
-        {
-            cio_column *c = &dataset->cols[j];
-            size_t i = (size_t)(r - start);
-            double value;
-            const char *text;
-            int type = cio_xlsx_raw(&x, r, c0 + j, &value, &text);
-            int date = type == XLSX_CELL_DATE ? 1 : type == XLSX_CELL_DATETIME ? 2 : 0;
-            if (c->is_string)
-            {
-                char number[100];
-                if (cio_xlsx_numeric(type))
-                {
-                    if (c->format_numbers && !date)
-                        c->numbers[i] = value;
-                    if (date)
-                    {
-                        /* Text keeps each cell's own display format */
-                        cio_excel_date_text(cio_excel_days(value, x.date1904),
-                                            cio_xlsx_native_format(&x, r, c0 + j), number,
-                                            sizeof(number));
-                    }
-                    else
-                        snprintf(number, sizeof(number), "%.16g", value);
-                    /* Native general-format text omits zero before a decimal point. */
-                    if (!date && number[0] == '0' && number[1] == '.')
-                        memmove(number, number + 1, strlen(number));
-                    else if (!date && number[0] == '-' && number[1] == '0' && number[2] == '.')
-                        memmove(number + 1, number + 2, strlen(number + 1));
-                    text = number;
-                }
-                size_t n = strlen(text);
-                if (n > INT_MAX)
-                {
-                    rc = 109;
-                    goto done;
-                }
-                c->strings[i] = strdup(text);
-                if (!c->strings[i])
-                {
-                    rc = 909;
-                    goto done;
-                }
-                if ((int)n > c->width)
-                    c->width = (int)n;
-            }
-            else if (cio_xlsx_numeric(type) && !(c->date_kind && type == XLSX_CELL_BOOLEAN))
-            {
-                /* One unit per column: General serials in a date column convert too;
-                   TRUE/FALSE in a date column stay missing, as in native */
-                c->numbers[i] =
-                    c->date_kind ? cio_excel_stata_value(value, x.date1904, c->date_kind) : value;
-            }
-        }
+    int *col_rc = calloc((size_t)ncol, sizeof(int));
+    if (!col_rc)
+    {
+        rc = 909;
+        goto done;
+    }
+#pragma omp parallel for schedule(dynamic, 1) if (split)
+    for (int j = 0; j < ncol; j++)
+        col_rc[j] = xlsx_column_values(&x, &dataset->cols[j], c0 + j, start, r1);
+    /* The first failing column reports, as when they were filled in turn */
+    for (int j = 0; j < ncol && !rc; j++)
+        rc = col_rc[j];
+    free(col_rc);
+    if (rc)
+        goto done;
     for (int j = 0; j < dataset->nvar; j++)
     {
         /* Room for the %18.0g text that replaces each number */

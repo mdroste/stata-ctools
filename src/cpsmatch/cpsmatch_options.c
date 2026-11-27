@@ -231,16 +231,48 @@ int cpsmatch_parse_options(const char *args, cpsmatch_options *opts)
         {"matched", offsetof(cpsmatch_options, matched_idx)},
         {"self", offsetof(cpsmatch_options, self_idx)},
         {"ai", offsetof(cpsmatch_options, ai)},
+        {"ny", offsetof(cpsmatch_options, ny)},
+        {"yeff", offsetof(cpsmatch_options, yeff_idx)},
+        {"nx", offsetof(cpsmatch_options, nx)},
+        {"xcol", offsetof(cpsmatch_options, xcol_idx)},
+        {"xself", offsetof(cpsmatch_options, xself_idx)},
+        {"supscore", offsetof(cpsmatch_options, supscore_idx)},
+    };
+    static const struct
+    {
+        const char *name;
+        size_t offset;
+    } flags[] = {
+        {"touse", offsetof(cpsmatch_options, touse)},
+        {"stats", offsetof(cpsmatch_options, statistics)},
+        {"ate", offsetof(cpsmatch_options, ate)},
+        {"altvar", offsetof(cpsmatch_options, altvariance)},
+        {"w2float", offsetof(cpsmatch_options, float_squares)},
+        {"mkarm", offsetof(cpsmatch_options, make_arm)},
+        {"fill", offsetof(cpsmatch_options, fill)},
+        {"outids", offsetof(cpsmatch_options, outside_ids)},
+        {"single", offsetof(cpsmatch_options, single)},
+        {"effects", offsetof(cpsmatch_options, effects)},
+        {"samplevar", offsetof(cpsmatch_options, samplevar)},
+        {"warn", offsetof(cpsmatch_options, warn)},
+        {"kdirect", offsetof(cpsmatch_options, kernel_direct)},
+        {"radall", offsetof(cpsmatch_options, radius_all)},
     };
     while (*p)
     {
         while (*p == ' ') p++;
         size_t length = strcspn(p, " ");
-        if (length == 5 && !strncmp(p, "touse", 5)) opts->touse = 1;
-        else if (length == 5 && !strncmp(p, "stats", 5)) opts->statistics = 1;
-        else if (length == 3 && !strncmp(p, "ate", 3)) opts->ate = 1;
-        else if (length == 6 && !strncmp(p, "altvar", 6)) opts->altvariance = 1;
-        else if (length == 7 && !strncmp(p, "w2float", 7)) opts->float_squares = 1;
+        int flagged = 0;
+        for (size_t k = 0; k < sizeof(flags) / sizeof(flags[0]); k++)
+        {
+            if (length == strlen(flags[k].name) && !strncmp(p, flags[k].name, length))
+            {
+                *(int *)((char *)opts + flags[k].offset) = 1;
+                flagged = 1;
+            }
+        }
+        if (flagged)
+            ;
         else
         {
             for (size_t k = 0; k < sizeof(keys) / sizeof(keys[0]); k++)

@@ -773,6 +773,45 @@ ST_int ctools_count_connected_components(
 }
 
 /*
+    Component of every level of the first effect in the graph of the two
+    effects' levels (ctools_hdfe_utils.h): root[l] is the smallest level of
+    the first effect in l's component. The same union-find as the count
+    above, over every row.
+*/
+ST_int ctools_connected_component_roots(
+    const ST_int *fe1_levels,
+    const ST_int *fe2_levels,
+    ST_int N,
+    ST_int num_levels1,
+    ST_int num_levels2,
+    ST_int *root)
+{
+    if (num_levels1 < 0 || num_levels2 < 0) return -1;
+    const long long total_nodes = (long long)num_levels1 + num_levels2;
+    if (total_nodes > 0x7fffffffLL) return -1;
+    ST_int *parent = (ST_int *)malloc((size_t)(total_nodes > 0 ? total_nodes : 1) * sizeof(ST_int));
+    if (!parent) return -1;
+    const int B = ctools_hdfe_row_blocks(N);
+    const ST_int nodes = (ST_int)total_nodes;
+    ST_int x;
+    int b;
+    #pragma omp parallel for schedule(static) if (B > 1)
+    for (x = 0; x < nodes; x++) parent[x] = x;
+    #pragma omp parallel for schedule(static) if (B > 1)
+    for (b = 0; b < B; b++) {
+        ST_int i0, i1;
+        ctools_hdfe_block_range(N, B, b, &i0, &i1);
+        for (ST_int i = i0; i < i1; i++)
+            (void)cc_unite(parent, fe1_levels[i] - 1, num_levels1 + fe2_levels[i] - 1);
+    }
+    /* every tree's root is its smallest node, an FE1 level */
+    #pragma omp parallel for schedule(static) if (B > 1)
+    for (x = 0; x < num_levels1; x++) root[x] = cc_find(parent, x);
+    free(parent);
+    return 0;
+}
+
+/*
     Check if a fixed effect is nested within a cluster variable.
 */
 ST_int ctools_fe_nested_in_cluster(
@@ -944,7 +983,9 @@ ST_int ctools_hdfe_alloc_buffers(HDFE_State *state, ST_int alloc_proj, ST_int ma
         if (!state->factors[g].inv_counts) {
             return -1;  /* Allocation failed — caller must clean up */
         }
-        for (ST_int lev = 0; lev < num_lev; lev++) {
+        ST_int lev;
+        #pragma omp parallel for schedule(static) if (num_lev > 200000)
+        for (lev = 0; lev < num_lev; lev++) {
             state->factors[g].inv_counts[lev] =
                 (state->factors[g].counts[lev] > 0) ? 1.0 / state->factors[g].counts[lev] : 0.0;
         }
@@ -954,7 +995,9 @@ ST_int ctools_hdfe_alloc_buffers(HDFE_State *state, ST_int alloc_proj, ST_int ma
             if (!state->factors[g].inv_weighted_counts) {
                 return -1;  /* Allocation failed — caller must clean up */
             }
-            for (ST_int lev = 0; lev < num_lev; lev++) {
+            ST_int lev;
+            #pragma omp parallel for schedule(static) if (num_lev > 200000)
+            for (lev = 0; lev < num_lev; lev++) {
                 state->factors[g].inv_weighted_counts[lev] =
                     (state->factors[g].weighted_counts[lev] > 0) ? 1.0 / state->factors[g].weighted_counts[lev] : 0.0;
             }

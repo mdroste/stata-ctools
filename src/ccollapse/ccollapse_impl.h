@@ -8,15 +8,17 @@
  * The ado converts in two calls, so that nothing in the dataset changes
  * until every statistic has been computed:
  *
- *   compute nby=<b> nsrc=<s> wtype=<w> targets=<list> [marker] [cw] [verbose]
+ *   compute nby=<b> nsrc=<s> wtype=<w> tlen=<n> [marker] [cw] [verbose]
  *       The plugin varlist holds the by() variables, the distinct source
  *       variables, the weight variable when wtype is not none, and last,
  *       with marker, a sample marker in place of an if condition. An in
  *       range is passed on the plugin call itself.
  *
- *       targets is a comma-separated list of <source>:<stat>, where <source>
- *       is the one-based position among the source variables and <stat> one
- *       of mean sum rawsum count percent sd semean sebinomial sepoisson min
+ *       The targets are in the calling ado's local ccollapse_targets, of tlen
+ *       bytes (Stata cuts a plugin's argument string off after a few thousand
+ *       bytes): a comma-separated list of <source>:<stat>, where <source> is
+ *       the one-based position among the source variables and <stat> one of
+ *       mean sum rawsum count percent sd semean sebinomial sepoisson min
  *       max first last firstnm lastnm iqr p1 ... p99.
  *
  *       Reads the selected observations, leaves out those with a zero or

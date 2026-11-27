@@ -223,8 +223,9 @@ Michael Droste{break}
 {pstd}
 ctools reimplements existing Stata commands in C. Each ctools command takes
 its syntax, options, output, and stored results from the command it replaces,
-and is pinned to one version of that command. The Acknowledgments section of
-each command's help file has details and references.
+and is pinned to one version of that command. {cmd:csql} is a new command
+rather than a reimplementation of a Stata command. The Acknowledgments section
+of each command's help file has details and references.
 
 {pstd}
 {ul:Community-contributed commands}
@@ -302,6 +303,12 @@ in){p_end}
 in){p_end}
 {p2col:{help cqreg##acknowledgments:cqreg}}Stata's {cmd:qreg} ({cmd:qreg.ado}
 4.4.2, May 8, 2020){p_end}
+
+{pstd}
+{ul:New commands}
+
+{p2col:{help csql##acknowledgments:csql}}Built on DuckDB 2.0.1 by Mark
+Raasveldt, Hannes Mühleisen, and the DuckDB contributors{p_end}
 
 {pstd}
 {ul:Supporting packages}

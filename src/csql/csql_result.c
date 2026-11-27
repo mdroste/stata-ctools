@@ -13,7 +13,9 @@
  * every value, else double; FLOAT float; DOUBLE and DECIMAL double; DATE long
  * %td; TIMESTAMP (any precision or zone, as UTC) double %tc; TIME double
  * %tcHH:MM:SS; VARCHAR str# up to 2,045 bytes, else strL; BLOB strL; ENUM
- * integer codes 1, 2, ... with a value label of the same name.
+ * integer codes 1, 2, ... with a value label of the same name (name_1, ...
+ * when an inherited label has that name). FLOAT past Stata's float range
+ * (2^127) is missing, as DOUBLE past 2^1023 is.
  */
 #include <math.h>
 #include <stdio.h>
@@ -166,14 +168,36 @@ static inline int row_valid(const uint64_t *valid, size_t i)
     return !valid || ((valid[i >> 6] >> (i & 63)) & 1);
 }
 
+/* The 128-bit unsigned hi * 2^64 + lo, rounded once to the nearest double
+ * (ties to even): the top 64 bits, with every lower bit folded into the
+ * last one as a sticky bit, round as the whole number would. */
+static double u128_to_double(uint64_t hi, uint64_t lo)
+{
+    if (!hi) return (double)lo;
+    int lz = __builtin_clzll(hi);
+    int shift = 64 - lz; /* bits below the top 64 */
+    uint64_t top, sticky;
+    if (lz == 0) {
+        top = hi;
+        sticky = lo != 0;
+    } else {
+        top = (hi << lz) | (lo >> shift);
+        sticky = (lo & ((UINT64_C(1) << shift) - 1)) != 0;
+    }
+    return ldexp((double)(top | sticky), shift);
+}
+
+/* HUGEINT is two's complement: a negative value converts as its magnitude. */
 static inline double huge_to_double(duckdb_hugeint h)
 {
-    return (double)h.upper * 18446744073709551616.0 + (double)h.lower;
+    if (h.upper >= 0) return u128_to_double((uint64_t)h.upper, h.lower);
+    uint64_t lo = ~h.lower + 1, hi = ~(uint64_t)h.upper + (lo == 0);
+    return -u128_to_double(hi, lo);
 }
 
 static inline double uhuge_to_double(duckdb_uhugeint h)
 {
-    return (double)h.upper * 18446744073709551616.0 + (double)h.lower;
+    return u128_to_double(h.upper, h.lower);
 }
 
 /* Signed integer value i of a vector of width bytes. */
@@ -332,8 +356,10 @@ static void stats_chunk(const res_col *c, duckdb_vector vec, size_t n, col_stats
             break;
         }
         case K_FLOAT: case K_DOUBLE: {
-            double v = value_at(c, d, i);
-            if (!(v < 0x1p1023 && v > -0x1p1023)) s->nonfinite++;
+            /* Stata's float range ends below 2^127, its double range below
+             * 2^1023; past it (and NaN) a value is missing */
+            double v = value_at(c, d, i), lim = c->kind == K_FLOAT ? 0x1p127 : 0x1p1023;
+            if (!(v < lim && v > -lim)) s->nonfinite++;
             break;
         }
         case K_STRING: case K_BLOB: {
@@ -486,6 +512,43 @@ static void inherit(csql_ctx *ctx, res_col *c, int labels, const csql_source **l
     if (c->renamed && !c->label[0] && c->orig) label_copy(c->label, c->orig);
 }
 
+/* Whether a label written already holds the values and texts of vl. */
+static int label_same(const ctools_dta_value_label *a, const csql_vlabel *vl)
+{
+    if (a->n != vl->n) return 0;
+    for (size_t k = 0; k < vl->n; k++)
+        if (a->values[k] != vl->values[k] || strcmp(a->texts[k], vl->texts[k])) return 0;
+    return 1;
+}
+
+/* A value label name for base: base itself when no label written or
+ * inherited by a column has it, else base_1, base_2, ... (base cut to whole
+ * characters so that the name stays within 32 characters). */
+static void label_name_free(char out[CSQL_NAME_BYTES], const char *base, const res_col *cols,
+                            const csql_source *const *col_src, size_t ncols,
+                            const ctools_dta_value_label *labs, size_t nlabs)
+{
+    snprintf(out, CSQL_NAME_BYTES, "%s", base);
+    for (int k = 1;; k++) {
+        int taken = 0;
+        for (size_t l = 0; l < nlabs && !taken; l++) taken = !strcmp(labs[l].name, out);
+        for (size_t j = 0; j < ncols && !taken; j++)
+            taken = col_src[j] && cols[j].kind != K_ENUM && cols[j].vlabel[0] && !strcmp(cols[j].vlabel, out);
+        if (!taken) return;
+        char suffix[16];
+        int sl = snprintf(suffix, sizeof(suffix), "_%d", k);
+        size_t o = 0, chars = 0;
+        for (const char *p = base; *p;) {
+            size_t len = 1;
+            while (p[len] && ((unsigned char)p[len] & 0xC0) == 0x80) len++;
+            if (chars + 1 + (size_t)sl > 32 || o + len + (size_t)sl >= CSQL_NAME_BYTES) break;
+            memcpy(out + o, p, len);
+            o += len, p += len, chars++;
+        }
+        memcpy(out + o, suffix, (size_t)sl + 1);
+    }
+}
+
 /* ------------------------------------------------------------ producer */
 
 typedef struct
@@ -585,13 +648,14 @@ static int prod_fill(void *arg, size_t group, int phase, ctools_dta_group *out)
             } else {
                 double *x = (double *)col + at;
                 double miss = csql_missing();
+                double lim = c->kind == K_FLOAT ? 0x1p127 : 0x1p1023; /* as in stats_chunk */
                 for (size_t i = 0; i < m; i++) {
                     if (c->kind == K_NULL || !row_valid(valid, i)) {
                         x[i] = miss;
                         continue;
                     }
                     double v = value_at(c, d, i);
-                    if (!(v < 0x1p1023 && v > -0x1p1023)) v = miss;
+                    if (!(v < lim && v > -lim)) v = miss;
                     x[i] = v;
                 }
             }
@@ -1019,24 +1083,26 @@ int csql_result_output(csql_ctx *ctx, duckdb_result *res, int streaming, const c
         ctools_dta_value_label *labs = calloc(ncols ? ncols : 1, sizeof(*labs));
         size_t nlabs = 0;
         int32_t **enum_vals = calloc(ncols ? ncols : 1, sizeof(int32_t *));
-        if (!dcols || !labs || !enum_vals) rc = rc ? rc : 920;
+        /* per label written: the source it came from (NULL for an ENUM) and
+         * its name there */
+        const csql_source **lab_src = calloc(ncols ? ncols : 1, sizeof(*lab_src));
+        const char **lab_orig = calloc(ncols ? ncols : 1, sizeof(*lab_orig));
+        const csql_source **col_src = calloc(ncols ? ncols : 1, sizeof(*col_src));
+        if (!dcols || !labs || !enum_vals || !lab_src || !lab_orig || !col_src) rc = rc ? rc : 920;
+        for (size_t j = 0; !rc && j < ncols; j++) {
+            decide(&cols[j], opts->strl_min > 0 && opts->strl_min < CSQL_STR_MAX ? opts->strl_min : CSQL_STR_MAX);
+            inherit(ctx, &cols[j], opts->labels, &col_src[j]);
+        }
+        /* Value label names: an inherited label keeps its name; another
+         * label of that name (an ENUM's, or one from another source with
+         * different contents) gets name_1, name_2, ..., a name no label
+         * written or inherited has. */
         for (size_t j = 0; !rc && j < ncols; j++) {
             res_col *c = &cols[j];
-            const csql_source *lsrc = NULL;
-            decide(c, opts->strl_min > 0 && opts->strl_min < CSQL_STR_MAX ? opts->strl_min : CSQL_STR_MAX);
-            inherit(ctx, c, opts->labels, &lsrc);
+            const csql_source *lsrc = col_src[j];
             if (c->kind == K_ENUM && c->ndict) {
-                /* a value label of the same name, unless that name is taken */
                 char lname[CSQL_NAME_BYTES];
-                snprintf(lname, sizeof(lname), "%s", c->name);
-                for (int k = 1;; k++) {
-                    int taken = 0;
-                    for (size_t l = 0; l < nlabs && !taken; l++) taken = !strcmp(labs[l].name, lname);
-                    if (!taken) break;
-                    char suffix[16];
-                    snprintf(suffix, sizeof(suffix), "_%d", k);
-                    snprintf(lname, sizeof(lname), "%.*s%s", (int)(31 - strlen(suffix)), c->name, suffix);
-                }
+                label_name_free(lname, c->name, cols, col_src, ncols, labs, nlabs);
                 enum_vals[j] = malloc(c->ndict * sizeof(int32_t));
                 if (!enum_vals[j]) {
                     rc = 920;
@@ -1044,14 +1110,34 @@ int csql_result_output(csql_ctx *ctx, duckdb_result *res, int streaming, const c
                 }
                 for (size_t k = 0; k < c->ndict; k++) enum_vals[j][k] = (int32_t)(k + 1);
                 snprintf(c->vlabel, sizeof(c->vlabel), "%s", lname);
+                lab_src[nlabs] = NULL, lab_orig[nlabs] = NULL;
                 labs[nlabs++] = (ctools_dta_value_label){c->vlabel, c->ndict, enum_vals[j],
                                                          (const char *const *)c->dict};
             } else if (c->vlabel[0] && lsrc) {
-                int have = 0;
-                for (size_t l = 0; l < nlabs && !have; l++) have = !strcmp(labs[l].name, c->vlabel);
-                if (!have) {
-                    const csql_vlabel *vl = csql_source_label(lsrc, c->vlabel);
-                    labs[nlabs++] = (ctools_dta_value_label){vl->name, vl->n, vl->values,
+                const csql_vlabel *vl = csql_source_label(lsrc, c->vlabel);
+                size_t l = 0;
+                /* the same label of the same source, written already */
+                for (; l < nlabs; l++)
+                    if (lab_src[l] == lsrc && !strcmp(lab_orig[l], vl->name)) break;
+                /* else one of the same name: shared when it says the same */
+                if (l == nlabs)
+                    for (l = 0; l < nlabs; l++)
+                        if (!strcmp(labs[l].name, vl->name)) {
+                            if (!label_same(&labs[l], vl)) l = nlabs;
+                            break;
+                        }
+                if (l < nlabs) {
+                    if (strcmp(labs[l].name, c->vlabel)) snprintf(c->vlabel, sizeof(c->vlabel), "%s", labs[l].name);
+                } else {
+                    int clash = 0;
+                    for (size_t k = 0; k < nlabs && !clash; k++) clash = !strcmp(labs[k].name, vl->name);
+                    if (clash) {
+                        char lname[CSQL_NAME_BYTES];
+                        label_name_free(lname, vl->name, cols, col_src, ncols, labs, nlabs);
+                        snprintf(c->vlabel, sizeof(c->vlabel), "%s", lname);
+                    }
+                    lab_src[nlabs] = lsrc, lab_orig[nlabs] = vl->name;
+                    labs[nlabs++] = (ctools_dta_value_label){clash ? c->vlabel : vl->name, vl->n, vl->values,
                                                              (const char *const *)vl->texts};
                 }
             }
@@ -1113,6 +1199,9 @@ int csql_result_output(csql_ctx *ctx, duckdb_result *res, int streaming, const c
         free(enum_vals);
         free(dcols);
         free(labs);
+        free(lab_src);
+        free(lab_orig);
+        free(col_src);
     }
     if (!rc) {
         *nrows_out = (int64_t)total;

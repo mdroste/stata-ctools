@@ -103,9 +103,10 @@ The default follows the {help ctools##threads:ctools thread setting}.
 
 {pstd}
 The ctools plugin stores numeric results as {cmd:long}. {cmd:cencode} uses
-Stata's {cmd:encode} for {cmd:strL} inputs and for existing value labels
-containing long text, extended missing values, or codes outside the {cmd:long}
-range. The value-label limit is 65,536 entries.
+Stata's {cmd:encode} for {cmd:strL} inputs holding values longer than 2,045
+bytes or binary data, and for existing value labels containing long text,
+extended missing values, or codes outside the {cmd:long} range. The
+value-label limit is 65,536 entries.
 
 {pstd}
 Output names must be distinct new variables. If a multi-variable conversion

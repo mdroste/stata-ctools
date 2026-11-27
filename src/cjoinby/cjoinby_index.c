@@ -680,10 +680,13 @@ static inline uint32_t cj_lookup_direct(const cj_index *ix, const stata_variable
         {
             if (!(v >= d->base[k] && v <= d->top[k]))
                 return CJ_NONE;
-            double delta = v - d->base[k];
-            code = (uint64_t)delta;
-            if ((double)code != delta)
+            /* Test v itself: v - base can round a value one step from an
+             * integer onto that integer (1e-15 - (-127) == 127 exactly).
+             * base and top are integers within CJ_EXACT_INT, so the cast is
+             * defined and, for an integer v, the difference is exact. */
+            if (v != (double)(int64_t)v)
                 return CJ_NONE;
+            code = (uint64_t)(v - d->base[k]);
         }
         pos += code * d->mult[k];
     }

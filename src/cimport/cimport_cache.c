@@ -115,7 +115,7 @@ static size_t cimport_cache_plan(CImportCacheBuilder *b, double missing, bool as
                 seen = true;
                 if (!isfinite(value) || value > missing)
                     finite = false;
-                if (floor(value) != value || (value == 0 && signbit(value)))
+                if (!cimport_integral(value) || (value == 0 && signbit(value)))
                     integer = false;
                 if (value < low)
                     low = value;

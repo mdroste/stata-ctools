@@ -181,10 +181,14 @@ Results do not depend on the number of threads.
 - **group**: blanks are trimmed unless `noclean`, as `strgroup`'s help file
   describes; `strgroup` 1.0.4 never trims (its `noclean` has no effect). Blank
   strings get a missing group. There is no 10,000-observation limit (`force`
-  is accepted) and no warning about duplicate values.
+  is accepted) and no warning about duplicate values. When no observation is
+  selected, the new variable is all missing (`strgroup` stops with r(198)).
+  `strgroup`'s plugin reads only the first 244 bytes of each string;
+  `cfuzzyjoin group` compares whole strings, so strings longer than that can
+  be grouped differently.
 
-Strings are compared up to 2,045 bytes; `strL` values are read up to that
-length.
+Strings are compared up to 2,045 bytes; longer `strL` values are compared on
+their first 2,045 bytes.
 
 ## Performance
 

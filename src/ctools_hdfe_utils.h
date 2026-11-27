@@ -314,6 +314,22 @@ ST_int ctools_compute_hdfe_dof(
 
     Returns: 0 on success, -1 on memory allocation error
 */
+/*
+    Component of every level of the first effect in the bipartite graph of
+    two effects' levels (rows link them): root[l] (num_levels1 entries) is
+    the smallest level of the first effect in the component of level l,
+    0-based. Levels are 1-based in fe1_levels/fe2_levels, every level of the
+    second effect on some row. Returns 0, or -1 on memory allocation error.
+*/
+ST_int ctools_connected_component_roots(
+    const ST_int *fe1_levels,
+    const ST_int *fe2_levels,
+    ST_int N,
+    ST_int num_levels1,
+    ST_int num_levels2,
+    ST_int *root
+);
+
 ST_int ctools_hdfe_redundant_intercepts(
     const FE_Factor *factors,
     ST_int G,

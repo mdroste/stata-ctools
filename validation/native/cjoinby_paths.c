@@ -638,6 +638,48 @@ static void large_joins(void)
     }
 }
 
+/* Master keys one rounding step from an integer, against using keys whose
+ * direct table starts far below zero: v - base rounds them onto an integer
+ * (1e-15 + 127 == 127), so the lookup must test v itself. */
+static void near_integer_joins(void)
+{
+    static const double bases[] = {-1, -127, -32767, -1e6};
+    const double eps = 2.220446049250313e-16; /* epsdouble() */
+    const double near[] = {1e-15, -1e-15, 2 - eps, 2 - 2 * eps, 2 + 2 * eps, 3 - eps,
+                           3 + 4 * eps, 5 + 1e-12, 5 - 1e-12, 5 + 1e-11, 0.5, -0.0,
+                           0, 2, 5, 6, -1, -127, -32767, -1e6, -1e6 + 1e-9, 1e-300};
+    const size_t nnear = sizeof(near) / sizeof(near[0]);
+    for (size_t b = 0; b < sizeof(bases) / sizeof(bases[0]); b++)
+    {
+        const double ukeys[] = {bases[b], 0, 2, 5, missing_value(0)};
+        const size_t nu = sizeof(ukeys) / sizeof(ukeys[0]);
+        const int types[MAXCOLS] = {0};
+        for (size_t nm = 1; nm <= nnear; nm += nnear - 1)
+        {
+            fixture u, m;
+            cj_table table;
+            cj_index ix;
+            fixture_init(&u, nu, 1, types);
+            fixture_init(&m, nm, 1, types);
+            memcpy(u.num[0], ukeys, sizeof(ukeys));
+            /* one row (each value alone) and all of them together */
+            for (size_t start = 0; start + nm <= nnear; start += nm)
+            {
+                memcpy(m.num[0], near + start, nm * sizeof(double));
+                fixture_bind(&m);
+                fixture_table(&u, &table);
+                assert(cj_index_build(&ix, &table, 1, nm) == STATA_OK);
+                check_index(&ix, &u, 1, 1);
+                for (int unmatched = 0; unmatched < 4; unmatched++)
+                    check_plan(&ix, &u, &m, 1, unmatched);
+                cj_index_free(&ix);
+            }
+            fixture_free(&u);
+            fixture_free(&m);
+        }
+    }
+}
+
 int main(void)
 {
     mock.missval = missing_value(0);
@@ -646,6 +688,7 @@ int main(void)
         rng_state = 88172645463325252ULL;
         small_joins();
         large_joins();
+        near_integer_joins();
 #ifndef _OPENMP
         break;
 #endif

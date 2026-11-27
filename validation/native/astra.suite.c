@@ -9,6 +9,7 @@
 #include "ctools_parse.c"
 #include "ctools_arena.c"
 #include "ctools_hash.c"
+#include "formats/ctools_dta_schema.c"
 #include "cencode/cencode_impl.c"
 #include "cgroup/cgroup_impl.c"
 static ST_plugin host;

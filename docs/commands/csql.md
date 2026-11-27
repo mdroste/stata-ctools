@@ -105,7 +105,15 @@ of a variable the query read takes its variable label, display format and,
 for integers, its value label (`nolabel` turns this off). Invalid Stata names
 are changed and keep the original as the variable label.
 
-Integers beyond 2^53 lose precision as `double`; NaN and infinities become
+An `ENUM`'s value label has the column's name. When two value labels would
+share a name (an `ENUM` named like an inherited label, or labels of the same
+name but different contents from two sources), the inherited label, or the
+one from the first column that uses it, keeps the name and the other gets
+`name_1` (then `name_2`, ...), a name no other label has. Same-named labels
+with the same contents are written once.
+
+Integers beyond 2^53 lose precision as `double`; NaN, infinities, `DOUBLE`
+values beyond `c(maxdouble)` and `FLOAT` values beyond `c(maxfloat)` become
 missing. `csql` reports how many values each affects.
 
 ## Speed

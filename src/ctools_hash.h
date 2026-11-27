@@ -3,9 +3,9 @@
  * String -> integer hash table and value-label output for ctools
  *
  * The hash table uses:
- * - Open addressing with linear probing
+ * - Open addressing with linear probing over a power-of-two capacity
  * - Automatic resizing at 75% load factor
- * - String arena for efficient memory management
+ * - A growing block arena for the keys
  */
 
 #ifndef CTOOLS_HASH_H
@@ -25,26 +25,27 @@
  * ============================================================================ */
 
 typedef struct {
-    char *key;          /* String key (owned by arena) */
+    char *key;          /* String key (owned by the table's arena) */
     int value;          /* Integer value */
     uint32_t hash;      /* Cached hash for faster probing */
 } ctools_str_hash_entry;
 
 typedef struct {
     ctools_str_hash_entry *entries;
-    size_t capacity;
+    size_t capacity;    /* a power of two; 0 until initialised */
     size_t count;
-    ctools_string_arena *arena;
+    ctools_arena keys;  /* copies of the keys */
 } ctools_str_hash_table;
 
 /*
- * Compute FNV-1a hash of a string.
- * Fast, good distribution for typical string data.
+ * Hash of a string (word-at-a-time multiply-xorshift).
  */
 uint32_t ctools_str_hash_compute(const char *s);
 
 /*
- * Initialize a string->int hash table.
+ * Initialize a string->int hash table with room for about
+ * initial_capacity * 3/4 keys before it grows (the capacity is rounded up
+ * to a power of two).
  * Returns 0 on success, -1 on allocation failure.
  */
 int ctools_str_hash_init(ctools_str_hash_table *ht, size_t initial_capacity);
@@ -105,5 +106,16 @@ int ctools_str_hash_lookup(ctools_str_hash_table *ht, const char *key, int *valu
  */
 int ctools_label_write_file(const char **strings, const int *codes, size_t n_labels,
                             const char *filepath);
+
+/* ============================================================================
+ * Value Label Input (cencode, cdecode)
+ * ============================================================================ */
+
+/*
+ * Read a label mapping too long for a macro: exactly len bytes from the
+ * file at path into buf (at least len + 2 bytes). Returns 0, or 198 when the
+ * file is missing, of another length or holds a NUL byte.
+ */
+int ctools_label_map_read_file(const char *path, size_t len, char *buf);
 
 #endif /* CTOOLS_HASH_H */

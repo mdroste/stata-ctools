@@ -239,6 +239,17 @@ o  When a request is refused, {cmd:reshape} leaves the data sorted by
 {cmd:i}; {cmd:creshape} leaves them as they were.
 
 {phang2}
+o  {cmd:creshape wide} on data that are already wide displays
+"(data are already wide)" and returns 0, as {cmd:reshape} with
+{cmd:favor(memory)} does; {cmd:reshape} with {cmd:favor(speed)}, the default,
+stops with r(111).
+
+{phang2}
+o  {cmd:if}, {cmd:in} and weights are refused with r(101) before any setting
+is recorded. {cmd:reshape} records them in {cmd:_dta[ReS_Xij]} as if they
+were stubs and then stops with r(110) or r(101).
+
+{phang2}
 o  Value labels that are not attached to any variable are kept;
 {cmd:reshape} drops them.
 

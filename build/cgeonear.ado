@@ -164,7 +164,9 @@ program define cgeonear, rclass
     * distance between two points, in each observation or once.
     capture syntax anything [if] [in] [using/] [, Neighbors(string) *]
     if _rc local near = strpos(`" `macval(0)' "', " using ") > 0
-    else local near = `"`using'"' != "" | `"`neighbors'"' != ""
+    * neighbors() without a using file is geonear's form unless four
+    * coordinates are given: geodist's syntax then rejects the option
+    else local near = `"`using'"' != "" | (`"`neighbors'"' != "" & `: word count `anything'' != 4)
     if `near' {
         * Break is recognized only inside _cgeonear_impl. A failure leaves
         * the data as they were: the plugin frees what it holds, and the
@@ -437,15 +439,11 @@ program define _cgeonear_impl
         quietly _ctools_lap __time_compute __ct_lap `__ct_lap'
         * What geonear's result keeps of the base data: the identifier with
         * everything that describes it, the data label, the dataset's
-        * characteristics and notes, and the value labels of the location
-        * variables
+        * characteristics and notes. Of the value labels only baseid's:
+        * geonear's intermediate files drop labels no variable uses
         mata: _cgeonear_hold_var("b_id", st_local("baseid"))
         mata: _cgeonear_stash("b_dta", _cgeonear_chars("_dta"))
-        local keeplabs
-        foreach v of local varlist {
-            local l : value label `v'
-            if "`l'" != "" local keeplabs `keeplabs' `l'
-        }
+        local keeplabs : value label `baseid'
         local dlabel : data label
         local btype : type `baseid'
         nobreak {
@@ -569,7 +567,7 @@ program define _cgeonear_using
     mata: _cgeonear_stash("n_dta", _cgeonear_chars("_dta"))
     if "`long'" != "" {
         mata: _cgeonear_hold_var("n_id", st_local("nid"))
-        mata: _cgeonear_hold_labels("n_labels", tokens(st_local("full")))
+        mata: _cgeonear_hold_labels("n_labels", st_local("nid"))
     }
     c_local nborid `nid'
     c_local nbortype `: type `nid''

@@ -757,7 +757,8 @@ stata_retcode ctools_data_load(ctools_filtered_data *fd,int *v,size_t nv,size_t 
 int main(void){
  mock.ismissing=missing;mock.nobs1=one;mock.nobs2=count;mock.safestore=store;mock.store=store;mock.scalsave=scal;mock.spouterr=message;mock.missval=8.98846567431158e307;
  tr[0]=1;for(int i=0;i<301;i++){ps[i]=0.5;map[i]=i+1;}
- const char *args="1 2 0 3 4 5 301 2 1 0 0 0 1 1 0 0";
+ /* kdirect: the pairwise kernel pass, whose workspace grows */
+ const char *args="1 2 0 3 4 5 301 2 1 0 0 0 1 1 0 0 kdirect";
  for(fail_growth=0;fail_growth<2;fail_growth++){
  stores=0; int rc=cpsmatch_main(args);
  assert(rc==(fail_growth ? 920 : 0));

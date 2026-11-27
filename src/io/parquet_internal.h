@@ -200,6 +200,20 @@ const char *pq_brotli_decompress(const uint8_t *src, size_t n, uint8_t *dst, siz
  * the whole column (text widths, dictionaries), 2 decodes everything. */
 int pq_read_column(pq_file *f, const pq_field *field, int64_t first, int64_t last, int measure_all,
                    pq_values *out, char *err, size_t errcap);
+
+/* pq_read_column in parts, which may run in parallel: pq_alloc_column sets
+ * out up for rows first..last; pq_read_groups decodes row groups [g0, g1)
+ * of rows first..last into out (a column, or a part of one). A part covers
+ * a run of row groups: pq_part_view makes part a view of rows base..base+n-1
+ * of column (its own text bytes and offsets), and pq_parts_join adds the k
+ * decoded parts of a column, in row order, to it and frees them. The column
+ * then holds what pq_read_column returns. Dictionary columns, whose entries
+ * depend on the order of every row group, are read whole. */
+int pq_alloc_column(const pq_field *field, int64_t first, int64_t last, pq_values *out);
+int pq_read_groups(pq_file *f, const pq_field *field, int g0, int g1, int64_t first, int64_t last,
+                   int measure_all, pq_values *out, char *err, size_t errcap);
+int pq_part_view(pq_values *column, size_t base, size_t n, pq_values *part);
+int pq_parts_join(pq_values *column, pq_values *const *parts, const size_t *bases, int k);
 void pq_values_free(pq_values *v);
 int pq_check_field(pq_file *f, const pq_field *field, char *err, size_t errcap);
 void pq_decimal_text(const uint8_t *be, size_t n, int scale, char *out, size_t cap);

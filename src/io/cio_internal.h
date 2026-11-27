@@ -34,6 +34,8 @@ typedef struct
     /* A numeric header cell: native labels it with its %18.0g text. */
     int label_numeric;
     double label_number;
+    /* cio_storage() of the scanned column, once asked ("" until then) */
+    char storage[16];
 } cio_column;
 typedef struct
 {

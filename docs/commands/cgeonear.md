@@ -115,8 +115,9 @@ the order `geonear` documents.
 
 **Metadata.** The long-form result keeps the data label, characteristics and
 notes of the base data, everything that describes `baseid` and `nborid`
-(formats, variable and value labels, notes, characteristics), and the value
-labels attached to the six location variables. The using file's dataset notes
+(formats, variable and value labels, notes, characteristics), and no other
+value labels: as in `geonear`, the labels of the location variables and labels
+no variable uses are dropped. The using file's dataset notes
 are appended (a note already present is not repeated) and its other dataset
 characteristics are added where the data have none. In wide form only the
 dataset notes and characteristics are merged that way, as in `geonear`.

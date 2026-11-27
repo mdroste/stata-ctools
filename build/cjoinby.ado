@@ -533,7 +533,7 @@ end
 program define cjoinby, rclass
     version 14.1
     syntax [varlist(default=none)] using/ [, UNMatched(string) noLabel UPDATE REPLACE ///
-        _merge(name) Verbose THReads(integer 0) SNAPshot FAST]
+        _merge(string) Verbose THReads(integer 0) SNAPshot FAST]
     if "`snapshot'" != "" & "`fast'" != "" {
         di as error "options snapshot and fast may not be combined"
         exit 198
@@ -645,7 +645,7 @@ end
 program define _cjoinby_impl, rclass
     version 14.1
     syntax [varlist(default=none)] using/ [, UNMatched(string) noLabel UPDATE REPLACE ///
-        _merge(name) Verbose THReads(integer 0) SNAPshot FAST]
+        _merge(string) Verbose THReads(integer 0) SNAPshot FAST]
 
     local timing = "`verbose'" != ""
     if `timing' quietly _ctools_clock t_begin
@@ -675,9 +675,25 @@ program define _cjoinby_impl, rclass
     * joinby creates _merge only with unmatched() or _merge()
     * (a default _merge the master already has is r(110); a name given in
     * _merge() is refused by joinby's merge, r(198), after the using data
-    * were checked for it, r(110))
+    * were checked for it, r(110)). joinby takes _merge() as a string: more
+    * than one word fails in that merge too, r(198), after the using check;
+    * one word is checked as a name, as before.
+    local mergewords
+    if `: word count `_merge'' > 1 {
+        local mergewords `_merge'
+        local _merge
+    }
+    else if `"`_merge'"' != "" {
+        * (syntax resets varlist and using)
+        local hold_varlist `varlist'
+        local hold_using `"`macval(using)'"'
+        local 0 , _merge(`_merge')
+        syntax [, _merge(name)]
+        local varlist `hold_varlist'
+        local using `"`macval(hold_using)'"'
+    }
     local mergevar `_merge'
-    if "`mergevar'" == "" & "`unmatch'" != "none" local mergevar _merge
+    if "`mergevar'" == "" & "`unmatch'" != "none" & "`mergewords'" == "" local mergevar _merge
     local mergeclash 0
     if "`mergevar'" != "" {
         capture confirm new variable `mergevar'
@@ -694,8 +710,13 @@ program define _cjoinby_impl, rclass
     * The master, before anything changes
     * =========================================================================
     if c(k) == 0 {
-        di as error "no variables defined"
-        exit 111
+        * Only without a varlist (syntax refused a varlist already). joinby
+        * looks in the using data for common variables first, so an
+        * unreadable using file fails as it does there.
+        quietly describe using `"`macval(using)'"', short
+        di as error "no variables in common to master and using data"
+        di as error "thus a join is not possible"
+        exit 198
     }
     local N0 = _N
     unab mastervars : _all
@@ -785,6 +806,28 @@ program define _cjoinby_impl, rclass
                 di as error "`mergevar' invalid name"
                 exit 198
             }
+        }
+        if "`mergewords'" != "" {
+            * joinby's confirm new var on the using data, word by word,
+            * then its merge refusing the list
+            local mergerc 0
+            foreach w of local mergewords {
+                if `mergerc' continue, break
+                capture confirm name `w'
+                if _rc {
+                    di as error "`w' invalid name"
+                    local mergerc 198
+                }
+                else if `: list w in usingvars' {
+                    di as error "variable `w' already defined"
+                    local mergerc 110
+                }
+            }
+            if !`mergerc' {
+                di as error "option {bf:_merge()} incorrectly specified"
+                local mergerc 198
+            }
+            exit `mergerc'
         }
 
         * The other using variables. A variable the master also has is

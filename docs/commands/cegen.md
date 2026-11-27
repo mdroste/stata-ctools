@@ -100,9 +100,16 @@ the same on every run and for any number of threads.
 - `seq()` with `by()` and `if`: `egen` numbers a group's observations in the
   order its sort leaves them. `cegen` numbers them in observation order,
   which is what `egen` gives on data sorted by the by-variables.
+- `sd()` with by-groups of values whose squares overflow (beyond about
+  1e154 in absolute value): `egen`'s running `sum()` skips the overflowed
+  squares as missing values and reports a wrong standard deviation (0 for
+  values near 1e306). `cegen` gives missing.
 - `mtr()`, functions from other packages (such as `egenmore`), `rowfirst()`
   and `rowlast()` of string variables, and results or keys that need a `strL`
   longer than 2,045 bytes are run by `egen` itself, with the same arguments.
+  So are calls with a word that is not a storage type before the new
+  variable, and functions given no arguments (other than `seq()` and
+  `group()`), whose errors and results are `egen`'s.
 - In `concat()`, numbers other than integers of up to seven digits, and any
   number with `format()` or `decode`, are converted to text by Stata's
   `string()` and `decode` before the plugin joins them.

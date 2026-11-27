@@ -266,6 +266,16 @@ const char *cegen_type_name(cegen_type type);
 */
 double cegen_type_round(double value, cegen_type type);
 
+/*
+    The type of a variable of the given type after replace has stored values
+    whose nonmissing ones (any: there is one) lie in lo .. hi (fractional:
+    some is not an integer). An integer type widens as replace widens it: to
+    float (double from long) for a fraction, else to the narrowest integer
+    type from its own up that holds the range, else to double. float and
+    double stay. (cegen_rows.c)
+*/
+cegen_type cegen_chain_promote(cegen_type type, int any, int fractional, double lo, double hi);
+
 /* Range and kind of the nonmissing values of a numeric result */
 typedef struct
 {

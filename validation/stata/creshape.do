@@ -697,5 +697,801 @@ global CTOOLS_COMPONENT_COMPLETE "creshape"
     exit
 }
 
+if "`__case'" == "creshape_extra" {
+* More comparisons with reshape: shapes of j, @ in stubs, stubs of mixed
+* types and j sets, i of several kinds, refusals (data untouched, settings as
+* reshape leaves them), reshape error, qualifiers and abbreviations, chains of
+* reshape and creshape, metadata, a million observations, threads().
+do "validation/support/validate_setup.do"
+set seed 26112601
+
+* Everything but the values: CRX_SIG (as in the creshape case) and the
+* dataset's characteristics alone in CRX_DSIG.
+capture program drop _crx_sig
+program define _crx_sig
+    local sig "N=`=_N' k=`=c(k)' sort=`: sortedby' label=`: data label'"
+    foreach v of varlist * {
+        local chars : char `v'[]
+        local chars : list sort chars
+        local cs
+        foreach c of local chars {
+            local cs `"`cs' `c'=<`: char `v'[`c']'>"'
+        }
+        local sig `"`sig' | `v' `: type `v'' `: format `v'' [`: value label `v''] {`: variable label `v''}`cs'"'
+    }
+    local chars : char _dta[]
+    local chars : list sort chars
+    local dsig
+    foreach c of local chars {
+        if "`c'" == "ReS_favor" continue
+        local dsig `"`dsig' ; `c'=<`: char _dta[`c']'>"'
+    }
+    local sig `"`sig'`dsig'"'
+    foreach v of varlist * {
+        local l : value label `v'
+        if "`l'" != "" {
+            capture label list `l'
+            if _rc == 0 local sig `"`sig' L[`l':`r(k)':`r(min)':`r(max)']"'
+            else local sig `"`sig' L[`l':undefined]"'
+        }
+    }
+    global CRX_SIG `"`sig'"'
+    global CRX_DSIG `"`dsig'"'
+end
+
+* _crx_cmp "name" <arguments of reshape>: reshape and creshape from the same
+* saved data. Same return code; after success the same data and description
+* and the same c(changed); after a refusal creshape leaves the data as they
+* were, with the settings reshape leaves.
+capture program drop _crx_cmp
+program define _crx_cmp
+    gettoken name 0 : 0
+    tempfile in ref
+    local N0 = _N
+    local sort0 : sortedby
+    quietly save "`in'", emptyok orphans
+    quietly use "`in'", clear
+    capture reshape `0'
+    local rc1 = _rc
+    local ch1 = c(changed)
+    _crx_sig
+    local sig1 `"$CRX_SIG"'
+    local dsig1 `"$CRX_DSIG"'
+    quietly save "`ref'", emptyok orphans
+    quietly use "`in'", clear
+    capture creshape `0'
+    local rc2 = _rc
+    local ch2 = c(changed)
+    if `rc1' != `rc2' {
+        test_fail "`name'" "reshape r(`rc1'), creshape r(`rc2')"
+        exit
+    }
+    _crx_sig
+    if `rc1' {
+        capture cf _all using "`in'"
+        if _rc | _N != `N0' | "`: sortedby'" != "`sort0'" {
+            test_fail "`name'" "data changed after r(`rc1')"
+            exit
+        }
+        mata: st_local("same", strofreal(st_global("CRX_DSIG") == st_local("dsig1")))
+        if !`same' {
+            test_fail "`name'" "settings after r(`rc1') differ from reshape's"
+            exit
+        }
+        test_pass "`name'"
+        exit
+    }
+    mata: st_local("same", strofreal(st_global("CRX_SIG") == st_local("sig1")))
+    if !`same' {
+        test_fail "`name'" "description differs from reshape's"
+        exit
+    }
+    capture cf _all using "`ref'"
+    if _rc {
+        test_fail "`name'" "values differ from reshape's"
+        exit
+    }
+    if `ch1' != `ch2' {
+        test_fail "`name'" "c(changed) `ch2', reshape's `ch1'"
+        exit
+    }
+    test_pass "`name'"
+end
+
+* _crx_errcmp "name" <arguments>: after the same refused request, the output
+* of creshape error equals that of reshape error.
+capture program drop _crx_errcmp
+program define _crx_errcmp
+    gettoken name 0 : 0
+    tempfile in l1 l2
+    tempname lg
+    quietly save "`in'", emptyok orphans
+    capture reshape `0'
+    local rc1 = _rc
+    quietly log using "`l1'", text replace nomsg name(`lg')
+    capture noisily reshape error
+    local e1 = _rc
+    quietly log close `lg'
+    quietly use "`in'", clear
+    capture creshape `0'
+    local rc2 = _rc
+    quietly log using "`l2'", text replace nomsg name(`lg')
+    capture noisily creshape error
+    local e2 = _rc
+    quietly log close `lg'
+    mata: st_local("same", strofreal(cat(st_local("l1")) == cat(st_local("l2"))))
+    mata: st_local("lines", strofreal(rows(cat(st_local("l1")))))
+    if `rc1' == `rc2' & `e1' == `e2' & `same' & `lines' > 0 test_pass "`name'"
+    else test_fail "`name'" "r(`rc1'/`rc2') error r(`e1'/`e2') same output `same', `lines' lines"
+end
+
+* A small wide dataset: an i with an abbreviable name, labels, notes,
+* characteristics, sorted by another variable.
+capture program drop _crx_base
+program define _crx_base
+    clear
+    quietly set obs 4
+    gen long identifier = 5 - _n
+    gen str3 name = "n" + string(_n)
+    gen int inc80 = 100 * _n
+    gen float inc81 = 1.5 * _n
+    gen byte ue80 = mod(_n, 2)
+    gen byte ue81 = 1 - mod(_n, 2)
+    gen double other = _n / 7
+    label var inc80 "income 80"
+    format inc81 %8.3f
+    label define yesno 0 "no" 1 "yes"
+    label values ue81 yesno
+    note ue80: a note
+    char inc81[c] "c81"
+    label data "base"
+    sort name
+end
+
+* Long data with six observations: id, t, v and a constant string k.
+capture program drop _crx_l6
+program define _crx_l6
+    clear
+    quietly set obs 6
+    gen id = ceil(_n / 3)
+    gen t = mod(_n - 1, 3) + 1
+    gen v = _n
+    gen str3 k = "c" + string(id)
+end
+
+* ---------------------------------------------------------------------------
+* Numeric j: gaps, leading zeros, clashes, exponents, signs, large values
+* ---------------------------------------------------------------------------
+clear
+quietly set obs 4
+gen id = _n
+gen x1 = _n
+gen x5 = _n * 5
+gen x100 = -_n
+gen x12345 = .c
+_crx_cmp "j with gaps: long" long x, i(id) j(t)
+_crx_cmp "j with gaps: wide" wide
+
+clear
+quietly set obs 3
+gen id = _n
+gen x01 = 1
+gen x02 = 2
+gen x10 = 10
+_crx_cmp "suffixes with leading zeros: long" long x, i(id) j(t)
+_crx_cmp "suffixes with leading zeros: back to wide" wide
+
+clear
+quietly set obs 3
+gen id = _n
+gen x1 = 1
+gen x01 = 2
+_crx_cmp "x1 and x01, one value of j" long x, i(id) j(t)
+
+clear
+quietly set obs 3
+gen id = _n
+gen x0 = 1
+gen x00 = 2
+gen x2 = 3
+_crx_cmp "x0 and x00" long x, i(id) j(t)
+
+clear
+quietly set obs 3
+gen id = _n
+gen x1 = 1
+gen x1e3 = 2
+gen x1_2 = 3
+gen xa = 4
+_crx_cmp "suffixes that are not plain integers stay" long x, i(id) j(t)
+
+clear
+quietly set obs 4
+gen id = ceil(_n / 2)
+gen t = cond(mod(_n, 2), -1, 1)
+gen a = _n
+_crx_cmp "negative j: wide" wide a, i(id) j(t)
+quietly replace t = cond(mod(_n, 2), 0, 123456789)
+_crx_cmp "j of 0 and 123456789: wide" wide a, i(id) j(t)
+_crx_cmp "j of 0 and 123456789: back to long" long
+
+clear
+quietly set obs 4
+gen id = ceil(_n / 2)
+gen double t = cond(mod(_n, 2), 1, 1e10)
+gen a = _n
+_crx_cmp "j of 1e10: wide" wide a, i(id) j(t)
+clear
+quietly set obs 4
+gen id = ceil(_n / 2)
+gen t = cond(mod(_n, 2), 1, 2)
+gen a = _n
+quietly replace t = .a in 2
+_crx_cmp "j of .a: wide" wide a, i(id) j(t)
+
+* listed values of j: out of order, a range
+_crx_base
+_crx_cmp "listed j out of order: long" long inc ue, i(identifier) j(year 81 80)
+_crx_base
+_crx_cmp "listed j as a range: long" long inc ue, i(identifier) j(year 80-81)
+
+* ---------------------------------------------------------------------------
+* String j
+* ---------------------------------------------------------------------------
+foreach set in "a A B b" "01 1 10 2" "é ü ß a" {
+    clear
+    quietly set obs 8
+    gen id = ceil(_n / 4)
+    gen str4 w = word("`set'", mod(_n - 1, 4) + 1)
+    gen v = _n
+    gen str3 q = "q" + string(_n)
+    _crx_cmp "string j (`set'): wide" wide v q, i(id) j(w) string
+    _crx_cmp "string j (`set'): long" long
+}
+
+clear
+quietly set obs 3
+gen id = _n
+gen inc_a = 1
+gen inc_b1 = 2
+gen inc_2 = 3
+gen inc_é = 4
+_crx_cmp "string j from suffixes with digits, _ and é" long inc_, i(id) j(k) string
+
+capture program drop _crx_xy
+program define _crx_xy
+    clear
+    quietly set obs 3
+    gen id = _n
+    gen x1 = 1
+    gen x2 = 2
+    gen xy1 = 3
+    gen xy2 = 4
+end
+_crx_xy
+_crx_cmp "stubs x and xy, numeric j" long x xy, i(id) j(t)
+_crx_xy
+_crx_cmp "stubs x and xy, string j" long x xy, i(id) j(t) string
+_crx_xy
+_crx_cmp "stub x alone, string j takes xy1" long x, i(id) j(t) string
+
+clear
+quietly set obs 3
+gen id = _n
+gen x = 0
+gen x1 = 1
+gen x2 = 2
+_crx_cmp "a variable named as the stub, string j" long x, i(id) j(t) string
+
+* ---------------------------------------------------------------------------
+* @ in stubs
+* ---------------------------------------------------------------------------
+clear
+quietly set obs 3
+gen id = _n
+gen ainc = 1
+gen binc = 2
+gen abinc = 3
+_crx_cmp "@ first, string j: long" long @inc, i(id) j(k) string
+_crx_cmp "@ first: back to wide" wide
+
+clear
+quietly set obs 3
+gen id = _n
+gen inc1 = 1
+gen inc2 = 2
+gen ue1r = 3
+gen ue3r = 4
+gen str2 s2 = "z"
+_crx_cmp "@ last, @ inside and plain stubs: long" long inc@ ue@r s, i(id) j(t)
+_crx_cmp "@ last, @ inside and plain stubs: wide" wide
+
+clear
+quietly set obs 6
+gen id = ceil(_n / 3)
+gen t = mod(_n - 1, 3) + 1
+gen incr = _n
+gen ue = -_n
+_crx_cmp "@ stub from long data: wide" wide inc@r ue, i(id) j(t)
+
+* ---------------------------------------------------------------------------
+* Stubs with different values of j and storage types; values at the edges
+* ---------------------------------------------------------------------------
+clear
+quietly set obs 5
+gen c = 7
+gen id = _n * 2
+gen byte a1 = _n
+gen int a2 = 300 * _n
+gen long a3 = 2147483620 - _n
+gen float b2 = 1.1 * _n
+gen long b4 = 16777217 + _n
+gen double b3 = 1e300 * _n
+gen str3 s1 = "ab"
+gen str2000 s4 = 1000 * "é"
+_crx_cmp "stubs with other j sets and types: long" long a b s, i(id) j(t)
+_crx_cmp "stubs with other j sets and types: wide" wide
+
+clear
+quietly set obs 3
+gen id = _n
+gen str2045 s1 = 1022 * "é" + "a"
+gen str5 s2 = "y"
+_crx_cmp "str2045 stub: long" long s, i(id) j(t)
+_crx_cmp "str2045 stub: wide" wide
+
+clear
+quietly set obs 27
+gen id = _n
+gen double m1 = .
+gen byte m2 = .z
+gen float m3 = -1e-30
+forvalues k = 1/26 {
+    local l = char(96 + `k')
+    quietly replace m1 = .`l' in `=`k' + 1'
+    quietly replace m3 = .`l' in `=28 - `k''
+}
+_crx_cmp "every missing value: long" long m, i(id) j(t)
+_crx_cmp "every missing value: wide" wide
+
+clear
+quietly set obs 4
+gen id = _n
+gen str20 q1 = `"a"b"'
+quietly replace q1 = `"`"x"'"' in 2
+quietly replace q1 = " lead" in 3
+quietly replace q1 = "trail " in 4
+gen str20 q2 = char(36) + "x" + char(96) + "y" + char(39)
+quietly replace q2 = "é ß " in 2
+quietly replace q2 = "" in 3
+_crx_cmp "quotes, macro characters, blanks: long" long q, i(id) j(t)
+_crx_cmp "quotes, macro characters, blanks: wide" wide
+
+clear
+quietly set obs 3
+gen id = _n
+gen double tm1 = clock("2026-11-26 10:11:12.345", "YMDhms") + _n
+gen double tm2 = tm1 + 1000
+format tm1 %tcHH:MM:SS.sss
+format tm2 %tcHH:MM:SS.sss
+gen long d1 = _n + 20000
+gen long d2 = d1 + 1
+format d1 %td
+format d2 %tdCCYY-NN-DD
+_crx_cmp "time formats on stubs: long" long tm d, i(id) j(t)
+_crx_cmp "time formats on stubs: wide" wide
+
+* ---------------------------------------------------------------------------
+* i of several variables, last in the data
+* ---------------------------------------------------------------------------
+clear
+quietly set obs 12
+gen x1 = _n
+gen x2 = -_n
+gen str2 y1 = "p" + string(_n)
+gen str3 si = cond(mod(_n, 3) == 0, "", cond(mod(_n, 3) == 1, " a", "a"))
+gen float fi = 0.1 + floor((_n - 1) / 3)
+gen double di = floor((_n - 1) / 3) / 3
+quietly replace di = . if di == 1
+quietly replace di = .a if di == 2
+gen byte bi = 1
+_crx_cmp "i of a string, a float, a double and a byte: long" long x y, i(si fi di bi) j(t)
+_crx_cmp "i of a string, a float, a double and a byte: wide" wide
+
+* ---------------------------------------------------------------------------
+* Refusals: return code, data untouched, settings; reshape error
+* ---------------------------------------------------------------------------
+capture program drop _crx_dup2
+program define _crx_dup2
+    clear
+    quietly set obs 6
+    gen str1 g = cond(_n <= 3, "a", "b")
+    gen k = mod(_n, 3)
+    quietly replace k = 1 in 6
+    gen x1 = _n
+    gen x2 = -_n
+end
+_crx_dup2
+_crx_cmp "i of two variables repeats: r(9)" long x, i(g k) j(t)
+_crx_dup2
+_crx_errcmp "reshape error: repeated i in wide data" long x, i(g k) j(t)
+
+capture program drop _crx_dupw
+program define _crx_dupw
+    clear
+    quietly set obs 6
+    gen id = ceil(_n / 3)
+    gen str1 w = word("a b c", mod(_n - 1, 3) + 1)
+    quietly replace w = "a" in 2
+    gen v = _n
+end
+_crx_dupw
+_crx_cmp "string j repeats within i: r(9)" wide v, i(id) j(w) string
+_crx_dupw
+_crx_errcmp "reshape error: repeated string j" wide v, i(id) j(w) string
+
+_crx_l6
+quietly replace k = "d" in 5
+_crx_cmp "string variable varies within i: r(9)" wide v, i(id) j(t)
+_crx_l6
+quietly replace k = "d" in 5
+_crx_errcmp "reshape error: a variable that varies within i" wide v, i(id) j(t)
+_crx_l6
+_crx_errcmp "reshape error: nothing wrong" wide v, i(id) j(t)
+_crx_l6
+gen double m = .
+quietly replace m = .a in 2
+_crx_cmp ". and .a within i: r(9)" wide v, i(id) j(t)
+_crx_l6
+gen double m = 1
+quietly replace m = 1 + epsdouble() in 5
+_crx_cmp "values one ulp apart within i: r(9)" wide v, i(id) j(t)
+_crx_l6
+gen float m = 1
+quietly replace m = . in 4
+_crx_cmp "missing in one observation of i: r(9)" wide v, i(id) j(t)
+_crx_l6
+gen str1 m = "x"
+quietly replace m = "" in 6
+_crx_cmp "empty string in one observation of i: r(9)" wide v, i(id) j(t)
+
+clear
+set seed 4401
+quietly set obs 300000
+gen long id = ceil(_n / 3)
+gen t = mod(_n - 1, 3) + 1
+gen double a = runiform()
+gen str4 s = "s" + string(mod(_n, 77))
+gen double u = runiform()
+sort u
+drop u
+quietly replace t = cond(t == 1, 2, 1) in 250000
+_crx_cmp "a repeat among 300,000 observations: r(9)" wide a s, i(id) j(t)
+
+* the limit on variables: a result of exactly c(maxvar) variables, and one
+* that passes it through two stubs while j alone has room
+clear
+quietly set obs `=c(maxvar) - 1'
+gen id = 1
+gen long t = _n
+gen byte a = 1
+quietly replace a = mod(_n, 7) in 1/50
+* (cf needs room for variables of its own, so the values are compared in Mata)
+tempfile mv0
+quietly save "`mv0'"
+quietly reshape wide a, i(id) j(t)
+_crx_sig
+local sigr `"$CRX_SIG"'
+mata: _crx_R = st_data(., .)
+quietly use "`mv0'", clear
+capture creshape wide a, i(id) j(t)
+local rc = _rc
+_crx_sig
+mata: st_local("same", strofreal(st_global("CRX_SIG") == st_local("sigr") & st_data(., .) == _crx_R))
+mata: mata drop _crx_R
+if `rc' == 0 & `same' test_pass "a result of exactly c(maxvar) variables"
+else test_fail "a result of exactly c(maxvar) variables" "r(`rc'), same as reshape `same'"
+clear
+quietly set obs `=floor(c(maxvar) / 2) + 100'
+gen id = 1
+gen long t = _n
+gen byte a = 1
+gen byte b = 2
+_crx_cmp "two stubs past c(maxvar): reshape's r(900)" wide a b, i(id) j(t)
+
+* names that clash
+_crx_base
+_crx_cmp "j() named like a stub" long inc ue, i(identifier) j(inc)
+_crx_l6
+_crx_cmp "a stub that is in i()" wide id v, i(id) j(t)
+_crx_l6
+_crx_cmp "j in i()" wide v, i(id t) j(t)
+_crx_l6
+_crx_cmp "the same stub twice: wide" wide v v, i(id) j(t)
+_crx_base
+_crx_cmp "the same stub twice: long" long inc inc ue, i(identifier) j(year)
+_crx_base
+gen _j = 1
+_crx_cmp "default j name _j taken: r(110)" long inc, i(identifier)
+clear
+quietly set obs 4
+gen id = ceil(_n / 2)
+gen t = 10 * mod(_n, 2) + 10
+gen abcdefghijklmnopqrstuvwxyz12345 = _n
+_crx_cmp "wide names longer than 32 characters" wide abcdefghijklmnopqrstuvwxyz12345, i(id) j(t)
+
+clear
+quietly set obs 4
+gen id = _n
+gen __000000 = 0
+gen __000001 = _n
+gen __000002 = -_n
+gen __000009 = 9
+_crx_cmp "stub __00000 with names like temporary ones: long" long __00000, i(id) j(t)
+tempfile tl
+quietly save "`tl'"
+* (reshape wide loses __000000 here, a clash with its own temporary names)
+quietly creshape wide
+capture noisily {
+    confirm variable __000000 __000001 __000002 __000009, exact
+    assert c(k) == 5 & _N == 4
+    assert __000000 == 0 & __000001 == id & __000002 == -id & __000009 == 9
+    quietly creshape long
+    cf _all using "`tl'"
+}
+if _rc == 0 test_pass "stub __00000 with names like temporary ones: wide keeps j = 0"
+else test_fail "stub __00000 with names like temporary ones: wide keeps j = 0" "r(`=_rc')"
+
+* variable _merge (reshape favor(memory) refuses it in wide)
+_crx_l6
+gen _merge = 3
+_crx_cmp "variable _merge: wide" wide v, i(id) j(t)
+_crx_cmp "variable _merge: long" long
+
+* qualifiers and weights, which reshape does not take: reshape stores them
+* in its settings as stubs and fails (if with r(110)); creshape refuses them
+* with r(101) before declaring anything
+foreach q in "if identifier > 1" "in 1/2" "[fw=identifier]" {
+    _crx_base
+    tempfile q0
+    quietly save "`q0'"
+    capture reshape long inc ue `q', i(identifier) j(year)
+    local rc1 = _rc
+    quietly use "`q0'", clear
+    capture creshape long inc ue `q', i(identifier) j(year)
+    local rc2 = _rc
+    local xij : char _dta[ReS_Xij]
+    capture cf _all using "`q0'"
+    if `rc1' & `rc2' == 101 & _rc == 0 & "`xij'" == "" test_pass "refused with r(101), data untouched: `q'"
+    else test_fail "refused with r(101), data untouched: `q'" "reshape r(`rc1'), creshape r(`rc2')"
+}
+_crx_base
+sort identifier
+tempfile b0
+quietly save "`b0'"
+capture by identifier: reshape long inc ue, i(identifier) j(year)
+local rc1 = _rc
+quietly use "`b0'", clear
+capture by identifier: creshape long inc ue, i(identifier) j(year)
+local rc2 = _rc
+capture cf _all using "`b0'"
+if `rc1' == `rc2' & `rc1' & _rc == 0 test_pass "by prefix: reshape's error, data untouched"
+else test_fail "by prefix: reshape's error, data untouched" "reshape r(`rc1'), creshape r(`rc2')"
+
+* ---------------------------------------------------------------------------
+* Abbreviations of options and variables, varlists
+* ---------------------------------------------------------------------------
+_crx_base
+_crx_cmp "i() abbreviated" long inc ue, i(ident) j(year)
+_crx_base
+_crx_cmp "string abbreviated to str" long inc ue, i(identifier) j(year) str
+_crx_base
+_crx_cmp "favor(mem) abbreviated" long inc ue, i(identifier) j(year) fav(mem)
+_crx_base
+quietly reshape long inc ue, i(identifier) j(year)
+quietly reshape clear
+tempfile lb
+quietly save "`lb'"
+_crx_cmp "j() abbreviated: wide" wide inc ue, i(identifier) j(ye)
+quietly use "`lb'", clear
+rename inc income
+quietly save "`lb'", replace
+_crx_cmp "stub abbreviated: wide" wide inco ue, i(identifier) j(year)
+quietly use "`lb'", clear
+_crx_cmp "stub abbreviation that is ambiguous: wide" wide i ue, i(identifier) j(year)
+quietly use "`lb'", clear
+_crx_cmp "stubs as a wildcard: wide" wide income u*, i(identifier) j(year)
+quietly use "`lb'", clear
+_crx_cmp "stubs as a range: wide" wide income-ue, i(identifier) j(year)
+
+* ---------------------------------------------------------------------------
+* Settings carried between commands
+* ---------------------------------------------------------------------------
+_crx_base
+tempfile c0
+quietly save "`c0'"
+foreach chain in a b c {
+    quietly use "`c0'", clear
+    local c1 = cond("`chain'" == "b", "creshape", "reshape")
+    local c2 = cond("`chain'" == "c", "creshape", "reshape")
+    quietly `c1' long inc ue, i(identifier) j(year)
+    quietly `c2' wide
+    quietly `c1' long
+    quietly replace inc = inc + 1
+    quietly `c2' wide
+    quietly `c1' long
+    _crx_sig
+    local sig_`chain' `"$CRX_SIG"'
+    tempfile out_`chain'
+    quietly save "`out_`chain''"
+}
+quietly use "`out_b'", clear
+capture cf _all using "`out_a'"
+mata: st_local("same", strofreal(st_local("sig_a") == st_local("sig_b")))
+if _rc == 0 & `same' test_pass "creshape long and reshape wide in turns"
+else test_fail "creshape long and reshape wide in turns" "differs from reshape alone"
+quietly use "`out_c'", clear
+capture cf _all using "`out_a'"
+mata: st_local("same", strofreal(st_local("sig_a") == st_local("sig_c")))
+if _rc == 0 & `same' test_pass "reshape long and creshape wide in turns"
+else test_fail "reshape long and creshape wide in turns" "differs from reshape alone"
+
+_crx_base
+quietly creshape long inc ue, i(identifier) j(year)
+_crx_cmp "long when already long" long
+_crx_cmp "long with arguments when already long" long inc ue, i(identifier) j(year)
+quietly creshape wide
+* (reshape's favor(speed) path skips its "already wide" check and fails
+* with r(111); creshape follows favor(memory), which says so and exits)
+char _dta[ReS_favor] "memory"
+_crx_cmp "wide when already wide, as favor(memory)" wide
+
+_crx_base
+quietly creshape long inc ue, i(identifier) j(year)
+gen v = year
+_crx_cmp "a new variable that varies within i: r(9)" wide
+drop v
+gen v = identifier * 2
+_crx_cmp "a new constant variable goes along" wide
+_crx_base
+quietly creshape long inc ue, i(identifier) j(year)
+quietly expand 2 in 1
+quietly replace year = 82 in l
+_crx_cmp "a new value of j added after long" wide
+
+* ---------------------------------------------------------------------------
+* Metadata of i and j across round trips
+* ---------------------------------------------------------------------------
+_crx_base
+label define idl 1 "one" 2 "two" 4 "four"
+label values identifier idl
+char identifier[k] "ik"
+format identifier %5.0f
+note identifier: an i note
+note: a second data note
+label var identifier "the id"
+_crx_cmp "labels, formats, notes and chars of i: long" long inc ue, i(identifier) j(year)
+format year %ty
+label var year "Year"
+char year[j] "jc"
+note year: a j note
+_crx_cmp "metadata of j set aside by wide" wide
+_crx_cmp "metadata of j put back by long" long
+
+clear
+quietly set obs 6
+gen id = ceil(_n / 2)
+gen t = mod(_n, 2) + 1
+gen a = _n
+local lab = `"say "hi" "' + char(36) + "S_OS"
+label var a `"`macval(lab)'"'
+gen b = -_n
+label var b "plain"
+_crx_cmp "variable labels with quotes and a dollar: wide" wide a b, i(id) j(t)
+_crx_cmp "variable labels with quotes and a dollar: long" long
+
+* ---------------------------------------------------------------------------
+* A million observations; threads(); incoming order
+* ---------------------------------------------------------------------------
+clear
+set seed 4402
+quietly set obs 200000
+gen long id = _n * 7 - 3
+gen str5 g = "g" + string(mod(_n, 97))
+gen double k = runiform()
+quietly expand 5
+bysort id: gen int t = 2 ^ (_n - 1)
+gen double a = rnormal()
+quietly replace a = .a if runiform() < 0.01
+gen long b = floor(1e6 * runiform())
+gen str6 s = substr("abcdefgh", 1 + floor(3 * runiform()), 1 + floor(5 * runiform()))
+quietly drop if runiform() < 0.1
+gen double u = runiform()
+sort u
+drop u
+tempfile big bw1 bl1
+quietly save "`big'"
+_crx_cmp "1,000,000 observations: wide" wide a b s, i(id) j(t)
+_crx_cmp "1,000,000 observations: long" long
+
+quietly use "`big'", clear
+quietly creshape wide a b s, i(id) j(t) threads(1)
+_crx_sig
+local sw1 `"$CRX_SIG"'
+quietly save "`bw1'"
+quietly creshape long, threads(1)
+_crx_sig
+local sl1 `"$CRX_SIG"'
+quietly save "`bl1'"
+quietly use "`big'", clear
+quietly creshape wide a b s, i(id) j(t) threads(8)
+_crx_sig
+local sw8 `"$CRX_SIG"'
+capture cf _all using "`bw1'"
+if _rc == 0 & `"`sw1'"' == `"`sw8'"' test_pass "threads(1) and threads(8): wide"
+else test_fail "threads(1) and threads(8): wide" "results differ"
+quietly creshape long, threads(8)
+_crx_sig
+capture cf _all using "`bl1'"
+if _rc == 0 & `"`sl1'"' == `"$CRX_SIG"' test_pass "threads(1) and threads(8): long"
+else test_fail "threads(1) and threads(8): long" "results differ"
+quietly use "`big'", clear
+gsort -t -id
+quietly creshape wide a b s, i(id) j(t)
+_crx_sig
+capture cf _all using "`bw1'"
+if _rc == 0 & `"`sw1'"' == `"$CRX_SIG"' test_pass "result independent of the incoming order"
+else test_fail "result independent of the incoming order" "results differ"
+
+* ---------------------------------------------------------------------------
+* Random long panels: i of a string (with unicode and blanks), a double
+* (with missing values) and a byte; j numeric with gaps or string; @ stubs
+* ---------------------------------------------------------------------------
+forvalues r = 1/6 {
+    local seed = 9100 + `r'
+    clear
+    set seed `seed'
+    local nid = 1 + int(400 * runiform())
+    local strj = mod(`r', 2)
+    quietly set obs `nid'
+    gen str4 sv = cond(mod(_n, 4) == 0, "", cond(mod(_n, 4) == 1, "é", cond(mod(_n, 4) == 2, "a", "B")))
+    gen double dv = floor((_n - 1) / 4) / 3
+    quietly replace dv = . if floor((_n - 1) / 4) == 2
+    quietly replace dv = .a if floor((_n - 1) / 4) == 3
+    gen byte bv = 1
+    gen double c = runiform()
+    gen long row = _n
+    if `strj' local vals "a B é 01 1 x_y"
+    else local vals "0 3 7 100 2147483 12"
+    local J = 2 + int(5 * runiform())
+    quietly expand `J'
+    bysort row: gen int pick = _n
+    if `strj' gen str3 jj = ""
+    else gen long jj = .
+    forvalues p = 1/`J' {
+        local w : word `p' of `vals'
+        if `strj' quietly replace jj = "`w'" if pick == `p'
+        else quietly replace jj = `w' if pick == `p'
+    }
+    drop row pick
+    gen double pq = rnormal()
+    quietly replace pq = .b if runiform() < 0.05
+    gen str5 s = substr("vwxyz", 1, 1 + floor(5 * runiform()))
+    gen int n = floor(1000 * runiform())
+    quietly drop if runiform() < 0.2
+    gen double u = runiform()
+    sort u
+    drop u
+    local sopt = cond(`strj', "string", "")
+    _crx_cmp "random `r': wide" wide p@q s n, i(sv dv bv) j(jj) `sopt'
+    _crx_cmp "random `r': long" long
+}
+
+print_summary "creshape_extra"
+global CTOOLS_COMPONENT_COMPLETE "creshape_extra"
+    global CTOOLS_CASE_COMPLETE "creshape_extra"
+    exit
+}
+
 di as error "Unknown creshape case: `__case'"
 exit 198

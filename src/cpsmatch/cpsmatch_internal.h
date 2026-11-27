@@ -99,6 +99,23 @@ typedef struct
     int ai;                /* neighbors of the ai() same-arm matching (0 = none) */
     int altvariance;       /* ai(): Abadie et al. (2004) conditional variance */
     int float_squares;     /* statistics: squared weights stored as float */
+    /* One call for every outcome and the ai() correction's columns: ny
+     * outcomes from outcome_idx, their matched values from matched_idx and
+     * same-arm values from self_idx (consecutive plugin variables); yeff_idx
+     * the outcomes _cpsmatch_effects summarizes (default: the outcomes);
+     * nx score-model columns from xcol_idx with same-arm values at
+     * xself_idx. */
+    int ny, yeff_idx, nx, xcol_idx, xself_idx;
+    int supscore_idx;      /* score that common support compares (default: pscore) */
+    int make_arm;          /* compute _treated from the treatment, store at arm_idx */
+    int fill;              /* write every observation (missing outside the sample) */
+    int outside_ids;       /* _id outside the sample, by score then observation */
+    int single;            /* ai(): an arm of one row takes the row after it */
+    int effects;           /* save what _cpsmatch_effects reads, per outcome */
+    int samplevar;         /* effects: ai() sample variance */
+    int warn;              /* report tied scores (warnings) */
+    int kernel_direct;     /* kernel matching over every pair (no moment sums) */
+    int radius_all;        /* radius without caliper(): weights spread over _N */
 } cpsmatch_options;
 
 /* Match result for a single observation */
@@ -215,4 +232,12 @@ void cpsmatch_distance_window(const sorted_control_t *sorted, size_t n, double p
                               size_t *start, size_t *end);
 void cpsmatch_find_radius_range_fast(double pscore_treated, const sorted_control_t *sorted_controls,
                                      size_t n_controls, double radius, radius_match_info *info);
+/* Kernel matching (not the normal kernel) through moment sums: targets at
+ * tps and donors at dps, both ascending; dy holds ny donor outcomes. Per
+ * target: on (a donor has a positive weight), nn and matched[k] (missing
+ * when a weighted donor's outcome is); per donor: its added weight. */
+int cpsmatch_kernel_moments(kernel_type_t kernel, double bw, const double *tps, size_t nt,
+                            const double *dps, size_t nd, const double *const *dy, int ny,
+                            int threads, double *donor_weight, double *nn, int *on,
+                            double *const *matched);
 #endif

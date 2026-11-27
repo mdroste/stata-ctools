@@ -104,7 +104,9 @@ static ST_retcode geodist_scalar(const char *args)
     double d;
     int iter = 0, failed = 0;
     if (c.sphere)
-        d = cgeo_haversine_deg(v[0], v[1], v[2], v[3], c.d2r, c.fac);
+        /* a missing radius(): geodist's distance is missing */
+        d = c.fac >= SV_missval ? SV_missval
+                                : cgeo_haversine_deg(v[0], v[1], v[2], v[3], c.d2r, c.fac);
     else
     {
         /* geodist: while ++iter < maxiter & more { ... }; failure when the
@@ -228,7 +230,8 @@ static ST_retcode geodist_vars(const char *args)
     SF_scal_save("__cgeonear_dnsample", (double)nsample);
     if (viol != 5 || check < 4 || !out)
         goto done;
-    if (!nsample)
+    /* no sample, or a missing radius(): every distance is missing */
+    if (!nsample || (c.sphere && c.fac >= SV_missval))
         allmissing = 1;
     size_t nobs = (size_t)SF_nobs();
     res = malloc((nobs ? nobs : 1) * sizeof(*res));

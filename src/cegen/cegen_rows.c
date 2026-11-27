@@ -339,7 +339,7 @@ static int chain_function(cegen_fn fn)
 
 /* The type of an integer variable after replace has stored values with
  * this range (fractional: some value is not an integer) */
-static cegen_type chain_promote(cegen_type type, int any, int fractional, double lo, double hi)
+cegen_type cegen_chain_promote(cegen_type type, int any, int fractional, double lo, double hi)
 {
     static const double low[] = {-127.0, -32767.0, -2147483647.0};
     static const double high[] = {100.0, 32740.0, 2147483620.0};
@@ -419,7 +419,7 @@ static void rows_chain(const cegen_job *job, const double **x, size_t k, size_t 
                     hi = value;
             }
         }
-        type = chain_promote(type, any, fractional, lo, hi);
+        type = cegen_chain_promote(type, any, fractional, lo, hi);
         if (type == CEGEN_T_FLOAT)
         {
 #pragma omp parallel for schedule(static) num_threads(threads)

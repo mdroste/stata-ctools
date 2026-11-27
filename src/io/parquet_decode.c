@@ -55,12 +55,29 @@ static int uleb(const uint8_t **p, const uint8_t *end, uint64_t *v)
     return 1;
 }
 
-/* LSB-first unpacking of count values of width bits */
-static void unpack(const uint8_t *s, int width, size_t count, uint32_t *out)
+/* LSB-first unpacking of count values of width bits; avail is the number of
+ * readable bytes from s on */
+static void unpack(const uint8_t *s, size_t avail, int width, size_t count, uint32_t *out)
 {
     uint64_t mask = width >= 32 ? 0xffffffffull : ((1ull << width) - 1);
-    size_t bit = 0;
-    for (size_t i = 0; i < count; i++, bit += (size_t)width)
+    size_t bit = 0, i = 0;
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+    /* One 8-byte load per value while eight bytes remain: a value spans at
+       most 39 bits from its first byte, and the bytes past it are masked */
+    if (avail >= 8)
+        for (; i < count; i++, bit += (size_t)width)
+        {
+            size_t byte = bit >> 3;
+            if (byte > avail - 8)
+                break;
+            uint64_t w;
+            memcpy(&w, s + byte, 8);
+            out[i] = (uint32_t)((w >> (bit & 7)) & mask);
+        }
+#else
+    (void)avail;
+#endif
+    for (; i < count; i++, bit += (size_t)width)
     {
         size_t byte = bit >> 3;
         int shift = (int)(bit & 7);
@@ -95,7 +112,7 @@ static int rle_decode(const uint8_t *p, size_t n, int width, uint32_t *out, size
             size_t left = count - got;
             size_t take = groups >= left / 8 + 1 ? left : (size_t)groups * 8;
             if (width)
-                unpack(p, width, take, out + got);
+                unpack(p, (size_t)(end - p), width, take, out + got);
             else
                 memset(out + got, 0, take * sizeof(uint32_t));
             got += take;
@@ -391,19 +408,27 @@ static int decode_values(const uint8_t *p, size_t n, int encoding, const pq_fiel
             free(idx);
             return 909;
         }
+        uint32_t most = 0;
         for (size_t i = 0; i < count; i++)
+            most = idx[i] > most ? idx[i] : most;
+        if (count && most >= dict->count)
         {
-            if (idx[i] >= dict->count)
-            {
-                free(idx);
-                return 1;
-            }
-            if (physical == PQ_BYTE_ARRAY)
+            free(idx);
+            return 1;
+        }
+        if (physical == PQ_BYTE_ARRAY)
+            for (size_t i = 0; i < count; i++)
                 v->strs[i] = dict->strs[idx[i]];
-            else
+        else if (width == 4)
+            for (size_t i = 0; i < count; i++)
+                memcpy(v->fixed + i * 4, dict->fixed + (size_t)idx[i] * 4, 4);
+        else if (width == 8)
+            for (size_t i = 0; i < count; i++)
+                memcpy(v->fixed + i * 8, dict->fixed + (size_t)idx[i] * 8, 8);
+        else
+            for (size_t i = 0; i < count; i++)
                 memcpy(v->fixed + i * (size_t)width, dict->fixed + (size_t)idx[i] * (size_t)width,
                        (size_t)width);
-        }
         free(idx);
         return 0;
     }
@@ -885,6 +910,265 @@ static int emit(pq_values *out, const pq_field *fd, size_t idx, const pq_vals *v
     return 0;
 }
 
+/* ---- Whole pages --------------------------------------------------------------
+ * A page of the common types is converted in one loop instead of one emit()
+ * per row, with the same results: emit()'s checks cannot fail for these
+ * types (a page holds exactly one value per present row, and every kept row
+ * lies inside out), so only the kept rows need visiting. */
+
+/* Numeric columns emit() converts from a fixed-width value of their physical
+ * type: 1 when page_numbers() handles the field */
+static int fast_numbers(const pq_field *fd)
+{
+    switch (fd->arrow)
+    {
+    case PA_INT8:
+    case PA_INT16:
+    case PA_INT32:
+    case PA_UINT8:
+    case PA_UINT16:
+    case PA_UINT32:
+    case PA_DATE32:
+    case PA_TIME32:
+        return fd->physical == PQ_INT32;
+    case PA_INT64:
+    case PA_UINT64:
+    case PA_TIME64:
+        return fd->physical == PQ_INT64;
+    case PA_TIMESTAMP:
+        return fd->physical == PQ_INT64;
+    case PA_FLOAT:
+        return fd->physical == PQ_FLOAT;
+    case PA_DOUBLE:
+        return fd->physical == PQ_DOUBLE;
+    default:
+        return 0;
+    }
+}
+
+/* Text columns stored as byte arrays: 1 when page_texts() handles the field */
+static int fast_texts(const pq_field *fd)
+{
+    return fd->physical == PQ_BYTE_ARRAY &&
+           (fd->arrow == PA_UTF8 || fd->arrow == PA_BINARY || fd->arrow == PA_LARGE_UTF8 ||
+            fd->arrow == PA_LARGE_BINARY);
+}
+
+/* The page's rows [*lo, *hi) that lie in [first, last]; p0 is its first row */
+static void kept_rows(int64_t p0, size_t nv, int64_t first, int64_t last, size_t *lo, size_t *hi)
+{
+    int64_t a = first - p0, b = last - p0 + 1;
+    if (a < 0)
+        a = 0;
+    if (b > (int64_t)nv)
+        b = (int64_t)nv;
+    *lo = (size_t)a;
+    *hi = b > a ? (size_t)b : (size_t)a;
+}
+
+/* Stores the kept rows of a numeric page (as emit() does row by row). defs
+ * is NULL for a required column. */
+static void page_numbers(pq_values *out, const pq_field *fd, const pq_vals *v,
+                         const uint32_t *defs, size_t nv, int64_t p0, int64_t first, int64_t last)
+{
+    size_t lo, hi, k = 0;
+    kept_rows(p0, nv, first, last, &lo, &hi);
+    if (lo >= hi)
+        return;
+    if (defs)
+        for (size_t i = 0; i < lo; i++)
+            k += defs[i];
+    else
+        k = lo;
+    const size_t base = (size_t)(p0 - first); /* idx = base + i */
+    const uint8_t *src = v->fixed;
+    uint8_t *valid = out->valid;
+    pq_arrow a = fd->arrow;
+    if (a == PA_INT64 || a == PA_UINT64)
+    {
+        int64_t *dst = out->i64;
+        int wide = out->wide, any = out->any;
+        for (size_t i = lo; i < hi; i++)
+        {
+            if (defs && !defs[i])
+                continue;
+            int64_t x;
+            memcpy(&x, src + 8 * k++, 8);
+            dst[base + i] = x;
+            valid[base + i] = 1;
+            if (a == PA_INT64 ? (x < -2147483647LL || x > 2147483620LL)
+                              : (uint64_t)x > 2147483620ULL)
+                wide = 1;
+            any = 1;
+        }
+        out->wide = wide;
+        out->any = any;
+        return;
+    }
+    double *dst = out->num, maxv = out->maxv;
+    int any = out->any;
+    const int unit = fd->unit;
+#define PQ_PAGE_LOOP(W, CONVERT)                                                                   \
+    for (size_t i = lo; i < hi; i++)                                                               \
+    {                                                                                              \
+        if (defs && !defs[i])                                                                      \
+            continue;                                                                              \
+        const uint8_t *f = src + (size_t)(W) * k++;                                                \
+        double x;                                                                                  \
+        CONVERT;                                                                                   \
+        dst[base + i] = x;                                                                         \
+        valid[base + i] = 1;                                                                       \
+        if (!isnan(x) && (!any || x > maxv))                                                       \
+            maxv = x;                                                                              \
+        if (!isnan(x))                                                                             \
+            any = 1;                                                                               \
+    }
+#define PQ_I32 int32_t i32; memcpy(&i32, f, 4)
+#define PQ_I64 int64_t i64; memcpy(&i64, f, 8)
+    switch (a)
+    {
+    case PA_INT8:
+        PQ_PAGE_LOOP(4, PQ_I32; x = (int8_t)i32)
+        break;
+    case PA_INT16:
+        PQ_PAGE_LOOP(4, PQ_I32; x = (int16_t)i32)
+        break;
+    case PA_INT32:
+    case PA_TIME32:
+        PQ_PAGE_LOOP(4, PQ_I32; x = i32)
+        break;
+    case PA_UINT8:
+        PQ_PAGE_LOOP(4, PQ_I32; x = (uint8_t)i32)
+        break;
+    case PA_UINT16:
+        PQ_PAGE_LOOP(4, PQ_I32; x = (uint16_t)i32)
+        break;
+    case PA_UINT32:
+        PQ_PAGE_LOOP(4, PQ_I32; x = (uint32_t)i32)
+        break;
+    case PA_DATE32:
+        PQ_PAGE_LOOP(4, PQ_I32; x = (double)i32 + 3653.0)
+        break;
+    case PA_FLOAT:
+        PQ_PAGE_LOOP(4, float fl; memcpy(&fl, f, 4); x = fl)
+        break;
+    case PA_DOUBLE:
+        PQ_PAGE_LOOP(8, memcpy(&x, f, 8))
+        break;
+    case PA_TIME64:
+        PQ_PAGE_LOOP(8, PQ_I64; x = (double)(i64 / (unit == 2 ? 1000 : 1000000)))
+        break;
+    case PA_TIMESTAMP:
+        PQ_PAGE_LOOP(8, PQ_I64;
+                     int64_t ms = unit == 1 ? i64 : unit == 2 ? i64 / 1000 : i64 / 1000000;
+                     x = (double)ms + 315619200000.0)
+        break;
+    default:
+        break;
+    }
+#undef PQ_PAGE_LOOP
+#undef PQ_I32
+#undef PQ_I64
+    out->maxv = maxv;
+    out->any = any;
+}
+
+/* n bytes from src to dst, reading and writing only those bytes: short
+ * values in two overlapping word copies rather than a call */
+static inline void copy_value(uint8_t *dst, const uint8_t *src, size_t n)
+{
+    if (n > 16)
+        memcpy(dst, src, n);
+    else if (n >= 8)
+    {
+        uint64_t a, b;
+        memcpy(&a, src, 8);
+        memcpy(&b, src + n - 8, 8);
+        memcpy(dst, &a, 8);
+        memcpy(dst + n - 8, &b, 8);
+    }
+    else if (n >= 4)
+    {
+        uint32_t a, b;
+        memcpy(&a, src, 4);
+        memcpy(&b, src + n - 4, 4);
+        memcpy(dst, &a, 4);
+        memcpy(dst + n - 4, &b, 4);
+    }
+    else
+        for (size_t i = 0; i < n; i++)
+            dst[i] = src[i];
+}
+
+/* Stores the kept rows of a byte-array text page and measures every value
+ * of it (as emit() and put_bytes() do row by row). Returns 0, 1 for a value
+ * without data, or 909. */
+static int page_texts(pq_values *out, const pq_vals *v, const uint32_t *defs, size_t nv,
+                      int64_t p0, int64_t first, int64_t last)
+{
+    const pq_str *s = v->strs;
+    size_t present = v->count, longest = out->max_len;
+    for (size_t k = 0; k < present; k++)
+    {
+        if (!s[k].p && s[k].n)
+            return 1;
+        if (s[k].n > longest)
+            longest = s[k].n;
+    }
+    out->max_len = longest;
+    size_t lo, hi, k = 0;
+    kept_rows(p0, nv, first, last, &lo, &hi);
+    if (lo >= hi)
+        return 0;
+    if (defs)
+        for (size_t i = 0; i < lo; i++)
+            k += defs[i];
+    else
+        k = lo;
+    /* The kept values' bytes, then room for them at once */
+    size_t need = 0, k1 = k;
+    for (size_t i = lo; i < hi; i++)
+        if (!defs || defs[i])
+            need += s[k1++].n;
+    if (out->capbytes - out->nbytes < need)
+    {
+        size_t cap = out->capbytes ? out->capbytes : 4096;
+        while (cap - out->nbytes < need)
+        {
+            if (cap > SIZE_MAX / 2)
+                return 909;
+            cap *= 2;
+        }
+        uint8_t *b = realloc(out->bytes, cap);
+        if (!b)
+            return 909;
+        out->bytes = b;
+        out->capbytes = cap;
+    }
+    const size_t base = (size_t)(p0 - first), start = out->nbytes;
+    size_t at = start;
+    uint64_t *off = out->off;
+    uint8_t *bytes = out->bytes, *valid = out->valid;
+    for (size_t i = lo; i < hi; i++)
+    {
+        if (defs && !defs[i])
+        {
+            off[base + i + 1] = at;
+            continue;
+        }
+        size_t n = s[k].n;
+        copy_value(bytes + at, s[k].p, n);
+        k++;
+        at += n;
+        off[base + i + 1] = at;
+        valid[base + i] = 1;
+    }
+    out->nbytes = at;
+    if (at > start && memchr(bytes + start, 0, at - start))
+        out->has_nul = 1;
+    return 0;
+}
+
 /* ---- Pages ------------------------------------------------------------------ */
 typedef struct
 {
@@ -1121,8 +1405,23 @@ static int read_group(pq_ctx *c, const pq_chunk *ch, int64_t nrows, int leaf_onl
                           : fail(c, "page values are corrupt");
             break;
         }
+        /* The common types a page at a time; the rest row by row */
+        const uint32_t *page_defs = fd->max_def ? defs : NULL;
+        int whole = 0;
+        if (fast_numbers(fd) && vals.fixed && vals.width == fixed_width(fd->physical, 0))
+        {
+            page_numbers(c->out, fd, &vals, page_defs, nv, p0, c->first, c->last);
+            whole = 1;
+        }
+        else if (fast_texts(fd) && vals.strs)
+        {
+            int e = page_texts(c->out, &vals, page_defs, nv, p0, c->first, c->last);
+            if (e)
+                rc = e == 909 ? 909 : fail(c, "a value cannot be converted");
+            whole = 1;
+        }
         size_t k = 0;
-        for (size_t i = 0; i < nv && !rc; i++)
+        for (size_t i = 0; i < nv && !rc && !whole; i++)
         {
             int64_t r = p0 + (int64_t)i;
             size_t idx = (r >= c->first && r <= c->last) ? (size_t)(r - c->first) : SIZE_MAX;
@@ -1166,8 +1465,7 @@ void pq_values_free(pq_values *v)
     memset(v, 0, sizeof(*v));
 }
 
-int pq_read_column(pq_file *f, const pq_field *field, int64_t first, int64_t last, int measure_all,
-                   pq_values *out, char *err, size_t errcap)
+int pq_alloc_column(const pq_field *field, int64_t first, int64_t last, pq_values *out)
 {
     memset(out, 0, sizeof(*out));
     out->field = field;
@@ -1194,6 +1492,12 @@ int pq_read_column(pq_file *f, const pq_field *field, int64_t first, int64_t las
         if (!out->num)
             return 909;
     }
+    return 0;
+}
+
+int pq_read_groups(pq_file *f, const pq_field *field, int g0, int g1, int64_t first, int64_t last,
+                   int measure_all, pq_values *out, char *err, size_t errcap)
+{
     pq_ctx c = {f, field, out, 0, first, last, measure_all, err, errcap, NULL};
     c.fp = ctools_fopen(f->path, "rb");
     if (!c.fp)
@@ -1202,7 +1506,9 @@ int pq_read_column(pq_file *f, const pq_field *field, int64_t first, int64_t las
         return 691;
     }
     int64_t row = 0;
-    for (int g = 0; g < f->ngroups; g++)
+    for (int g = 0; g < g0; g++)
+        row += f->groups[g].num_rows;
+    for (int g = g0; g < g1; g++)
     {
         int64_t nr = f->groups[g].num_rows;
         c.row = row;
@@ -1221,10 +1527,102 @@ int pq_read_column(pq_file *f, const pq_field *field, int64_t first, int64_t las
     fclose(c.fp);
     /* Rows never reached keep their offsets continuous */
     if (out->off)
-        for (size_t i = 0; i < n; i++)
+        for (size_t i = 0; i < out->n; i++)
             if (out->off[i + 1] < out->off[i])
                 out->off[i + 1] = out->off[i];
     return 0;
+}
+
+int pq_read_column(pq_file *f, const pq_field *field, int64_t first, int64_t last, int measure_all,
+                   pq_values *out, char *err, size_t errcap)
+{
+    int rc = pq_alloc_column(field, first, last, out);
+    return rc ? rc
+              : pq_read_groups(f, field, 0, f->ngroups, first, last, measure_all, out, err, errcap);
+}
+
+int pq_part_view(pq_values *column, size_t base, size_t n, pq_values *part)
+{
+    memset(part, 0, sizeof(*part));
+    part->field = column->field;
+    part->n = n;
+    part->valid = column->valid + base;
+    part->num = column->num ? column->num + base : NULL;
+    part->i64 = column->i64 ? column->i64 + base : NULL;
+    if (column->off)
+    {
+        part->off = calloc(n + 1, sizeof(uint64_t));
+        if (!part->off)
+            return 909;
+    }
+    return 0;
+}
+
+int pq_parts_join(pq_values *column, pq_values *const *parts, const size_t *bases, int k)
+{
+    int rc = 0;
+    if (column->off)
+    {
+        /* Each part's bytes follow the ones before it, and its offsets shift
+           by as much: the column's bytes are sized once, then the parts copy
+           into their places side by side */
+        uint64_t *shift = malloc((k ? (size_t)k : 1) * sizeof(uint64_t));
+        size_t total = column->nbytes;
+        for (int p = 0; p < k && shift; p++)
+        {
+            shift[p] = total;
+            if (parts[p]->nbytes > SIZE_MAX - total)
+                rc = 909;
+            else
+                total += parts[p]->nbytes;
+        }
+        if (!shift)
+            rc = 909;
+        if (!rc && total > column->capbytes)
+        {
+            uint8_t *b = realloc(column->bytes, total);
+            if (!b)
+                rc = 909;
+            else
+            {
+                column->bytes = b;
+                column->capbytes = total;
+            }
+        }
+        if (!rc)
+        {
+#pragma omp parallel for schedule(dynamic, 1) if (k > 1 && total >= ((size_t)1 << 20))
+            for (int p = 0; p < k; p++)
+            {
+                const pq_values *part = parts[p];
+                if (part->nbytes)
+                    memcpy(column->bytes + shift[p], part->bytes, part->nbytes);
+                uint64_t *dst = column->off + bases[p] + 1;
+                for (size_t i = 0; i < part->n; i++)
+                    dst[i] = part->off[i + 1] + shift[p];
+            }
+            column->nbytes = total;
+        }
+        free(shift);
+    }
+    for (int p = 0; p < k; p++)
+    {
+        pq_values *part = parts[p];
+        if (part->has_nul)
+            column->has_nul = 1;
+        if (part->max_len > column->max_len)
+            column->max_len = part->max_len;
+        if (part->any && (!column->any || part->maxv > column->maxv))
+            column->maxv = part->maxv;
+        if (part->any)
+            column->any = 1;
+        if (part->wide)
+            column->wide = 1;
+        free(part->off);
+        free(part->bytes);
+        memset(part, 0, sizeof(*part));
+    }
+    return rc;
 }
 
 /* Decompresses every page of every leaf under a (nested) field */

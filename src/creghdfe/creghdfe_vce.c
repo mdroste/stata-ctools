@@ -371,19 +371,24 @@ ST_retcode compute_vce_multicluster(
      * even number */
     for (ST_int subset = 1; subset < (1 << Q) && !rc; subset++) {
         ST_int members = 0, groups = 0;
+        /* the ids of the subset's intersection: a dimension's own ids while
+         * it is the only one, then the intersections, which alternate
+         * between the two buffers instead of being copied */
+        const ST_int *cur = NULL;
         for (ST_int dim = 0; dim < Q && !rc; dim++) {
             if (!(subset & (1 << dim))) continue;
             const ST_int *dim_ids = cluster_ids + (size_t)dim * N;
             if (!members++) {
-                memcpy(ids, dim_ids, (size_t)N * sizeof(*ids));
+                cur = dim_ids;
                 groups = num_clusters[dim];
             } else {
-                if (ctools_intersect_cluster_ids(ids, dim_ids, N, joined, &groups)) rc = 920;
-                else memcpy(ids, joined, (size_t)N * sizeof(*ids));
+                ST_int *dst = (cur == ids) ? joined : ids;
+                if (ctools_intersect_cluster_ids(cur, dim_ids, N, dst, &groups)) rc = 920;
+                else cur = dst;
             }
         }
         if (rc) break;
-        rc = ctools_vce_cluster(&d, ids, groups, dof_adj, term);
+        rc = ctools_vce_cluster(&d, cur, groups, dof_adj, term);
         ST_double sign = (members % 2) ? 1.0 : -1.0;
         for (size_t i = 0; i < KK && !rc; i++) V[i] += sign * term[i];
     }
@@ -425,12 +430,33 @@ ST_retcode compute_vce_dkraay(
     long double *M = (long double *)calloc((size_t)K * K, sizeof(*M));
     ST_double *DM = (ST_double *)malloc((size_t)K * K * sizeof(*DM));
     if (!h || !M || !DM) { free(h); free(M); free(DM); return 920; }
-    /* h_t: the moments of period t summed over its observations */
-    for (ST_int i = 0; i < N; i++) {
-        ST_int t = time_ids[i];
-        if (t < 0 || t >= T) { free(h); free(M); free(DM); return 498; }
-        ST_double e = resid[i] * (weights ? weights[i] * wscale : 1.0);
-        for (ST_int k = 0; k < K; k++) h[(size_t)t * K + k] += (long double)e * data[(size_t)(k + 1) * N + i];
+    /* h_t: the moments of period t summed over its observations. Every
+     * h[t][k] is its own sum over the rows of period t in row order, so the
+     * regressors run side by side, each thread's sums of its regressor
+     * (one per period) kept in an array of its own. */
+    {
+        int bad = 0;
+        ST_int i;
+        #pragma omp parallel for schedule(static) reduction(| : bad) if (N > 200000)
+        for (i = 0; i < N; i++) bad |= (time_ids[i] < 0) | (time_ids[i] >= T);
+        if (bad) { free(h); free(M); free(DM); return 498; }
+    }
+    {
+        ST_int k;
+        int failed = 0;
+        #pragma omp parallel for schedule(dynamic, 1) reduction(| : failed) if (K > 1 && (size_t)N * (size_t)K > 400000)
+        for (k = 0; k < K; k++) {
+            long double *hk = (long double *)calloc((size_t)T, sizeof(*hk));
+            if (!hk) { failed = 1; continue; }
+            const ST_double *xk = data + (size_t)(k + 1) * N;
+            for (ST_int r = 0; r < N; r++) {
+                ST_double e = resid[r] * (weights ? weights[r] * wscale : 1.0);
+                hk[time_ids[r]] += (long double)e * xk[r];
+            }
+            for (ST_int t = 0; t < T; t++) h[(size_t)t * K + k] = hk[t];
+            free(hk);
+        }
+        if (failed) { free(h); free(M); free(DM); return 920; }
     }
     /* Meat: sum_t h_t' h_t plus the Bartlett-weighted autocovariances */
     for (ST_int t = 0; t < T; t++)

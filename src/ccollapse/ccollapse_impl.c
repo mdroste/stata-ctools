@@ -107,7 +107,7 @@ static int cc_parse_stat(const char *name, cc_target *target)
     return -1;
 }
 
-/* targets=<source>:<stat>[,<source>:<stat>...] */
+/* <source>:<stat>[,<source>:<stat>...] */
 static int cc_parse_targets(char *list, cc_config *config)
 {
     size_t count = 1;
@@ -167,13 +167,21 @@ static int cc_parse_config(const char *args, cc_config *config)
     config->cw = ctools_parse_bool_option(args, "cw");
     config->verbose = ctools_parse_bool_option(args, "verbose");
 
-    size_t cap = strlen(args) + 1;
-    char *list = malloc(cap);
+    /* The target list is the ado's local ccollapse_targets, of tlen bytes:
+     * a plugin's argument string is cut off after a few thousand bytes,
+     * a local is not */
+    int length = -1;
+    if (ctools_parse_int_option(args, "tlen", &length) != CTOOLS_PARSE_OK || length < 3)
+        return 198;
+    size_t len = (size_t)length;
+    char *list = malloc(len + 2);
     if (!list)
         return 920;
-    int rc = ctools_parse_string_option(args, "targets", list, cap) == CTOOLS_PARSE_OK
-                 ? cc_parse_targets(list, config)
-                 : 198;
+    list[0] = '\0';
+    int rc = SF_macro_use("_ccollapse_targets", list, (ST_int)(len + 1)) != 0 ||
+                     strlen(list) != len
+                 ? 198
+                 : cc_parse_targets(list, config);
     free(list);
     return rc;
 }

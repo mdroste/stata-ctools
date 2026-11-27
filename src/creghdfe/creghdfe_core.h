@@ -150,6 +150,16 @@ ST_retcode creghdfe_collinear(ST_double *data, ST_int N, ST_int K, const ST_doub
                               ST_int *is_collinear, ST_int *depvar_explained, ST_double *xtx,
                               ST_double *xty_all, ST_double *scratch);
 
+/* creghdfe_collinear(), and with tss_within not NULL also y's (weighted)
+ * sum of squares in row order as creghdfe_ols() takes it (zero when y is
+ * explained by the effects and zeroed), formed beside the columns' sums of
+ * squares on a thread of its own */
+ST_retcode creghdfe_collinear_tss(ST_double *data, ST_int N, ST_int K, const ST_double *norm2,
+                                  const ST_double *count_w, const ST_double *weights,
+                                  ST_int weight_type, ST_double collinear_tol, ST_int *fe_flagged,
+                                  ST_int *is_collinear, ST_int *depvar_explained, ST_double *xtx,
+                                  ST_double *xty_all, ST_double *scratch, ST_double *tss_within);
+
 typedef struct
 {
     ST_double *data;            /* N x K partialled columns, y first */
@@ -164,6 +174,8 @@ typedef struct
     const ST_double *stdevs;    /* K scales the columns were divided by */
     ST_int standardize;
     ST_int use_quad;
+    ST_int tss_given;           /* 1: tss_within below is y's sum of squares (not use_quad) */
+    ST_double tss_within;
 } creghdfe_ols_in;
 
 /* Every array is allocated by creghdfe_ols and owned by the caller, also

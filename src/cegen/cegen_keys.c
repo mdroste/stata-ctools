@@ -362,12 +362,15 @@ static stata_retcode keys_cut(const cegen_job *job, const stata_data *data, doub
             if (v > hi)
                 hi = v;
         }
-        if (nq > m + 1)
+        if ((double)nq > job->nobs_total + 1.0)
         {
-            /* pctile refuses more quantiles than observations plus one */
+            /* pctile refuses more quantiles than _N + 1 (the ado checks
+             * this first; the limit is not the size of the sample) */
             report->bad_groups = 1;
             m = 0;
         }
+        else if (!m)
+            report->all_missing = 1; /* pctile: no observations, r(2000) */
         if (m)
         {
             cuts[ncuts++] = lo;
@@ -496,6 +499,92 @@ static stata_retcode keys_fill(const cegen_job *job, size_t n, double *out)
    ma()
    --------------------------------------------------------------------------- */
 
+/* After one of ma()'s replace steps: widen the type as replace does for the
+ * values now held, and round them when the type has become float */
+static void ma_settle(double *out, size_t n, int threads, cegen_type *type)
+{
+    const double miss = SV_missval;
+    int fractional = 0, any = 0;
+    double lo = INFINITY, hi = -INFINITY;
+#pragma omp parallel for schedule(static) num_threads(threads) reduction(| : fractional, any) reduction(min : lo) reduction(max : hi)
+    for (size_t i = 0; i < n; i++)
+    {
+        const double value = out[i];
+        if (value < miss)
+        {
+            any = 1;
+            fractional |= (value != trunc(value));
+            if (value < lo)
+                lo = value;
+            if (value > hi)
+                hi = value;
+        }
+    }
+    *type = cegen_chain_promote(*type, any, fractional, lo, hi);
+    if (*type == CEGEN_T_FLOAT)
+    {
+#pragma omp parallel for schedule(static) num_threads(threads)
+        for (size_t i = 0; i < n; i++)
+            out[i] = cegen_type_round(out[i], CEGEN_T_FLOAT);
+    }
+}
+
+/*
+    ma() in an integer type. egen creates the variable empty in the type
+    asked for and fills it by replace: the values, then one replace per
+    distance adding both neighbours, then the division by their count. Each
+    step can widen the type (cegen_chain_promote), and later steps round to
+    the wider type, so the steps are taken one pass at a time here and the
+    type reached is the type of the result.
+*/
+static void ma_chain(const cegen_job *job, const double *x, size_t n, double *out,
+                     cegen_type *final_type)
+{
+    const double miss = SV_missval;
+    const int threads = cegen_threads_for(n);
+    const size_t half = (size_t)((job->window - 1) / 2);
+    cegen_type type = job->type;
+
+#pragma omp parallel for schedule(static) num_threads(threads)
+    for (size_t i = 0; i < n; i++)
+        out[i] = x[i];
+    ma_settle(out, n, threads, &type);
+
+    for (size_t d = 1; d <= half; d++)
+    {
+#pragma omp parallel for schedule(static) num_threads(threads)
+        for (size_t i = 0; i < n; i++)
+        {
+            /* neighbours outside the range are absent, not missing */
+            const double lag = i >= d ? x[i - d] : 0.0, lead = i + d < n ? x[i + d] : 0.0;
+            if (out[i] < miss)
+                out[i] = out[i] + lag + lead;
+        }
+        ma_settle(out, n, threads, &type);
+    }
+
+#pragma omp parallel for schedule(static) num_threads(threads)
+    for (size_t i = 0; i < n; i++)
+    {
+        const size_t count = 1 + (i < half ? i : half) + (n - 1 - i < half ? n - 1 - i : half);
+        if (out[i] < miss)
+            out[i] /= (double)count;
+    }
+    ma_settle(out, n, threads, &type);
+
+    if (!job->nomiss)
+    {
+#pragma omp parallel for schedule(static) num_threads(threads)
+        for (size_t i = 0; i < n; i++)
+        {
+            const size_t count = 1 + (i < half ? i : half) + (n - 1 - i < half ? n - 1 - i : half);
+            if (count != (size_t)job->window)
+                out[i] = miss;
+        }
+    }
+    *final_type = type;
+}
+
 static stata_retcode keys_ma(const cegen_job *job, const stata_data *data, double *out,
                              cegen_report *report)
 {
@@ -514,6 +603,13 @@ static stata_retcode keys_ma(const cegen_job *job, const stata_data *data, doubl
         /* egen stops: "missing values encountered" (its ma() runs under
          * version 6, where every missing code equals missing) */
         report->all_missing = 1;
+        return STATA_OK;
+    }
+
+    if (job->type <= CEGEN_T_LONG)
+    {
+        ma_chain(job, x, n, out, &report->final_type);
+        report->has_final_type = 1;
         return STATA_OK;
     }
 

@@ -4,6 +4,7 @@
     "scripts/sync_attribution.py copies this file into docs/ATTRIBUTION.md, the Acknowledgments section of each help",
     "file in build/, help ctools, and the *! original: lines of the ado-files. After editing, run:",
     "python scripts/sync_attribution.py",
+    "new_commands lists the ctools commands that reimplement no Stata command (csql), with the software they build on.",
     "Text fields use a small markup: `command`, *italic*, **bold**, [text](url)."
   ],
   "recorded": "November 25, 2026",
@@ -839,6 +840,29 @@
       "role": "Reference for the wild bootstrap p-values in `creghdfe` and `civreghdfe`",
       "distributed": "October 28, 2026",
       "channel": "SSC"
+    }
+  ],
+  "new_commands": [
+    {
+      "command": "csql",
+      "intro": "`csql` is a ctools command, not a reimplementation of a Stata command. Its queries run in [DuckDB](https://duckdb.org), developed by Mark Raasveldt, Hannes Mühleisen, and the DuckDB contributors, and released by the DuckDB Foundation under the MIT license.",
+      "uses": [
+        {
+          "name": "DuckDB",
+          "authors": "Mark Raasveldt, Hannes Mühleisen, and the DuckDB contributors",
+          "version": "2.0.1",
+          "url": "https://github.com/duckdb/duckdb/releases/tag/v2.0.1",
+          "channel": "GitHub (duckdb/duckdb)",
+          "license": "MIT, Stichting DuckDB Foundation",
+          "role": "Runs the queries of `csql`"
+        }
+      ],
+      "credits": [
+        "ctools ships DuckDB's C API header (`duckdb.h`). The library itself is not part of ctools: `csql, install` downloads it from DuckDB's own releases, and `library()` loads another DuckDB release (1.1 or later). [help ctools_licenses](help:ctools_licenses) reproduces the DuckDB license."
+      ],
+      "references": [
+        "Raasveldt, M., and H. Mühleisen. 2019. DuckDB: An embeddable analytical database. In *Proceedings of the 2019 International Conference on Management of Data (SIGMOD '19)*, 1981-1984. New York: ACM. [https://doi.org/10.1145/3299869.3320212](https://doi.org/10.1145/3299869.3320212)."
+      ]
     }
   ],
   "algorithms": [

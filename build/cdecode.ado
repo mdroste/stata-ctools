@@ -3,12 +3,30 @@
 *! original: see help cdecode for details
 
 * Hand one value label to the plugin as local __cd_map (format: see
-* src/cdecode/cdecode_impl.c). Sets __cd_ok to 0 when decode itself must do the
-* work: an undefined or empty label, a strL result, or a maxlength() cut inside
-* text with multibyte characters, which decode never splits.
+* src/cdecode/cdecode_impl.c) or, when that is too long for a macro, in the
+* file path, with local __cd_mapflag "mapfile". Sets __cd_ok to 0 when decode
+* itself must do the work: an undefined or empty label, a strL result, or a
+* maxlength() cut inside text with multibyte characters, which decode never
+* splits.
 capture mata: mata drop _cdecode_pack()
+capture mata: mata drop _cdecode_write_text()
 mata:
-void _cdecode_pack(string scalar label, real scalar maxlength)
+/* Write text to the file path, replacing any file there; 1 on success. */
+real scalar _cdecode_write_text(string scalar path, string scalar text)
+{
+    real scalar fh
+
+    if (fileexists(path)) unlink(path)
+    fh = _fopen(path, "w")
+    if (fh < 0) return(0)
+    if (_fwrite(fh, text) < 0) {
+        (void) _fclose(fh)
+        return(0)
+    }
+    return(_fclose(fh) == 0)
+}
+
+void _cdecode_pack(string scalar label, real scalar maxlength, string scalar path)
 {
     real colvector values, lengths
     string colvector text, entries
@@ -16,6 +34,7 @@ void _cdecode_pack(string scalar label, real scalar maxlength)
     real scalar i, width
 
     st_local("__cd_ok", "0")
+    st_local("__cd_mapflag", "")
     if (!st_vlexists(label)) return
     st_vlload(label, values, text)
     if (rows(values) == 0) return
@@ -35,8 +54,11 @@ void _cdecode_pack(string scalar label, real scalar maxlength)
     entries = strtrim(strofreal(values, "%21.0f")) :+ " " :+ strofreal(lengths) :+ " " :+ text
     packed = strofreal(rows(values)) + " " + invtokens(entries', " ") + " |"
     if (strlen(packed) != strlen(strofreal(rows(values))) + sum(strlen(entries)) + rows(values) + 2) return
-    if (strlen(packed) >= c("macrolen")) return
-    st_local("__cd_map", packed)
+    if (strlen(packed) < c("macrolen")) st_local("__cd_map", packed)
+    else {
+        if (!_cdecode_write_text(path, packed)) return
+        st_local("__cd_mapflag", "mapfile")
+    }
     st_local("__cd_len", strofreal(strlen(packed), "%21.0f"))
     st_local("__cd_width", strofreal(width))
     st_local("__cd_ok", "1")
@@ -112,6 +134,55 @@ program define _cdecode_impl, rclass
         }
     }
 
+    local maxopt ""
+    if `maxlength' > 0 local maxopt "maxlength(`maxlength')"
+    local threads_code ""
+    if `threads' > 0 local threads_code "threads(`threads')"
+
+    * The plugin is an accelerator only: without it every variable is decoded
+    * by Stata, as are labels the plugin protocol does not cover. Its outputs
+    * are created now, without initial values (the plugin writes every
+    * observation), so that an if marker made next is the last variable:
+    * Stata drops that one at no cost, and one in the middle at the cost of a
+    * pass over the data. Every output is built under a temporary name. The
+    * inputs are not touched until all variables have been decoded, so a
+    * failure or Break before then leaves the dataset as it was.
+    local have_plugin = 0
+    capture _ctools_load
+    * Above Stata's plugin limit of 2^31-1 observations Stata decodes everything.
+    if !_rc & !(_N > 2147483647) {
+        capture program ctools_plugin, plugin using("`__ctools_plugin'")
+        if _rc == 0 | _rc == 110 local have_plugin = 1
+    }
+    capture confirm number 0
+    local staged ""
+    local new_names ""
+    local new_types ""
+    local i = 0
+    foreach v of local varlist {
+        local ++i
+        tempvar decoded
+        local staged `staged' `decoded'
+        local __cd_ok = 0
+        if `have_plugin' & `maxlength' <= 32000 & _N > 0 {
+            tempfile __cd_mapfile`i'
+            mata: _cdecode_pack("`: value label `v''", `maxlength', st_local("__cd_mapfile`i'"))
+        }
+        local __cd_ok`i' = `__cd_ok'
+        if `__cd_ok' {
+            local __cd_map`i' : copy local __cd_map
+            local __cd_len`i' `__cd_len'
+            local __cd_width`i' `__cd_width'
+            local __cd_mapflag`i' `__cd_mapflag'
+            local new_names `new_names' `decoded'
+            local new_types `new_types' str`__cd_width'
+        }
+        local __cd_map ""
+    }
+    if "`new_names'" != "" {
+        mata: (void) st_addvar(tokens(st_local("new_types")), tokens(st_local("new_names")), 1)
+    }
+
     * Stata answers an if one observation at a time, so the plugin is passed
     * the sample as a marker variable, last, and reads it in parallel. An if
     * that names a numeric variable other than a source is that marker. Any
@@ -137,45 +208,26 @@ program define _cdecode_impl, rclass
             local ifflag "ifcond touse"
         }
     }
-    * Without if/in the plugin writes every observation, so its destination
-    * can be created without first being filled.
-    local fill = cond(`"`if'`in'"' == "", "fillall", "")
-    local maxopt ""
-    if `maxlength' > 0 local maxopt "maxlength(`maxlength')"
-    local threads_code ""
-    if `threads' > 0 local threads_code "threads(`threads')"
-
-    * The plugin is an accelerator only: without it every variable is decoded
-    * by Stata, as are labels the plugin protocol does not cover.
-    local have_plugin = 0
-    capture _ctools_load
-    * Above Stata's plugin limit of 2^31-1 observations Stata decodes everything.
-    if !_rc & !(_N > 2147483647) {
-        capture program ctools_plugin, plugin using("`__ctools_plugin'")
-        if _rc == 0 | _rc == 110 local have_plugin = 1
-    }
-    capture confirm number 0
-
-    * Every output is first built under a temporary name. The inputs are not
-    * touched until all variables have been decoded, so a failure or Break
-    * before then leaves the dataset as it was.
-    local staged ""
     local n_plugin = 0
+    local moved = 0
+    local i = 0
     foreach v of local varlist {
-        tempvar decoded
+        local ++i
+        local decoded : word `i' of `staged'
         local done = 0
-        local __cd_ok = 0
-        if `have_plugin' & `maxlength' <= 32000 & _N > 0 {
-            mata: _cdecode_pack("`: value label `v''", `maxlength')
-        }
-        if `__cd_ok' {
-            mata: (void) st_addvar("str`__cd_width'", "`decoded'", "`fill'" != "")
+        if `__cd_ok`i'' {
+            local __cd_map : copy local __cd_map`i'
+            local __cd_map`i' ""
+            local __cd_mapfile `"`__cd_mapfile`i''"'
+            * A plugin that knows only v2 refuses v3, and decode does the work.
             capture plugin call ctools_plugin `v' `decoded' `touse' `plugin_sample', ///
-                "cdecode `threads_code' v2 maplen=`__cd_len' width=`__cd_width' `ifflag' `fill'"
+                "cdecode `threads_code' v3 maplen=`__cd_len`i'' width=`__cd_width`i'' `ifflag' fillrows `__cd_mapflag`i''"
             local plugin_rc = _rc
+            local __cd_map ""
             if `plugin_rc' == 1 exit 1
             if `plugin_rc' {
                 drop `decoded'
+                local moved = 1
             }
             else {
                 mata: st_varlabel("`decoded'", st_varlabel("`v'"))
@@ -183,11 +235,10 @@ program define _cdecode_impl, rclass
                 local ++n_plugin
             }
         }
-        local __cd_map ""
+        else if `i' < `nvars' local moved = 1
         if !`done' {
             quietly decode `v' `sample', generate(`decoded') `maxopt'
         }
-        local staged `staged' `decoded'
     }
 
     * st_varrename() is built in; rename is an ado file whose first use in a
@@ -206,6 +257,8 @@ program define _cdecode_impl, rclass
             mata: st_varrename("`decoded'", "`v'")
         }
         if "`replace'" != "" order `original_order'
+        * decode's outputs were made after the plugin's; put them in order.
+        else if `moved' order `generate', last
     }
     if "`verbose'" != "" {
         di as text "cdecode: decoded `nvars' variable(s): `n_plugin' in the ctools plugin, " ///

@@ -721,8 +721,9 @@ ST_retcode xlsx_parse_shared_strings(XLSXContext *ctx)
         return 0;  /* Not an error */
     }
 
+    /* Inflated by libdeflate, as the worksheet is (miniz when it cannot) */
     size_t size;
-    void *data = xlsx_zip_extract_to_heap(zip, idx, &size);
+    void *data = xlsx_zip_extract_direct(zip, idx, &size);
     if (!data && xlsx_zip_refused(zip)) return xlsx_part_refused(ctx, ctx->shared_strings_path);
     if (!data) {
         snprintf(ctx->error_message, sizeof(ctx->error_message),

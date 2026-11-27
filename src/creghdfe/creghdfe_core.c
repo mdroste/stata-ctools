@@ -558,6 +558,17 @@ ST_retcode creghdfe_collinear(ST_double *data, ST_int N, ST_int K, const ST_doub
                               ST_int *is_collinear, ST_int *depvar_explained, ST_double *xtx,
                               ST_double *xty_all, ST_double *scratch)
 {
+    return creghdfe_collinear_tss(data, N, K, norm2, count_w, weights, weight_type, collinear_tol,
+                                  fe_flagged, is_collinear, depvar_explained, xtx, xty_all, scratch,
+                                  NULL);
+}
+
+ST_retcode creghdfe_collinear_tss(ST_double *data, ST_int N, ST_int K, const ST_double *norm2,
+                                  const ST_double *count_w, const ST_double *weights,
+                                  ST_int weight_type, ST_double collinear_tol, ST_int *fe_flagged,
+                                  ST_int *is_collinear, ST_int *depvar_explained, ST_double *xtx,
+                                  ST_double *xty_all, ST_double *scratch, ST_double *tss_within)
+{
     const ST_int K_x = K - 1;
     ST_int k, j;
     if (K_x > 0)
@@ -577,13 +588,37 @@ ST_retcode creghdfe_collinear(ST_double *data, ST_int N, ST_int K, const ST_doub
     *depvar_explained = 0;
     ST_int num_fe_collinear = 0;
     /* The partialled sums of squares: one independent sum per column, each in
-     * row order, so the columns run in parallel */
+     * row order, so the columns run in parallel; with tss_within one more
+     * task takes y's sum of squares as creghdfe_ols() would */
     ST_double *ss_all = (ST_double *)malloc((size_t)K * sizeof(ST_double));
     if (!ss_all)
         return 920;
-#pragma omp parallel for schedule(static) if (K > 1 && (size_t)N * (size_t)K > 200000)
-    for (k = 0; k < K; k++)
+    const ST_int tasks = K + (tss_within ? 1 : 0);
+#pragma omp parallel for schedule(static) if (tasks > 1 && (size_t)N * (size_t)K > 200000)
+    for (k = 0; k < tasks; k++)
     {
+        if (k == K)
+        {
+            ST_double t = 0.0;
+            if (weights)
+            {
+                for (ST_int i = 0; i < N; i++)
+                {
+                    volatile ST_double sq = data[i] * data[i];
+                    t += weights[i] * sq;
+                }
+            }
+            else
+            {
+                for (ST_int i = 0; i < N; i++)
+                {
+                    volatile ST_double sq = data[i] * data[i];
+                    t += sq;
+                }
+            }
+            *tss_within = t;
+            continue;
+        }
         const ST_double *col = &data[(size_t)k * N];
         ST_double ss;
         if (count_w)
@@ -608,6 +643,9 @@ ST_retcode creghdfe_collinear(ST_double *data, ST_int N, ST_int K, const ST_doub
             {
                 memset(col, 0, (size_t)N * sizeof(ST_double));
                 *depvar_explained = 1;
+                /* the sum of squares of the zeroed column */
+                if (tss_within)
+                    *tss_within = 0.0;
             }
             continue;
         }
@@ -773,7 +811,11 @@ ST_retcode creghdfe_ols(const creghdfe_ols_in *in, creghdfe_ols_out *out)
                                      xty_keep);
         /* Weighted TSS_within = sum(w_i * y_i^2)
          * Use quad-precision or Kahan summation based on option. */
-        if (in->use_quad)
+        if (in->tss_given && !in->use_quad)
+        {
+            tss_within = in->tss_within;
+        }
+        else if (in->use_quad)
         {
             tss_within = dd_sum_sq_weighted(data_keep, weights, N);
         }
@@ -792,7 +834,11 @@ ST_retcode creghdfe_ols(const creghdfe_ols_in *in, creghdfe_ols_out *out)
         if (!reuse_xx)
             compute_xtx_xty(data_keep, N, K_keep + 1, xtx_keep, xty_keep);
         /* Compute tss_within: use quad-precision or Kahan summation. */
-        if (in->use_quad)
+        if (in->tss_given && !in->use_quad)
+        {
+            tss_within = in->tss_within;
+        }
+        else if (in->use_quad)
         {
             tss_within = dd_sum_sq(data_keep, N);
         }

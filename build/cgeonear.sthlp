@@ -316,8 +316,8 @@ command it ran internally.{p_end}
 
 {pstd}As in {cmd:geonear}, the long-form result keeps the data label, the
 characteristics and notes of the base data, everything that describes
-{it:baseid} and {it:nborid}, and the value labels of the six location
-variables; the notes of {it:nborfile} are appended to those of the data unless
+{it:baseid} and {it:nborid}, and no other value labels (those of the location
+variables, and labels no variable uses, are dropped); the notes of {it:nborfile} are appended to those of the data unless
 the same note is already there, and its other dataset characteristics are
 added where the data have none of that name. In wide form, only the dataset
 notes and characteristics of {it:nborfile} are added.

@@ -955,6 +955,19 @@ program define _creghdfe_impl, eclass
     * Record setup time
     _ctools_lap __time_setup __ct_lap98 `__ct_lap98'
 
+    * A cluster variable that is also an absorbed effect's variable is read
+    * once: the plugin takes its values from that effect (1-based position)
+    forvalues d = 1/`ncl' {
+        local __clv : word `d' of `clustervar'
+        local __clg = 0
+        local __g = 0
+        foreach __fv of local absorb {
+            local ++__g
+            if `__clg' == 0 & "`__fv'" == "`__clv'" local __clg = `__g'
+        }
+        scalar __creghdfe_cl_fe_`d' = `__clg'
+    }
+
     * Build varlist for plugin: depvar indepvars fe_vars [cluster_var] [weight_var] [resid_var]
     * Use expanded varlist (factor variables converted to temp numeric vars)
     local plugin_varlist `varlist_expanded' `absorb'

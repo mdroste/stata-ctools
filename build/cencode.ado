@@ -60,6 +60,19 @@ program define _cencode_impl, rclass
         di as error "noextend option not allowed without label() option"
         exit 198
     }
+    local n_vars : word count `varlist'
+    unab original_order : _all
+    * The outputs are created first, without initial values (the plugin
+    * writes every observation), so that the if marker made next is the last
+    * variable: Stata drops that one at no cost, and one in the middle at the
+    * cost of a pass over the data. Every output is built under a temporary
+    * name; see _cencode_commit.
+    local staged ""
+    forvalues i = 1/`n_vars' {
+        tempvar __tempgen
+        local staged `staged' `__tempgen'
+    }
+    if _N > 0 mata: (void) st_addvar("long", tokens(st_local("staged")), 1)
     * The if is evaluated now, as encode does, before any helper replaces
     * the r() or e() results it may name.
     if `"`if'"' != "" {
@@ -81,10 +94,6 @@ program define _cencode_impl, rclass
         di as error "cencode: cannot specify both generate() and replace options"
         exit 198
     }
-
-    * Count input variables
-    local n_vars : word count `varlist'
-    unab original_order : _all
 
     * Handle replace vs generate
     local __do_replace = 0
@@ -152,6 +161,14 @@ program define _cencode_impl, rclass
     capture confirm number 0
     * Reset _rc (plugin load may leave _rc=110 for already-loaded plugin)
     capture confirm number 0
+    * The plugin's encoder protocol 3 (see src/cencode/cencode_impl.c); a
+    * plugin that does not speak it refuses the question, and encode then
+    * encodes every variable.
+    capture scalar drop _cencode_protocol
+    capture plugin call ctools_plugin, "cencode v3"
+    local __ce_v3 = 0
+    if !_rc capture local __ce_v3 = (scalar(_cencode_protocol) == 3)
+    capture scalar drop _cencode_protocol
 
     * Build threads option
     local threads_code ""
@@ -159,9 +176,6 @@ program define _cencode_impl, rclass
         local threads_code "threads(`threads')"
     }
 
-    * Without if/in the plugin writes every observation, so the destination
-    * can be created without first filling it with missing values.
-    local __fill = cond(`"`if'`in'"' == "", "fillall", "")
     local __ifflag = cond(`"`if'"' != "", "ifcond", "")
     * An if was marked once after syntax; the marker is passed last to each
     * plugin call, which reads it in parallel (Stata would answer the if one
@@ -171,14 +185,12 @@ program define _cencode_impl, rclass
     * Process each variable
     * =========================================================================
 
-    local staged ""
+    * An output encode makes comes after the plugin's; __moved puts them back
+    * in order.
+    local __moved = 0
     forvalues i = 1/`n_vars' {
         local srcvar : word `i' of `varlist'
-
-        * Every output is built under a temporary name; see _cencode_commit.
-        tempvar __tempgen
-        local destvar "`__tempgen'"
-        local staged `staged' `destvar'
+        local destvar : word `i' of `staged'
         if `__do_replace' {
             local __final_name "`srcvar'"
         }
@@ -195,37 +207,27 @@ program define _cencode_impl, rclass
         }
 
         * An existing label is extended as encode does: the plugin receives
-        * its mappings. Encode itself handles what the plugin hands back
-        * (noextend with new strings, codes past the long range) and labels it
-        * cannot pass (extended missing values, text over 2,045 bytes).
-        local __existing = 0
-        local __native = 0
+        * its mappings (in a file when they are too long for a macro). Encode
+        * itself handles what the plugin hands back (noextend with new
+        * strings, codes past the long range, strL values over 2,045 bytes or
+        * binary) and labels it cannot pass (extended missing values, text
+        * over 2,045 bytes).
+        local __native = !`__ce_v3'
         local __labelmap ""
-        capture label list `this_label'
-        if !_rc {
-            local __existing = 1
+        mata: st_local("__existing", strofreal(st_vlexists(st_local("this_label"))))
+        if `__existing' & !`__native' {
             local __ce_ok = 0
-            mata: _cencode_pack_label(st_local("this_label"))
-            if `__ce_ok' local __labelmap "labelmap=`__ce_len' `noextend'"
+            tempfile __ce_mapfile
+            mata: _cencode_pack_label(st_local("this_label"), st_local("__ce_mapfile"))
+            if `__ce_ok' local __labelmap "labelmap=`__ce_len' `__ce_mapflag' `noextend'"
             else local __native = 1
         }
-        * The plugin reads strL text up to 2,045 bytes and no binary values;
-        * encode itself takes the others
-        if !`__native' & "`: type `srcvar''" == "strL" {
-            mata: st_local("__native", strofreal(_cencode_strl_unsupported(st_local("srcvar"))))
-        }
         if `__native' {
+            drop `destvar'
             _cencode_native `srcvar' `destvar' `this_label' `"`if' `in'"' `noextend'
             return scalar N_unique = r(N_unique)
+            if `i' < `n_vars' local __moved = 1
             continue
-        }
-
-        * Create the destination variable (numeric, long type for sufficient range)
-        if "`__fill'" != "" {
-            mata: (void) st_addvar("long", st_local("destvar"), 1)
-        }
-        else {
-            quietly generate long `destvar' = .
         }
 
         * Temp data file for C plugin to write length-prefixed label bytes
@@ -235,6 +237,20 @@ program define _cencode_impl, rclass
         local __ce_labelfile `"`__labelfile'"'
         local __ce_lflen = strlen(`"`__labelfile'"')
         local labelfile_code "labelfile=`__ce_lflen'"
+        * st_vlmodify() copies the whole label for each mapping it adds, so a
+        * large label comes back instead as a 0-observation dataset holding
+        * it, under a temporary name, for append to load. Append clears the
+        * sort order, which a stable sort then restores. The plugin chooses,
+        * given this estimate of the append and sort in microseconds.
+        tempfile __labeldta
+        tempname __dtalab
+        local __ce_labeldta `"`__labeldta'"'
+        local __ce_dtavar "`destvar'"
+        local __ce_dtalab "`__dtalab'"
+        local __sortlist : sortedby
+        local __dtacost = 3000 + _N * 0.004 + ("`__sortlist'" != "") * _N * (0.01 + 0.0004 * c(width))
+        local __dtacost = string(min(`__dtacost', 2e9), "%12.0f")
+        local labeldta_code = "labeldta=" + string(strlen(`"`__labeldta'"')) + " dtacost=`__dtacost'"
 
         * The plugin sees only the source (variable 1), the destination (2)
         * and any sample marker (3).
@@ -245,14 +261,16 @@ program define _cencode_impl, rclass
             quietly _ctools_clock __ct_start92
         }
         capture scalar drop _cencode_max_len _cencode_protocol _cencode_fallback _cencode_n_new
+        capture scalar drop _cencode_unsupported _cencode_label_route
         local __marker ""
         if `"`if'"' != "" {
             local __marker "`__iftouse'"
             local __ifflag "ifcond touse"
         }
-        plugin call ctools_plugin `srcvar' `destvar' `__marker' `in', "cencode `threads_code' 1 2 `labelfile_code' stream `__fill' `__ifflag' `__labelmap'"
+        plugin call ctools_plugin `srcvar' `destvar' `__marker' `in', "cencode `threads_code' v3 1 2 `labelfile_code' `labeldta_code' stream fillrows `__ifflag' `__labelmap'"
         local __ce_map ""
         local __ce_labelfile ""
+        local __ce_labeldta ""
         if `__do_timing' {
             quietly _ctools_clock __ct_now
             local __ct_elapsed92 = `__ct_elapsed92' + (`__ct_now' - `__ct_start92')
@@ -264,35 +282,45 @@ program define _cencode_impl, rclass
         * Install the label vector without interpreting user text as source
         * =====================================================================
 
+        * A strL value the plugin cannot read: encode takes the variable.
+        if scalar(_cencode_unsupported) == 1 {
+            drop `destvar'
+            _cencode_native `srcvar' `destvar' `this_label' `"`if' `in'"' `noextend'
+            return scalar N_unique = r(N_unique)
+            if `i' < `n_vars' local __moved = 1
+            continue
+        }
         local n_unique = scalar(_cencode_n_unique)
+        local __route = scalar(_cencode_label_route)
+        local __n_install = 0
 
         if `__existing' {
-            * A plugin that does not report protocol 2 numbered the strings
-            * afresh; encode redoes those, as it does the handed-back cases.
-            capture local __protocol = scalar(_cencode_protocol)
-            if _rc local __protocol = 0
-            capture local __fallback = scalar(_cencode_fallback)
-            if _rc local __fallback = 1
-            if `__protocol' != 2 | `__fallback' != 0 | `n_unique' == 0 {
+            * encode redoes what the plugin handed back.
+            if scalar(_cencode_fallback) != 0 | `n_unique' == 0 {
                 drop `destvar'
                 _cencode_native `srcvar' `destvar' `this_label' `"`if' `in'"' `noextend'
                 return scalar N_unique = r(N_unique)
+                if `i' < `n_vars' local __moved = 1
                 continue
             }
-            local n_new = scalar(_cencode_n_new)
-            if `n_new' > 0 {
-                mata: _cencode_apply_labels(st_local("__labelfile"), st_local("this_label"), strtoreal(st_local("n_new")))
-            }
+            local __n_install = scalar(_cencode_n_new)
         }
-        else if `n_unique' > 0 {
-            * Drop any pre-existing label with this name for a clean slate
-            capture label drop `this_label'
-            mata: _cencode_apply_labels(st_local("__labelfile"), st_local("this_label"), strtoreal(st_local("n_unique")))
+        else local __n_install = `n_unique'
+        if `__n_install' > 0 & `__route' == 2 {
+            * The whole label, from the label dataset; then the sort order
+            * append cleared.
+            quietly append using `"`__labeldta'"'
+            if "`__sortlist'" != "" sort `__sortlist', stable
+            label copy `__dtalab' `this_label', replace
+            label drop `__dtalab'
+        }
+        else if `__n_install' > 0 {
+            mata: _cencode_apply_labels(st_local("__labelfile"), st_local("this_label"), strtoreal(st_local("__n_install")))
         }
 
         * Apply label to variable if it exists
-        capture label list `this_label'
-        if _rc == 0 {
+        mata: st_local("__ce_haslabel", strofreal(st_vlexists(st_local("this_label"))))
+        if `__ce_haslabel' {
             label values `destvar' `this_label'
         }
 
@@ -327,6 +355,7 @@ program define _cencode_impl, rclass
     }
 
     _cencode_commit "`varlist'" "`staged'" "`generate'" `__do_replace' "`original_order'"
+    if `__moved' & !`__do_replace' order `generate', last
 
     if `__do_timing' {
         quietly _ctools_clock __ct_now
@@ -444,17 +473,6 @@ program define _cencode_commit
 end
 
 mata:
-/* 1 if a strL variable holds a value the plugin cannot read: longer than
-   2,045 bytes, or binary */
-real scalar _cencode_strl_unsupported(string scalar var)
-{
-    string colvector text
-
-    text = st_sdata(., var)
-    if (!rows(text)) return(0)
-    return(any(strlen(text) :> 2045) | any(strpos(text, char(0))))
-}
-
 struct _cencode_vl {
     real scalar exists
     real colvector values
@@ -498,18 +516,34 @@ void _cencode_labels_restore()
     }
 }
 
+/* Write text to the file path, replacing any file there; 1 on success. */
+real scalar _cencode_write_text(string scalar path, string scalar text)
+{
+    real scalar fh
+
+    if (fileexists(path)) unlink(path)
+    fh = _fopen(path, "w")
+    if (fh < 0) return(0)
+    if (_fwrite(fh, text) < 0) {
+        (void) _fclose(fh)
+        return(0)
+    }
+    return(_fclose(fh) == 0)
+}
+
 /* Hand an existing value label to the plugin as local __ce_map (format: see
-   cencode_label_read in src/cencode/cencode_impl.c). __ce_ok is 0 when encode
-   itself must handle the label: extended missing or non-integer values, more
-   than 65,536 mappings, text over 2,045 bytes, or a mapping too large for a
-   macro. */
-void _cencode_pack_label(string scalar label)
+   cencode_label_read in src/cencode/cencode_impl.c) or, when that is too long
+   for a macro, in the file path, with local __ce_mapflag "mapfile". __ce_ok
+   is 0 when encode itself must handle the label: extended missing or
+   non-integer values, more than 65,536 mappings, text over 2,045 bytes. */
+void _cencode_pack_label(string scalar label, string scalar path)
 {
     real colvector values, lengths
     string colvector text, entries
     string scalar packed
 
     st_local("__ce_ok", "0")
+    st_local("__ce_mapflag", "")
     st_vlload(label, values, text)
     if (rows(values) > 65536) return
     if (rows(values) == 0) {
@@ -523,8 +557,11 @@ void _cencode_pack_label(string scalar label)
         packed = strofreal(rows(values)) + " " + invtokens(entries', " ") + " |"
         if (strlen(packed) != strlen(strofreal(rows(values))) + sum(strlen(entries)) + rows(values) + 2) return
     }
-    if (strlen(packed) >= c("macrolen")) return
-    st_local("__ce_map", packed)
+    if (strlen(packed) < c("macrolen")) st_local("__ce_map", packed)
+    else {
+        if (!_cencode_write_text(path, packed)) return
+        st_local("__ce_mapflag", "mapfile")
+    }
     st_local("__ce_len", strofreal(strlen(packed), "%21.0f"))
     st_local("__ce_ok", "1")
 }

@@ -207,7 +207,8 @@ must be integers.
 {pstd}
 {ul:Agreement with collapse.} Counts, percentages, minimums, maximums, first and
 last values, percentiles and the interquartile range are those of
-{cmd:collapse} exactly. Sums and means are identical when the data are sorted
+{cmd:collapse} exactly, apart from weighted percentiles at an exact boundary
+(below). Sums and means are identical when the data are sorted
 by the {opt by()} variables, where {cmd:collapse} too adds each group's values
 in the order of the observations. On data in another order {cmd:collapse}
 arranges the observations of a group in an order of its own, which changes from
@@ -220,9 +221,26 @@ the last digit; with {cmd:set processors 1} they are identical for unweighted,
 {opt fweight}ed and {opt iweight}ed data.
 
 {pstd}
+{ul:Weighted percentiles at an exact boundary.} When a weighted percentile
+falls exactly between two values and the weights are not exactly representable
+(0.1, 0.7, ...), {cmd:collapse}'s own result depends on the order of the
+observations and on {cmd:set processors}: it adds the weights of parts of the
+group whose make-up depends on that order, and the rounding of those sums
+decides the boundary. {cmd:ccollapse} adds the weights of the sorted group from
+the lowest value up, so its result does not change with the order or the
+threads, and at such a boundary it can be the other of {cmd:collapse}'s two
+answers. Weights whose sums are exact (integers, halves, {cmd:float} values)
+give identical results. Groups whose {opt iweight}s add to zero or less follow
+{cmd:collapse}'s rescaling of the weights to w*n/W; a total of exactly zero
+gives missing.
+
+{pstd}
 {ul:Differences from collapse.} {opt sepoisson} is computed for groups whose
 total reaches 2^31, where {cmd:collapse} stores a value that is not a number.
-A {opt by()} variable may also be a source variable (under another target
+A result that overflows past Stata's largest double (about 8.99e307), such as
+the {opt sum} or {opt iqr} of values near that limit, is stored as missing
+({cmd:.}), where {cmd:collapse} stores the raw IEEE value, which Stata lists as
+{cmd:.z_}. A {opt by()} variable may also be a source variable (under another target
 name), which {cmd:collapse} refuses. {opt fast} has no effect, as described
 above. The undocumented {opt graphbar()} option that {helpb graph bar} passes to
 {cmd:collapse} is not available.

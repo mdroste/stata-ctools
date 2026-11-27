@@ -658,7 +658,7 @@ bool cimport_analyze_numeric_with_sep(const char *file_base, CImportFieldRef *fi
 
     if (!isfinite(val) || val >= SV_missval) return false;
     *out_value = val;
-    *out_is_integer = (floor(val) == val);
+    *out_is_integer = cimport_integral(val);
 
     return true;
 }

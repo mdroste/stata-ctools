@@ -814,21 +814,33 @@ int creshape_plan_outputs(creshape_state *st)
     }
     else
         middle = 1 + st->nstubs;
+    /* reshape's rule: r(134) when j alone takes on more values than
+     * c(maxvar), whatever the number of stubs; otherwise r(900) when the
+     * whole result does not fit */
+    if (wide && st->nlevels > (size_t)st->maxvar)
+    {
+        creshape_error("variable {bf:%s} takes on too many values", st->jname);
+        return 134;
+    }
     const size_t total = st->ni + middle + st->nxi;
     if (total > (size_t)st->maxvar)
     {
-        /* reshape's message and code for a wide form that does not fit */
-        if (wide)
-            creshape_error("variable {bf:%s} takes on too many values", st->jname);
+        /* Stata's own r(900) message, as reshape shows it */
+        char num[32], text[256];
+        int m = st->maxvar;
+        if (m >= 1000000)
+            snprintf(num, sizeof(num), "%d,%03d,%03d", m / 1000000, (m / 1000) % 1000, m % 1000);
+        else if (m >= 1000)
+            snprintf(num, sizeof(num), "%d,%03d", m / 1000, m % 1000);
         else
-            creshape_error("no room to add more variables");
-        char text[256];
+            snprintf(num, sizeof(num), "%d", m);
+        creshape_error("no room to add more variables");
         snprintf(text, sizeof(text),
-                 "{p 4 4 2}The result would have %zu variables, and {bf:maxvar} is %d; see "
-                 "{bf:help maxvar}.{p_end}",
-                 total, st->maxvar);
+                 "{p 4 4 2}Up to %s variables are currently allowed, although you could reset "
+                 "the maximum using {bf:set maxvar}; see help {bf:memory}.{p_end}",
+                 num);
         creshape_error_text(text);
-        return wide ? 134 : 900;
+        return 900;
     }
     st->out = (creshape_out *)calloc(total ? total : 1, sizeof(creshape_out));
     if (!st->out)

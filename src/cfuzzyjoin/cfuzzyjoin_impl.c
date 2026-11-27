@@ -18,12 +18,93 @@
 
 #include "cfuzzyjoin_impl.h"
 #include "cfuzzyjoin_internal.h"
+#include "ctools_alloc.h"
 #include "ctools_runtime.h"
 
 void cfuzzyjoin_cleanup_state(void)
 {
     cfj_match_cleanup();
     cfj_link_cleanup();
+}
+
+/* The longest string the shared loader reads; cfuzzyjoin compares strL
+ * values on their first CFJ_STR_MAXLEN bytes */
+#define CFJ_STR_MAXLEN 2045
+
+/* Does strL variable idx hold a text value longer than CFJ_STR_MAXLEN bytes
+ * (and no binary value, which stays an error of the loader) among the
+ * observations in range? */
+static int strl_has_long(int idx)
+{
+    const ST_int in1 = SF_in1(), in2 = SF_in2();
+    int found = 0;
+    for (ST_int obs = in1; obs >= 1 && obs <= in2; obs++)
+    {
+        if (SF_var_is_binary(idx, obs))
+            return 0;
+        if (SF_sdatalen(idx, obs) > CFJ_STR_MAXLEN)
+            found = 1;
+    }
+    return found;
+}
+
+/* Fill column j of fd with strL variable idx, each value cut to its first
+ * CFJ_STR_MAXLEN bytes (the column the loader read in its place is freed) */
+static stata_retcode load_strl_cut(ctools_filtered_data *fd, size_t j, int idx)
+{
+    stata_variable *v = &fd->data.vars[j];
+    const size_t n = fd->data.nobs;
+    stata_variable_free(v);
+    v->type = STATA_TYPE_STRING;
+    v->nobs = n;
+    v->buffer_storage = CTOOLS_BUFFER_HEAP;
+    v->string_storage = CTOOLS_STRINGS_OWNED;
+    v->str_maxlen = CFJ_STR_MAXLEN;
+    v->data.str = (char **)calloc(n ? n : 1, sizeof(char *));
+    if (!v->data.str)
+        return STATA_ERR_MEMORY;
+    char *buf = NULL;
+    size_t cap = 0;
+    stata_retcode rc = STATA_OK;
+    for (size_t i = 0; i < n && !rc; i++)
+    {
+        const ST_int obs = fd->obs_map ? (ST_int)fd->obs_map[i] : SF_in1() + (ST_int)i;
+        ST_int len = SF_sdatalen(idx, obs);
+        if (len < 0)
+        {
+            rc = STATA_ERR_STATA_READ;
+            break;
+        }
+        if ((size_t)len + 1 > cap)
+        {
+            char *more = (char *)realloc(buf, (size_t)len + 1);
+            if (!more)
+            {
+                rc = STATA_ERR_MEMORY;
+                break;
+            }
+            buf = more;
+            cap = (size_t)len + 1;
+        }
+        /* SF_strldata returns the number of bytes copied */
+        if (SF_strldata(idx, obs, buf, len + 1) != len)
+        {
+            rc = STATA_ERR_STATA_READ;
+            break;
+        }
+        size_t keep = (size_t)len < CFJ_STR_MAXLEN ? (size_t)len : CFJ_STR_MAXLEN;
+        char *s = (char *)malloc(keep + 1);
+        if (!s)
+        {
+            rc = STATA_ERR_MEMORY;
+            break;
+        }
+        memcpy(s, buf, keep);
+        s[keep] = '\0';
+        v->data.str[i] = s;
+    }
+    free(buf);
+    return rc;
 }
 
 stata_retcode cfj_load(ctools_filtered_data *fd, int first, int count, int flags)
@@ -34,8 +115,59 @@ stata_retcode cfj_load(ctools_filtered_data *fd, int first, int count, int flags
     for (int j = 0; j < count; j++)
         idx[j] = first + j;
     ctools_filtered_data_free(fd);
-    return ctools_data_load_ex(fd, idx, (size_t)count, 0, 0, flags | CTOOLS_LOAD_NO_SORT_ORDER,
-                               NULL);
+
+    /* strL variables with values the loader does not read (over 2,045
+     * bytes): the loader reads a stand-in variable in their place, then
+     * they are read here cut to 2,045 bytes */
+    unsigned char cut[4096];
+    int ncut = 0, standin = 0;
+    for (int j = 0; j < count; j++)
+    {
+        cut[j] = SF_var_is_strl(idx[j]) && strl_has_long(idx[j]);
+        ncut += cut[j];
+    }
+    if (ncut)
+    {
+        for (int v = 1; v <= SF_nvars() && !standin; v++)
+            if (!SF_var_is_string(v))
+                standin = v;
+        if (!standin)
+            ncut = 0; /* no numeric variable to stand in: the loader's error */
+        for (int j = 0; j < count && ncut; j++)
+            if (cut[j])
+                idx[j] = standin;
+    }
+
+    stata_retcode rc = ctools_data_load_ex(fd, idx, (size_t)count, 0, 0,
+                                           flags | CTOOLS_LOAD_NO_SORT_ORDER, NULL);
+    if (rc)
+        return rc;
+
+    /* No observation: the loader leaves the columns out (or untyped); give
+     * them their types, so that the calls can check them and see 0 rows */
+    if (fd->data.nobs == 0)
+    {
+        if (!fd->data.vars)
+        {
+            fd->data.vars =
+                (stata_variable *)ctools_safe_cacheline_alloc2((size_t)count, sizeof(stata_variable));
+            if (!fd->data.vars)
+                return STATA_ERR_MEMORY;
+            memset(fd->data.vars, 0, (size_t)count * sizeof(stata_variable));
+            fd->data.nvars = (size_t)count;
+        }
+        for (int j = 0; j < count && (size_t)j < fd->data.nvars; j++)
+            fd->data.vars[j].type =
+                SF_var_is_string(first + j) ? STATA_TYPE_STRING : STATA_TYPE_DOUBLE;
+        return STATA_OK;
+    }
+
+    for (int j = 0; j < count && ncut && !rc; j++)
+        if (cut[j])
+            rc = load_strl_cut(fd, (size_t)j, first + j);
+    if (rc)
+        ctools_filtered_data_free(fd);
+    return rc;
 }
 
 void cfj_say(const char *fmt, ...)

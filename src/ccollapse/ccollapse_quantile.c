@@ -13,7 +13,9 @@
  * values into a buffer of their own and select from it. Unweighted values
  * need no sort, only the order statistics the percentiles ask for
  * (quickselect, narrowed from one requested rank to the next). Weighted
- * values are sorted, stably, with their weights.
+ * values are sorted with their weights, equal values by weight as collapse
+ * orders them (the order sets the running total when weights are negative
+ * or too small to change it).
  *
  * A group of a million rows or more would keep one thread busy while the
  * others wait, so it is selected from with all of them: a sorted sample of
@@ -126,7 +128,13 @@ static void cc_percentiles(double *a, size_t n, cc_quantile_source *qs)
     }
 }
 
-/* Stable merge sort of pairs by value; tmp holds n pairs */
+/* collapse's order of the pairs: by value, and equal values by weight */
+static inline int cc_pair_before(const cc_pair *a, const cc_pair *b)
+{
+    return a->x < b->x || (a->x == b->x && a->w < b->w);
+}
+
+/* Stable merge sort of pairs by value, then weight; tmp holds n pairs */
 static void cc_sort_pairs(cc_pair *a, cc_pair *tmp, size_t n)
 {
     enum { CC_RUN = 16 };
@@ -137,7 +145,7 @@ static void cc_sort_pairs(cc_pair *a, cc_pair *tmp, size_t n)
         {
             cc_pair key = a[i];
             size_t j = i;
-            while (j > lo && a[j - 1].x > key.x)
+            while (j > lo && cc_pair_before(&key, &a[j - 1]))
             {
                 a[j] = a[j - 1];
                 j--;
@@ -154,7 +162,7 @@ static void cc_sort_pairs(cc_pair *a, cc_pair *tmp, size_t n)
             size_t hi = lo + 2 * width < n ? lo + 2 * width : n;
             size_t l = lo, r = mid, out = lo;
             while (l < mid && r < hi)
-                dst[out++] = src[r].x < src[l].x ? src[r++] : src[l++];
+                dst[out++] = cc_pair_before(&src[r], &src[l]) ? src[r++] : src[l++];
             while (l < mid)
                 dst[out++] = src[l++];
             while (r < hi)
@@ -168,13 +176,90 @@ static void cc_sort_pairs(cc_pair *a, cc_pair *tmp, size_t n)
         memcpy(a, src, n * sizeof(*a));
 }
 
-/* Weighted percentiles of the n pairs in a (sorted here) */
+/*
+    Weighted percentiles of the n pairs in a (sorted here). The running
+    total reaches P = W p / 100 at the first pair whose cumulative weight is
+    P or more. When it equals P, the percentile is the mean of that value and
+    the next. Weights too small to change the total can leave it at P over
+    several pairs; collapse then averages the last of them with the next
+    when every weight is positive, and the first of them when a weight is
+    negative (iweights).
+
+    A total of zero or less (iweights only) is collapse's rescaled case:
+    W = 0 gives missing (w * n / W is missing in Stata), and with W negative
+    each weight becomes w * n / W, as in collapse's ado implementation
+    (collapse_16's remakew), which turns the running total around. Equal
+    values are then taken in the order of their rescaled weights (by
+    descending weight), percentile p is the first value whose rescaled
+    running total reaches G = (rescaled total) p / 100 to within 1e-6, and
+    the mean of it and the next value when that total is within 1e-6 of G.
+    This reproduced collapse in every such cell probed (32,000 cells, exact
+    and inexact weights). W is the total in ascending order.
+*/
+static void cc_weighted_percentiles_rescaled(cc_pair *a, size_t n, double W,
+                                             cc_quantile_source *qs)
+{
+    const double missval = SV_missval;
+    if (W == 0.0)
+    {
+        for (int k = 0; k < qs->npct; k++)
+            qs->value[k] = missval;
+        return;
+    }
+    if (W < 0.0)
+    {
+        /* each run of equal values, ascending by weight, turned around */
+        for (size_t lo = 0; lo < n;)
+        {
+            size_t hi = lo + 1;
+            while (hi < n && a[hi].x == a[lo].x)
+                hi++;
+            for (size_t i = lo, j = hi - 1; i < j; i++, j--)
+            {
+                cc_pair t = a[i];
+                a[i] = a[j];
+                a[j] = t;
+            }
+            lo = hi;
+        }
+    }
+    const double m = (double)n;
+    double total = 0.0;
+    for (size_t i = 0; i < n; i++)
+        total += a[i].w * m / W;
+    for (int k = 0; k < qs->npct; k++)
+    {
+        const double G = total * (double)qs->pct[k] / 100.0;
+        double cumulative = 0.0;
+        size_t i = 0;
+        for (; i < n; i++)
+        {
+            cumulative += a[i].w * m / W;
+            if (cumulative >= G - 1e-6)
+                break;
+        }
+        if (i == n)
+            i = n - 1;
+        qs->value[k] = fabs(cumulative - G) <= 1e-6 && i + 1 < n ? (a[i].x + a[i + 1].x) / 2.0
+                                                                 : a[i].x;
+    }
+}
+
 static void cc_weighted_percentiles(cc_pair *a, cc_pair *tmp, size_t n, cc_quantile_source *qs)
 {
     cc_sort_pairs(a, tmp, n);
     double W = 0.0;
+    int negative = 0;
     for (size_t i = 0; i < n; i++)
+    {
         W += a[i].w;
+        negative |= a[i].w < 0;
+    }
+    if (negative && !(W > 0.0))
+    {
+        cc_weighted_percentiles_rescaled(a, n, W, qs);
+        return;
+    }
     size_t i = 0;
     double cumulative = a[0].w;
     for (int k = 0; k < qs->npct; k++)
@@ -182,6 +267,9 @@ static void cc_weighted_percentiles(cc_pair *a, cc_pair *tmp, size_t n, cc_quant
         double P = W * (double)qs->pct[k] / 100.0;
         while (i + 1 < n && cumulative < P)
             cumulative += a[++i].w;
+        if (cumulative == P && !negative)
+            while (i + 1 < n && cumulative + a[i + 1].w == P)
+                cumulative += a[++i].w;
         qs->value[k] = cumulative == P && i + 1 < n ? (a[i].x + a[i + 1].x) / 2.0 : a[i].x;
     }
 }
@@ -198,10 +286,12 @@ static void cc_assign(const cc_job *job, const cc_quantile_source *qs, size_t g,
         if (target->stat == CC_STAT_PCTILE)
             job->values[t][g] = n ? qs->value[cc_pct_slot(qs, target->pct)] : missval;
         else if (target->stat == CC_STAT_IQR)
-            job->values[t][g] = n ? cc_storable(qs->value[cc_pct_slot(qs, 75)] -
-                                                    qs->value[cc_pct_slot(qs, 25)],
-                                                missval)
-                                  : missval;
+        {
+            /* a missing quartile (rescaled iweights) makes the range missing */
+            double hi = qs->value[cc_pct_slot(qs, 75)], lo = qs->value[cc_pct_slot(qs, 25)];
+            job->values[t][g] =
+                n && hi < missval && lo < missval ? cc_storable(hi - lo, missval) : missval;
+        }
     }
 }
 

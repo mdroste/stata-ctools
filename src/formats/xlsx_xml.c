@@ -8,7 +8,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stddef.h>
 #include <ctype.h>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 /* Parser states */
 typedef enum
@@ -740,35 +744,76 @@ static const char *xlsx_xml_entity_end(const char *p, const char *end)
     return p + 1;
 }
 
-bool xlsx_xml_validate_document(const char *data, size_t len, const char *root)
+/* Byte classes of the structural pass. They are taken from the C library's
+ * isspace and isalnum at each call, so that a table lookup answers exactly
+ * as the call it replaces, whatever the locale. */
+enum {
+    XV_SPACE = 1,      /* isspace */
+    XV_NAME = 2,       /* a name character: isalnum, _ : - . or a byte >= 128 */
+    XV_TEXT_STOP = 4,  /* ends a run of text: < & or NUL */
+    XV_VALUE_STOP = 8  /* ends a run of an attribute value: also either quote */
+};
+
+static void xlsx_xml_classes(unsigned char cls[256])
 {
-    if (!data || !root) return false;
-    struct { const char *name; size_t len; } stack[256];
-    size_t depth = 0;
-    bool seen_root = false;
-    const char *p = data, *end = data + len;
-    if (len >= 3 && !memcmp(p, "\xef\xbb\xbf", 3)) p += 3;
+    for (int c = 0; c < 256; c++) {
+        unsigned char k = 0;
+        if (isspace(c)) k |= XV_SPACE;
+        if (isalnum(c) || c == '_' || c == ':' || c == '-' || c == '.' || c >= 128) k |= XV_NAME;
+        if (c == '<' || c == '&' || c == 0) k |= XV_TEXT_STOP | XV_VALUE_STOP;
+        if (c == '"' || c == '\'') k |= XV_VALUE_STOP;
+        cls[c] = k;
+    }
+}
+
+#define XV_MAX_DEPTH 256
+typedef struct { const char *name; size_t len; } xv_level;
+typedef struct {
+    size_t depth;
+    bool seen_root;
+    xv_level stack[XV_MAX_DEPTH];
+} xv_state;
+
+/* The structural pass from p in state *st. With stop, the walk ends as soon
+ * as it stands at or past stop between two items (markup or text), leaving
+ * its position in *at; without, it runs to end. Returns false as soon as the
+ * text is not well formed. */
+static bool xv_walk(const unsigned char *cls, xv_state *st, const char *p, const char *end,
+                    const char *stop, const char **at, const char *root)
+{
+#define XV_IS(ch, k) (cls[(unsigned char)(ch)] & (k))
+    xv_level *stack = st->stack;
+    size_t depth = st->depth;
+    bool seen_root = st->seen_root;
     while (p < end) {
+        if (stop && p >= stop) break;
         if (*p != '<') {
-            if (!depth && !isspace((unsigned char)*p)) return false;
-            if (!*p) return false;
-            if (*p == '&') {
-                p = xlsx_xml_entity_end(p, end);
-                if (!p) return false;
+            if (!depth) {
+                /* Outside the root only white space may appear */
+                if (!XV_IS(*p, XV_SPACE)) return false;
+                p++;
                 continue;
             }
-            p++;
+            /* Text, up to the next markup, entity or NUL */
+            while (p < end && !XV_IS(*p, XV_TEXT_STOP)) p++;
+            if (p == end) break;
+            if (*p == '<') continue;
+            if (!*p) return false;
+            p = xlsx_xml_entity_end(p, end);
+            if (!p) return false;
             continue;
         }
         const char *terminator = NULL;
         size_t opener = 0, closer = 0;
-        if (end - p >= 4 && !memcmp(p, "<!--", 4)) {
-            terminator = "-->"; opener = 4; closer = 3;
-        } else if (end - p >= 9 && !memcmp(p, "<![CDATA[", 9)) {
-            if (!depth) return false;
-            terminator = "]]>"; opener = 9; closer = 3;
-        } else if (end - p >= 2 && !memcmp(p, "<?", 2)) {
-            terminator = "?>"; opener = 2; closer = 2;
+        if (end - p >= 2 && (p[1] == '!' || p[1] == '?')) {
+            if (end - p >= 4 && !memcmp(p, "<!--", 4)) {
+                terminator = "-->"; opener = 4; closer = 3;
+            } else if (end - p >= 9 && !memcmp(p, "<![CDATA[", 9)) {
+                if (!depth) return false;
+                terminator = "]]>"; opener = 9; closer = 3;
+            } else if (!memcmp(p, "<?", 2)) {
+                terminator = "?>"; opener = 2; closer = 2;
+            }
         }
         if (terminator) {
             p += opener;
@@ -781,14 +826,13 @@ bool xlsx_xml_validate_document(const char *data, size_t len, const char *root)
         bool closing = p < end && *p == '/';
         if (closing) p++;
         const char *name = p;
-        while (p < end && (isalnum((unsigned char)*p) || *p == '_' || *p == ':' ||
-                           *p == '-' || *p == '.' || (unsigned char)*p >= 128)) p++;
+        while (p < end && XV_IS(*p, XV_NAME)) p++;
         size_t n = (size_t)(p - name);
         if (!n) return false;
         bool self_closing = false;
         for (;;) {
             const char *space = p;
-            while (p < end && isspace((unsigned char)*p)) p++;
+            while (p < end && XV_IS(*p, XV_SPACE)) p++;
             if (p == end) return false;
             if (*p == '>') { p++; break; }
             if (!closing && *p == '/' && end - p >= 2 && p[1] == '>') {
@@ -796,24 +840,25 @@ bool xlsx_xml_validate_document(const char *data, size_t len, const char *root)
             }
             if (closing || p == space) return false;
             const char *attr = p;
-            while (p < end && (isalnum((unsigned char)*p) || *p == '_' || *p == ':' ||
-                               *p == '-' || *p == '.' || (unsigned char)*p >= 128)) p++;
+            while (p < end && XV_IS(*p, XV_NAME)) p++;
             if (p == attr) return false;
-            while (p < end && isspace((unsigned char)*p)) p++;
+            while (p < end && XV_IS(*p, XV_SPACE)) p++;
             if (p == end || *p++ != '=') return false;
-            while (p < end && isspace((unsigned char)*p)) p++;
+            while (p < end && XV_IS(*p, XV_SPACE)) p++;
             if (p == end || (*p != '\'' && *p != '"')) return false;
             char quote = *p++;
-            while (p < end && *p != quote) {
+            for (;;) {
+                while (p < end && !XV_IS(*p, XV_VALUE_STOP)) p++;
+                if (p == end) return false;
+                if (*p == quote) break;
                 if (*p == '<' || !*p) return false;
                 if (*p == '&') {
                     p = xlsx_xml_entity_end(p, end);
                     if (!p) return false;
                     continue;
                 }
-                p++;
+                p++; /* the other quote character */
             }
-            if (p == end) return false;
             p++;
         }
         if (closing) {
@@ -830,13 +875,135 @@ bool xlsx_xml_validate_document(const char *data, size_t len, const char *root)
                 seen_root = true;
             }
             if (!self_closing) {
-                if (depth == sizeof(stack) / sizeof(stack[0])) return false;
+                if (depth == XV_MAX_DEPTH) return false;
                 stack[depth].name = name;
                 stack[depth++].len = n;
             }
         }
     }
-    return seen_root && depth == 0;
+#undef XV_IS
+    st->depth = depth;
+    st->seen_root = seen_root;
+    *at = p;
+    return true;
+}
+
+/* Parts this long are checked in pieces, in parallel */
+#ifndef XV_PARALLEL_BYTES
+#define XV_PARALLEL_BYTES ((size_t)8 << 20)
+#endif
+#ifndef XV_PIECE_BYTES
+#define XV_PIECE_BYTES ((size_t)2 << 20)
+#endif
+
+/* The next start tag <tag, followed by white space, > or /, at or after p */
+static const char *xv_next_tag(const char *p, const char *end, const char *tag, size_t n)
+{
+    while (end - p > (ptrdiff_t)(n + 1)) {
+        const char *lt = memchr(p, '<', (size_t)(end - p) - n - 1);
+        if (!lt) return NULL;
+        char c = lt[1 + n];
+        if (!memcmp(lt + 1, tag, n) &&
+            (c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '>' || c == '/'))
+            return lt;
+        p = lt + 1;
+    }
+    return NULL;
+}
+
+/* The same state: depth, root seen, and the open elements' names */
+static bool xv_same(const xv_state *a, const xv_state *b)
+{
+    if (a->depth != b->depth || a->seen_root != b->seen_root) return false;
+    for (size_t i = 0; i < a->depth; i++)
+        if (a->stack[i].len != b->stack[i].len ||
+            memcmp(a->stack[i].name, b->stack[i].name, a->stack[i].len)) return false;
+    return true;
+}
+
+/* The pass from first, the start of an element named tag, in state *start.
+ * Every piece begins at such an element and is walked from that same state,
+ * in parallel. Piece k is the serial walk itself when piece k - 1 is and
+ * stops exactly at piece k's start in that state; the first piece that does
+ * not hands the rest of the part to a serial walk from where it stopped. */
+static bool xv_pieces(const unsigned char *cls, const xv_state *start, const char *first,
+                      const char *end, const char *tag, size_t pieces, const char *root)
+{
+    size_t n = strlen(tag);
+    const char **b = malloc((pieces + 1) * sizeof(*b));
+    const char **ats = malloc(pieces * sizeof(*ats));
+    xv_state *ws = malloc(pieces * sizeof(*ws));
+    unsigned char *ok = malloc(pieces);
+    bool result = false;
+    const char *at;
+    if (!b || !ats || !ws || !ok) {
+        xv_state s = *start;
+        result = xv_walk(cls, &s, first, end, NULL, &at, root) && s.seen_root && !s.depth;
+        goto done;
+    }
+    size_t m = 0, span = (size_t)(end - first);
+    b[m++] = first;
+    for (size_t k = 1; k < pieces; k++) {
+        const char *t = xv_next_tag(first + span / pieces * k, end, tag, n);
+        if (!t) break;
+        if (t > b[m - 1]) b[m++] = t;
+    }
+#pragma omp parallel for schedule(dynamic, 1) if (m > 1)
+    for (long k = 0; k < (long)m; k++) {
+        ws[k].depth = start->depth;
+        ws[k].seen_root = start->seen_root;
+        memcpy(ws[k].stack, start->stack, start->depth * sizeof(xv_level));
+        ok[k] = xv_walk(cls, &ws[k], b[k], end, (size_t)k + 1 < m ? b[k + 1] : NULL, &ats[k], root);
+    }
+    for (size_t k = 0; k < m; k++) {
+        if (!ok[k]) break;
+        if (k + 1 == m) {
+            result = ws[k].seen_root && !ws[k].depth;
+            break;
+        }
+        if (ats[k] != b[k + 1] || !xv_same(&ws[k], start)) {
+            xv_state s = ws[k];
+            result = xv_walk(cls, &s, ats[k], end, NULL, &at, root) && s.seen_root && !s.depth;
+            break;
+        }
+    }
+done:
+    free(b);
+    free(ats);
+    free(ws);
+    free(ok);
+    return result;
+}
+
+bool xlsx_xml_validate_document(const char *data, size_t len, const char *root)
+{
+    if (!data || !root) return false;
+    unsigned char cls[256];
+    xlsx_xml_classes(cls);
+    xv_state st;
+    st.depth = 0;
+    st.seen_root = false;
+    const char *p = data, *end = data + len, *at;
+    if (len >= 3 && !memcmp(p, "\xef\xbb\xbf", 3)) p += 3;
+    /* A worksheet's rows, and a shared-string table's items, all begin in
+       one state; a long part is checked in pieces that begin at them. */
+    const char *tag = !strcmp(root, "worksheet") ? "row" : !strcmp(root, "sst") ? "si" : NULL;
+    size_t team = 1;
+#ifdef _OPENMP
+    team = (size_t)omp_get_max_threads();
+#endif
+    size_t pieces = len / XV_PIECE_BYTES;
+    if (pieces > 2 * team) pieces = 2 * team;
+    if (tag && len >= XV_PARALLEL_BYTES && pieces >= 2) {
+        const char *first = xv_next_tag(p, end, tag, strlen(tag));
+        if (first) {
+            if (!xv_walk(cls, &st, p, end, first, &at, root)) return false;
+            if (at == first) return xv_pieces(cls, &st, first, end, tag, pieces, root);
+            p = at; /* the tag lay inside other markup: on serially */
+        }
+    }
+    if (!xv_walk(cls, &st, p, end, NULL, &at, root)) return false;
+    return st.seen_root && st.depth == 0;
 }
 
 

@@ -238,6 +238,48 @@ def citing(c):
     return "The original command is described in:"
 
 
+# ---------------------------------------------------------------- new commands
+# A new command reimplements no Stata command; it credits the software it uses.
+
+def new_commands(d):
+    return d.get("new_commands", [])
+
+
+def uses_rows(u):
+    return [
+        ("Software", u["name"]),
+        ("Authors", u["authors"]),
+        ("Version", u["version"]),
+        ("Source", f"[{u['channel']}]({u['url']})"),
+        ("License", u["license"]),
+    ]
+
+
+def uses_lead(c):
+    names = listing(u["name"] for u in c["uses"])
+    return f"`{c['command']}` is tested with {'this version' if len(c['uses']) == 1 else 'these versions'} of {names}:"
+
+
+def uses_brief(c):
+    return "; ".join(f"{u['name']} {u['version']} by {u['authors']}" for u in c["uses"])
+
+
+def uses_citing(c):
+    return f"If you use `{c['command']}` in published work, please cite {listing(u['name'] for u in c['uses'])}:"
+
+
+def exceptions(d):
+    """The sentence that names the new commands, or nothing."""
+    names = [f"`{c['command']}`" for c in new_commands(d)]
+    if not names:
+        return ""
+    one = len(names) == 1
+    return (
+        f"{listing(names)} {'is a new command' if one else 'are new commands'} rather than "
+        f"{'a reimplementation of a Stata command' if one else 'reimplementations of Stata commands'}."
+    )
+
+
 # ---------------------------------------------------------------- help files
 
 def table_smcl(rows_):
@@ -275,6 +317,25 @@ def help_block(d, c):
     return out + [END]
 
 
+def new_help_block(d, c):
+    out = [BEGIN, "{marker acknowledgments}{...}", "{title:Acknowledgments}", ""]
+    out += paragraph(c["intro"])
+    out += paragraph(uses_lead(c))
+    for u in c["uses"]:
+        out += table_smcl(uses_rows(u)) + [""]
+    for text in c.get("credits", []):
+        out += paragraph(text)
+    if c.get("references"):
+        out += paragraph(uses_citing(c))
+        for ref in c["references"]:
+            out += fill("{phang2}" + smcl(ref) + "{p_end}") + [""]
+    site = d["issues"].split("//", 1)[1]
+    out += paragraph(f"Please report bugs and questions about `{c['command']}` at [{site}]({d['issues']}).")
+    while out[-1] == "":
+        out.pop()
+    return out + [END]
+
+
 def credit_block(c):
     return [CREDIT_BEGIN, "{pstd}"] + fill(smcl(credit(c))) + [CREDIT_END]
 
@@ -283,8 +344,9 @@ def ctools_block(d):
     out = [BEGIN, "{marker acknowledgments}{...}", "{title:Acknowledgments}", ""]
     out += paragraph(
         "ctools reimplements existing Stata commands in C. Each ctools command takes its syntax, options, output, "
-        "and stored results from the command it replaces, and is pinned to one version of that command. The "
-        "Acknowledgments section of each command's help file has details and references."
+        "and stored results from the command it replaces, and is pinned to one version of that command. "
+        + (exceptions(d) + " " if exceptions(d) else "")
+        + "The Acknowledgments section of each command's help file has details and references."
     )
     out += ["{pstd}", "{ul:Community-contributed commands}", "", "{p2colset 5 20 22 2}{...}"]
     for c in d["commands"]:
@@ -297,6 +359,11 @@ def ctools_block(d):
     for c in d["commands"]:
         if not community(c):
             text = "; ".join(brief(o) for o in c["originals"])
+            out += fill("{p2col:{help %s##acknowledgments:%s}}%s{p_end}" % (c["command"], c["command"], smcl(text)))
+    if new_commands(d):
+        out += ["", "{pstd}", "{ul:New commands}", ""]
+        for c in new_commands(d):
+            text = "Built on " + uses_brief(c)
             out += fill("{p2col:{help %s##acknowledgments:%s}}%s{p_end}" % (c["command"], c["command"], smcl(text)))
     out += ["", "{pstd}", "{ul:Supporting packages}", ""]
     for s in d["supporting"]:
@@ -409,7 +476,10 @@ def document(d):
         "and stored results from the command it replaces, and credit for those designs belongs to the original "
         "authors. This page lists each original command, its authors, and the version that the ctools command is "
         "pinned to. The same information appears in each command's help file and ado-file header "
-        "(`which cdistinct`).",
+        "(`which cdistinct`)."
+        + (" " + exceptions(d) + " [New commands](#new-commands) credits the software "
+           + ("it is" if len(new_commands(d)) == 1 else "they are") + " built on."
+           if exceptions(d) else ""),
         "",
         "## Pinned versions",
         "",
@@ -474,6 +544,26 @@ def document(d):
                     manual[:1].upper() + manual[1:],
                 ])
     out += table_md(["ctools command", "Original", "Pinned version", "Date", "Credit in the Stata manual"], body)
+    if new_commands(d):
+        one = len(new_commands(d)) == 1
+        out += [
+            "",
+            "## New commands",
+            "",
+            ("This ctools command reimplements no Stata command. It is" if one else
+             "These ctools commands reimplement no Stata command. They are")
+            + " built on the software below, and credit for that software belongs to its authors. If you use "
+            + ("this command" if one else "one of these commands")
+            + " in published work, please cite the software it is built on. References are listed under "
+            + ("the command" if one else "each command") + " below.",
+            "",
+        ]
+        body = [
+            [f"[`{c['command']}`](#{c['command']})", u["name"], u["authors"], u["version"],
+             f"[{u['channel']}]({u['url']})", u["license"], markdown(u["role"])]
+            for c in new_commands(d) for u in c["uses"]
+        ]
+        out += table_md(["ctools command", "Built on", "Authors", "Tested version", "Source", "License", "Role"], body)
     out += ["", "## Details by command", ""]
     for c in d["commands"]:
         out += [f"### `{c['command']}`", "", markdown(c["intro"]), ""]
@@ -484,6 +574,15 @@ def document(d):
             out += [markdown(text), ""]
         if supporting(d, c):
             out += [markdown(supporting(d, c)), ""]
+        if c.get("references"):
+            out += ["References:", ""] + ["- " + markdown(ref) for ref in c["references"]] + [""]
+    for c in new_commands(d):
+        out += [f"### `{c['command']}`", "", markdown(c["intro"]), ""]
+        for u in c["uses"]:
+            out += table_md(["", ""], [[f"**{label}**", markdown(text)] for label, text in uses_rows(u)])
+            out += [""]
+        for text in c.get("credits", []):
+            out += [markdown(text), ""]
         if c.get("references"):
             out += ["References:", ""] + ["- " + markdown(ref) for ref in c["references"]] + [""]
     out += [
@@ -537,8 +636,8 @@ def read(path):
 def generated():
     d = json.loads((ROOT / "config/attribution.json").read_text(encoding="utf-8"))
     public = {p.stem for p in (ROOT / "build").glob("*.sthlp")} - {"ctools", "ctools_licenses"}
-    named = {c["command"] for c in d["commands"]}
-    if public != named:
+    named = {c["command"] for c in d["commands"] + new_commands(d)}
+    if public != named or len(named) != len(d["commands"]) + len(new_commands(d)):
         raise SystemExit(
             "config/attribution.json does not match the commands in build/: "
             f"missing {sorted(public - named)}, unknown {sorted(named - public)}"
@@ -554,6 +653,9 @@ def generated():
         text = place_help(read(ROOT / f"build/{name}.sthlp")[0], help_block(d, c), name)
         files[f"build/{name}.sthlp"] = place_credit(text, credit_block(c), name)
         files[f"build/{name}.ado"] = place_ado(read(ROOT / f"build/{name}.ado")[0], ado_lines(c))
+    for c in new_commands(d):
+        name = c["command"]
+        files[f"build/{name}.sthlp"] = place_help(read(ROOT / f"build/{name}.sthlp")[0], new_help_block(d, c), name)
     files["build/ctools.sthlp"] = place_help(read(ROOT / "build/ctools.sthlp")[0], ctools_block(d), "ctools")
     return files
 

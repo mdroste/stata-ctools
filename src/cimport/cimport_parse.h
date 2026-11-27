@@ -32,6 +32,15 @@ typedef struct {
     uint32_t length;   /* Bit 31 = has_quote flag, bits 0-30 = actual length */
 } CImportFieldRef;
 
+/* floor(v) == v, without the call: this build's floor is a library function
+ * (x86-64 without SSE4.1 has no rounding instruction), and the parse tests
+ * every number. Doubles from 2^52 up, and infinities, are integers; NaN is
+ * not. */
+static inline bool cimport_integral(double v)
+{
+    return v > -4503599627370496.0 && v < 4503599627370496.0 ? (double)(int64_t)v == v : v == v;
+}
+
 #define CIMPORT_FIELD_QUOTED_FLAG 0x80000000u
 #define CIMPORT_FIELD_LENGTH(f) ((f).length & 0x7FFFFFFFu)
 /* Longest field the 31-bit length holds, with room for len + 1 in an int.
@@ -186,7 +195,8 @@ static inline bool cimport_parse_plain_decimal(const char *src, int len, double 
     bool negative = p < end && *p == '-';
     if (negative) p++;
     uint64_t mantissa = 0;
-    int digits = 0, frac = -1;
+    int digits = 0, frac = -1, exp10 = 0;
+    bool scientific = false;
     for (; p < end; p++) {
         unsigned d = (unsigned)(unsigned char)*p - '0';
         if (d < 10) {
@@ -195,12 +205,33 @@ static inline bool cimport_parse_plain_decimal(const char *src, int len, double 
             if (frac >= 0) frac++;
         } else if (*p == '.' && frac < 0) {
             frac = 0;
+        } else if ((*p == 'e' || *p == 'E') && digits) {
+            /* An exponent of one to four digits, as the generic parser
+             * reads it: the value is mantissa * 10^(exponent - frac) */
+            p++;
+            bool down = p < end && *p == '-';
+            if (p < end && (*p == '-' || *p == '+')) p++;
+            int ndig = 0;
+            for (; p < end; p++, ndig++) {
+                unsigned e = (unsigned)(unsigned char)*p - '0';
+                if (e >= 10 || ndig == 4) return false;
+                exp10 = exp10 * 10 + (int)e;
+            }
+            if (!ndig) return false;
+            if (down) exp10 = -exp10;
+            scientific = true;
+            break;
         } else {
             return false;
         }
     }
     if (digits == 0 || digits > 19) return false;
-    return eisel_lemire_compute(mantissa, frac > 0 ? -frac : 0, negative, value);
+    if (!scientific)
+        return eisel_lemire_compute(mantissa, frac > 0 ? -frac : 0, negative, value);
+    /* Values near Stata's missing range keep the generic path, which maps
+     * them to missing before inference sees them */
+    return eisel_lemire_compute(mantissa, exp10 - (frac > 0 ? frac : 0), negative, value) &&
+           *value > -1e300 && *value < 1e300;
 }
 
 /*

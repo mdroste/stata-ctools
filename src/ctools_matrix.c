@@ -504,15 +504,30 @@ ST_retcode ctools_vce_robust(const ctools_vce_data *d, ST_double dof_adj, ST_dou
 #define CTOOLS_VCE_CLUSTER_SUMS ((size_t)16 << 20)
 #endif
 
-/* meat (upper triangle) += sums * sums' for one cluster's e'X */
-static inline void vce_meat_add(long double *meat, const long double *sums, ST_int K)
+/* meat (upper triangle) += the sum over n clusters of s_c s_c', element k of
+ * cluster c's e'X at sums[c * cs + k * ks]. Every element of the meat is its
+ * own sum over the clusters in order, as when the outer products are added
+ * one cluster after another, so the elements are summed side by side, each
+ * in a register (a long double kept in memory is stored and reloaded at
+ * every cluster). */
+static void vce_meat_add_all(long double *meat, const long double *sums, ST_int n, size_t cs,
+                             size_t ks, ST_int K)
 {
-    for (ST_int jj = 0; jj < K; jj++) {
-        long double ecXj = sums[jj];
-        meat[(size_t)jj * K + jj] += ecXj * ecXj;
-        for (ST_int kk = jj + 1; kk < K; kk++) {
-            meat[(size_t)jj * K + kk] += ecXj * sums[kk];
+    const int npairs = K * (K + 1) / 2;
+    int p;
+    #pragma omp parallel for schedule(dynamic, 1) if((size_t)n * (size_t)npairs > 200000)
+    for (p = 0; p < npairs; p++) {
+        /* pair p is (jj, kk), kk >= jj, the upper triangle row by row */
+        ST_int jj = 0, rem = p;
+        while (rem >= K - jj) {
+            rem -= K - jj;
+            jj++;
         }
+        const ST_int kk = jj + rem;
+        const long double *sj = sums + (size_t)jj * ks, *sk = sums + (size_t)kk * ks;
+        long double acc = meat[(size_t)jj * K + kk];
+        for (ST_int c = 0; c < n; c++) acc += sj[(size_t)c * cs] * sk[(size_t)c * cs];
+        meat[(size_t)jj * K + kk] = acc;
     }
 }
 
@@ -523,25 +538,41 @@ static ST_retcode vce_cluster_meat_sorted(const ctools_vce_data *d, const ST_int
                                           long double *meat)
 {
     const ST_int N = d->N, K = d->K;
-    ST_int k;
-    ST_int *sort_perm = (ST_int *)malloc((size_t)N * sizeof(ST_int));
+    ST_int idx;
+    /* Clusters numbered 0, 1, 2, ... along the rows (each id the previous
+     * row's or one more, every id present): the counting sort would leave
+     * the rows where they are, and each cluster's rows are the stretch from
+     * its first row to the next cluster's */
+    int in_order = cluster_ids[0] == 0 && cluster_ids[N - 1] == num_clusters - 1;
+    #pragma omp parallel for schedule(static) reduction(& : in_order) if(N > 200000)
+    for (idx = 1; idx < N; idx++) {
+        const ST_int step = cluster_ids[idx] - cluster_ids[idx - 1];
+        in_order &= step == 0 || step == 1;
+    }
+    ST_int *sort_perm = in_order ? NULL : (ST_int *)malloc((size_t)N * sizeof(ST_int));
     ST_int *boundaries = (ST_int *)malloc(((size_t)num_clusters + 1) * sizeof(ST_int));
     /* Clusters are processed in blocks: the e'X sums of a block are formed
-     * one regressor per thread (each sum over its cluster's observations in
-     * sorted order), then the outer products are added in cluster order. */
-    ST_int block_clusters = 65536 / (K > 0 ? K : 1);
+     * in parallel (each sum over its cluster's observations in sorted order),
+     * then the outer products are added in cluster order. */
+    ST_int block_clusters = 262144 / (K > 0 ? K : 1);
     if (block_clusters < 1) block_clusters = 1;
     if (block_clusters > num_clusters) block_clusters = num_clusters;
     long double *block_sums =
         (long double *)malloc((size_t)block_clusters * (size_t)K * sizeof(long double));
 
     /* Sort observations by cluster using counting sort */
-    if (!sort_perm || !boundaries || !block_sums ||
-        vce_sort_by_cluster(cluster_ids, N, num_clusters, sort_perm, boundaries) != 0) {
+    if ((!in_order && !sort_perm) || !boundaries || !block_sums ||
+        (!in_order && vce_sort_by_cluster(cluster_ids, N, num_clusters, sort_perm, boundaries) != 0)) {
         free(sort_perm);
         free(boundaries);
         free(block_sums);
         return 920;
+    }
+    if (in_order) {
+        #pragma omp parallel for schedule(static) if(N > 200000)
+        for (idx = 0; idx < N; idx++)
+            if (idx == 0 || cluster_ids[idx] != cluster_ids[idx - 1]) boundaries[cluster_ids[idx]] = idx;
+        boundaries[num_clusters] = N;
     }
 
     /* c0 advances to c1, which never passes num_clusters (c0 += block_clusters
@@ -550,14 +581,15 @@ static ST_retcode vce_cluster_meat_sorted(const ctools_vce_data *d, const ST_int
         c1 = (num_clusters - c0 < block_clusters) ? num_clusters : c0 + block_clusters;
         #ifdef _OPENMP
         const size_t block_obs = (size_t)(boundaries[c1] - boundaries[c0]);
-        #pragma omp parallel for schedule(static) if(K > 1 && block_obs * (size_t)K > 100000)
         #endif
-        for (k = 0; k < K; k++) {
-            const ST_double *xk = d->X_eff + (size_t)k * N;
-            for (ST_int c = c0; c < c1; c++) {
+        ST_int c;
+        #pragma omp parallel for schedule(static) if(block_obs * (size_t)K > 100000)
+        for (c = c0; c < c1; c++) {
+            for (ST_int k = 0; k < K; k++) {
+                const ST_double *xk = d->X_eff + (size_t)k * N;
                 long double acc = 0.0L;
                 for (ST_int pos = boundaries[c]; pos < boundaries[c + 1]; pos++) {
-                    ST_int obs = sort_perm[pos];
+                    ST_int obs = sort_perm ? sort_perm[pos] : pos;
                     acc += (long double)e_w[obs] * (long double)xk[obs];
                 }
                 block_sums[(size_t)(c - c0) * K + k] = acc;
@@ -565,9 +597,7 @@ static ST_retcode vce_cluster_meat_sorted(const ctools_vce_data *d, const ST_int
         }
 
         /* Accumulate outer product ecX * ecX' into meat (upper triangle) */
-        for (ST_int c = c0; c < c1; c++) {
-            vce_meat_add(meat, block_sums + (size_t)(c - c0) * K, K);
-        }
+        vce_meat_add_all(meat, block_sums, c1 - c0, (size_t)K, 1, K);
     }
     free(sort_perm);
     free(boundaries);
@@ -590,8 +620,12 @@ ST_retcode ctools_vce_cluster(const ctools_vce_data *d,
         return 498;
 
     if (!cluster_ids || num_clusters <= 1) return 498;
-    for (idx = 0; idx < N; idx++) {
-        if (cluster_ids[idx] < 0 || cluster_ids[idx] >= num_clusters) return 498;
+    {
+        int bad = 0;
+        #pragma omp parallel for schedule(static) reduction(| : bad) if(N > 200000)
+        for (idx = 0; idx < N; idx++)
+            bad |= (cluster_ids[idx] < 0) | (cluster_ids[idx] >= num_clusters);
+        if (bad) return 498;
     }
 
     /* Normalize weights for aweight/pweight (OLS convention): w * scale,
@@ -609,31 +643,31 @@ ST_retcode ctools_vce_cluster(const ctools_vce_data *d,
     /* Allocate high-precision buffers */
     long double *meat = (long double *)calloc((size_t)K * K, sizeof(long double));
     long double *temp = (long double *)malloc((size_t)K * K * sizeof(long double));
-    long double *ecX = (long double *)malloc(K * sizeof(long double));
-    /* Weighted residual of every observation */
-    ST_double *e_w = (ST_double *)malloc((size_t)N * sizeof(ST_double));
+    /* Weighted residual of every observation (the residual itself without
+     * weights: then no copy is made) */
+    ST_double *e_w_buf = d->weights ? (ST_double *)malloc((size_t)N * sizeof(ST_double)) : NULL;
 
-    if (!meat || !temp || !ecX || !e_w) {
+    if (!meat || !temp || (d->weights && !e_w_buf)) {
         free(meat);
         free(temp);
-        free(ecX);
-        free(e_w);
+        free(e_w_buf);
         return 920;
     }
     /* one value per row, rows in parallel */
-    #pragma omp parallel for schedule(static) if(N > 200000)
-    for (idx = 0; idx < N; idx++) {
-        if (d->weights == NULL) {
-            e_w[idx] = d->resid[idx];
-        } else if (d->weight_type == 2) {
-            e_w[idx] = d->resid[idx] * d->weights[idx];
-        } else if (w_norm) {
-            const ST_double wn = d->weights[idx] * scale;
-            e_w[idx] = d->resid[idx] * wn;
-        } else {
-            e_w[idx] = d->resid[idx] * d->weights[idx];
+    if (d->weights) {
+        #pragma omp parallel for schedule(static) if(N > 200000)
+        for (idx = 0; idx < N; idx++) {
+            if (d->weight_type == 2) {
+                e_w_buf[idx] = d->resid[idx] * d->weights[idx];
+            } else if (w_norm) {
+                const ST_double wn = d->weights[idx] * scale;
+                e_w_buf[idx] = d->resid[idx] * wn;
+            } else {
+                e_w_buf[idx] = d->resid[idx] * d->weights[idx];
+            }
         }
     }
+    const ST_double *e_w = d->weights ? e_w_buf : d->resid;
 
     /* e'X of every cluster: each element sums its cluster's observations in
      * row order. When all the sums fit, a regressor's pass over the rows adds
@@ -653,7 +687,53 @@ ST_retcode ctools_vce_cluster(const ctools_vce_data *d,
         all_sums = (long double *)malloc((size_t)num_clusters * (size_t)K * sizeof(long double));
         if (!all_sums) meat_rc = 920;
     }
-    if (all_sums) {
+    /* Rows grouped by cluster, the clusters numbered 0, 1, 2, ... along the
+     * rows (each id the previous row's or one more, from 0 to the last: every
+     * cluster one run of rows, as in a panel sorted by its unit): the threads
+     * take the rows in stretches that begin where a run begins, each run's
+     * sums from zero over its rows in order, as the pass below forms them;
+     * every thread busy instead of one per regressor. */
+    int grouped = 0;
+    #ifdef _OPENMP
+    if (all_sums && N > 200000 && K < omp_get_max_threads() && cluster_ids[0] == 0 &&
+        cluster_ids[N - 1] == num_clusters - 1) {
+        int in_order = 1;
+        #pragma omp parallel for schedule(static) reduction(& : in_order)
+        for (idx = 1; idx < N; idx++) {
+            const ST_int step = cluster_ids[idx] - cluster_ids[idx - 1];
+            in_order &= step == 0 || step == 1;
+        }
+        grouped = in_order;
+    }
+    #endif
+    if (all_sums && grouped) {
+        #pragma omp parallel
+        {
+            int team = 1, me = 0;
+            #ifdef _OPENMP
+            team = omp_get_num_threads();
+            me = omp_get_thread_num();
+            #endif
+            ST_int r0 = (ST_int)((long long)N * me / team);
+            ST_int r1 = (ST_int)((long long)N * (me + 1) / team);
+            while (r0 > 0 && r0 < N && cluster_ids[r0] == cluster_ids[r0 - 1]) r0++;
+            while (r1 > 0 && r1 < N && cluster_ids[r1] == cluster_ids[r1 - 1]) r1++;
+            for (ST_int obs = r0; obs < r1;) {
+                const ST_int c = cluster_ids[obs];
+                ST_int end = obs + 1;
+                while (end < N && cluster_ids[end] == c) end++;
+                for (ST_int kk = 0; kk < K; kk++) {
+                    const ST_double *xk = d->X_eff + (size_t)kk * N;
+                    long double acc = 0.0L;
+                    for (ST_int r = obs; r < end; r++) acc += (long double)e_w[r] * (long double)xk[r];
+                    all_sums[(size_t)kk * num_clusters + c] = acc;
+                }
+                obs = end;
+            }
+        }
+        vce_meat_add_all(meat, all_sums, num_clusters, 1, (size_t)num_clusters, K);
+        free(all_sums);
+    } else if (all_sums) {
         #pragma omp parallel for schedule(static) if(K > 1 && (size_t)N * (size_t)K > 100000)
         for (k = 0; k < K; k++) {
             const ST_double *xk = d->X_eff + (size_t)k * N;
@@ -672,16 +752,12 @@ ST_retcode ctools_vce_cluster(const ctools_vce_data *d,
                 sums_k[c] = acc;
             }
         }
-        for (ST_int c = 0; c < num_clusters; c++) {
-            for (k = 0; k < K; k++) ecX[k] = all_sums[(size_t)k * num_clusters + c];
-            vce_meat_add(meat, ecX, K);
-        }
+        vce_meat_add_all(meat, all_sums, num_clusters, 1, (size_t)num_clusters, K);
         free(all_sums);
     } else if (!sums_fit) {
         meat_rc = vce_cluster_meat_sorted(d, cluster_ids, num_clusters, e_w, meat);
     }
-    free(e_w);
-    free(ecX);
+    free(e_w_buf);
     if (meat_rc) {
         free(meat);
         free(temp);

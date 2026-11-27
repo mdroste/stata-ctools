@@ -20,9 +20,12 @@
  * (1-based rows); the ado file drops them all when it is done. */
 #include "cparquet.h"
 #include "parquet_internal.h"
+#include "ctools_cancel.h"
+#include "ctools_config.h"
 #include "ctools_file.h"
 #include "ctools_threads.h"
 #include <math.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -206,12 +209,18 @@ static pq_storage storage_of(const pq_values *v, int *width)
     }
 }
 
+/* One unit of decoding: row groups [g0, g1) of a column, rows first..last,
+ * into the column itself or into a part of it (rows base.. of the column) */
 typedef struct
 {
     pq_file *file;
     const pq_field *field;
+    int g0, g1;
     int64_t first, last;
     pq_values *out;
+    int column;
+    size_t base;
+    pq_values part;
     int rc;
     char err[512];
 } pq_task;
@@ -219,8 +228,99 @@ typedef struct
 static void *decode_task(void *arg)
 {
     pq_task *t = arg;
-    t->rc = pq_read_column(t->file, t->field, t->first, t->last, 1, t->out, t->err, sizeof(t->err));
+    if (!t->rc)
+        t->rc = pq_read_groups(t->file, t->field, t->g0, t->g1, t->first, t->last, 1, t->out, t->err,
+                               sizeof(t->err));
     return NULL;
+}
+
+/* Parts per column: one, unless the columns are few against the threads
+ * (at most a quarter as many) and there are several row groups, when a
+ * column's groups are shared out in runs of about equal rows. With more
+ * columns, decoding them side by side keeps the threads busy, and joining
+ * text parts would only add a pass. A dictionary column is read whole (its
+ * entries are numbered in the order of every row group). */
+static int parts_for(const pq_file *f, const pq_field *fd, int ncols)
+{
+    size_t threads = (size_t)ctools_get_max_threads();
+    if (f->ngroups < 2 || fd->arrow == PA_DICT || ncols < 1 || (size_t)ncols * 4 > threads)
+        return 1;
+    size_t parts = (2 * threads + (size_t)ncols - 1) / (size_t)ncols;
+    return parts < (size_t)f->ngroups ? (int)parts : f->ngroups;
+}
+
+/* The parts' row groups: part k is groups [cut[k], cut[k+1]) */
+static void group_runs(const pq_file *f, int parts, int *cut)
+{
+    int64_t total = f->num_rows, seen = 0;
+    int k = 1;
+    cut[0] = 0;
+    for (int g = 0; g < f->ngroups && k < parts; g++)
+    {
+        seen += f->groups[g].num_rows;
+        /* Close part k-1 after group g once its share of the rows is reached,
+           leaving at least a group for each part still to come */
+        if ((double)seen >= (double)total * k / parts && f->ngroups - (g + 1) >= parts - k)
+            cut[k++] = g + 1;
+    }
+    while (k < parts)
+        cut[k++] = f->ngroups; /* fewer runs than parts: empty ones */
+    cut[parts] = f->ngroups;
+}
+
+/* Sets up the tasks for columns [0, n): every column's arrays, and a task
+ * per part. Returns the number of tasks, or -1 when memory runs out. */
+static int plan_tasks(pq_file *f, const pq_field *const *fields, int n, int64_t first,
+                      int64_t last, pq_values *cols, pq_task **out)
+{
+    int total = 0, *parts = calloc(n ? (size_t)n : 1, sizeof(int));
+    if (!parts)
+        return -1;
+    for (int j = 0; j < n; j++)
+        total += parts[j] = parts_for(f, fields[j], n);
+    pq_task *tasks = calloc(total ? (size_t)total : 1, sizeof(pq_task));
+    int *cut = malloc(((size_t)f->ngroups + 2) * sizeof(int));
+    if (!tasks || !cut)
+    {
+        free(parts);
+        free(tasks);
+        free(cut);
+        return -1;
+    }
+    int t = 0;
+    for (int j = 0; j < n; j++)
+    {
+        int rc = pq_alloc_column(fields[j], first, last, &cols[j]);
+        if (parts[j] == 1)
+        {
+            tasks[t++] = (pq_task){f, fields[j], 0, f->ngroups, first, last, &cols[j], j, 0, {0}, rc, ""};
+            continue;
+        }
+        group_runs(f, parts[j], cut);
+        int64_t row = 0;
+        int g = 0;
+        for (int k = 0; k < parts[j]; k++)
+        {
+            int64_t r0 = row;
+            for (; g < cut[k + 1]; g++)
+                row += f->groups[g].num_rows;
+            /* The part's rows of the range, and where they sit in the column */
+            int64_t lo = first > r0 ? first : r0, hi = last < row - 1 ? last : row - 1;
+            size_t n_rows = hi >= lo ? (size_t)(hi - lo + 1) : 0;
+            size_t base = lo > first ? (size_t)(lo - first) : 0;
+            if (base > cols[j].n)
+                base = cols[j].n;
+            pq_task *task = &tasks[t++];
+            *task = (pq_task){f, fields[j], cut[k], cut[k + 1], lo, hi, NULL, j, base, {0}, rc, ""};
+            if (!task->rc && cols[j].valid)
+                task->rc = pq_part_view(&cols[j], base, n_rows, &task->part);
+            task->out = &task->part;
+        }
+    }
+    free(parts);
+    free(cut);
+    *out = tasks;
+    return t;
 }
 
 static int scan(void)
@@ -270,8 +370,8 @@ static int scan(void)
         free(list);
         return 909;
     }
-    pq_task *tasks = calloc(n ? (size_t)n : 1, sizeof(pq_task));
-    if (!tasks)
+    const pq_field **fields = calloc(n ? (size_t)n : 1, sizeof(*fields));
+    if (!fields)
     {
         free(list);
         return 909;
@@ -284,25 +384,67 @@ static int scan(void)
             state.file.fields[index].leaf < 0 || !is_supported(state.file.fields[index].arrow))
             rc = 198;
         else
-            tasks[j] = (pq_task){&state.file, &state.file.fields[index], first - 1, last - 1,
-                                 &state.cols[j], 0, ""};
+            fields[j] = &state.file.fields[index];
     }
     state.ncols = rc ? 0 : n;
-    /* Columns decode independently, each with its own file handle */
-    ctools_persistent_pool *pool = !rc && n > 1 ? ctools_get_global_pool() : NULL;
-    if (pool && !ctools_persistent_pool_submit_batch(pool, decode_task, tasks, (size_t)n,
+    pq_task *tasks = NULL;
+    int ntasks = rc ? 0 : plan_tasks(&state.file, fields, n, first - 1, last - 1, state.cols, &tasks);
+    free(fields);
+    if (ntasks < 0)
+    {
+        free(list);
+        cparquet_cleanup();
+        return 909;
+    }
+    /* Columns, and runs of a column's row groups, decode independently, each
+       with its own file handle */
+    ctools_persistent_pool *pool = ntasks > 1 ? ctools_get_global_pool() : NULL;
+    if (pool && !ctools_persistent_pool_submit_batch(pool, decode_task, tasks, (size_t)ntasks,
                                                      sizeof(pq_task)))
         ctools_persistent_pool_wait(pool);
     else
-        for (int j = 0; j < n && !rc; j++)
-            decode_task(&tasks[j]);
-    /* The first failing column, in order, reports */
-    for (int j = 0; j < n && !rc; j++)
-        if (tasks[j].rc)
+        for (int t = 0; t < ntasks; t++)
+            decode_task(&tasks[t]);
+    /* The first failing column, in order, reports (and within it the first
+       failing run of row groups); a column's parts then join it in order */
+    pq_values **parts = malloc((ntasks ? (size_t)ntasks : 1) * sizeof(*parts));
+    size_t *bases = malloc((ntasks ? (size_t)ntasks : 1) * sizeof(*bases));
+    for (int t = 0; t < ntasks;)
+    {
+        int t1 = t;
+        while (t1 < ntasks && tasks[t1].column == tasks[t].column)
+            t1++;
+        for (int u = t; u < t1; u++)
+            if (tasks[u].rc && !rc)
+            {
+                rc = tasks[u].rc;
+                snprintf(err, sizeof(err), "%s", tasks[u].err);
+            }
+        if (tasks[t].out == &tasks[t].part)
         {
-            rc = tasks[j].rc;
-            snprintf(err, sizeof(err), "%s", tasks[j].err);
+            int k = 0;
+            for (int u = t; parts && bases && u < t1; u++, k++)
+            {
+                parts[k] = &tasks[u].part;
+                bases[k] = tasks[u].base;
+            }
+            int jr = parts && bases ? pq_parts_join(&state.cols[tasks[t].column], parts, bases, k) : 909;
+            if (jr && !rc)
+                rc = jr;
         }
+        t = t1;
+    }
+    /* Parts never joined (no memory to join them) */
+    for (int t = 0; t < ntasks; t++)
+        if (tasks[t].out == &tasks[t].part)
+        {
+            free(tasks[t].part.off);
+            free(tasks[t].part.bytes);
+            tasks[t].part.off = NULL;
+            tasks[t].part.bytes = NULL;
+        }
+    free(parts);
+    free(bases);
     free(tasks);
     for (int j = 0; j < n && !rc; j++)
     {
@@ -371,6 +513,67 @@ static double stored(pq_storage st, double x)
     }
 }
 
+/* Whether load() stores column j through the SPI (strL and text with NUL
+ * bytes go through Mata; a column without dictionary entries is created
+ * empty) */
+static int spi_column(int j)
+{
+    pq_storage st = state.storage[j];
+    return st != ST_STRL && st != ST_EMPTY && !(st == ST_STR && state.cols[j].has_nul);
+}
+
+/* Stores rows [i0, i1) of column j; buf holds the longest str# value (its
+ * column's max_len, at most 2045 bytes, plus the NUL). */
+static int store_rows(int j, size_t i0, size_t i1, char *buf)
+{
+    const pq_values *v = &state.cols[j];
+    const pq_storage st = state.storage[j];
+    const int var = j + 1;
+    int rc = 0;
+    if (st == ST_HEX)
+    {
+        for (size_t i = i0; i < i1 && !rc; i++)
+        {
+            char hex[24] = "";
+            if (v->valid[i])
+                snprintf(hex, sizeof(hex), "%llx", (unsigned long long)v->i64[i]);
+            rc = SF_sstore(var, (int)i + 1, hex);
+        }
+    }
+    else if (st == ST_STR)
+    {
+        for (size_t i = i0; i < i1 && !rc; i++)
+        {
+            size_t len = (size_t)(v->off[i + 1] - v->off[i]);
+            if (!v->valid[i] || !len)
+            {
+                rc = SF_sstore(var, (int)i + 1, "");
+                continue;
+            }
+            memcpy(buf, v->bytes + v->off[i], len);
+            buf[len] = 0;
+            rc = SF_sstore(var, (int)i + 1, buf);
+        }
+    }
+    else if (v->i64)
+    {
+        for (size_t i = i0; i < i1 && !rc; i++)
+            rc = SF_vstore(var, (int)i + 1,
+                           v->valid[i] ? stored(st, (double)v->i64[i]) : SV_missval);
+    }
+    else
+    {
+        for (size_t i = i0; i < i1 && !rc; i++)
+            rc = SF_vstore(var, (int)i + 1, v->valid[i] ? stored(st, v->num[i]) : SV_missval);
+    }
+    return rc;
+}
+
+/* Rows per unit of the parallel store. A unit stores its rows of every
+ * column in turn, so the rows' records in Stata's observation-major data
+ * stay in cache while each column is written. */
+#define PQ_STORE_ROWS 8192
+
 static int load(void)
 {
     if (!state.cols || SF_nvars() != state.ncols)
@@ -378,72 +581,51 @@ static int load(void)
     size_t nobs = state.ncols ? state.cols[0].n : 0;
     if ((size_t)SF_nobs() < nobs)
         return 198;
-    char *buf = NULL;
-    size_t bufcap = 0;
-    int rc = 0;
-    for (int j = 0; j < state.ncols && !rc; j++)
+    size_t width = 1;
+    for (int j = 0; j < state.ncols; j++)
     {
-        pq_values *v = &state.cols[j];
-        pq_storage st = state.storage[j];
-        if (st == ST_STRL || (st == ST_STR && v->has_nul))
+        if (!spi_column(j))
             continue;
-        int var = j + 1;
-        if (st == ST_EMPTY)
-            continue; /* created empty */
-        if ((st >= ST_HEX) != !!SF_var_is_string(var))
-        {
-            rc = 109;
-            break;
-        }
-        for (size_t i = 0; i < v->n && !rc; i++)
-        {
-            if ((i & 65535) == 0 && SF_poll())
-            {
-                rc = 1;
-                break;
-            }
-            int obs = (int)i + 1;
-            if (st == ST_HEX)
-            {
-                char hex[24] = "";
-                if (v->valid[i])
-                    snprintf(hex, sizeof(hex), "%llx", (unsigned long long)v->i64[i]);
-                rc = SF_sstore(var, obs, hex);
-            }
-            else if (st == ST_STR)
-            {
-                size_t len = (size_t)(v->off[i + 1] - v->off[i]);
-                if (!v->valid[i] || !len)
-                {
-                    rc = SF_sstore(var, obs, "");
-                    continue;
-                }
-                if (len + 1 > bufcap)
-                {
-                    free(buf);
-                    bufcap = len + 1;
-                    buf = malloc(bufcap);
-                    if (!buf)
-                    {
-                        rc = 909;
-                        break;
-                    }
-                }
-                memcpy(buf, v->bytes + v->off[i], len);
-                buf[len] = 0;
-                rc = SF_sstore(var, obs, buf);
-            }
-            else
-            {
-                double x = SV_missval;
-                if (v->valid[i])
-                    x = v->i64 ? (double)v->i64[i] : v->num[i];
-                rc = SF_vstore(var, obs, stored(st, x));
-            }
-        }
+        if ((state.storage[j] >= ST_HEX) != !!SF_var_is_string(j + 1))
+            return 109;
+        if (state.cols[j].n != nobs)
+            return 198;
+        if (state.storage[j] == ST_STR && state.cols[j].max_len + 1 > width)
+            width = state.cols[j].max_len + 1;
     }
-    free(buf);
-    return rc;
+    size_t units = (nobs + PQ_STORE_ROWS - 1) / PQ_STORE_ROWS;
+    atomic_int failed = 0;
+    ctools_cancel_team team = {0};
+#pragma omp parallel if (units > 1)
+    {
+        char *buf = malloc(width);
+        if (!buf)
+            atomic_store(&failed, 909);
+#pragma omp for schedule(dynamic, 1) nowait
+        for (size_t u = 0; u < units; u++)
+        {
+            if (atomic_load(&failed) || ctools_cancel_requested())
+                continue;
+            size_t i0 = u * PQ_STORE_ROWS, i1 = i0 + PQ_STORE_ROWS < nobs ? i0 + PQ_STORE_ROWS : nobs;
+            for (int j = 0; j < state.ncols; j++)
+            {
+                if (!spi_column(j))
+                    continue;
+                int rc = store_rows(j, i0, i1, buf);
+                if (rc)
+                {
+                    int none = 0;
+                    atomic_compare_exchange_strong(&failed, &none, rc);
+                    break;
+                }
+            }
+        }
+        free(buf);
+        ctools_cancel_wait(&team);
+    }
+    if (ctools_cancel_requested())
+        return 1;
+    return atomic_load(&failed);
 }
 
 /* A dictionary column's entries, length-prefixed, for its value labels */
@@ -455,6 +637,7 @@ static int dictfile(const pq_values *v)
     FILE *out = ctools_fopen(path, "wb");
     if (!out)
         return 603;
+    setvbuf(out, NULL, _IOFBF, (size_t)1 << 20);
     int rc = 0;
     for (size_t e = 0; e < v->dn && !rc; e++)
     {
@@ -483,6 +666,9 @@ static int blobfile(int j, int dict)
     FILE *out = ctools_fopen(path, "wb");
     if (!out)
         return 603;
+    /* Long values in few large writes, not a 4-byte prefix and a value per call
+       through the runtime's small default buffer */
+    setvbuf(out, NULL, _IOFBF, (size_t)4 << 20);
     int rc = 0;
     for (size_t i = 0; i < v->n && !rc; i++)
     {
